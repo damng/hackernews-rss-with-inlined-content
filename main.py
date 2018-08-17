@@ -82,7 +82,7 @@ class hnentries(object):
         c.close()
 
 
-def clean(url: str) -> str:
+def clean(url: str, moble_flag : bool = True) -> str:
     """
     Open page in chrome. Clean up dom.
     :param url:
@@ -90,13 +90,14 @@ def clean(url: str) -> str:
     """
     with tempfile.TemporaryDirectory() as tdir:
         chrome_options = Options()
-        chrome_options.add_experimental_option(
-            "mobileEmulation",
-            {
-                "deviceMetrics": {"width": 360, "height": 640, "pixelRatio": 3.0},
-                "userAgent": USER_AGENT,
-            },
-        )
+        if moble_flag:
+            chrome_options.add_experimental_option(
+                "mobileEmulation",
+                {
+                    "deviceMetrics": {"width": 360, "height": 640, "pixelRatio": 3.0},
+                    "userAgent": USER_AGENT,
+                },
+            )
         shutil.rmtree(tdir)
         shutil.copytree("../dat", tdir)
         chrome_options.add_argument(f"--user-data-dir={tdir}")
@@ -115,7 +116,8 @@ def clean(url: str) -> str:
         return new_html
 
 
-def clean_through_fb(url: str) -> str:
+
+def clean_through_fb(url: str, moble_flag : bool = True) -> str:
     """
     Pretend we clicked the link on facebook. Click through. Clean up dom.
     :param url:
@@ -123,14 +125,14 @@ def clean_through_fb(url: str) -> str:
     """
     with tempfile.TemporaryDirectory() as tdir:
         chrome_options = Options()
-        chrome_options.add_experimental_option(
-            "mobileEmulation",
-            {
-                "deviceMetrics": {"width": 360, "height": 640, "pixelRatio": 3.0},
-                "userAgent": USER_AGENT,
-            },
-        )
-        # chrome_options.add_argument("--headless")
+        if moble_flag:
+            chrome_options.add_experimental_option(
+                "mobileEmulation",
+                {
+                    "deviceMetrics": {"width": 360, "height": 640, "pixelRatio": 3.0},
+                    "userAgent": USER_AGENT,
+                },
+            )
         shutil.rmtree(tdir)
         shutil.copytree("../dat", tdir)
         chrome_options.add_argument(f"--user-data-dir={tdir}")
@@ -161,11 +163,12 @@ def invert_feed(feed: str) -> str:
     pool = multiprocessing.Pool(8)
     rs = pool.map_async(process_entry, parsed["entries"])
     pool.close()
-    with progressbar.ProgressBar(max_value=len(parsed["entries"])) as bar:
+    max_value = len(parsed["entries"])
+    with progressbar.ProgressBar(max_value=max_value) as bar:
         while True:
             if rs.ready():
                 break
-            bar.update(complete_counter.value)
+            bar.update(min(complete_counter.value,max_value))
             time.sleep(1)
 
     for i in rs.get():
@@ -187,6 +190,7 @@ def process_entry(entry):
         # no pdfs (yet?)
         content_type = r.headers.get("Content-Type", "text/plain")
         if "pdf" in content_type.lower():
+            logging.info(f"pdf: {old_url}")
             raise Exception
 
         # off site.
@@ -196,6 +200,8 @@ def process_entry(entry):
         hn_id = int(urllib.parse.parse_qs(hn_url.query)["id"][0])
         with complete_counter.get_lock():
             not_in_db = hn_id not in db
+
+        # uggo
         if not_in_db:
             if "wsj.com/" in old_url:
                 cleaned_html = clean_through_fb(old_url)
@@ -206,9 +212,17 @@ def process_entry(entry):
         else:
             with complete_counter.get_lock():
                 cleaned_html = db.get(hn_id)
-        del db
         with complete_counter.get_lock():
             complete_counter.value += 1
+        if cleaned_html == '':
+            logging.info(f"Empty Entry {old_url}. Trying Desktop")
+            cleaned_html = clean(old_url,moble_flag=False)
+            if cleaned_html == '':
+                logging.info(f"Empty Entry {old_url}. ")
+                raise Exception
+
+        # Successful.
+        del db
         return FeedTuple(
             title=entry["title"],
             entry=raw_attrs_href_,
