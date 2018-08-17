@@ -235,13 +235,12 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     while True:
         try:
-            # time.sleep(30)
+            time.sleep(30)
             logging.info("Running ... ")
             rss = requests.get("https://news.ycombinator.com/bigrss").text
             with open("docs/output.rss", "w") as newrss:
                 feed = invert_feed(rss)
                 newrss.write(feed)
-            time.sleep(1800)
             # commit it
             logging.info("Updating git")
             subprocess.call(
@@ -263,6 +262,7 @@ if __name__ == "__main__":
                  'user.name=Davis Terrence',
                  'push']
             )
+            time.sleep(1800)
         except KeyboardInterrupt:
             sys.exit(0)
         except:
