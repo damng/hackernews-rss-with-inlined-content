@@ -132,7 +132,7 @@ def clean_through_fb(url: str) -> str:
         )
         # chrome_options.add_argument("--headless")
         shutil.rmtree(tdir)
-        shutil.copytree("dat", tdir)
+        shutil.copytree("../dat", tdir)
         chrome_options.add_argument(f"--user-data-dir={tdir}")
         chrome_options.add_argument("--incognito")
         chrome_options.add_argument("--disable-gpu")
@@ -243,6 +243,7 @@ if __name__ == "__main__":
                 newrss.write(feed)
             time.sleep(1800)
             # commit it
+            logging.info("Updating git")
             subprocess.call(
                 ['git',
                  '-c',
