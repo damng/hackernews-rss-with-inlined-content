@@ -8,6 +8,7 @@ import typing
 import time
 import urllib
 import logging
+import subprocess
 
 import attr
 import bs4
@@ -241,6 +242,26 @@ if __name__ == "__main__":
                 feed = invert_feed(rss)
                 newrss.write(feed)
             time.sleep(1800)
+            # commit it
+            subprocess.call(
+                ['git',
+                 '-c',
+                 'user.email=okokok@okokok.ok',
+                 '-c',
+                 'user.name=Davis Terrence',
+                 'commit',
+                 '-a',
+                 '-m',
+                 str(datetime.datetime.now())]
+            )
+            subprocess.call(
+                ['git',
+                 '-c',
+                 'user.email=okokok@okokok.ok',
+                 '-c',
+                 'user.name=Davis Terrence',
+                 'push']
+            )
         except KeyboardInterrupt:
             sys.exit(0)
         except:
