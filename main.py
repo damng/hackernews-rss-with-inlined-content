@@ -159,7 +159,7 @@ def invert_feed(feed: str) -> str:
     parsed = feedparser.parse(feed)
     out_feed = feedgenerator.Rss201rev2Feed("Hackernews - Inlined Content Feed", "", "")
     pool = multiprocessing.Pool(8)
-    rs = pool.map_async(process_entry, parsed["entries"][:4])
+    rs = pool.map_async(process_entry, parsed["entries"])
     pool.close()
     with progressbar.ProgressBar(max_value=len(parsed["entries"])) as bar:
         while True:
