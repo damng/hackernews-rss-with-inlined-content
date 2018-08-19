@@ -11,3 +11,7 @@ I invoke it as:
 I used `xvfb-run` instead of headless mode because extensions are not supported in headless. One directory up, in "../dat", is a chrome user profile data directory that is copied for each instance of the browser run and deleted when finished. You can initialize it and add whatever extensions you want. The resulting rss file is then commited/pushed on here and served via gitpages. 
 
 This is hack level code. 
+
+The feed is available at https://damng.github.io/hackernews-rss-with-inlined-content/output.rss
+
+If you find this useful, don't give me anything. Instead, go to http://templeos.org, donate to the TempleOS project and become a Templar. 
