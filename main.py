@@ -157,7 +157,7 @@ def invert_feed(feed: str) -> str:
     :param feed:
     :return:
     """
-    parsed = feedparser.parse(feed)
+    parsed : feedparser.FeedParserDict = feedparser.parse(feed)
     out_feed = feedgenerator.Rss201rev2Feed("Hackernews - Inlined Content Feed", "", "")
     pool = multiprocessing.Pool(8)
     rs = pool.map_async(process_entry, parsed["entries"])
@@ -178,7 +178,7 @@ def invert_feed(feed: str) -> str:
     return out_feed.writeString(encoding="utf-8")
 
 
-def process_entry(entry):
+def process_entry(entry) -> FeedTuple:
     db = hnentries()
     try:
         old_url = entry["link"]
@@ -192,7 +192,7 @@ def process_entry(entry):
             logging.info(f"pdf: {old_url}")
             raise ValueError("PDF")
 
-        #
+        # TODO: Check with youtube-dl and see if there's any media handler that's not "generic."
         if any(x in old_url for x in ["youtube.com", "youtu.be"]):
             raise ValueError("Youtube")
 
@@ -206,7 +206,6 @@ def process_entry(entry):
 
         # uggo
         if not_in_db:
-
             if "wsj.com/" in old_url:
                 cleaned_html = clean_through_fb(old_url)
             else:
@@ -222,18 +221,16 @@ def process_entry(entry):
                         break
                     logging.info(f"Preview on {old_url} looks short.")
                 cleaned_html = max(cleaners_output,key=len)
+            if cleaned_html == '':
+                logging.info(f"Empty Entry {old_url}. ")
+                raise ValueError("No Good Preview")
             with complete_counter.get_lock():
                 db.set(hn_id, cleaned_html)
+                complete_counter.value += 1
         else:
             with complete_counter.get_lock():
                 cleaned_html = db.get(hn_id)
-
-        with complete_counter.get_lock():
-            complete_counter.value += 1
-        if cleaned_html == '':
-            logging.info(f"Empty Entry {old_url}. ")
-            raise ValueError("No Good Preview")
-
+                
         # Successful.
         del db
         return FeedTuple(
@@ -270,6 +267,10 @@ if __name__ == "__main__":
                 newrss.write(feed)
             # commit it
             logging.info("Updating git")
+            subprocess.call([
+                'git',
+                'pull'
+            ])
             subprocess.call(
                 ['git',
                  '-c',
