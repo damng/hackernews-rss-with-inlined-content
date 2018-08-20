@@ -82,7 +82,7 @@ class hnentries(object):
         c.close()
 
 
-def clean(url: str, moble_flag : bool = True) -> str:
+def clean(url: str, moble_flag: bool = True) -> str:
     """
     Open page in chrome. Clean up dom.
     :param url:
@@ -116,8 +116,7 @@ def clean(url: str, moble_flag : bool = True) -> str:
         return new_html
 
 
-
-def clean_through_fb(url: str, moble_flag : bool = True) -> str:
+def clean_through_fb(url: str, moble_flag: bool = True) -> str:
     """
     Pretend we clicked the link on facebook. Click through. Clean up dom.
     :param url:
@@ -168,7 +167,7 @@ def invert_feed(feed: str) -> str:
         while True:
             if rs.ready():
                 break
-            bar.update(min(complete_counter.value,max_value))
+            bar.update(min(complete_counter.value, max_value))
             time.sleep(1)
 
     for i in rs.get():
@@ -191,7 +190,11 @@ def process_entry(entry):
         content_type = r.headers.get("Content-Type", "text/plain")
         if "pdf" in content_type.lower():
             logging.info(f"pdf: {old_url}")
-            raise Exception
+            raise ValueError("PDF")
+
+        #
+        if any(x in old_url for x in ["youtube.com", "youtu.be"]):
+            raise ValueError("Youtube")
 
         # off site.
         hn_url_raw = bs4.BeautifulSoup(entry["description"], "html.parser")("a")[0]
@@ -203,23 +206,33 @@ def process_entry(entry):
 
         # uggo
         if not_in_db:
+
             if "wsj.com/" in old_url:
                 cleaned_html = clean_through_fb(old_url)
             else:
-                cleaned_html = clean(old_url)
+                cleaners = [clean, lambda x: clean(x, False), clean_through_fb, lambda x: clean_through_fb(x, False)]
+                cleaners_output = [""]*len(cleaners)
+                for idx_clean_f,clean_f in enumerate(cleaners):
+                    logging.info(f"Attempt {idx_clean_f}/{len(cleaners)} on {old_url}")
+                    cleaners_output[idx_clean_f] = clean_f(old_url)
+
+                    # Looked at histogram of article lengths. Valley here.
+                    if len(cleaners_output[idx_clean_f]) > 6441:
+                        logging.info(f"Got long preview on {idx_clean_f} for {old_url}")
+                        break
+                    logging.info(f"Preview on {old_url} looks short.")
+                cleaned_html = max(cleaners_output,key=len)
             with complete_counter.get_lock():
                 db.set(hn_id, cleaned_html)
         else:
             with complete_counter.get_lock():
                 cleaned_html = db.get(hn_id)
+
         with complete_counter.get_lock():
             complete_counter.value += 1
         if cleaned_html == '':
-            logging.info(f"Empty Entry {old_url}. Trying Desktop")
-            cleaned_html = clean(old_url,moble_flag=False)
-            if cleaned_html == '':
-                logging.info(f"Empty Entry {old_url}. ")
-                raise Exception
+            logging.info(f"Empty Entry {old_url}. ")
+            raise ValueError("No Good Preview")
 
         # Successful.
         del db
