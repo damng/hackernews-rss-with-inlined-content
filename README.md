@@ -14,4 +14,4 @@ This is hack level code.
 
 The feed is available at https://damng.github.io/hackernews-rss-with-inlined-content/output.rss
 
-If you find this useful, don't give me anything. Instead, go to http://templeos.org, donate to the TempleOS project and become a Templar. 
+If you find this useful, don't give me anything. ~~Instead, go to http://templeos.org, donate to the TempleOS project and become a Templar.~~ Dontate to the Brain and Behavior Research Foundation (https://www.bbrfoundation.org/).
