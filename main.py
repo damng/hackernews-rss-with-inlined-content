@@ -43,6 +43,7 @@ class FeedTuple(object):
 
 
 # Little sqlite3 db to store ones we've done.
+# TODO: Add LRU Cache. Prune DB based on that so it doesn't go over 100mb.
 class hnentries(object):
 
     def __init__(self, db_file="hn.sqlite3"):
