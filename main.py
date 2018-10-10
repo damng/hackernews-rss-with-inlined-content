@@ -114,6 +114,7 @@ def clean(url: str, moble_flag: bool = True) -> str:
         """
         )
         driver.close()
+        driver.quit()
         return new_html
 
 
@@ -149,6 +150,7 @@ def clean_through_fb(url: str, moble_flag: bool = True) -> str:
         """
         )
         driver.close()
+        driver.quit()
         return new_html
 
 
