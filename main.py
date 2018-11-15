@@ -9,7 +9,7 @@ import time
 import urllib
 import logging
 import subprocess
-from pyvirtualdisplay import Display
+#from pyvirtualdisplay import Display
 
 import attr
 import bs4
@@ -200,9 +200,9 @@ def process_entry(entry) -> FeedTuple:
         if any(x in old_url for x in ["youtube.com", "youtu.be"]):
             raise ValueError("Youtube")
 
-        # Virual FB
-        display = Display(visible=0, size=(800, 800))  
-        display.start()
+        ## Virual FB
+        #display = Display(visible=0, size=(800, 800))  
+        #display.start()
 
         # off site.
         hn_url_raw = bs4.BeautifulSoup(entry["description"], "html.parser")("a")[0]
@@ -241,7 +241,7 @@ def process_entry(entry) -> FeedTuple:
                 
         # Successful.
         del db
-        del display
+        #del display
         return FeedTuple(
             title=entry["title"],
             entry=raw_attrs_href_,
