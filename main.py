@@ -171,7 +171,7 @@ def invert_feed(feed: str) -> str:
         while True:
             if rs.ready():
                 break
-            bar.update(min(complete_counter.value, max_value))
+            //bar.update(min(complete_counter.value, max_value))
             time.sleep(1)
 
     for i in rs.get():
