@@ -167,12 +167,12 @@ def invert_feed(feed: str) -> str:
     rs = pool.map_async(process_entry, parsed["entries"])
     pool.close()
     max_value = len(parsed["entries"])
-    with progressbar.ProgressBar(max_value=max_value) as bar:
-        while True:
-            if rs.ready():
-                break
-            //bar.update(min(complete_counter.value, max_value))
-            time.sleep(1)
+    #with progressbar.ProgressBar(max_value=max_value) as bar:
+    while True:
+        if rs.ready():
+            break
+        #bar.update(min(complete_counter.value, max_value))
+        time.sleep(1)
 
     for i in rs.get():
         out_feed.add_item(
