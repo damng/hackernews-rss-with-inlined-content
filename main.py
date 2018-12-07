@@ -266,41 +266,40 @@ def process_entry(entry) -> FeedTuple:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    while True:
-        try:
-            time.sleep(30)
-            logging.info("Running ... ")
-            rss = requests.get("https://news.ycombinator.com/bigrss").text
-            with open("docs/output.rss", "w") as newrss:
-                feed = invert_feed(rss)
-                newrss.write(feed)
-            # commit it
-            logging.info("Updating git")
-            subprocess.call([
-                'git',
-                'pull'
-            ])
-            subprocess.call(
-                ['git',
-                 '-c',
-                 'user.email=okokok@okokok.ok',
-                 '-c',
-                 'user.name=Davis Terrence',
-                 'commit',
-                 '-a',
-                 '-m',
-                 str(datetime.datetime.now())]
-            )
-            subprocess.call(
-                ['git',
-                 '-c',
-                 'user.email=okokok@okokok.ok',
-                 '-c',
-                 'user.name=Davis Terrence',
-                 'push']
-            )
-            time.sleep(1800)
-        except KeyboardInterrupt:
-            sys.exit(0)
-        except:
-            logging.exception("")
+    try:
+        time.sleep(30)
+        logging.info("Running ... ")
+        rss = requests.get("https://news.ycombinator.com/bigrss").text
+        with open("docs/output.rss", "w") as newrss:
+            feed = invert_feed(rss)
+            newrss.write(feed)
+        # commit it
+        logging.info("Updating git")
+        subprocess.call([
+            'git',
+            'pull'
+        ])
+        subprocess.call(
+            ['git',
+             '-c',
+             'user.email=okokok@okokok.ok',
+             '-c',
+             'user.name=Davis Terrence',
+             'commit',
+             '-a',
+             '-m',
+             str(datetime.datetime.now())]
+        )
+        subprocess.call(
+            ['git',
+             '-c',
+             'user.email=okokok@okokok.ok',
+             '-c',
+             'user.name=Davis Terrence',
+             'push']
+        )
+        time.sleep(1800)
+    except KeyboardInterrupt:
+        sys.exit(0)
+    except:
+        logging.exception("")
