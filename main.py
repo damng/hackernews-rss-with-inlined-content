@@ -118,6 +118,42 @@ def clean(url: str, moble_flag: bool = True) -> str:
         driver.quit()
         return new_html
 
+def cleanphantom(url: str) -> str:
+    driver = webdriver.PhantomJS()
+    driver.set_window_size(1024,1920)
+    driver.get(url)
+    driver.execute_async_script(
+            """
+page.settings.userAgent = ''Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.77 Safari/537.36;
+page.onInitialized = function () {
+    page.evaluate(function () {
+        // Spoof Plugins
+        var oldNavigator = navigator;
+        var oldPlugins = oldNavigator.plugins;
+        var plugins = {};
+        plugins.length = 1;
+        plugins.__proto__ = oldPlugins.__proto__;
+        window.navigator = {plugins: plugins};
+        window.navigator.__proto__ = oldNavigator.__proto__;
+
+        // Remove phantom 
+        var p = window.callPhantom;
+        delete window._phantom;
+        delete window.callPhantom;
+    });
+};
+            """
+            )
+    driver.execute_script(DOM_DISTILLER_JS)
+    new_html = driver.execute_script(
+        """
+        ok = org.chromium.distiller.DomDistiller.apply();
+        return ok[2][1];
+    """
+    )
+    driver.close()
+    driver.quit()
+    return new_html
 
 def clean_through_fb(url: str, moble_flag: bool = True) -> str:
     """
