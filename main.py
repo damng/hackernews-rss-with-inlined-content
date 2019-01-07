@@ -9,6 +9,7 @@ import time
 import urllib
 import logging
 import subprocess
+import click
 #from pyvirtualdisplay import Display
 
 import attr
@@ -155,14 +156,14 @@ def clean_through_fb(url: str, moble_flag: bool = True) -> str:
         return new_html
 
 
-def invert_feed(feed: str) -> str:
+def invert_feed(feed: str, name: str ) -> str:
     """
     Go through each element of the feed.
     :param feed:
     :return:
     """
     parsed : feedparser.FeedParserDict = feedparser.parse(feed)
-    out_feed = feedgenerator.Rss201rev2Feed("Hackernews - Inlined Content Feed", "", "")
+    out_feed = feedgenerator.Rss201rev2Feed(name, "http://n-gate.com", "webshit condom")
     pool = multiprocessing.Pool(8)
     rs = pool.map_async(process_entry, parsed["entries"])
     pool.close()
@@ -264,14 +265,20 @@ def process_entry(entry) -> FeedTuple:
         )
 
 
-if __name__ == "__main__":
+@click.command()
+@click.option('--feed_url',default="https://news.ycombinator.com/bigrss",help="Feed URL")
+@click.option('--name',default="Hackernews - Inlined Content Feed",help="Feed URL")
+@click.option('--output',default="docs/output.rss",help="Output Location")
+@click.option('--interval',default=1800,help="Interval between runs (sec)")
+@click.option('--initial_pause',default=30,help="Initial pause (sec)")
+def rss_main(feed_url: str, name: str, output: str, interval: int, initial_pause: int):
     logging.basicConfig(level=logging.INFO)
     try:
-        time.sleep(30)
+        time.sleep(initial_pause)
         logging.info("Running ... ")
-        rss = requests.get("https://news.ycombinator.com/bigrss").text
+        rss = requests.get(feed_url).text
         with open("docs/output.rss", "w") as newrss:
-            feed = invert_feed(rss)
+            feed = invert_feed(rss, name)
             newrss.write(feed)
         # commit it
         logging.info("Updating git")
@@ -298,8 +305,11 @@ if __name__ == "__main__":
              'user.name=Davis Terrence',
              'push']
         )
-        time.sleep(1800)
+        time.sleep(interval)
     except KeyboardInterrupt:
         sys.exit(0)
     except:
         logging.exception("")
+
+if __name__ == "__main__":
+    rss_main()
