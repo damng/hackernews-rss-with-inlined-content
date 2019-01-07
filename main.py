@@ -22,10 +22,10 @@ import requests
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 
+
 # count for progress bar and lock for db
 complete_counter = multiprocessing.Value("i", 0)
 
-# Just me on my poor 7 year old phone. so sad like the folk on irc.rizon.net #apu.
 USER_AGENT = (
     "Mozilla/5.0 (Linux; Android 4.2.1; en-us; Nexus 5 Build/JOP40D) AppleWebKit/535.19 (KHTML, like Gecko) Chrome/18.0.1025.166 Mobile Safari/535.19"
 )
@@ -47,9 +47,10 @@ class FeedTuple(object):
 # Little sqlite3 db to store ones we've done.
 # TODO: Add LRU Cache. Prune DB based on that so it doesn't go over 100mb.
 class hnentries(object):
+    db_file = "hn.sqlite3"
 
-    def __init__(self, db_file="hn.sqlite3"):
-        self._connection = sqlite3.connect(db_file)
+    def __init__(self):
+        self._connection = sqlite3.connect(hnentries.db_file)
 
     def __del__(self):
         self._connection.close()
@@ -269,10 +270,12 @@ def process_entry(entry) -> FeedTuple:
 @click.option('--feed_url',default="https://news.ycombinator.com/bigrss",help="Feed URL")
 @click.option('--name',default="Hackernews - Inlined Content Feed",help="Feed URL")
 @click.option('--output',default="docs/output.rss",help="Output Location")
+@click.option('--database',default="hn.sqlite3",help="SQLite3 Database")
 @click.option('--interval',default=1800,help="Interval between runs (sec)")
 @click.option('--initial_pause',default=30,help="Initial pause (sec)")
-def rss_main(feed_url: str, name: str, output: str, interval: int, initial_pause: int):
+def rss_main(feed_url: str, name: str, output: str, database: str, interval: int, initial_pause: int):
     logging.basicConfig(level=logging.INFO)
+    hnentries.db_file = database
     try:
         time.sleep(initial_pause)
         logging.info("Running ... ")
