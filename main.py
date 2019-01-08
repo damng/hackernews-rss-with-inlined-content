@@ -288,7 +288,7 @@ def rss_main(feed_url: str, name: str, output: str, database: str, interval: int
         time.sleep(initial_pause)
         logging.info("Running ... ")
         rss = requests.get(feed_url).text
-        with open("docs/output.rss", "w") as newrss:
+        with open(output, "w") as newrss:
             feed = invert_feed(rss, name)
             newrss.write(feed)
         # commit it
