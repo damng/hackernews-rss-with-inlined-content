@@ -1,3 +1,5 @@
+import os
+import sys
 import datetime
 import multiprocessing
 import shutil
@@ -210,7 +212,9 @@ def process_entry(entry) -> FeedTuple:
         hn_url_raw = bs4.BeautifulSoup(entry["description"], "html.parser")("a")[0]
         raw_attrs_href_ = hn_url_raw.attrs["href"]
         hn_url = urllib.parse.urlparse(raw_attrs_href_)
-        hn_id = int(urllib.parse.parse_qs(hn_url.query)["id"][0])
+        print(hn_url.path)
+        sys.exit(1)
+        hn_id = int(urllib.parse.parse_qs(hn_url.query)["id"])
         with complete_counter.get_lock():
             not_in_db = hn_id not in db
 
