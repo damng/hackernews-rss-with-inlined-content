@@ -209,12 +209,16 @@ def process_entry(entry) -> FeedTuple:
         #display.start()
 
         # off site.
-        hn_url_raw = bs4.BeautifulSoup(entry["description"], "html.parser")("a")[0]
-        raw_attrs_href_ = hn_url_raw.attrs["href"]
-        hn_url = urllib.parse.urlparse(raw_attrs_href_)
-        print(hn_url.path)
-        sys.exit(1)
-        hn_id = int(urllib.parse.parse_qs(hn_url.query)["id"])
+        try:
+            # Lobste.rs
+            hn_id = entry["guid"].split('/')[-1]
+            raw_attrs_href_ = entry["guid"]
+        except:
+            # Hackernews
+            hn_url_raw = bs4.BeautifulSoup(entry["description"], "html.parser")("a")[0]
+            raw_attrs_href_ = hn_url_raw.attrs["href"]
+            hn_url = urllib.parse.urlparse(raw_attrs_href_)
+            hn_id = int(urllib.parse.parse_qs(hn_url.query)["id"])
         with complete_counter.get_lock():
             not_in_db = hn_id not in db
 
