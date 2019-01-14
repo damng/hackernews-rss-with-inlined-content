@@ -211,273 +211,7 @@ You can only opt-in or opt-out once every 24 hours - which is plenty enough to m
 I am not against web host providers monitoring how their servers are running. Using a technology like RUM is a great way to do it, but this is meant to be a passive technology that is invisible to the end user. Injecting JavaScript into pages being served is far from passive and, at least in my eyes, is a violation of trust between the web host and the customer.&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;
 By the way the issues I was having with the admin interface turned out to be unrelated to this but were rather a bug in Safari which is resolved by closing Safari down and opening it again, maybe more on that later though.&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;
 -i&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;
-&lt;/div&gt;</description><pubDate>Sun, 13 Jan 2019 07:48:02 -0600</pubDate></item><item><title>Investigating compile times, and Clang -ftime-report</title><link>https://lobste.rs/s/w2of30</link><description>&lt;h1&gt;Investigating compile times, and Clang -ftime-report&lt;/h1&gt;&lt;div dir="ltr"&gt;
-        Posted on
-        &lt;time datetime="2019-01-12T21:02:10+03:00" dir="ltr"&gt;
-          Jan 12, 2019
-        &lt;/time&gt;
-      &lt;/div&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;TL;DR&lt;/em&gt;: if you want to use &lt;code dir="ltr"&gt;-ftime-report&lt;/code&gt; Clang flag to help you figure out where or why your code is slow to compile…
-it’s not very helpful for that. But! In the next post we’ll try to do something about it :)&lt;/p&gt;&lt;h2&gt;Need for build time investigation tools&lt;/h2&gt;&lt;p&gt;Depending on how your large your codebase is, and how it is structured, C++ compilation times may or might not be an issue for you.
-It certainly is for us at Unity, and my understanding of build times of other large projects (like Chrome, LLVM or UE4), they aren’t
-exactly “fast” either. There are various underlying reasons for why C++ codebases might be slow to compile (preprocessor, complexity
-of the language, template instantiations, optimizations done by the compiler, linking times etc.).&lt;/p&gt;&lt;p dir="ltr"&gt;It would make sense to have some tools that a programmer could use to help them understand &lt;em dir="ltr"&gt;where&lt;/em&gt; or &lt;em dir="ltr"&gt;why&lt;/em&gt; their code is slow to compile.&lt;/p&gt;&lt;p&gt;You might think that, given how big of an issue compile times are in C++, there would be readily-available tools to do that. E.g. some
-flags in the popular compilers, or something?&lt;/p&gt;&lt;p dir="ltr"&gt;The reality, at least right now, is “ehhh, not really”. There really are no &lt;em dir="ltr"&gt;good&lt;/em&gt; tools in C++ compilers to help you with investigating build
-times.&lt;/p&gt;&lt;h2&gt;Build timing tools in existing compilers&lt;/h2&gt;&lt;p dir="ltr"&gt;I’ll do example with a super small C++ snippet that just includes some STL headers and does something with them. See the snippet
-and the output from three major compilers (Visual Studio, Gcc, Clang) in &lt;a href="https://godbolt.org/z/Yw08WW" dir="ltr"&gt;Compiler Explorer here&lt;/a&gt;.
-The actual code does not do anything useful, I just needed &lt;em dir="ltr"&gt;something&lt;/em&gt; to throw at the compiler.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;include&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;vector&amp;gt;&lt;/span&gt;&lt;/span&gt;
-&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;include&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;string&amp;gt;&lt;/span&gt;&lt;/span&gt;
-&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;include&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;unordered_map&amp;gt;&lt;/span&gt;&lt;/span&gt;
-&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;include&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;regex&amp;gt;&lt;/span&gt;&lt;/span&gt;
-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt;
-&lt;/span&gt;{
-    &lt;span dir="ltr"&gt;std&lt;/span&gt;::&lt;span dir="ltr"&gt;vector&lt;/span&gt;&amp;lt;&lt;span dir="ltr"&gt;int&lt;/span&gt;&amp;gt; v(&lt;span dir="ltr"&gt;10&lt;/span&gt;);
-    v.push_back(&lt;span dir="ltr"&gt;7&lt;/span&gt;);
-    &lt;span dir="ltr"&gt;std&lt;/span&gt;::&lt;span dir="ltr"&gt;unordered_map&lt;/span&gt;&amp;lt;&lt;span dir="ltr"&gt;std&lt;/span&gt;::&lt;span dir="ltr"&gt;string&lt;/span&gt;, &lt;span dir="ltr"&gt;double&lt;/span&gt;&amp;gt; m;
-    m.insert(&lt;span dir="ltr"&gt;std&lt;/span&gt;::make_pair(&lt;span dir="ltr"&gt;"foo"&lt;/span&gt;, &lt;span dir="ltr"&gt;1.0&lt;/span&gt;));
-    &lt;span dir="ltr"&gt;std&lt;/span&gt;::&lt;span dir="ltr"&gt;regex &lt;span dir="ltr"&gt;re&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;"^asd.*$"&lt;/span&gt;)&lt;/span&gt;&lt;/span&gt;;
-    &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;;
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;I’m testing with Visual Studio 2017 v15.9, Gcc 8.2 and Clang 7.0.&lt;/p&gt;&lt;h4&gt;Visual Studio&lt;/h4&gt;&lt;p dir="ltr"&gt;Visual Studio has &lt;code dir="ltr"&gt;/Bt&lt;/code&gt;
-(see &lt;a href="https://blogs.msdn.microsoft.com/vcblog/2010/04/01/vc-tip-get-detailed-build-throughput-diagnostics-using-msbuild-compiler-and-linker/" dir="ltr"&gt;VC++ Team Blog post&lt;/a&gt;)
-and &lt;code dir="ltr"&gt;/d2cgsummary&lt;/code&gt; (see &lt;a href="http://aras-p.info/blog/2017/10/23/Best-unknown-MSVC-flag-d2cgsummary/" dir="ltr"&gt;my blog post&lt;/a&gt;) flags,
-and while they don’t contain much information and the UX of them is “a bit lacking”, they are at least something.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;/Bt&lt;/code&gt; prints how much time “frontend” (preprocessing, parsing - everything that is about the “C++ language”) and the “backend” (optimizations
-and final machine code generation – much less specific to C++ language) takes.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;time(C:\msvc\v19_16\bin\Hostx64\x64\c1xx.dll)=0.775s
-time(C:\msvc\v19_16\bin\Hostx64\x64\c2.dll)=1.303s
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Of course it would be way friendlier if instead of printing two paths to DLLs, it would actually print “Frontend” and “Backend”. That’s
-what &lt;code dir="ltr"&gt;whatever\c1xx.dll&lt;/code&gt; and &lt;code dir="ltr"&gt;whatever\c2.dll&lt;/code&gt; actually are. &lt;a href="http://aras-p.info/blog/2017/05/07/Users-POV-and-Empathy/" dir="ltr"&gt;Empathy towards the user&lt;/a&gt; is important!&lt;/p&gt;&lt;p dir="ltr"&gt;Output of &lt;code dir="ltr"&gt;/d2cgsummary&lt;/code&gt; is even more cryptic, something like this (cut down for brevity):&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;Code Generation Summary
-  Total Function Count: 821
-  Elapsed Time: 1.210 sec
-  Total Compilation Time: 4.209 sec
-  Average time per function: 0.005 sec
-  Anomalistic Compile Times: 15
-    ?_Add_equiv@?$_Builder@PEBDDV?$regex_traits@D@std@@@std@@QEAAXPEBD0_J@Z: 0.299 sec, 869 instrs
-    ?_Add_rep@?$_Builder@PEBDDV?$regex_traits@D@std@@@std@@QEAAXHH_N@Z: 0.239 sec, 831 instrs
-    &amp;lt;...&amp;gt;
-  Serialized Initializer Count: 1
-  Serialized Initializer Time: 0.001 sec
-RdrReadProc Caching Stats
-  Functions Cached: 5
-  Retrieved Count: 164
-  Abandoned Retrieval Count: 0
-  Abandoned Caching Count: 0
-  Wasted Caching Attempts: 0
-  Functions Retrieved at Least Once: 5
-  Functions Cached and Never Retrieved: 0
-  Most Hits:
-    ?_Get_data@?$_Vector_alloc@U?$_Vec_base_types@IV?$allocator@I@std@@@std@@@std@@QEAAAEAV?$_Vector_val@U?$_Simple_types@I@std@@@2@XZ: 35
-    ?_Get_second@?$_Compressed_pair@V?$allocator@I@std@@V?$_Vector_val@U?$_Simple_types@I@std@@@2@$00@std@@QEAAAEAV?$_Vector_val@U?$_Simple_types@I@std@@@2@XZ: 35
-    &amp;lt;...&amp;gt;
-  Least Hits:
-    ?_Adopt@_Iterator_base0@std@@QEAAXPEBX@Z: 28
-    &amp;lt;...&amp;gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Most of that &lt;em dir="ltr"&gt;probably&lt;/em&gt; makes sense for someone who actually works on the Visual Studio compiler, but again - I’m just a user, I have
-&lt;em dir="ltr"&gt;no idea&lt;/em&gt; what is “RdrReadProc”, what is “Serialized Initializer” or “Retrieved Count”, and most importantly,
-whether any of this output can help me to answer the question
-“&lt;strong dir="ltr"&gt;how can I change &lt;em dir="ltr"&gt;my code&lt;/em&gt; to make it compile faster&lt;/strong&gt;”? Also, why are the function names not demangled?&lt;/p&gt;&lt;p dir="ltr"&gt;The “Anomalistic Compile Times” section can help to track down some patterns in code that end up being very slow for compiler to process
-(like &lt;a href="http://aras-p.info/blog/2017/10/09/Forced-Inlining-Might-Be-Slow/" dir="ltr"&gt;forced inlining on large functions&lt;/a&gt;), but that’s about it.&lt;/p&gt;&lt;p dir="ltr"&gt;So while MSC does have &lt;em dir="ltr"&gt;something&lt;/em&gt;, I could think of many possible improvements in what kind of timing/profiling information it could output.&lt;/p&gt;&lt;h4&gt;Gcc&lt;/h4&gt;&lt;p&gt;I’m not using Gcc much, and at least in my industry (game development), it’s not very popular.
-Out of all platforms that I happen to use at work, they are all on either Visual Studio or some variant of Clang. Gcc is only used on Linux, and
-even there, there’s an option to use Clang.&lt;/p&gt;&lt;p dir="ltr"&gt;Anyway, gcc has &lt;code dir="ltr"&gt;-ftime-report&lt;/code&gt; argument that prints information about where time was spent during compilation. Brace yourself,
-this will be over 100 lines of text:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;Time variable                                   usr           sys          wall               GGC
- phase setup                        :   0.00 (  0%)   0.00 (  0%)   0.00 (  0%)    1509 kB (  1%)
- phase parsing                      :   0.59 ( 16%)   0.60 ( 43%)   2.35 ( 38%)   91628 kB ( 33%)
- phase lang. deferred               :   0.32 (  9%)   0.16 ( 12%)   0.47 (  8%)   46797 kB ( 17%)
- phase opt and generate             :   2.60 ( 72%)   0.62 ( 45%)   3.22 ( 53%)  132237 kB ( 48%)
- phase last asm                     :   0.08 (  2%)   0.00 (  0%)   0.09 (  1%)    2921 kB (  1%)
- |name lookup                       :   0.18 (  5%)   0.10 (  7%)   0.27 (  4%)    4820 kB (  2%)
- |overload resolution               :   0.13 (  4%)   0.12 (  9%)   0.31 (  5%)   26374 kB ( 10%)
- dump files                         :   0.08 (  2%)   0.01 (  1%)   0.04 (  1%)       0 kB (  0%)
- callgraph construction             :   0.08 (  2%)   0.02 (  1%)   0.11 (  2%)   12160 kB (  4%)
- callgraph optimization             :   0.02 (  1%)   0.02 (  1%)   0.04 (  1%)      87 kB (  0%)
- ipa function summary               :   0.00 (  0%)   0.01 (  1%)   0.02 (  0%)     808 kB (  0%)
- ipa cp                             :   0.01 (  0%)   0.01 (  1%)   0.01 (  0%)     564 kB (  0%)
- ipa inlining heuristics            :   0.01 (  0%)   0.00 (  0%)   0.02 (  0%)     807 kB (  0%)
- ipa function splitting             :   0.01 (  0%)   0.00 (  0%)   0.02 (  0%)     233 kB (  0%)
- ipa pure const                     :   0.02 (  1%)   0.00 (  0%)   0.01 (  0%)      22 kB (  0%)
- ipa icf                            :   0.01 (  0%)   0.00 (  0%)   0.02 (  0%)       0 kB (  0%)
- ipa SRA                            :   0.07 (  2%)   0.02 (  1%)   0.10 (  2%)    6231 kB (  2%)
- ipa free inline summary            :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)       0 kB (  0%)
- cfg construction                   :   0.01 (  0%)   0.00 (  0%)   0.01 (  0%)     179 kB (  0%)
- cfg cleanup                        :   0.04 (  1%)   0.00 (  0%)   0.03 (  0%)     200 kB (  0%)
- trivially dead code                :   0.00 (  0%)   0.00 (  0%)   0.03 (  0%)       1 kB (  0%)
- df scan insns                      :   0.02 (  1%)   0.01 (  1%)   0.01 (  0%)       7 kB (  0%)
- df multiple defs                   :   0.00 (  0%)   0.00 (  0%)   0.02 (  0%)       0 kB (  0%)
- df reaching defs                   :   0.01 (  0%)   0.00 (  0%)   0.01 (  0%)       0 kB (  0%)
- df live regs                       :   0.05 (  1%)   0.01 (  1%)   0.02 (  0%)      26 kB (  0%)
- df live&amp;amp;initialized regs           :   0.00 (  0%)   0.01 (  1%)   0.01 (  0%)       0 kB (  0%)
- df use-def / def-use chains        :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)       0 kB (  0%)
- df reg dead/unused notes           :   0.02 (  1%)   0.00 (  0%)   0.00 (  0%)     510 kB (  0%)
- register information               :   0.00 (  0%)   0.00 (  0%)   0.03 (  0%)       0 kB (  0%)
- alias analysis                     :   0.02 (  1%)   0.00 (  0%)   0.04 (  1%)    1258 kB (  0%)
- alias stmt walking                 :   0.05 (  1%)   0.02 (  1%)   0.06 (  1%)      82 kB (  0%)
- preprocessing                      :   0.06 (  2%)   0.15 ( 11%)   1.38 ( 23%)    2618 kB (  1%)
- parser (global)                    :   0.11 (  3%)   0.19 ( 14%)   0.31 (  5%)   27095 kB ( 10%)
- parser struct body                 :   0.07 (  2%)   0.03 (  2%)   0.11 (  2%)   14169 kB (  5%)
- parser enumerator list             :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)      94 kB (  0%)
- parser function body               :   0.04 (  1%)   0.06 (  4%)   0.12 (  2%)    4044 kB (  1%)
- parser inl. func. body             :   0.03 (  1%)   0.03 (  2%)   0.02 (  0%)    1952 kB (  1%)
- parser inl. meth. body             :   0.09 (  3%)   0.03 (  2%)   0.11 (  2%)    9238 kB (  3%)
- template instantiation             :   0.47 ( 13%)   0.23 ( 17%)   0.71 ( 12%)   64835 kB ( 24%)
- constant expression evaluation     :   0.00 (  0%)   0.02 (  1%)   0.01 (  0%)     225 kB (  0%)
- early inlining heuristics          :   0.02 (  1%)   0.01 (  1%)   0.03 (  0%)    1507 kB (  1%)
- inline parameters                  :   0.02 (  1%)   0.00 (  0%)   0.05 (  1%)    4043 kB (  1%)
- integration                        :   0.25 (  7%)   0.10 (  7%)   0.23 (  4%)   22167 kB (  8%)
- tree gimplify                      :   0.02 (  1%)   0.02 (  1%)   0.04 (  1%)    6664 kB (  2%)
- tree eh                            :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)    1039 kB (  0%)
- tree CFG construction              :   0.01 (  0%)   0.00 (  0%)   0.01 (  0%)    2800 kB (  1%)
- tree CFG cleanup                   :   0.04 (  1%)   0.02 (  1%)   0.09 (  1%)      62 kB (  0%)
- tree VRP                           :   0.08 (  2%)   0.01 (  1%)   0.03 (  0%)    1672 kB (  1%)
- tree Early VRP                     :   0.02 (  1%)   0.02 (  1%)   0.02 (  0%)    2084 kB (  1%)
- tree PTA                           :   0.07 (  2%)   0.03 (  2%)   0.08 (  1%)     648 kB (  0%)
- tree SSA rewrite                   :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)    2156 kB (  1%)
- tree SSA other                     :   0.01 (  0%)   0.01 (  1%)   0.03 (  0%)     282 kB (  0%)
- tree SSA incremental               :   0.02 (  1%)   0.00 (  0%)   0.02 (  0%)     393 kB (  0%)
- tree operand scan                  :   0.07 (  2%)   0.05 (  4%)   0.12 (  2%)    7305 kB (  3%)
- dominator optimization             :   0.11 (  3%)   0.00 (  0%)   0.13 (  2%)    1428 kB (  1%)
- backwards jump threading           :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)     248 kB (  0%)
- tree SRA                           :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)     385 kB (  0%)
- tree CCP                           :   0.04 (  1%)   0.01 (  1%)   0.04 (  1%)     413 kB (  0%)
- tree PRE                           :   0.00 (  0%)   0.01 (  1%)   0.06 (  1%)    1057 kB (  0%)
- tree FRE                           :   0.06 (  2%)   0.05 (  4%)   0.05 (  1%)     670 kB (  0%)
- tree forward propagate             :   0.02 (  1%)   0.00 (  0%)   0.01 (  0%)     454 kB (  0%)
- tree phiprop                       :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)       7 kB (  0%)
- tree conservative DCE              :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)      45 kB (  0%)
- tree aggressive DCE                :   0.03 (  1%)   0.01 (  1%)   0.04 (  1%)    2337 kB (  1%)
- tree DSE                           :   0.01 (  0%)   0.01 (  1%)   0.02 (  0%)      32 kB (  0%)
- tree loop invariant motion         :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)       1 kB (  0%)
- complete unrolling                 :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)     417 kB (  0%)
- tree iv optimization               :   0.01 (  0%)   0.01 (  1%)   0.02 (  0%)     705 kB (  0%)
- tree switch conversion             :   0.00 (  0%)   0.01 (  1%)   0.00 (  0%)       0 kB (  0%)
- tree strlen optimization           :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)       2 kB (  0%)
- dominance computation              :   0.02 (  1%)   0.00 (  0%)   0.06 (  1%)       0 kB (  0%)
- out of ssa                         :   0.00 (  0%)   0.01 (  1%)   0.01 (  0%)      15 kB (  0%)
- expand vars                        :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)     351 kB (  0%)
- expand                             :   0.04 (  1%)   0.01 (  1%)   0.02 (  0%)    8842 kB (  3%)
- post expand cleanups               :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)     285 kB (  0%)
- forward prop                       :   0.04 (  1%)   0.00 (  0%)   0.02 (  0%)     375 kB (  0%)
- CSE                                :   0.02 (  1%)   0.01 (  1%)   0.11 (  2%)     141 kB (  0%)
- dead code elimination              :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)       0 kB (  0%)
- dead store elim1                   :   0.03 (  1%)   0.00 (  0%)   0.02 (  0%)     415 kB (  0%)
- dead store elim2                   :   0.02 (  1%)   0.00 (  0%)   0.04 (  1%)     630 kB (  0%)
- loop init                          :   0.01 (  0%)   0.01 (  1%)   0.03 (  0%)    2511 kB (  1%)
- loop fini                          :   0.02 (  1%)   0.00 (  0%)   0.00 (  0%)       0 kB (  0%)
- CPROP                              :   0.04 (  1%)   0.00 (  0%)   0.06 (  1%)     619 kB (  0%)
- PRE                                :   0.01 (  0%)   0.00 (  0%)   0.02 (  0%)     103 kB (  0%)
- CSE 2                              :   0.01 (  0%)   0.01 (  1%)   0.03 (  0%)      83 kB (  0%)
- branch prediction                  :   0.01 (  0%)   0.00 (  0%)   0.02 (  0%)     413 kB (  0%)
- combiner                           :   0.03 (  1%)   0.00 (  0%)   0.03 (  0%)    1112 kB (  0%)
- if-conversion                      :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)      64 kB (  0%)
- integrated RA                      :   0.09 (  3%)   0.01 (  1%)   0.05 (  1%)    5912 kB (  2%)
- LRA non-specific                   :   0.06 (  2%)   0.00 (  0%)   0.03 (  0%)     305 kB (  0%)
- LRA create live ranges             :   0.02 (  1%)   0.00 (  0%)   0.02 (  0%)      41 kB (  0%)
- LRA hard reg assignment            :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)       0 kB (  0%)
- reload                             :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)       0 kB (  0%)
- reload CSE regs                    :   0.02 (  1%)   0.00 (  0%)   0.03 (  0%)     571 kB (  0%)
- ree                                :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)       8 kB (  0%)
- thread pro- &amp;amp; epilogue             :   0.03 (  1%)   0.00 (  0%)   0.03 (  0%)     460 kB (  0%)
- peephole 2                         :   0.02 (  1%)   0.00 (  0%)   0.02 (  0%)      41 kB (  0%)
- hard reg cprop                     :   0.00 (  0%)   0.00 (  0%)   0.02 (  0%)      17 kB (  0%)
- scheduling 2                       :   0.15 (  4%)   0.01 (  1%)   0.16 (  3%)     335 kB (  0%)
- reorder blocks                     :   0.01 (  0%)   0.00 (  0%)   0.02 (  0%)     294 kB (  0%)
- shorten branches                   :   0.01 (  0%)   0.00 (  0%)   0.01 (  0%)       0 kB (  0%)
- final                              :   0.04 (  1%)   0.01 (  1%)   0.04 (  1%)    4707 kB (  2%)
- symout                             :   0.15 (  4%)   0.02 (  1%)   0.17 (  3%)   26953 kB ( 10%)
- variable tracking                  :   0.03 (  1%)   0.00 (  0%)   0.02 (  0%)    2416 kB (  1%)
- var-tracking dataflow              :   0.03 (  1%)   0.00 (  0%)   0.09 (  1%)      74 kB (  0%)
- var-tracking emit                  :   0.05 (  1%)   0.00 (  0%)   0.08 (  1%)    4059 kB (  1%)
- tree if-combine                    :   0.00 (  0%)   0.00 (  0%)   0.02 (  0%)      10 kB (  0%)
- straight-line strength reduction   :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)      11 kB (  0%)
- store merging                      :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)      61 kB (  0%)
- initialize rtl                     :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)      12 kB (  0%)
- early local passes                 :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)       0 kB (  0%)
- rest of compilation                :   0.13 (  4%)   0.02 (  1%)   0.12 (  2%)     731 kB (  0%)
- remove unused locals               :   0.01 (  0%)   0.00 (  0%)   0.05 (  1%)       3 kB (  0%)
- address taken                      :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)       0 kB (  0%)
- repair loop structures             :   0.02 (  1%)   0.00 (  0%)   0.00 (  0%)       3 kB (  0%)
- TOTAL                              :   3.59          1.38          6.13         275104 kB
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Ok, I guess that totally makes sense, &lt;em dir="ltr"&gt;if you are a compiler developer working on gcc itself&lt;/em&gt;. But I’m not! Most of
-the above either does not mean anything to me, or I don’t really care about it.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;I don’t care that much about “user” or “system” time; I care about how much time I had to wait for compilation
-to finish (“wall time”). Why it is in the middle of each row?&lt;/LI&gt;&lt;LI&gt;Is this output sorted by something? It’s not sorted from “most expensive” to “least expensive”. Not sorted
-alphabetically either. I &lt;em dir="ltr"&gt;guess&lt;/em&gt; it’s sorted by some internal structure that is not obvious to me.&lt;/LI&gt;&lt;LI&gt;I think the &lt;code dir="ltr"&gt;phase parsing&lt;/code&gt; is “generally frontend”, and &lt;code dir="ltr"&gt;phase opt and generate&lt;/code&gt; is “generally backend”; these are good to know.
-Then later on there’s a more detailed &lt;code dir="ltr"&gt;preprocessing&lt;/code&gt; to &lt;code dir="ltr"&gt;template instantiation&lt;/code&gt; which is frontend in more detail;
-that’s useful too. The rest? Besides some names that mean some optimization passes, many are cryptic to me, and I’m
-not sure why I should care about them. &lt;code dir="ltr"&gt;tree eh&lt;/code&gt;? Eh indeed.&lt;/LI&gt;&lt;LI&gt;Memory usage numbers are interesting to compiler developers, and &lt;em dir="ltr"&gt;maybe&lt;/em&gt; are useful to users that are under memory-constrained
-situations (like 32 bit systems etc.). Me? I don’t really care.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;So, while the gcc &lt;code dir="ltr"&gt;-ftime-report&lt;/code&gt; prints something, and some of that is very useful (template instantiation time; preprocessing time;
-time spent performing inlining etc.), it seems to be geared towards compiler developers, and less towards users.&lt;/p&gt;&lt;p dir="ltr"&gt;Again - if I’m investigating compile times of &lt;em dir="ltr"&gt;my code&lt;/em&gt;, the question I have is &lt;strong dir="ltr"&gt;what can I change in my code to make it compile faster?&lt;/strong&gt;
-Ideally some tool should be able to tell me both &lt;em dir="ltr"&gt;what&lt;/em&gt; takes time, and &lt;em dir="ltr"&gt;where&lt;/em&gt; in the code it does it.&lt;/p&gt;&lt;h3&gt;Clang&lt;/h3&gt;&lt;p&gt;Clang, being the most “fresh” of all these compilers, should be the most excellent, right? Right? :)&lt;/p&gt;&lt;p dir="ltr"&gt;Just like gcc, it also has &lt;code dir="ltr"&gt;-ftime-report&lt;/code&gt; option. That produces &lt;em dir="ltr"&gt;900 lines&lt;/em&gt; of output! Instead of pasting it in full here,
-I’ll &lt;a href="https://gist.github.com/aras-p/9b2f3fbad355d44a812e6749d9b69cb9" dir="ltr"&gt;just link to it&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;Several things to note:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Almost half of it is just the same information, duplicated? “Register Allocation”, “Instruction Selection and Scheduling”,
-“DWARF Emission” and “… Pass execution timing report …” sections are just emitted twice, but curiously enough, the
-other sections are printed just once. This sounds like a bug to me, and testing out various Clang versions in &lt;a href="https://godbolt.org/" dir="ltr"&gt;Compiler Explorer&lt;/a&gt;
-suggests that it started with Clang 7.0.0 and still exists on today’s 8.0.0-trunk. I’ll try to actually report it
-once I get access to their bug reporting system.
-
-&lt;UL&gt;&lt;LI&gt;Within the “Pass Execution Timing Report” section, there’s a bunch of items that are repeated multiple times too, e.g.
-“Combine redundant instructions” is listed 8 times; and “Function Alias Analysis Results” is listed 21 times.
-I’ve no idea if that’s a bug or not; I think I don’t care about them anyway.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;It suffers from the same “oriented to clang compiler developers, and not clang users” that gcc time report does.
-I really don’t care about all the LLVM optimization passes you ended up doing; and similarly I don’t care
-about user vs system times or memory usage.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;If it stopped printing all the info I don’t care about, did not duplicate half of it, and stopped printing LLVM passes after top 5 most
-expensive ones, it would already be way more legible, e.g. like this:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;===-------------------------------------------------------------------------===
-                         Miscellaneous Ungrouped Timers
-===-------------------------------------------------------------------------===
-   ---Wall Time---  --- Name ---
-   4.1943 ( 93.7%)  Code Generation Time
-   0.2808 (  6.3%)  LLVM IR Generation Time
-   4.4751 (100.0%)  Total
-===-------------------------------------------------------------------------===
-                              Register Allocation
-===-------------------------------------------------------------------------===
-  Total Execution Time: 0.0180 seconds (0.0181 wall clock)
-===-------------------------------------------------------------------------===
-                      Instruction Selection and Scheduling
-===-------------------------------------------------------------------------===
-  Total Execution Time: 0.2894 seconds (0.2894 wall clock)
-===-------------------------------------------------------------------------===
-                                 DWARF Emission
-===-------------------------------------------------------------------------===
-  Total Execution Time: 0.3599 seconds (0.3450 wall clock)
-===-------------------------------------------------------------------------===
-                      ... Pass execution timing report ...
-===-------------------------------------------------------------------------===
-  Total Execution Time: 3.5271 seconds (3.5085 wall clock)
-   ---Wall Time---  --- Name ---
-   0.4859 ( 13.8%)  X86 Assembly Printer
-   0.4388 ( 12.5%)  X86 DAG-&amp;gt;DAG Instruction Selection
-   0.2633 (  7.5%)  Function Integration/Inlining
-   0.1228 (  3.5%)  Global Value Numbering
-   0.0695 (  2.0%)  Combine redundant instructions
-   3.5085 (100.0%)  Total
-===-------------------------------------------------------------------------===
-                          Clang front-end time report
-===-------------------------------------------------------------------------===
-  Total Execution Time: 5.2175 seconds (6.3410 wall clock)
-   ---Wall Time---  --- Name ---
-   6.3410 (100.0%)  Clang front-end timer
-   6.3410 (100.0%)  Total
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;&lt;em&gt;(also, please, drop the “…” around “Pass execution timing report” name; why it is there?)&lt;/em&gt;&lt;/p&gt;&lt;p&gt;And then the various “Total” under the sections are quite a bit confusing. Let’s see:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;“Clang front-end time report” seems to be time for “everything”, not just the frontend (Clang frontend, LLVM backend, and whatever else it did).&lt;/LI&gt;&lt;LI&gt;I &lt;em dir="ltr"&gt;think&lt;/em&gt; the “backend” (LLVM) total part is under “Misc Ungrouped Timers, Code Generation Time”. This is probably
-what is “Pass execution timing” + “Register Allocation” + “Instruction Selection and Scheduling” etc.&lt;/LI&gt;&lt;LI&gt;So &lt;em dir="ltr"&gt;probably&lt;/em&gt; the actual Clang “frontend” (preprocessor, parsing – i.e. doing the C++ bits of the compilation)
-I could get by subtracting various LLVM related timer bits from the total time. Ugh. Could you just tell me that time please?&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Another thing to note: in all the optimization passes, “X86 Assembly Printer” seems to be the heaviest one? That doesn’t sound
-right. So I dug in a bit… turns out, once you pass &lt;code dir="ltr"&gt;-ftime-report&lt;/code&gt; flag, then the whole compilation time is &lt;strong dir="ltr"&gt;heavily affected&lt;/strong&gt;.
-It grows from 1.06s to 1.42s in that super simple STL snippet above, and from 16s to 26s in a much heavier source file I had.
-Normally for any sort of profiling tool I’d expect at max a couple percent overhead, but &lt;strong dir="ltr"&gt;Clang’s time report seems to make
-compilation take 1.5x longer&lt;/strong&gt;!&lt;/p&gt;&lt;p dir="ltr"&gt;From a quick look, it feels like this could primarily be caused by code in &lt;code dir="ltr"&gt;AsmPrinter.cpp&lt;/code&gt; that adds time sampling around
-each and every assembly instruction that was generated
-(&lt;a href="https://github.com/llvm-project/llvm-project-20170507/blob/2c29d441702d9/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp#L1087" dir="ltr"&gt;AsmPrinter.cpp, line 1087&lt;/a&gt;);
-this seems like it’s inside a loop that processes all the instructions. Taking &lt;em dir="ltr"&gt;that many&lt;/em&gt; timing samples probably does not end up
-being very fast, and thus heavily slows down the “X86 Assembly Printer” pass, when &lt;code dir="ltr"&gt;-ftime-report&lt;/code&gt; flag is used.&lt;/p&gt;&lt;p&gt;And each time sample capture itself seems to end up doing:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;A mutex lock and hashtable lookup (&lt;a href="https://github.com/llvm-project/llvm-project-20170507/blob/2c29d441702d9/llvm/lib/Support/Timer.cpp#L192" dir="ltr"&gt;Timer.cpp line 192&lt;/a&gt;),&lt;/LI&gt;&lt;LI&gt;Getting elapsed time (via &lt;code dir="ltr"&gt;chrono::system_clock::now&lt;/code&gt;), as well as user, system and wall times (via &lt;code dir="ltr"&gt;getrusage&lt;/code&gt; or &lt;code dir="ltr"&gt;GetProcessTimes&lt;/code&gt;),&lt;/LI&gt;&lt;LI&gt;Getting memory usage via &lt;code dir="ltr"&gt;_heapwalk&lt;/code&gt; loop on Windows
-(&lt;a href="https://github.com/llvm-project/llvm-project-20170507/blob/2c29d441702d9/llvm/lib/Support/Windows/Process.inc#L65" dir="ltr"&gt;Windows/Process.inc line 65&lt;/a&gt;),
-or via various means on Unix (&lt;a href="https://github.com/llvm-project/llvm-project-20170507/blob/2c29d441702d9/llvm/lib/Support/Unix/Process.inc#L87" dir="ltr"&gt;Unix/Process.inc line 87&lt;/a&gt;).&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;But dear clang! I only care about single “elapsed time”; you could replace all that complexity with a single
-&lt;code dir="ltr"&gt;*_clock::now&lt;/code&gt; call and be done with it.&lt;/p&gt;&lt;p dir="ltr"&gt;Even if presence of &lt;code dir="ltr"&gt;-ftime-report&lt;/code&gt; did not distort the compile times so much, Clang’s current implementation leaves much to be desired.
-It does not even tell me “how much time I spent parsing C++ code”, for example (without me manually doing the math), and does not tell
-other important aspects like “how much time I spent instantiating templates”. And just like gcc time report, it never tells &lt;strong dir="ltr"&gt;where in my code&lt;/strong&gt;
-the expensive parts actually are.&lt;/p&gt;&lt;h3&gt;But surely someone would have solved this already?&lt;/h3&gt;&lt;p&gt;I thought so too! But that doesn’t seem to be the case.&lt;/p&gt;&lt;p&gt;For Clang, various people have proposed changes or submitted patches to improve time report in some ways, for example:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;a href="https://reviews.llvm.org/D36946" dir="ltr"&gt;This patch&lt;/a&gt; by Eddie Elizondo adds template instantiation timers. Done in August 2017, everyone in discussion
-agreed it’s a good idea. Now it’s January 2019…&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://reviews.llvm.org/D36492" dir="ltr"&gt;This patch&lt;/a&gt; by Brian Gesiak added preprocessor timer in August 2017 too. After some back and forth
-discussion, eventually abandoned since someone else (Andrew Tischenko) said he’ll implement it in a better way. That was 2018 February.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Other people have built tools that are similar to clang, but are separate programs. For example, &lt;a href="https://github.com/mikael-s-persson/templight" dir="ltr"&gt;&lt;strong dir="ltr"&gt;Templight&lt;/strong&gt;&lt;/a&gt;
-by Sven Mikael Persson – it works just like Clang, but invoked with additional arguments dumps detailed information
-about all template instantiations into a separate file, that can then be converted into various other formats for visualization.&lt;/p&gt;&lt;p&gt;Templight does look promising, but a bit unwieldy to use, and only covers the template instantiation aspect. What if my compile
-time issues are somewhere else?&lt;/p&gt;&lt;p&gt;So I have spent a bit of time trying to make Clang do a “more useful for me” time report. It already pointed out one seemingly simple
-header file that we had, that was causing Clang to take “ages” (5-8 seconds) just including it, due to some recursive macro usage
-that Clang isn’t fast to plow through. Yay tools!&lt;/p&gt;&lt;p dir="ltr"&gt;What I did and how it works will be in the next blog post!
-But maybe you can guess on what it might be from my past blog posts (&lt;a href="http://aras-p.info/blog/2017/01/23/Chrome-Tracing-as-Profiler-Frontend/" dir="ltr"&gt;here&lt;/a&gt;
-or &lt;a href="http://aras-p.info/blog/2017/08/08/Unreasonable-Effectiveness-of-Profilers/" dir="ltr"&gt;here&lt;/a&gt;), and from this teaser image:&lt;/p&gt;&lt;img src="http://aras-p.info/img/blog/2019/clang-timereport-teaser.png" title="" alt="" width="320" height="74"&gt;&lt;p&gt;Stay tuned!&lt;/p&gt;</description><pubDate>Sun, 13 Jan 2019 19:33:38 -0600</pubDate></item><item><title>chezmoi: manage your dotfiles securely across multiple machines</title><link>https://lobste.rs/s/uet36y</link><description>&lt;h2&gt;Features&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Declarative: you declare the desired state of files, directories, and
+&lt;/div&gt;</description><pubDate>Sun, 13 Jan 2019 07:48:02 -0600</pubDate></item><item><title>chezmoi: manage your dotfiles securely across multiple machines</title><link>https://lobste.rs/s/uet36y</link><description>&lt;h2&gt;Features&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Declarative: you declare the desired state of files, directories, and
 symbolic links in your home directory and &lt;code dir="ltr"&gt;chezmoi&lt;/code&gt; updates your home
 directory to match that state.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Flexible: your dotfiles can be templates (using
 &lt;a href="https://godoc.org/text/template" rel="nofollow" dir="ltr"&gt;&lt;code dir="ltr"&gt;text/template&lt;/code&gt;&lt;/a&gt; syntax). Predefined
@@ -778,7 +512,364 @@ probably shouldn't. Existing configuration management tools like
 much better suited to whole system configuration management.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;chezmoi&lt;/code&gt; was inspired by Puppet, but created because Puppet is a slow overkill
 for managing your personal configuration files. The focus of &lt;code dir="ltr"&gt;chezmoi&lt;/code&gt; will
 always be personal home directory management. If your needs grow beyond that,
-switch to a whole system configuration management tool.&lt;/p&gt;&lt;h2&gt;Related projects&lt;/h2&gt;&lt;p dir="ltr"&gt;See &lt;a href="https://dotfiles.github.io/" rel="nofollow" dir="ltr"&gt;&lt;code dir="ltr"&gt;dotfiles.github.io&lt;/code&gt;&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;License&lt;/h2&gt;&lt;p&gt;MIT&lt;/p&gt;</description><pubDate>Sun, 13 Jan 2019 18:00:29 -0600</pubDate></item><item><title>Testing isn't everything</title><link>https://lobste.rs/s/d3smvj</link><description>&lt;p&gt;Written on  7 Jan 2019.&lt;/p&gt;&lt;p dir="ltr"&gt;Some of the most difficult code I’ve worked with is code that is “easily
+switch to a whole system configuration management tool.&lt;/p&gt;&lt;h2&gt;Related projects&lt;/h2&gt;&lt;p dir="ltr"&gt;See &lt;a href="https://dotfiles.github.io/" rel="nofollow" dir="ltr"&gt;&lt;code dir="ltr"&gt;dotfiles.github.io&lt;/code&gt;&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;License&lt;/h2&gt;&lt;p&gt;MIT&lt;/p&gt;</description><pubDate>Sun, 13 Jan 2019 18:00:29 -0600</pubDate></item><item><title>Investigating compile times, and Clang -ftime-report</title><link>https://lobste.rs/s/w2of30</link><description>&lt;h1&gt;Investigating compile times, and Clang -ftime-report&lt;/h1&gt;&lt;div dir="ltr"&gt;
+        Posted on
+        &lt;time datetime="2019-01-12T21:02:10+03:00" dir="ltr"&gt;
+          Jan 12, 2019
+        &lt;/time&gt;
+      &lt;/div&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;TL;DR&lt;/em&gt;: if you want to use &lt;code dir="ltr"&gt;-ftime-report&lt;/code&gt; Clang flag to help you figure out where or why your code is slow to compile…
+it’s not very helpful for that. But! In the next post we’ll try to do something about it :)&lt;/p&gt;&lt;h2&gt;Need for build time investigation tools&lt;/h2&gt;&lt;p&gt;Depending on how your large your codebase is, and how it is structured, C++ compilation times may or might not be an issue for you.
+It certainly is for us at Unity, and my understanding of build times of other large projects (like Chrome, LLVM or UE4), they aren’t
+exactly “fast” either. There are various underlying reasons for why C++ codebases might be slow to compile (preprocessor, complexity
+of the language, template instantiations, optimizations done by the compiler, linking times etc.).&lt;/p&gt;&lt;p dir="ltr"&gt;It would make sense to have some tools that a programmer could use to help them understand &lt;em dir="ltr"&gt;where&lt;/em&gt; or &lt;em dir="ltr"&gt;why&lt;/em&gt; their code is slow to compile.&lt;/p&gt;&lt;p&gt;You might think that, given how big of an issue compile times are in C++, there would be readily-available tools to do that. E.g. some
+flags in the popular compilers, or something?&lt;/p&gt;&lt;p dir="ltr"&gt;The reality, at least right now, is “ehhh, not really”. There really are no &lt;em dir="ltr"&gt;good&lt;/em&gt; tools in C++ compilers to help you with investigating build
+times.&lt;/p&gt;&lt;h2&gt;Build timing tools in existing compilers&lt;/h2&gt;&lt;p dir="ltr"&gt;I’ll do example with a super small C++ snippet that just includes some STL headers and does something with them. See the snippet
+and the output from three major compilers (Visual Studio, Gcc, Clang) in &lt;a href="https://godbolt.org/z/Yw08WW" dir="ltr"&gt;Compiler Explorer here&lt;/a&gt;.
+The actual code does not do anything useful, I just needed &lt;em dir="ltr"&gt;something&lt;/em&gt; to throw at the compiler.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;include&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;vector&amp;gt;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;include&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;string&amp;gt;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;include&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;unordered_map&amp;gt;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;include&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;regex&amp;gt;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt;
+&lt;/span&gt;{
+    &lt;span dir="ltr"&gt;std&lt;/span&gt;::&lt;span dir="ltr"&gt;vector&lt;/span&gt;&amp;lt;&lt;span dir="ltr"&gt;int&lt;/span&gt;&amp;gt; v(&lt;span dir="ltr"&gt;10&lt;/span&gt;);
+    v.push_back(&lt;span dir="ltr"&gt;7&lt;/span&gt;);
+    &lt;span dir="ltr"&gt;std&lt;/span&gt;::&lt;span dir="ltr"&gt;unordered_map&lt;/span&gt;&amp;lt;&lt;span dir="ltr"&gt;std&lt;/span&gt;::&lt;span dir="ltr"&gt;string&lt;/span&gt;, &lt;span dir="ltr"&gt;double&lt;/span&gt;&amp;gt; m;
+    m.insert(&lt;span dir="ltr"&gt;std&lt;/span&gt;::make_pair(&lt;span dir="ltr"&gt;"foo"&lt;/span&gt;, &lt;span dir="ltr"&gt;1.0&lt;/span&gt;));
+    &lt;span dir="ltr"&gt;std&lt;/span&gt;::&lt;span dir="ltr"&gt;regex &lt;span dir="ltr"&gt;re&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;"^asd.*$"&lt;/span&gt;)&lt;/span&gt;&lt;/span&gt;;
+    &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;;
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;I’m testing with Visual Studio 2017 v15.9, Gcc 8.2 and Clang 7.0.&lt;/p&gt;&lt;h4&gt;Visual Studio&lt;/h4&gt;&lt;p dir="ltr"&gt;Visual Studio has &lt;code dir="ltr"&gt;/Bt&lt;/code&gt;
+(see &lt;a href="https://blogs.msdn.microsoft.com/vcblog/2010/04/01/vc-tip-get-detailed-build-throughput-diagnostics-using-msbuild-compiler-and-linker/" dir="ltr"&gt;VC++ Team Blog post&lt;/a&gt;)
+and &lt;code dir="ltr"&gt;/d2cgsummary&lt;/code&gt; (see &lt;a href="http://aras-p.info/blog/2017/10/23/Best-unknown-MSVC-flag-d2cgsummary/" dir="ltr"&gt;my blog post&lt;/a&gt;) flags,
+and while they don’t contain much information and the UX of them is “a bit lacking”, they are at least something.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;/Bt&lt;/code&gt; prints how much time “frontend” (preprocessing, parsing - everything that is about the “C++ language”) and the “backend” (optimizations
+and final machine code generation – much less specific to C++ language) takes.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;time(C:\msvc\v19_16\bin\Hostx64\x64\c1xx.dll)=0.775s
+time(C:\msvc\v19_16\bin\Hostx64\x64\c2.dll)=1.303s
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Of course it would be way friendlier if instead of printing two paths to DLLs, it would actually print “Frontend” and “Backend”. That’s
+what &lt;code dir="ltr"&gt;whatever\c1xx.dll&lt;/code&gt; and &lt;code dir="ltr"&gt;whatever\c2.dll&lt;/code&gt; actually are. &lt;a href="http://aras-p.info/blog/2017/05/07/Users-POV-and-Empathy/" dir="ltr"&gt;Empathy towards the user&lt;/a&gt; is important!&lt;/p&gt;&lt;p dir="ltr"&gt;Output of &lt;code dir="ltr"&gt;/d2cgsummary&lt;/code&gt; is even more cryptic, something like this (cut down for brevity):&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;Code Generation Summary
+  Total Function Count: 821
+  Elapsed Time: 1.210 sec
+  Total Compilation Time: 4.209 sec
+  Average time per function: 0.005 sec
+  Anomalistic Compile Times: 15
+    ?_Add_equiv@?$_Builder@PEBDDV?$regex_traits@D@std@@@std@@QEAAXPEBD0_J@Z: 0.299 sec, 869 instrs
+    ?_Add_rep@?$_Builder@PEBDDV?$regex_traits@D@std@@@std@@QEAAXHH_N@Z: 0.239 sec, 831 instrs
+    &amp;lt;...&amp;gt;
+  Serialized Initializer Count: 1
+  Serialized Initializer Time: 0.001 sec
+RdrReadProc Caching Stats
+  Functions Cached: 5
+  Retrieved Count: 164
+  Abandoned Retrieval Count: 0
+  Abandoned Caching Count: 0
+  Wasted Caching Attempts: 0
+  Functions Retrieved at Least Once: 5
+  Functions Cached and Never Retrieved: 0
+  Most Hits:
+    ?_Get_data@?$_Vector_alloc@U?$_Vec_base_types@IV?$allocator@I@std@@@std@@@std@@QEAAAEAV?$_Vector_val@U?$_Simple_types@I@std@@@2@XZ: 35
+    ?_Get_second@?$_Compressed_pair@V?$allocator@I@std@@V?$_Vector_val@U?$_Simple_types@I@std@@@2@$00@std@@QEAAAEAV?$_Vector_val@U?$_Simple_types@I@std@@@2@XZ: 35
+    &amp;lt;...&amp;gt;
+  Least Hits:
+    ?_Adopt@_Iterator_base0@std@@QEAAXPEBX@Z: 28
+    &amp;lt;...&amp;gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Most of that &lt;em dir="ltr"&gt;probably&lt;/em&gt; makes sense for someone who actually works on the Visual Studio compiler, but again - I’m just a user, I have
+&lt;em dir="ltr"&gt;no idea&lt;/em&gt; what is “RdrReadProc”, what is “Serialized Initializer” or “Retrieved Count”, and most importantly,
+whether any of this output can help me to answer the question
+“&lt;strong dir="ltr"&gt;how can I change &lt;em dir="ltr"&gt;my code&lt;/em&gt; to make it compile faster&lt;/strong&gt;”? Also, why are the function names not demangled?&lt;/p&gt;&lt;p dir="ltr"&gt;The “Anomalistic Compile Times” section can help to track down some patterns in code that end up being very slow for compiler to process
+(like &lt;a href="http://aras-p.info/blog/2017/10/09/Forced-Inlining-Might-Be-Slow/" dir="ltr"&gt;forced inlining on large functions&lt;/a&gt;), but that’s about it.&lt;/p&gt;&lt;p dir="ltr"&gt;So while MSC does have &lt;em dir="ltr"&gt;something&lt;/em&gt;, I could think of many possible improvements in what kind of timing/profiling information it could output.&lt;/p&gt;&lt;h4&gt;Gcc&lt;/h4&gt;&lt;p&gt;I’m not using Gcc much, and at least in my industry (game development), it’s not very popular.
+Out of all platforms that I happen to use at work, they are all on either Visual Studio or some variant of Clang. Gcc is only used on Linux, and
+even there, there’s an option to use Clang.&lt;/p&gt;&lt;p dir="ltr"&gt;Anyway, gcc has &lt;code dir="ltr"&gt;-ftime-report&lt;/code&gt; argument that prints information about where time was spent during compilation. Brace yourself,
+this will be over 100 lines of text:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;Time variable                                   usr           sys          wall               GGC
+ phase setup                        :   0.00 (  0%)   0.00 (  0%)   0.00 (  0%)    1509 kB (  1%)
+ phase parsing                      :   0.59 ( 16%)   0.60 ( 43%)   2.35 ( 38%)   91628 kB ( 33%)
+ phase lang. deferred               :   0.32 (  9%)   0.16 ( 12%)   0.47 (  8%)   46797 kB ( 17%)
+ phase opt and generate             :   2.60 ( 72%)   0.62 ( 45%)   3.22 ( 53%)  132237 kB ( 48%)
+ phase last asm                     :   0.08 (  2%)   0.00 (  0%)   0.09 (  1%)    2921 kB (  1%)
+ |name lookup                       :   0.18 (  5%)   0.10 (  7%)   0.27 (  4%)    4820 kB (  2%)
+ |overload resolution               :   0.13 (  4%)   0.12 (  9%)   0.31 (  5%)   26374 kB ( 10%)
+ dump files                         :   0.08 (  2%)   0.01 (  1%)   0.04 (  1%)       0 kB (  0%)
+ callgraph construction             :   0.08 (  2%)   0.02 (  1%)   0.11 (  2%)   12160 kB (  4%)
+ callgraph optimization             :   0.02 (  1%)   0.02 (  1%)   0.04 (  1%)      87 kB (  0%)
+ ipa function summary               :   0.00 (  0%)   0.01 (  1%)   0.02 (  0%)     808 kB (  0%)
+ ipa cp                             :   0.01 (  0%)   0.01 (  1%)   0.01 (  0%)     564 kB (  0%)
+ ipa inlining heuristics            :   0.01 (  0%)   0.00 (  0%)   0.02 (  0%)     807 kB (  0%)
+ ipa function splitting             :   0.01 (  0%)   0.00 (  0%)   0.02 (  0%)     233 kB (  0%)
+ ipa pure const                     :   0.02 (  1%)   0.00 (  0%)   0.01 (  0%)      22 kB (  0%)
+ ipa icf                            :   0.01 (  0%)   0.00 (  0%)   0.02 (  0%)       0 kB (  0%)
+ ipa SRA                            :   0.07 (  2%)   0.02 (  1%)   0.10 (  2%)    6231 kB (  2%)
+ ipa free inline summary            :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)       0 kB (  0%)
+ cfg construction                   :   0.01 (  0%)   0.00 (  0%)   0.01 (  0%)     179 kB (  0%)
+ cfg cleanup                        :   0.04 (  1%)   0.00 (  0%)   0.03 (  0%)     200 kB (  0%)
+ trivially dead code                :   0.00 (  0%)   0.00 (  0%)   0.03 (  0%)       1 kB (  0%)
+ df scan insns                      :   0.02 (  1%)   0.01 (  1%)   0.01 (  0%)       7 kB (  0%)
+ df multiple defs                   :   0.00 (  0%)   0.00 (  0%)   0.02 (  0%)       0 kB (  0%)
+ df reaching defs                   :   0.01 (  0%)   0.00 (  0%)   0.01 (  0%)       0 kB (  0%)
+ df live regs                       :   0.05 (  1%)   0.01 (  1%)   0.02 (  0%)      26 kB (  0%)
+ df live&amp;amp;initialized regs           :   0.00 (  0%)   0.01 (  1%)   0.01 (  0%)       0 kB (  0%)
+ df use-def / def-use chains        :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)       0 kB (  0%)
+ df reg dead/unused notes           :   0.02 (  1%)   0.00 (  0%)   0.00 (  0%)     510 kB (  0%)
+ register information               :   0.00 (  0%)   0.00 (  0%)   0.03 (  0%)       0 kB (  0%)
+ alias analysis                     :   0.02 (  1%)   0.00 (  0%)   0.04 (  1%)    1258 kB (  0%)
+ alias stmt walking                 :   0.05 (  1%)   0.02 (  1%)   0.06 (  1%)      82 kB (  0%)
+ preprocessing                      :   0.06 (  2%)   0.15 ( 11%)   1.38 ( 23%)    2618 kB (  1%)
+ parser (global)                    :   0.11 (  3%)   0.19 ( 14%)   0.31 (  5%)   27095 kB ( 10%)
+ parser struct body                 :   0.07 (  2%)   0.03 (  2%)   0.11 (  2%)   14169 kB (  5%)
+ parser enumerator list             :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)      94 kB (  0%)
+ parser function body               :   0.04 (  1%)   0.06 (  4%)   0.12 (  2%)    4044 kB (  1%)
+ parser inl. func. body             :   0.03 (  1%)   0.03 (  2%)   0.02 (  0%)    1952 kB (  1%)
+ parser inl. meth. body             :   0.09 (  3%)   0.03 (  2%)   0.11 (  2%)    9238 kB (  3%)
+ template instantiation             :   0.47 ( 13%)   0.23 ( 17%)   0.71 ( 12%)   64835 kB ( 24%)
+ constant expression evaluation     :   0.00 (  0%)   0.02 (  1%)   0.01 (  0%)     225 kB (  0%)
+ early inlining heuristics          :   0.02 (  1%)   0.01 (  1%)   0.03 (  0%)    1507 kB (  1%)
+ inline parameters                  :   0.02 (  1%)   0.00 (  0%)   0.05 (  1%)    4043 kB (  1%)
+ integration                        :   0.25 (  7%)   0.10 (  7%)   0.23 (  4%)   22167 kB (  8%)
+ tree gimplify                      :   0.02 (  1%)   0.02 (  1%)   0.04 (  1%)    6664 kB (  2%)
+ tree eh                            :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)    1039 kB (  0%)
+ tree CFG construction              :   0.01 (  0%)   0.00 (  0%)   0.01 (  0%)    2800 kB (  1%)
+ tree CFG cleanup                   :   0.04 (  1%)   0.02 (  1%)   0.09 (  1%)      62 kB (  0%)
+ tree VRP                           :   0.08 (  2%)   0.01 (  1%)   0.03 (  0%)    1672 kB (  1%)
+ tree Early VRP                     :   0.02 (  1%)   0.02 (  1%)   0.02 (  0%)    2084 kB (  1%)
+ tree PTA                           :   0.07 (  2%)   0.03 (  2%)   0.08 (  1%)     648 kB (  0%)
+ tree SSA rewrite                   :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)    2156 kB (  1%)
+ tree SSA other                     :   0.01 (  0%)   0.01 (  1%)   0.03 (  0%)     282 kB (  0%)
+ tree SSA incremental               :   0.02 (  1%)   0.00 (  0%)   0.02 (  0%)     393 kB (  0%)
+ tree operand scan                  :   0.07 (  2%)   0.05 (  4%)   0.12 (  2%)    7305 kB (  3%)
+ dominator optimization             :   0.11 (  3%)   0.00 (  0%)   0.13 (  2%)    1428 kB (  1%)
+ backwards jump threading           :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)     248 kB (  0%)
+ tree SRA                           :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)     385 kB (  0%)
+ tree CCP                           :   0.04 (  1%)   0.01 (  1%)   0.04 (  1%)     413 kB (  0%)
+ tree PRE                           :   0.00 (  0%)   0.01 (  1%)   0.06 (  1%)    1057 kB (  0%)
+ tree FRE                           :   0.06 (  2%)   0.05 (  4%)   0.05 (  1%)     670 kB (  0%)
+ tree forward propagate             :   0.02 (  1%)   0.00 (  0%)   0.01 (  0%)     454 kB (  0%)
+ tree phiprop                       :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)       7 kB (  0%)
+ tree conservative DCE              :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)      45 kB (  0%)
+ tree aggressive DCE                :   0.03 (  1%)   0.01 (  1%)   0.04 (  1%)    2337 kB (  1%)
+ tree DSE                           :   0.01 (  0%)   0.01 (  1%)   0.02 (  0%)      32 kB (  0%)
+ tree loop invariant motion         :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)       1 kB (  0%)
+ complete unrolling                 :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)     417 kB (  0%)
+ tree iv optimization               :   0.01 (  0%)   0.01 (  1%)   0.02 (  0%)     705 kB (  0%)
+ tree switch conversion             :   0.00 (  0%)   0.01 (  1%)   0.00 (  0%)       0 kB (  0%)
+ tree strlen optimization           :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)       2 kB (  0%)
+ dominance computation              :   0.02 (  1%)   0.00 (  0%)   0.06 (  1%)       0 kB (  0%)
+ out of ssa                         :   0.00 (  0%)   0.01 (  1%)   0.01 (  0%)      15 kB (  0%)
+ expand vars                        :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)     351 kB (  0%)
+ expand                             :   0.04 (  1%)   0.01 (  1%)   0.02 (  0%)    8842 kB (  3%)
+ post expand cleanups               :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)     285 kB (  0%)
+ forward prop                       :   0.04 (  1%)   0.00 (  0%)   0.02 (  0%)     375 kB (  0%)
+ CSE                                :   0.02 (  1%)   0.01 (  1%)   0.11 (  2%)     141 kB (  0%)
+ dead code elimination              :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)       0 kB (  0%)
+ dead store elim1                   :   0.03 (  1%)   0.00 (  0%)   0.02 (  0%)     415 kB (  0%)
+ dead store elim2                   :   0.02 (  1%)   0.00 (  0%)   0.04 (  1%)     630 kB (  0%)
+ loop init                          :   0.01 (  0%)   0.01 (  1%)   0.03 (  0%)    2511 kB (  1%)
+ loop fini                          :   0.02 (  1%)   0.00 (  0%)   0.00 (  0%)       0 kB (  0%)
+ CPROP                              :   0.04 (  1%)   0.00 (  0%)   0.06 (  1%)     619 kB (  0%)
+ PRE                                :   0.01 (  0%)   0.00 (  0%)   0.02 (  0%)     103 kB (  0%)
+ CSE 2                              :   0.01 (  0%)   0.01 (  1%)   0.03 (  0%)      83 kB (  0%)
+ branch prediction                  :   0.01 (  0%)   0.00 (  0%)   0.02 (  0%)     413 kB (  0%)
+ combiner                           :   0.03 (  1%)   0.00 (  0%)   0.03 (  0%)    1112 kB (  0%)
+ if-conversion                      :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)      64 kB (  0%)
+ integrated RA                      :   0.09 (  3%)   0.01 (  1%)   0.05 (  1%)    5912 kB (  2%)
+ LRA non-specific                   :   0.06 (  2%)   0.00 (  0%)   0.03 (  0%)     305 kB (  0%)
+ LRA create live ranges             :   0.02 (  1%)   0.00 (  0%)   0.02 (  0%)      41 kB (  0%)
+ LRA hard reg assignment            :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)       0 kB (  0%)
+ reload                             :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)       0 kB (  0%)
+ reload CSE regs                    :   0.02 (  1%)   0.00 (  0%)   0.03 (  0%)     571 kB (  0%)
+ ree                                :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)       8 kB (  0%)
+ thread pro- &amp;amp; epilogue             :   0.03 (  1%)   0.00 (  0%)   0.03 (  0%)     460 kB (  0%)
+ peephole 2                         :   0.02 (  1%)   0.00 (  0%)   0.02 (  0%)      41 kB (  0%)
+ hard reg cprop                     :   0.00 (  0%)   0.00 (  0%)   0.02 (  0%)      17 kB (  0%)
+ scheduling 2                       :   0.15 (  4%)   0.01 (  1%)   0.16 (  3%)     335 kB (  0%)
+ reorder blocks                     :   0.01 (  0%)   0.00 (  0%)   0.02 (  0%)     294 kB (  0%)
+ shorten branches                   :   0.01 (  0%)   0.00 (  0%)   0.01 (  0%)       0 kB (  0%)
+ final                              :   0.04 (  1%)   0.01 (  1%)   0.04 (  1%)    4707 kB (  2%)
+ symout                             :   0.15 (  4%)   0.02 (  1%)   0.17 (  3%)   26953 kB ( 10%)
+ variable tracking                  :   0.03 (  1%)   0.00 (  0%)   0.02 (  0%)    2416 kB (  1%)
+ var-tracking dataflow              :   0.03 (  1%)   0.00 (  0%)   0.09 (  1%)      74 kB (  0%)
+ var-tracking emit                  :   0.05 (  1%)   0.00 (  0%)   0.08 (  1%)    4059 kB (  1%)
+ tree if-combine                    :   0.00 (  0%)   0.00 (  0%)   0.02 (  0%)      10 kB (  0%)
+ straight-line strength reduction   :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)      11 kB (  0%)
+ store merging                      :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)      61 kB (  0%)
+ initialize rtl                     :   0.00 (  0%)   0.00 (  0%)   0.01 (  0%)      12 kB (  0%)
+ early local passes                 :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)       0 kB (  0%)
+ rest of compilation                :   0.13 (  4%)   0.02 (  1%)   0.12 (  2%)     731 kB (  0%)
+ remove unused locals               :   0.01 (  0%)   0.00 (  0%)   0.05 (  1%)       3 kB (  0%)
+ address taken                      :   0.01 (  0%)   0.00 (  0%)   0.00 (  0%)       0 kB (  0%)
+ repair loop structures             :   0.02 (  1%)   0.00 (  0%)   0.00 (  0%)       3 kB (  0%)
+ TOTAL                              :   3.59          1.38          6.13         275104 kB
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Ok, I guess that totally makes sense, &lt;em dir="ltr"&gt;if you are a compiler developer working on gcc itself&lt;/em&gt;. But I’m not! Most of
+the above either does not mean anything to me, or I don’t really care about it.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;I don’t care that much about “user” or “system” time; I care about how much time I had to wait for compilation
+to finish (“wall time”). Why it is in the middle of each row?&lt;/LI&gt;&lt;LI&gt;Is this output sorted by something? It’s not sorted from “most expensive” to “least expensive”. Not sorted
+alphabetically either. I &lt;em dir="ltr"&gt;guess&lt;/em&gt; it’s sorted by some internal structure that is not obvious to me.&lt;/LI&gt;&lt;LI&gt;I think the &lt;code dir="ltr"&gt;phase parsing&lt;/code&gt; is “generally frontend”, and &lt;code dir="ltr"&gt;phase opt and generate&lt;/code&gt; is “generally backend”; these are good to know.
+Then later on there’s a more detailed &lt;code dir="ltr"&gt;preprocessing&lt;/code&gt; to &lt;code dir="ltr"&gt;template instantiation&lt;/code&gt; which is frontend in more detail;
+that’s useful too. The rest? Besides some names that mean some optimization passes, many are cryptic to me, and I’m
+not sure why I should care about them. &lt;code dir="ltr"&gt;tree eh&lt;/code&gt;? Eh indeed.&lt;/LI&gt;&lt;LI&gt;Memory usage numbers are interesting to compiler developers, and &lt;em dir="ltr"&gt;maybe&lt;/em&gt; are useful to users that are under memory-constrained
+situations (like 32 bit systems etc.). Me? I don’t really care.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;So, while the gcc &lt;code dir="ltr"&gt;-ftime-report&lt;/code&gt; prints something, and some of that is very useful (template instantiation time; preprocessing time;
+time spent performing inlining etc.), it seems to be geared towards compiler developers, and less towards users.&lt;/p&gt;&lt;p dir="ltr"&gt;Again - if I’m investigating compile times of &lt;em dir="ltr"&gt;my code&lt;/em&gt;, the question I have is &lt;strong dir="ltr"&gt;what can I change in my code to make it compile faster?&lt;/strong&gt;
+Ideally some tool should be able to tell me both &lt;em dir="ltr"&gt;what&lt;/em&gt; takes time, and &lt;em dir="ltr"&gt;where&lt;/em&gt; in the code it does it.&lt;/p&gt;&lt;h3&gt;Clang&lt;/h3&gt;&lt;p&gt;Clang, being the most “fresh” of all these compilers, should be the most excellent, right? Right? :)&lt;/p&gt;&lt;p dir="ltr"&gt;Just like gcc, it also has &lt;code dir="ltr"&gt;-ftime-report&lt;/code&gt; option. That produces &lt;em dir="ltr"&gt;900 lines&lt;/em&gt; of output! Instead of pasting it in full here,
+I’ll &lt;a href="https://gist.github.com/aras-p/9b2f3fbad355d44a812e6749d9b69cb9" dir="ltr"&gt;just link to it&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;Several things to note:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Almost half of it is just the same information, duplicated? “Register Allocation”, “Instruction Selection and Scheduling”,
+“DWARF Emission” and “… Pass execution timing report …” sections are just emitted twice, but curiously enough, the
+other sections are printed just once. This sounds like a bug to me, and testing out various Clang versions in &lt;a href="https://godbolt.org/" dir="ltr"&gt;Compiler Explorer&lt;/a&gt;
+suggests that it started with Clang 7.0.0 and still exists on today’s 8.0.0-trunk. I’ll try to actually report it
+once I get access to their bug reporting system.
+
+&lt;UL&gt;&lt;LI&gt;Within the “Pass Execution Timing Report” section, there’s a bunch of items that are repeated multiple times too, e.g.
+“Combine redundant instructions” is listed 8 times; and “Function Alias Analysis Results” is listed 21 times.
+I’ve no idea if that’s a bug or not; I think I don’t care about them anyway.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;It suffers from the same “oriented to clang compiler developers, and not clang users” that gcc time report does.
+I really don’t care about all the LLVM optimization passes you ended up doing; and similarly I don’t care
+about user vs system times or memory usage.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;If it stopped printing all the info I don’t care about, did not duplicate half of it, and stopped printing LLVM passes after top 5 most
+expensive ones, it would already be way more legible, e.g. like this:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;===-------------------------------------------------------------------------===
+                         Miscellaneous Ungrouped Timers
+===-------------------------------------------------------------------------===
+   ---Wall Time---  --- Name ---
+   4.1943 ( 93.7%)  Code Generation Time
+   0.2808 (  6.3%)  LLVM IR Generation Time
+   4.4751 (100.0%)  Total
+===-------------------------------------------------------------------------===
+                              Register Allocation
+===-------------------------------------------------------------------------===
+  Total Execution Time: 0.0180 seconds (0.0181 wall clock)
+===-------------------------------------------------------------------------===
+                      Instruction Selection and Scheduling
+===-------------------------------------------------------------------------===
+  Total Execution Time: 0.2894 seconds (0.2894 wall clock)
+===-------------------------------------------------------------------------===
+                                 DWARF Emission
+===-------------------------------------------------------------------------===
+  Total Execution Time: 0.3599 seconds (0.3450 wall clock)
+===-------------------------------------------------------------------------===
+                      ... Pass execution timing report ...
+===-------------------------------------------------------------------------===
+  Total Execution Time: 3.5271 seconds (3.5085 wall clock)
+   ---Wall Time---  --- Name ---
+   0.4859 ( 13.8%)  X86 Assembly Printer
+   0.4388 ( 12.5%)  X86 DAG-&amp;gt;DAG Instruction Selection
+   0.2633 (  7.5%)  Function Integration/Inlining
+   0.1228 (  3.5%)  Global Value Numbering
+   0.0695 (  2.0%)  Combine redundant instructions
+   3.5085 (100.0%)  Total
+===-------------------------------------------------------------------------===
+                          Clang front-end time report
+===-------------------------------------------------------------------------===
+  Total Execution Time: 5.2175 seconds (6.3410 wall clock)
+   ---Wall Time---  --- Name ---
+   6.3410 (100.0%)  Clang front-end timer
+   6.3410 (100.0%)  Total
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;&lt;em&gt;(also, please, drop the “…” around “Pass execution timing report” name; why it is there?)&lt;/em&gt;&lt;/p&gt;&lt;p&gt;And then the various “Total” under the sections are quite a bit confusing. Let’s see:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;“Clang front-end time report” seems to be time for “everything”, not just the frontend (Clang frontend, LLVM backend, and whatever else it did).&lt;/LI&gt;&lt;LI&gt;I &lt;em dir="ltr"&gt;think&lt;/em&gt; the “backend” (LLVM) total part is under “Misc Ungrouped Timers, Code Generation Time”. This is probably
+what is “Pass execution timing” + “Register Allocation” + “Instruction Selection and Scheduling” etc.&lt;/LI&gt;&lt;LI&gt;So &lt;em dir="ltr"&gt;probably&lt;/em&gt; the actual Clang “frontend” (preprocessor, parsing – i.e. doing the C++ bits of the compilation)
+I could get by subtracting various LLVM related timer bits from the total time. Ugh. Could you just tell me that time please?&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Another thing to note: in all the optimization passes, “X86 Assembly Printer” seems to be the heaviest one? That doesn’t sound
+right. So I dug in a bit… turns out, once you pass &lt;code dir="ltr"&gt;-ftime-report&lt;/code&gt; flag, then the whole compilation time is &lt;strong dir="ltr"&gt;heavily affected&lt;/strong&gt;.
+It grows from 1.06s to 1.42s in that super simple STL snippet above, and from 16s to 26s in a much heavier source file I had.
+Normally for any sort of profiling tool I’d expect at max a couple percent overhead, but &lt;strong dir="ltr"&gt;Clang’s time report seems to make
+compilation take 1.5x longer&lt;/strong&gt;!&lt;/p&gt;&lt;p dir="ltr"&gt;From a quick look, it feels like this could primarily be caused by code in &lt;code dir="ltr"&gt;AsmPrinter.cpp&lt;/code&gt; that adds time sampling around
+each and every assembly instruction that was generated
+(&lt;a href="https://github.com/llvm-project/llvm-project-20170507/blob/2c29d441702d9/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp#L1087" dir="ltr"&gt;AsmPrinter.cpp, line 1087&lt;/a&gt;);
+this seems like it’s inside a loop that processes all the instructions. Taking &lt;em dir="ltr"&gt;that many&lt;/em&gt; timing samples probably does not end up
+being very fast, and thus heavily slows down the “X86 Assembly Printer” pass, when &lt;code dir="ltr"&gt;-ftime-report&lt;/code&gt; flag is used.&lt;/p&gt;&lt;p&gt;And each time sample capture itself seems to end up doing:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;A mutex lock and hashtable lookup (&lt;a href="https://github.com/llvm-project/llvm-project-20170507/blob/2c29d441702d9/llvm/lib/Support/Timer.cpp#L192" dir="ltr"&gt;Timer.cpp line 192&lt;/a&gt;),&lt;/LI&gt;&lt;LI&gt;Getting elapsed time (via &lt;code dir="ltr"&gt;chrono::system_clock::now&lt;/code&gt;), as well as user, system and wall times (via &lt;code dir="ltr"&gt;getrusage&lt;/code&gt; or &lt;code dir="ltr"&gt;GetProcessTimes&lt;/code&gt;),&lt;/LI&gt;&lt;LI&gt;Getting memory usage via &lt;code dir="ltr"&gt;_heapwalk&lt;/code&gt; loop on Windows
+(&lt;a href="https://github.com/llvm-project/llvm-project-20170507/blob/2c29d441702d9/llvm/lib/Support/Windows/Process.inc#L65" dir="ltr"&gt;Windows/Process.inc line 65&lt;/a&gt;),
+or via various means on Unix (&lt;a href="https://github.com/llvm-project/llvm-project-20170507/blob/2c29d441702d9/llvm/lib/Support/Unix/Process.inc#L87" dir="ltr"&gt;Unix/Process.inc line 87&lt;/a&gt;).&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;But dear clang! I only care about single “elapsed time”; you could replace all that complexity with a single
+&lt;code dir="ltr"&gt;*_clock::now&lt;/code&gt; call and be done with it.&lt;/p&gt;&lt;p dir="ltr"&gt;Even if presence of &lt;code dir="ltr"&gt;-ftime-report&lt;/code&gt; did not distort the compile times so much, Clang’s current implementation leaves much to be desired.
+It does not even tell me “how much time I spent parsing C++ code”, for example (without me manually doing the math), and does not tell
+other important aspects like “how much time I spent instantiating templates”. And just like gcc time report, it never tells &lt;strong dir="ltr"&gt;where in my code&lt;/strong&gt;
+the expensive parts actually are.&lt;/p&gt;&lt;h3&gt;But surely someone would have solved this already?&lt;/h3&gt;&lt;p&gt;I thought so too! But that doesn’t seem to be the case.&lt;/p&gt;&lt;p&gt;For Clang, various people have proposed changes or submitted patches to improve time report in some ways, for example:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;a href="https://reviews.llvm.org/D36946" dir="ltr"&gt;This patch&lt;/a&gt; by Eddie Elizondo adds template instantiation timers. Done in August 2017, everyone in discussion
+agreed it’s a good idea. Now it’s January 2019…&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://reviews.llvm.org/D36492" dir="ltr"&gt;This patch&lt;/a&gt; by Brian Gesiak added preprocessor timer in August 2017 too. After some back and forth
+discussion, eventually abandoned since someone else (Andrew Tischenko) said he’ll implement it in a better way. That was 2018 February.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Other people have built tools that are similar to clang, but are separate programs. For example, &lt;a href="https://github.com/mikael-s-persson/templight" dir="ltr"&gt;&lt;strong dir="ltr"&gt;Templight&lt;/strong&gt;&lt;/a&gt;
+by Sven Mikael Persson – it works just like Clang, but invoked with additional arguments dumps detailed information
+about all template instantiations into a separate file, that can then be converted into various other formats for visualization.&lt;/p&gt;&lt;p&gt;Templight does look promising, but a bit unwieldy to use, and only covers the template instantiation aspect. What if my compile
+time issues are somewhere else?&lt;/p&gt;&lt;p&gt;So I have spent a bit of time trying to make Clang do a “more useful for me” time report. It already pointed out one seemingly simple
+header file that we had, that was causing Clang to take “ages” (5-8 seconds) just including it, due to some recursive macro usage
+that Clang isn’t fast to plow through. Yay tools!&lt;/p&gt;&lt;p dir="ltr"&gt;What I did and how it works will be in the next blog post!
+But maybe you can guess on what it might be from my past blog posts (&lt;a href="http://aras-p.info/blog/2017/01/23/Chrome-Tracing-as-Profiler-Frontend/" dir="ltr"&gt;here&lt;/a&gt;
+or &lt;a href="http://aras-p.info/blog/2017/08/08/Unreasonable-Effectiveness-of-Profilers/" dir="ltr"&gt;here&lt;/a&gt;), and from this teaser image:&lt;/p&gt;&lt;img src="http://aras-p.info/img/blog/2019/clang-timereport-teaser.png" title="" alt="" width="320" height="74"&gt;&lt;p&gt;Stay tuned!&lt;/p&gt;</description><pubDate>Sun, 13 Jan 2019 19:33:38 -0600</pubDate></item><item><title>Monotonic clocks are not monotonic</title><link>https://lobste.rs/s/eo82wo</link><description>&lt;div dir="ltr"&gt;
+
+    &lt;strong dir="ltr"&gt;
+        rust-highfive
+    &lt;/strong&gt;
+
+      referenced this pull request from commit &lt;code dir="ltr"&gt;&lt;a href="https://github.com/rust-lang-nursery/rust-toolstate/commit/2549066f8a35b4044a2692eb1d1309d21c3087ec" dir="ltr"&gt;2549066&lt;/a&gt;&lt;/code&gt;
+      
+
+
+    &lt;a href="https://github.com/rust-lang/rust/pull/56988#event-2060308478" dir="ltr"&gt;&lt;time datetime="2019-01-08 14:12:53 UTC" dir="ltr"&gt;6 days ago&lt;/time&gt;&lt;/a&gt;
+&lt;/div&gt;&lt;div dir="ltr"&gt;
+
+    &lt;strong dir="ltr"&gt;
+        VardhanThigle
+    &lt;/strong&gt;
+
+      referenced this pull request from commit &lt;code dir="ltr"&gt;&lt;a href="https://github.com/VardhanThigle/rust/commit/955564259982a85cce4dc80fe18af7b4514ae161" dir="ltr"&gt;9555642&lt;/a&gt;&lt;/code&gt;
+      
+
+
+    &lt;a href="https://github.com/rust-lang/rust/pull/56988#event-2062404046" dir="ltr"&gt;&lt;time datetime="2019-01-09 08:24:39 UTC" dir="ltr"&gt;5 days ago&lt;/time&gt;&lt;/a&gt;
+&lt;/div&gt;&lt;div dir="ltr"&gt;
+
+    &lt;strong dir="ltr"&gt;
+        VardhanThigle
+    &lt;/strong&gt;
+
+      referenced this pull request from commit &lt;code dir="ltr"&gt;&lt;a href="https://github.com/VardhanThigle/rust/commit/24742f0e24394bb7e4e5f3015b38b18c771506df" dir="ltr"&gt;24742f0&lt;/a&gt;&lt;/code&gt;
+      
+
+
+    &lt;a href="https://github.com/rust-lang/rust/pull/56988#event-2068488148" dir="ltr"&gt;&lt;time datetime="2019-01-11 13:01:19 UTC" dir="ltr"&gt;3 days ago&lt;/time&gt;&lt;/a&gt;
+&lt;/div&gt;&lt;div dir="ltr"&gt;
+
+    &lt;strong dir="ltr"&gt;
+        VardhanThigle
+    &lt;/strong&gt;
+
+      referenced this pull request from commit &lt;code dir="ltr"&gt;&lt;a href="https://github.com/VardhanThigle/rust/commit/b107c5b27cb24c0a87bb1143e74268deb890011a" dir="ltr"&gt;b107c5b&lt;/a&gt;&lt;/code&gt;
+      
+
+
+    &lt;a href="https://github.com/rust-lang/rust/pull/56988#event-2068917240" dir="ltr"&gt;&lt;time datetime="2019-01-11 16:03:27 UTC" dir="ltr"&gt;2 days ago&lt;/time&gt;&lt;/a&gt;
+&lt;/div&gt;&lt;div dir="ltr"&gt;
+        
+        &lt;a data-hovercard-type="user" data-hovercard-url="/hovercards?user_id=6307809" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/rusty122" dir="ltr"&gt;rusty122&lt;/a&gt;
+        &lt;strong dir="ltr"&gt;referenced&lt;/strong&gt; this pull request from another issue
+      &lt;/div&gt;&lt;div dir="ltr"&gt;
+
+    &lt;strong dir="ltr"&gt;
+        VardhanThigle
+    &lt;/strong&gt;
+
+      referenced this pull request from commit &lt;code dir="ltr"&gt;&lt;a href="https://github.com/VardhanThigle/rust/commit/fb83884b86daf6943aaf4e385ebb7846d9bd0d36" dir="ltr"&gt;fb83884&lt;/a&gt;&lt;/code&gt;
+      
+
+
+    &lt;a href="https://github.com/rust-lang/rust/pull/56988#event-2070404433" dir="ltr"&gt;&lt;time datetime="2019-01-13 06:42:30 UTC" dir="ltr"&gt;about 21 hours ago&lt;/time&gt;&lt;/a&gt;
+&lt;/div&gt;&lt;div dir="ltr"&gt;
+
+    &lt;strong dir="ltr"&gt;
+        VardhanThigle
+    &lt;/strong&gt;
+
+      referenced this pull request from commit &lt;code dir="ltr"&gt;&lt;a href="https://github.com/VardhanThigle/rust/commit/dab6b891a33fbfbd94a1a3dfaa3f89390c656dda" dir="ltr"&gt;dab6b89&lt;/a&gt;&lt;/code&gt;
+      
+
+
+    &lt;a href="https://github.com/rust-lang/rust/pull/56988#event-2070417143" dir="ltr"&gt;&lt;time datetime="2019-01-13 07:30:38 UTC" dir="ltr"&gt;about 20 hours ago&lt;/time&gt;&lt;/a&gt;
+&lt;/div&gt;&lt;div dir="ltr"&gt;
+
+    &lt;strong dir="ltr"&gt;
+        VardhanThigle
+    &lt;/strong&gt;
+
+      referenced this pull request from commit &lt;code dir="ltr"&gt;&lt;a href="https://github.com/VardhanThigle/rust/commit/99fbd1bf110c1e62c0c22a0e2232bec4bf9fdd89" dir="ltr"&gt;99fbd1b&lt;/a&gt;&lt;/code&gt;
+      
+
+
+    &lt;a href="https://github.com/rust-lang/rust/pull/56988#event-2070418918" dir="ltr"&gt;&lt;time datetime="2019-01-13 07:37:56 UTC" dir="ltr"&gt;about 20 hours ago&lt;/time&gt;&lt;/a&gt;
+&lt;/div&gt;&lt;div&gt;
+  Comment on pull request
+&lt;/div&gt;&lt;UL&gt;&lt;LI&gt;
+          &lt;form action="/site/mobile_preference" accept-charset="UTF-8" method="post" dir="ltr"&gt;
+            
+            
+
+            &lt;button type="submit" data-ga-click="Mobile, switch to desktop, switch button" dir="ltr"&gt;
+              Desktop version
+            &lt;/button&gt;
+&lt;/form&gt;        &lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Sun, 13 Jan 2019 21:27:00 -0600</pubDate></item><item><title>Testing isn't everything</title><link>https://lobste.rs/s/d3smvj</link><description>&lt;p&gt;Written on  7 Jan 2019.&lt;/p&gt;&lt;p dir="ltr"&gt;Some of the most difficult code I’ve worked with is code that is “easily
 testable”. Code that abstracts everything to the point where you have no idea
 what’s going on, just so that it can add a “unit test” to what would otherwise
 be a very straightforward function. DHH called this &lt;a href="http://david.heinemeierhansson.com/2014/test-induced-design-damage.html" dir="ltr"&gt;Test-induced design
@@ -1495,98 +1586,7 @@ while not &lt;span dir="ltr"&gt;frontier&lt;/span&gt;.empty():
                 or tweet to &lt;a rel="me" href="https://twitter.com/redblobgames" dir="ltr"&gt;@redblobgames&lt;/a&gt;,
               
             or post a public comment:
-            &lt;/p&gt;</description><pubDate>Sun, 13 Jan 2019 19:37:40 -0600</pubDate></item><item><title>Monotonic clocks are not monotonic</title><link>https://lobste.rs/s/eo82wo</link><description>&lt;div dir="ltr"&gt;
-
-    &lt;strong dir="ltr"&gt;
-        rust-highfive
-    &lt;/strong&gt;
-
-      referenced this pull request from commit &lt;code dir="ltr"&gt;&lt;a href="https://github.com/rust-lang-nursery/rust-toolstate/commit/2549066f8a35b4044a2692eb1d1309d21c3087ec" dir="ltr"&gt;2549066&lt;/a&gt;&lt;/code&gt;
-      
-
-
-    &lt;a href="https://github.com/rust-lang/rust/pull/56988#event-2060308478" dir="ltr"&gt;&lt;time datetime="2019-01-08 14:12:53 UTC" dir="ltr"&gt;6 days ago&lt;/time&gt;&lt;/a&gt;
-&lt;/div&gt;&lt;div dir="ltr"&gt;
-
-    &lt;strong dir="ltr"&gt;
-        VardhanThigle
-    &lt;/strong&gt;
-
-      referenced this pull request from commit &lt;code dir="ltr"&gt;&lt;a href="https://github.com/VardhanThigle/rust/commit/955564259982a85cce4dc80fe18af7b4514ae161" dir="ltr"&gt;9555642&lt;/a&gt;&lt;/code&gt;
-      
-
-
-    &lt;a href="https://github.com/rust-lang/rust/pull/56988#event-2062404046" dir="ltr"&gt;&lt;time datetime="2019-01-09 08:24:39 UTC" dir="ltr"&gt;5 days ago&lt;/time&gt;&lt;/a&gt;
-&lt;/div&gt;&lt;div dir="ltr"&gt;
-
-    &lt;strong dir="ltr"&gt;
-        VardhanThigle
-    &lt;/strong&gt;
-
-      referenced this pull request from commit &lt;code dir="ltr"&gt;&lt;a href="https://github.com/VardhanThigle/rust/commit/24742f0e24394bb7e4e5f3015b38b18c771506df" dir="ltr"&gt;24742f0&lt;/a&gt;&lt;/code&gt;
-      
-
-
-    &lt;a href="https://github.com/rust-lang/rust/pull/56988#event-2068488148" dir="ltr"&gt;&lt;time datetime="2019-01-11 13:01:19 UTC" dir="ltr"&gt;3 days ago&lt;/time&gt;&lt;/a&gt;
-&lt;/div&gt;&lt;div dir="ltr"&gt;
-
-    &lt;strong dir="ltr"&gt;
-        VardhanThigle
-    &lt;/strong&gt;
-
-      referenced this pull request from commit &lt;code dir="ltr"&gt;&lt;a href="https://github.com/VardhanThigle/rust/commit/b107c5b27cb24c0a87bb1143e74268deb890011a" dir="ltr"&gt;b107c5b&lt;/a&gt;&lt;/code&gt;
-      
-
-
-    &lt;a href="https://github.com/rust-lang/rust/pull/56988#event-2068917240" dir="ltr"&gt;&lt;time datetime="2019-01-11 16:03:27 UTC" dir="ltr"&gt;2 days ago&lt;/time&gt;&lt;/a&gt;
-&lt;/div&gt;&lt;div dir="ltr"&gt;
-        
-        &lt;a data-hovercard-type="user" data-hovercard-url="/hovercards?user_id=6307809" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/rusty122" dir="ltr"&gt;rusty122&lt;/a&gt;
-        &lt;strong dir="ltr"&gt;referenced&lt;/strong&gt; this pull request from another issue
-      &lt;/div&gt;&lt;div dir="ltr"&gt;
-
-    &lt;strong dir="ltr"&gt;
-        VardhanThigle
-    &lt;/strong&gt;
-
-      referenced this pull request from commit &lt;code dir="ltr"&gt;&lt;a href="https://github.com/VardhanThigle/rust/commit/fb83884b86daf6943aaf4e385ebb7846d9bd0d36" dir="ltr"&gt;fb83884&lt;/a&gt;&lt;/code&gt;
-      
-
-
-    &lt;a href="https://github.com/rust-lang/rust/pull/56988#event-2070404433" dir="ltr"&gt;&lt;time datetime="2019-01-13 06:42:30 UTC" dir="ltr"&gt;about 21 hours ago&lt;/time&gt;&lt;/a&gt;
-&lt;/div&gt;&lt;div dir="ltr"&gt;
-
-    &lt;strong dir="ltr"&gt;
-        VardhanThigle
-    &lt;/strong&gt;
-
-      referenced this pull request from commit &lt;code dir="ltr"&gt;&lt;a href="https://github.com/VardhanThigle/rust/commit/dab6b891a33fbfbd94a1a3dfaa3f89390c656dda" dir="ltr"&gt;dab6b89&lt;/a&gt;&lt;/code&gt;
-      
-
-
-    &lt;a href="https://github.com/rust-lang/rust/pull/56988#event-2070417143" dir="ltr"&gt;&lt;time datetime="2019-01-13 07:30:38 UTC" dir="ltr"&gt;about 20 hours ago&lt;/time&gt;&lt;/a&gt;
-&lt;/div&gt;&lt;div dir="ltr"&gt;
-
-    &lt;strong dir="ltr"&gt;
-        VardhanThigle
-    &lt;/strong&gt;
-
-      referenced this pull request from commit &lt;code dir="ltr"&gt;&lt;a href="https://github.com/VardhanThigle/rust/commit/99fbd1bf110c1e62c0c22a0e2232bec4bf9fdd89" dir="ltr"&gt;99fbd1b&lt;/a&gt;&lt;/code&gt;
-      
-
-
-    &lt;a href="https://github.com/rust-lang/rust/pull/56988#event-2070418918" dir="ltr"&gt;&lt;time datetime="2019-01-13 07:37:56 UTC" dir="ltr"&gt;about 20 hours ago&lt;/time&gt;&lt;/a&gt;
-&lt;/div&gt;&lt;div&gt;
-  Comment on pull request
-&lt;/div&gt;&lt;UL&gt;&lt;LI&gt;
-          &lt;form action="/site/mobile_preference" accept-charset="UTF-8" method="post" dir="ltr"&gt;
-            
-            
-
-            &lt;button type="submit" data-ga-click="Mobile, switch to desktop, switch button" dir="ltr"&gt;
-              Desktop version
-            &lt;/button&gt;
-&lt;/form&gt;        &lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Sun, 13 Jan 2019 21:27:00 -0600</pubDate></item><item><title>The next big Thing</title><link>https://www.youtube.com/watch?v=tcyb1lpEHm0</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/buokbn/next_big_thing"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 13 Jan 2019 21:15:08 -0600</pubDate></item><item><title>The Curious Case of the 99.9% Latency Hike</title><link>https://lobste.rs/s/iiqb5b</link><description>&lt;BLOCKQUOTE&gt;&lt;p&gt;Disclaimer: This is a story from production. I have changed a couple of details, but the gist of the story holds.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h2&gt;Exposition&lt;/h2&gt;&lt;p dir="ltr"&gt;On a normal morning, I was checking up on health metrics of a bunch of services, when a new service under test caught my attention. Let’s call this service &lt;code dir="ltr"&gt;Lucy&lt;/code&gt;. &lt;code dir="ltr"&gt;Lucy&lt;/code&gt; so far was doing pretty good perf-wise, stable latencies across the board, memory and CPU usage, all was good in the world. However, that day I found out there has been a 99.9% latency hike for several days. When I looked at latency counters it looked something similar to:&lt;/p&gt;&lt;img src="https://mahdytech.com/wp-content/uploads/2019/01/Latencies.png" alt="Latencies" title="Latencies show a hike in 99.9% latencies" srcset="data:image/gif;base64, https://mahdytech.com/2019/01/13/curious-case-999-latency-hike/R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" width="1" height="1"&gt;&lt;p dir="ltr"&gt;These numbers are averaged across hundreds of machines in one &lt;a href="https://azure.microsoft.com/en-us/global-infrastructure/regions/" dir="ltr"&gt;data center&lt;/a&gt;. Also, this is a zoom-in for the problem, but let’s assume that following 8:45, and for the next couple of days, &lt;a href="https://www.elastic.co/blog/averages-can-dangerous-use-percentile" dir="ltr"&gt;99.9% latency&lt;/a&gt; stays high.&lt;/p&gt;&lt;p dir="ltr"&gt;Latency is how much time it takes &lt;code dir="ltr"&gt;Lucy&lt;/code&gt; to respond to a request, starting from the time it receives the request until it sends the response back:&lt;/p&gt;&lt;img src="https://mahdytech.com/wp-content/uploads/2019/01/LatencyExp.png" alt="What is Latency?" title="Latency is the time interval between Request and Response" srcset="data:image/gif;base64, https://mahdytech.com/2019/01/13/curious-case-999-latency-hike/R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" width="1" height="1"&gt;&lt;p dir="ltr"&gt;That was weird for many reasons. First, &lt;code dir="ltr"&gt;Lucy&lt;/code&gt; is a new service with less than 10 &lt;a href="https://en.wikipedia.org/wiki/Queries_per_second" dir="ltr"&gt;QPS&lt;/a&gt; – which is very low compared to other similar services that were handling 100 QPS with less 99.9% latency. Second, &lt;code dir="ltr"&gt;Lucy&lt;/code&gt; has been doing a pretty standard distributed load: receive N documents, divide them between processing threads, do a data lookup or two, and return processing result. For the load done, we had expected less than 5ms end-to-end latency, which was the case up until 8:45.&lt;/p&gt;&lt;p dir="ltr"&gt;When any &lt;code dir="ltr"&gt;Lucy&lt;/code&gt; instance is restarted, the problem &lt;em dir="ltr"&gt;goes away&lt;/em&gt;, and latency is back to normal. But we could not ship &lt;code dir="ltr"&gt;Lucy&lt;/code&gt; this way: what if this happens in production when we have 10x more QPS? We had to figure this out sooner than later.&lt;/p&gt;&lt;p dir="ltr"&gt;Another interesting part, this problem occurred in &lt;em dir="ltr"&gt;only one&lt;/em&gt; data center. Other data centers were fine. This excludes issues where a change is rolled out to all machines at the same time – whatever caused this was local. However, we had done nothing! &lt;code dir="ltr"&gt;Lucy&lt;/code&gt; had no new deployments for some time, no new data, nothing! &lt;strong dir="ltr"&gt;How can nothing trigger something?&lt;/strong&gt;&lt;/p&gt;&lt;h2&gt;Let’s Debug this&lt;/h2&gt;&lt;p&gt;Naturally, I emptied my schedule, fired up the coffee machine, and dug in.&lt;/p&gt;&lt;h3&gt;F1 Profile&lt;/h3&gt;&lt;p dir="ltr"&gt;First thing I did was running a profile using &lt;a href="https://docs.microsoft.com/en-us/visualstudio/profiling/how-to-install-the-stand-alone-profiler?view=vs-2017" dir="ltr"&gt;F1 Profiler&lt;/a&gt;. The profile is usually useful for showing CPU hot spots. Its ease of use and its lightweight report makes it usually my first tool to run unless there are clear signs for other root causes, which I didn’t have by then. I ran something close to:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;vsperf &lt;/span&gt;&lt;span dir="ltr"&gt;/&lt;/span&gt;&lt;span dir="ltr"&gt;attach&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;Lucy&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;exe &lt;/span&gt;&lt;span dir="ltr"&gt;/&lt;/span&gt;&lt;span dir="ltr"&gt;file&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;LucyProfile&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;vspx
+            &lt;/p&gt;</description><pubDate>Sun, 13 Jan 2019 19:37:40 -0600</pubDate></item><item><title>The next big Thing</title><link>https://www.youtube.com/watch?v=tcyb1lpEHm0</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/buokbn/next_big_thing"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 13 Jan 2019 21:15:08 -0600</pubDate></item><item><title>The Curious Case of the 99.9% Latency Hike</title><link>https://lobste.rs/s/iiqb5b</link><description>&lt;BLOCKQUOTE&gt;&lt;p&gt;Disclaimer: This is a story from production. I have changed a couple of details, but the gist of the story holds.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h2&gt;Exposition&lt;/h2&gt;&lt;p dir="ltr"&gt;On a normal morning, I was checking up on health metrics of a bunch of services, when a new service under test caught my attention. Let’s call this service &lt;code dir="ltr"&gt;Lucy&lt;/code&gt;. &lt;code dir="ltr"&gt;Lucy&lt;/code&gt; so far was doing pretty good perf-wise, stable latencies across the board, memory and CPU usage, all was good in the world. However, that day I found out there has been a 99.9% latency hike for several days. When I looked at latency counters it looked something similar to:&lt;/p&gt;&lt;img src="https://mahdytech.com/wp-content/uploads/2019/01/Latencies.png" alt="Latencies" title="Latencies show a hike in 99.9% latencies" srcset="data:image/gif;base64, https://mahdytech.com/2019/01/13/curious-case-999-latency-hike/R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" width="1" height="1"&gt;&lt;p dir="ltr"&gt;These numbers are averaged across hundreds of machines in one &lt;a href="https://azure.microsoft.com/en-us/global-infrastructure/regions/" dir="ltr"&gt;data center&lt;/a&gt;. Also, this is a zoom-in for the problem, but let’s assume that following 8:45, and for the next couple of days, &lt;a href="https://www.elastic.co/blog/averages-can-dangerous-use-percentile" dir="ltr"&gt;99.9% latency&lt;/a&gt; stays high.&lt;/p&gt;&lt;p dir="ltr"&gt;Latency is how much time it takes &lt;code dir="ltr"&gt;Lucy&lt;/code&gt; to respond to a request, starting from the time it receives the request until it sends the response back:&lt;/p&gt;&lt;img src="https://mahdytech.com/wp-content/uploads/2019/01/LatencyExp.png" alt="What is Latency?" title="Latency is the time interval between Request and Response" srcset="data:image/gif;base64, https://mahdytech.com/2019/01/13/curious-case-999-latency-hike/R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" width="1" height="1"&gt;&lt;p dir="ltr"&gt;That was weird for many reasons. First, &lt;code dir="ltr"&gt;Lucy&lt;/code&gt; is a new service with less than 10 &lt;a href="https://en.wikipedia.org/wiki/Queries_per_second" dir="ltr"&gt;QPS&lt;/a&gt; – which is very low compared to other similar services that were handling 100 QPS with less 99.9% latency. Second, &lt;code dir="ltr"&gt;Lucy&lt;/code&gt; has been doing a pretty standard distributed load: receive N documents, divide them between processing threads, do a data lookup or two, and return processing result. For the load done, we had expected less than 5ms end-to-end latency, which was the case up until 8:45.&lt;/p&gt;&lt;p dir="ltr"&gt;When any &lt;code dir="ltr"&gt;Lucy&lt;/code&gt; instance is restarted, the problem &lt;em dir="ltr"&gt;goes away&lt;/em&gt;, and latency is back to normal. But we could not ship &lt;code dir="ltr"&gt;Lucy&lt;/code&gt; this way: what if this happens in production when we have 10x more QPS? We had to figure this out sooner than later.&lt;/p&gt;&lt;p dir="ltr"&gt;Another interesting part, this problem occurred in &lt;em dir="ltr"&gt;only one&lt;/em&gt; data center. Other data centers were fine. This excludes issues where a change is rolled out to all machines at the same time – whatever caused this was local. However, we had done nothing! &lt;code dir="ltr"&gt;Lucy&lt;/code&gt; had no new deployments for some time, no new data, nothing! &lt;strong dir="ltr"&gt;How can nothing trigger something?&lt;/strong&gt;&lt;/p&gt;&lt;h2&gt;Let’s Debug this&lt;/h2&gt;&lt;p&gt;Naturally, I emptied my schedule, fired up the coffee machine, and dug in.&lt;/p&gt;&lt;h3&gt;F1 Profile&lt;/h3&gt;&lt;p dir="ltr"&gt;First thing I did was running a profile using &lt;a href="https://docs.microsoft.com/en-us/visualstudio/profiling/how-to-install-the-stand-alone-profiler?view=vs-2017" dir="ltr"&gt;F1 Profiler&lt;/a&gt;. The profile is usually useful for showing CPU hot spots. Its ease of use and its lightweight report makes it usually my first tool to run unless there are clear signs for other root causes, which I didn’t have by then. I ran something close to:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;vsperf &lt;/span&gt;&lt;span dir="ltr"&gt;/&lt;/span&gt;&lt;span dir="ltr"&gt;attach&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;Lucy&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;exe &lt;/span&gt;&lt;span dir="ltr"&gt;/&lt;/span&gt;&lt;span dir="ltr"&gt;file&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;LucyProfile&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;vspx
 sleep &lt;/span&gt;&lt;span dir="ltr"&gt;5m&lt;/span&gt;&lt;span dir="ltr"&gt;
 vsperf &lt;/span&gt;&lt;span dir="ltr"&gt;/&lt;/span&gt;&lt;span dir="ltr"&gt;detach
 vsperfreport &lt;/span&gt;&lt;span dir="ltr"&gt;/&lt;/span&gt;&lt;span dir="ltr"&gt;symbolpath&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;"srv*d:\symbols*https://msdl.microsoft.com/download/symbols;"&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;/&lt;/span&gt;&lt;span dir="ltr"&gt;summaryfile &lt;/span&gt;&lt;span dir="ltr"&gt;/&lt;/span&gt;&lt;span dir="ltr"&gt;packsymbols &lt;/span&gt;&lt;span dir="ltr"&gt;LucyProfile&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;vspx&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Basically, attaching to the process for a 5 min, detach, then finally &lt;code dir="ltr"&gt;vsperfreport&lt;/code&gt; is used to add needed &lt;a href="https://docs.microsoft.com/en-us/windows/desktop/dxtecharts/debugging-with-symbols" dir="ltr"&gt;symbols&lt;/a&gt; for the report. The resulting &lt;code dir="ltr"&gt;.vsps&lt;/code&gt; file can be opened using F1 Profile tools (or Visual Studio if it was used for capture). A typical CPU profile looks like this:&lt;/p&gt;&lt;img src="https://mahdytech.com/wp-content/uploads/2019/01/F1Profile.png" alt="F1 Perf" title="A typical F1 Profile window" srcset="data:image/gif;base64, https://mahdytech.com/2019/01/13/curious-case-999-latency-hike/R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" width="1" height="1"&gt;&lt;p&gt;&lt;em dir="ltr"&gt;My favorite feature in F1 over XPerf: &lt;code dir="ltr"&gt;Expand hot path&lt;/code&gt;. Bonus points if you can guess which famous windows app in the preview!&lt;/em&gt;&lt;/p&gt;&lt;p&gt;The profile didn’t show anything unusual taking over the CPU. Even when I did a profile on a healthy machine, the two profiles looked very similar. I decided to move on.&lt;/p&gt;&lt;h3&gt;XPerf&lt;/h3&gt;&lt;p dir="ltr"&gt;Next, I ran XPerf, the swiss army knife of live profiles. XPerf has the big advantage of being non-invasive as it has an almost negligible effect on perf of running apps. It is highly customizable but suffers from a pretty steep learning curve. &lt;a href="https://randomascii.wordpress.com/" dir="ltr"&gt;randomascii&lt;/a&gt; has been an excellent up-to-date XPerf resource, I highly recommend the blog. I also recommend &lt;a href="https://www.amazon.com/Inside-Windows-Debugging-Practical-Strategies/dp/B00D46F9IU" dir="ltr"&gt;Inside Windows Debugging&lt;/a&gt; that dissects XPerf and puts the reader on track for using XPerf proficiently.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Note&lt;/em&gt;: XPerf seems to have been rebranded to &lt;a href="https://docs.microsoft.com/en-us/windows-hardware/test/wpt/" dir="ltr"&gt;Windows Performance Toolkit (WPT)&lt;/a&gt;, and it can also be downloaded from the Windows Store. I actually do &lt;em dir="ltr"&gt;not&lt;/em&gt; recommend using the &lt;code dir="ltr"&gt;Windows Performance Recorder (WPR)&lt;/code&gt; tool to record ETW traces and prefer to use the XPerf command line tool as shown below. WPR’s defaults produce &lt;strong dir="ltr"&gt;massive&lt;/strong&gt; traces that are both inconvenient to move around and can contain too much information for a first-time user. For analyzing traces, &lt;code dir="ltr"&gt;Windows Performance Analyzer (WPA)&lt;/code&gt; is the way to go, hands down.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Now, while F1 Profiler provided &lt;a href="https://docs.microsoft.com/en-us/windows-hardware/test/wpt/cpu-analysis#cpu-usage-sampled-graph" dir="ltr"&gt;Sampled CPU&lt;/a&gt; info, it was time to get &lt;a href="https://docs.microsoft.com/en-us/windows-hardware/test/wpt/cpu-analysis#cpu-usage-precise-graph" dir="ltr"&gt;Precise CPU&lt;/a&gt; info. A &lt;code dir="ltr"&gt;Sampled CPU&lt;/code&gt; profile captures call stacks on regular time intervals (i.e. takes samples). On the other hand, a &lt;code dir="ltr"&gt;Precise CPU&lt;/code&gt; profile captures context switches across threads, and in turn helps to detect any locks or long IO waits. I ran something close to:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;xperf &lt;/span&gt;&lt;span dir="ltr"&gt;-&lt;/span&gt;&lt;span dir="ltr"&gt;on PROC_THREAD&lt;/span&gt;&lt;span dir="ltr"&gt;+&lt;/span&gt;&lt;span dir="ltr"&gt;LOADER&lt;/span&gt;&lt;span dir="ltr"&gt;+&lt;/span&gt;&lt;span dir="ltr"&gt;Base&lt;/span&gt;&lt;span dir="ltr"&gt;+&lt;/span&gt;&lt;span dir="ltr"&gt;CSWITCH&lt;/span&gt;&lt;span dir="ltr"&gt;+&lt;/span&gt;&lt;span dir="ltr"&gt;DISPATCHER &lt;/span&gt;&lt;span dir="ltr"&gt;-&lt;/span&gt;&lt;span dir="ltr"&gt;stackwalk  &lt;/span&gt;&lt;span dir="ltr"&gt;CSwitch&lt;/span&gt;&lt;span dir="ltr"&gt;+&lt;/span&gt;&lt;span dir="ltr"&gt;ReadyThread&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;-&lt;/span&gt;&lt;span dir="ltr"&gt;BufferSize&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;1024&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;-&lt;/span&gt;&lt;span dir="ltr"&gt;MinBuffers&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;512&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;-&lt;/span&gt;&lt;span dir="ltr"&gt;MaxBuffers&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;5120&lt;/span&gt;&lt;span dir="ltr"&gt;
