@@ -685,170 +685,7 @@ That explains why the &lt;code dir="ltr"&gt;tsvector&lt;/code&gt; results have f
 					&lt;/div&gt;&lt;p dir="ltr"&gt;In 2017, while attempting to get some DRM-enabled video player to work on my Mac, I stumbled upon a hard-coded private key. The corresponding public key was used in a valid and publicly trusted &lt;a href="https://twitter.com/koenrh/status/876699612681293825" rel="noreferrer noopener" aria-label=" (opens in a new tab)" dir="ltr"&gt;Cisco certificate&lt;/a&gt;. This further piqued my interest in the internet PKI, and made me wonder how many of private keys I would be able to find. In the months that followed I found and reported many hundreds of certificates of which the private key was compromised. In this post, I want to focus on one particular compromised key.&amp;nbsp;&lt;/p&gt;&lt;p dir="ltr"&gt;I started out by building tools to scan the internet and public data sources (e.g. &lt;a rel="noreferrer noopener" aria-label=" (opens in a new tab)" href="https://cloud.google.com/bigquery/public-data/github" dir="ltr"&gt;GitHub’s public data set&lt;/a&gt;) for PEM and DER-encoded keys and certificates. After scanning for a while, I inserted the collected raw certificates and keys into a local document database for further analysis. This allowed me to quickly identify publicly trusted certificates with known-compromised keys by filtering out all non-publicly trusted certificates, and joining the certificates with the private keys on the SHA-256 hash of the extracted public key (&lt;a rel="noreferrer noopener" aria-label=" (opens in a new tab)" href="https://tools.ietf.org/html/rfc5280#section-4.1.2.7" dir="ltr"&gt;Subject Public Key Info&lt;/a&gt;). Grouping and counting the certificates on this hash showed that there were multiple certificates that shared the very same RSA public key. Searching the certificate transparency logs showed there were a few dozen in total.&lt;/p&gt;&lt;p&gt;Details of the compromised RSA key:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;SHA-256 hash of the SubjectPublicKeyInfo: &lt;code dir="ltr"&gt;2bf95e73d665fbdcf525f08420573df075ea81759e46b7554a2afa1b68d3bebe&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Raw PEM-encoded &lt;a rel="noreferrer noopener" aria-label=" (opens in a new tab)" href="https://gist.github.com/koenrh/6f2aaeca9661dbcd7f7a5521f5c0b249#file-privkey-pem" dir="ltr"&gt;private&lt;/a&gt; and &lt;a rel="noreferrer noopener" aria-label=" (opens in a new tab)" href="https://gist.github.com/koenrh/6f2aaeca9661dbcd7f7a5521f5c0b249#file-pubkey-pem" dir="ltr"&gt;public key&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;Certificates that use this public key: &lt;a rel="noreferrer noopener" aria-label=" (opens in a new tab)" href="https://crt.sh/?spkisha256=2bf95e73d665fbdcf525f08420573df075ea81759e46b7554a2afa1b68d3bebe" dir="ltr"&gt;crt.sh&lt;/a&gt;, &lt;a href="https://censys.io/certificates?q=parsed.subject_key_info.fingerprint_sha256%3A2bf95e73d665fbdcf525f08420573df075ea81759e46b7554a2afa1b68d3bebe" rel="noreferrer noopener" aria-label=" (opens in a new tab)" dir="ltr"&gt;Censys&lt;/a&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;In the end I had a list of a little over 60 certificates that all used the same compromised key (&lt;a href="https://gist.github.com/koenrh/5bf209b21eebd9546bfa65fbaa86286b" rel="noreferrer noopener" aria-label=" (opens in a new tab)" dir="ltr"&gt;full list&lt;/a&gt;). These certificates were valid for DNS names of seemingly-unrelated customers, which ruled out the possibility that one customer simply reused their private key in different certificates. This made me curious to figure out the source of the compromise.&lt;/p&gt;&lt;p&gt;I had two leads to go on:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The raw private key was found in two unrelated GitHub repositories that hosted the source code of a WordPress website.&lt;/LI&gt;&lt;LI&gt;A significant number of the DNS names for which these certificates were valid pointed (or had pointed to in the past) to DigitalOcean’s IP space.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;I also recalled one incident from a few years ago where Hetzner Online, a well-known German web hosting provider, had provisioned servers with &lt;a rel="noreferrer noopener" aria-label=" (opens in a new tab)" href="https://blogs.intevation.de/thomas/hetzner-duplicate-ed25519-ssh-host-keys/" dir="ltr"&gt;identical SSH host keys&lt;/a&gt;. Which made me think that this case might as well be related to using some base image with hard-coded keys. What strengthened this thought was that I found that DigitalOcean, for a while. allowed customers to quickly install popular web apps using virtual machine images provided by Bitnami (&lt;a rel="noreferrer noopener" aria-label=" (opens in a new tab)" href="https://web.archive.org/web/20150905122006/https://digitalocean.bitnami.com/" dir="ltr"&gt;archived page&lt;/a&gt;). &lt;/p&gt;&lt;p&gt;After scanning some of the virtual machine images for WordPress, I quickly found the private key in one of the WordPress images. These are the steps to reproduce:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Download the file&amp;nbsp;&lt;a rel="noreferrer noopener" aria-label=" (opens in a new tab)" href="https://downloads.bitnami.com/files/stacks/wordpress/4.9.1-0/bitnami-wordpress-4.9.1-0-linux-debian-8-x86_64.zip" dir="ltr"&gt;bitnami-wordpress-4.9.1-0-linux-debian-8-x86_64.zip.&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;The zip file should match the SHA-256 checksum:&amp;nbsp;&lt;code dir="ltr"&gt;59a970bf147aeaf125aec78f538127dff4799b28dabd705c6705d8e38155dd82&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;Unzip the contents (a single VMX configuration file, and multiple VMDK files).&lt;/LI&gt;&lt;LI&gt;Find the private key in the &lt;code dir="ltr"&gt;bitnami-wordpress-4.9.1-0-linux-debian-8-x86_64-s001.vmdk&lt;/code&gt; file at offset &lt;code dir="ltr"&gt;0x163C6000&lt;/code&gt; (and the next 4096 bytes).&lt;/LI&gt;&lt;LI&gt;Extract the key using a tool such as &lt;a rel="noreferrer noopener" aria-label=" (opens in a new tab)" href="https://github.com/ReFirmLabs/binwalk" dir="ltr"&gt;binwalk&lt;/a&gt;.&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;Provided you saved the extracted private key with the original file name,&amp;nbsp;&lt;code dir="ltr"&gt;server.key&lt;/code&gt;, you could verify that it matches the compromised private key by calculating the SHA-256 hash of the Subject Public Key Info using OpenSSL:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ openssl rsa -in server.key -pubout | openssl rsa -pubin -outform der | openssl dgst -sha256
 writing RSA key
 writing RSA key
-2bf95e73d665fbdcf525f08420573df075ea81759e46b7554a2afa1b68d3bebe&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This issue was reported to Bitnami on January 14, 2018. As per my suggestion, they released new versions of the virtual machine images for WordPress (and all Apache-powered catalog apps) to generate the default key at first-boot time. They also updated the existing documentation with instructions on how to furnish a new key before requesting the issuance of&amp;nbsp;an SSL certificate. The fix is included in WordPress image &lt;strong dir="ltr"&gt;version 4.9.2-1&lt;/strong&gt; and later.&lt;/p&gt;&lt;p&gt;After the original issue was fixed, and after I had reported several dozen certificates, I thought the case was closed. But then, over the course of 2018, I noticed that there were still new certificates being issued with the aforementioned compromised key, including, most recently, these two:&lt;/p&gt;&lt;table class="wp-block-table alignwide" dir="ltr"&gt;&lt;thead dir="ltr"&gt;&lt;tr dir="ltr"&gt;&lt;th dir="ltr"&gt;crt.sh ID&lt;/th&gt;&lt;th dir="ltr"&gt;Subject common name&lt;/th&gt;&lt;th dir="ltr"&gt;Issuer organization name&lt;/th&gt;&lt;th dir="ltr"&gt;Not after&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;&lt;td dir="ltr"&gt;&lt;a href="https://crt.sh/?id=877626319" rel="noreferrer noopener" aria-label=" (opens in a new tab)" dir="ltr"&gt;877626319&lt;/a&gt;&lt;/td&gt;&lt;td dir="ltr"&gt;&lt;code dir="ltr"&gt;greatwalksofaustralia.com.au&lt;/code&gt;&lt;/td&gt;&lt;td dir="ltr"&gt;DigiCert Inc&lt;/td&gt;&lt;td dir="ltr"&gt;2019-10-23&lt;/td&gt;&lt;/tr&gt;&lt;tr dir="ltr"&gt;&lt;td dir="ltr"&gt;&lt;a href="https://crt.sh/?id=829263927" rel="noreferrer noopener" aria-label=" (opens in a new tab)" dir="ltr"&gt;829263927&lt;/a&gt;&lt;/td&gt;&lt;td dir="ltr"&gt;&lt;code dir="ltr"&gt;childrenfirstfoundation.org.au&lt;/code&gt;&lt;/td&gt;&lt;td dir="ltr"&gt;DigiCert Inc&lt;/td&gt;&lt;td dir="ltr"&gt;2019-10-09&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;p&gt;Surprisingly (to me, at least), this means that:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Certificate authorities allow the same key to be reused by different customers. They do not appear to proactively check whether a key was used before, and block the key accordingly.&lt;/LI&gt;&lt;LI&gt;And worse, certificate authorities allow keys to be reused even after they themselves previously revoked a certificate with that key (with the reason code “keyCompromise”).&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;At least Comodo (now Sectico) eventually added the compromised key to their internal blacklist to prevent future issuance of certificates with that key. It appears this is not something certificate authorities do proactively when a key compromise is reported to them. As far as I understand, per the &lt;a href="https://cabforum.org/wp-content/uploads/CA-Browser-Forum-BR-1.6.2.pdf" rel="noreferrer noopener" aria-label=" (opens in a new tab)" dir="ltr"&gt;Baseline Requirements&lt;/a&gt;, they are not required to do so.&lt;/p&gt;&lt;p dir="ltr"&gt;In a brief email correspondence, Rob Stradling also pointed out that he previously made some &lt;a href="https://mailarchive.ietf.org/arch/msg/trans/tB8YhAapz_6RN9MJVMKlRCR9HK0" rel="noreferrer noopener" aria-label=" (opens in a new tab)" dir="ltr"&gt;suggestions&lt;/a&gt; for future improvements in this area.&lt;/p&gt;&lt;h3&gt;Share this:&lt;/h3&gt;</description><pubDate>Thu, 17 Jan 2019 13:44:40 -0600</pubDate></item><item><title>What would ActivityPub look like with capability-based security, anyway?</title><link>https://lobste.rs/s/optr5u</link><description>&lt;BLOCKQUOTE&gt;&lt;p&gt;This is the third article in a series of articles about ActivityPub detailing the challenges of building a trustworthy, secure implementation of the protocol stack.&lt;/p&gt;&lt;p dir="ltr"&gt;In this case, it also does a significant technical deep dive into informally specifying a set of protocol extensions to ActivityPub.  Formal specification of these extensions will be done in the Litepub working group, and will likely see some amount of change, &lt;strong dir="ltr"&gt;&lt;em dir="ltr"&gt;so this blog entry should be considered non-normative in it's entirety&lt;/em&gt;&lt;/strong&gt;.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;Over the past few years of creating and revising ActivityPub, many people have made a push for the inclusion of a capability-based security model as the core security primitive (instead, the core security primitive is “this section is non-normative,” but I'm not salty), but what would that look like?&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;There's a few different proposals in the works at varying stages of development that could be used to retrofit capability-based security into ActivityPub:&lt;/p&gt;
-
-&lt;/div&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://w3c-ccg.github.io/ocap-ld/" rel="nofollow" dir="ltr"&gt;OCAP-LD&lt;/a&gt;, which adds a generic object capabilities framework for any consumer of JSON-LD (such as the Linked Data Platform, or the neutered version of LDP that is described as part of ActivityPub),&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Litepub Capability Enforcement, which is preliminarily described by this blog post, and&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://gitlab.com/dustyweb/polapub" rel="nofollow" dir="ltr"&gt;PolaPub aka CapabilityPub&lt;/a&gt; which is only an outline stored in an .org document.  It is presumed that PolaPub or CapabilityPub or whatever it is called next week will be built on OCAP-LD, but in fairness, this is pure speculation.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;div dir="ltr"&gt;
-
-&lt;h2 dir="ltr"&gt;Why capabilities instead of ACLs?&lt;/h2&gt;
-
-&lt;p dir="ltr"&gt;ActivityPub, like the fediverse in general, is an open world system.  Traditional ACLs fail to provide proper scalability to the possibility of 100s of millions of accounts across millions of instances.  Object capabilities, on the other hand, are opaque tokens which allow the bearer to possibly consume a set of permissions.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;The capability enforcement proposals presently proposed would be deployed as a hybrid approach: capabilities to provide horizontal scalability for the large number of accounts and instances, and deny lists to block specific interactions from actors.  The combination of capabilities and deny lists provides for a highly robust permissions system for the fediverse, and mimics previous work on federated open world systems.&lt;/p&gt;
-
-&lt;h2 dir="ltr"&gt;Drawing inspiration from previous work: the Second Life Open Grid Protocol&lt;/h2&gt;
-
-&lt;p dir="ltr"&gt;I've been following large scale interactive communications architectures for many years, which has allowed me to learn many things about the design and implementation of open world horizontally-scaled systems.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;One of the projects that I followed very closely was started in 2008, as a collaboration between Linden Lab, IBM and some other participants: the &lt;a href="http://wiki.secondlife.com/wiki/OGP_Explained" rel="nofollow" dir="ltr"&gt;Open Grid Protocol&lt;/a&gt;.  While the Open Grid Protocol itself ultimately did not work out for various reasons (largely political), a large amount of the work was recycled into a significant redesign of the Second Life service's backend, and the SL grid itself now resembles a federated network in many ways.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;OGP was built on the concept of using capability tokens as URIs, which would either map to an active web service or a confirmation.  Since the capability token was opaque and difficult to forge, it provided sufficient proof of authentication without sharing any actual information about the authorization itself: the web services act on the session established by the capability URIs instead of on an account directly.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;Like ActivityPub, OGP is an actor-centric messaging protocol: when logging in, the login server provides a set of “seed capabilities”, which allow use of the other services.  From the perspective of the other services, invocation of those capability URIs is seen as an account performing an action.  Sound familiar in a way?&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;The way Linden Lab implemented this part of OGP was by having a capabilities server which handled routing the invoked capability URIs to other web services.  This step in and of itself is not particularly required, an OGP implementation could handle consumption of the capability URIs directly, as OpenSim does for example.&lt;/p&gt;
-
-&lt;h2 dir="ltr"&gt;Bringing capability URIs into ActivityPub as a first step&lt;/h2&gt;
-
-&lt;p dir="ltr"&gt;So, we have established that capability URIs are an opaque token that can be called as a substitute for whatever backend web service was going to be used in the first place.  But, what does that get us?&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;The simplest way to look at it is this way: there are activities which are &lt;em dir="ltr"&gt;relayable&lt;/em&gt; and others which are &lt;em dir="ltr"&gt;not relayable&lt;/em&gt;.  Both can become capability-enabled, but require separate strategies.&lt;/p&gt;
-
-&lt;h3 dir="ltr"&gt;Relayable activities&lt;/h3&gt;
-
-&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;Create&lt;/code&gt; (in this context, thread replies) activities are relayable.  This means the capability can simply be invoked by treating it as an &lt;code dir="ltr"&gt;inbox&lt;/code&gt;, and the server the capability is invoked on will relay the side effects forward.  The exact mechanism for this is not yet defined, as it will require prototyping and verification, but it's not impossible.  Capability URIs for relayable activities can likely be directly aliased to the &lt;code dir="ltr"&gt;sharedInbox&lt;/code&gt; if one is available, however.&lt;/p&gt;
-
-&lt;h3 dir="ltr"&gt;Intransitive activities&lt;/h3&gt;
-
-&lt;p dir="ltr"&gt;Intransitive activities (ones which act on a pre-existing object that is not supplied) like &lt;code dir="ltr"&gt;Announce&lt;/code&gt;, &lt;code dir="ltr"&gt;Like&lt;/code&gt;, &lt;code dir="ltr"&gt;Follow&lt;/code&gt; will require proofs.  We can already provide proofs in the form of an &lt;code dir="ltr"&gt;Accept&lt;/code&gt; activity:&lt;/p&gt;
-
-&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;{
-  "@context": "https://www.w3.org/ns/activitystreams",
-  "id": "https://example.social/proofs/fa43926a-63e5-4133-9c52-36d5fc6094fa",
-  "type": "Accept",
-  "actor": "https://example.social/users/bob",
-  "object": {
-    "id": "https://example.social/activities/12945622-9ea5-46f9-9005-41c5a2364f9c",
-    "type": "Announce",
-    "object": "https://example.social/objects/d6cb8429-4d26-40fc-90ef-a100503afb73",
-    "actor": "https://example.social/users/alyssa",
-    "to": ["https://example.social/users/alyssa/followers"],
-    "cc": ["https://www.w3.org/ns/activitystreams#Public"]
-  }
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;This proof can be optionally signed with LDS in the same way as OCAP-LD proofs.  Signing the proof is not covered here, and the proof must be fetchable, as somebody looking to distribute their intransitive actions on objects known to be security labeled must validate the proof somehow.&lt;/p&gt;
-
-&lt;h3 dir="ltr"&gt;Object capability discovery&lt;/h3&gt;
-
-&lt;p dir="ltr"&gt;A security labelled object has a new field, &lt;code dir="ltr"&gt;capabilities&lt;/code&gt; which is an &lt;code dir="ltr"&gt;Object&lt;/code&gt; that contains a set of allowed actions and the corresponding capability URI for them:&lt;/p&gt;
-
-&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;{
-  "@context": [
-    "https://www.w3.org/ns/activitystreams",
-    "https://litepub.social/litepub/lice-v0.0.1.jsonld"
-  ],
-  "capabilities": {
-    "Announce": "https://example.social/caps/4f230498-5a01-4bb5-b06b-e3625fc03947",
-    "Create": "https://example.social/caps/d4c4d96a-36d9-4df5-b9da-4b8c74e02567",
-    "Like": "https://example.social/caps/21a946fb-1bad-48ae-82c1-e8d1d2ab28c3"
-  },
-  [...]
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
-
-&lt;h3 dir="ltr"&gt;Example: Invoking a capability&lt;/h3&gt;
-
-&lt;p dir="ltr"&gt;Bob makes a post, which he allows liking, and replying, but not announcing.  That post looks like this:&lt;/p&gt;
-
-&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;{
-  "@context": [
-    "https://www.w3.org/ns/activitystreams",
-    "https://litepub.social/litepub/lice-v0.0.1.jsonld"
-  ],
-  "capabilities": {
-    "Create": "https://example.social/caps/d4c4d96a-36d9-4df5-b9da-4b8c74e02567",
-    "Like": "https://example.social/caps/21a946fb-1bad-48ae-82c1-e8d1d2ab28c3"
-  },
-  "id": "https://example.social/objects/d6cb8429-4d26-40fc-90ef-a100503afb73",
-  "type": "Note",
-  "content": "I'm really excited about the new capabilities feature!",
-  "attributedTo": "https://example.social/users/bob"
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;As you can tell, the capabilities object does not include an &lt;code dir="ltr"&gt;Announce&lt;/code&gt; grant, which means that a proof will not be provided for &lt;code dir="ltr"&gt;Announce&lt;/code&gt; objects.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;Alyssa wants to like the post, so she creates a normal Like activity and sends it to the &lt;code dir="ltr"&gt;Like&lt;/code&gt; capability URI.  The server responds with an &lt;code dir="ltr"&gt;Accept&lt;/code&gt; object that she can forward to her recipients:&lt;/p&gt;
-
-&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;{
-  "@context": [
-    "https://www.w3.org/ns/activitystreams",
-    "https://litepub.social/litepub/lice-v0.0.1.jsonld"
-  ],
-  "id": "https://example.social/proofs/fa43926a-63e5-4133-9c52-36d5fc6094fa",
-  "type": "Accept",
-  "actor": "https://example.social/users/bob",
-  "object": {
-    "id": "https://example.social/activities/12945622-9ea5-46f9-9005-41c5a2364f9c",
-    "type": "Like",
-    "object": "https://example.social/objects/d6cb8429-4d26-40fc-90ef-a100503afb73",
-    "actor": "https://example.social/users/alyssa",
-    "to": [
-      "https://example.social/users/alyssa/followers",
-      "https://example.social/users/bob"
-    ]
-  }
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;Bob can be removed from the recipient list, as he already processed the side effects of the activity when he accepted it.  Alyssa can then forward this object on to her followers, which can verify the proof by fetching it, or alternatively verifying the LDS signature if present.&lt;/p&gt;
-
-&lt;h3 dir="ltr"&gt;Example: Invoking a relayable capability&lt;/h3&gt;
-
-&lt;p dir="ltr"&gt;Some capabilities, like &lt;code dir="ltr"&gt;Create&lt;/code&gt; result in the server hosting the invoked capability relaying the message forward instead of using proofs.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;In this example, the post being relayed is assumed to be publicly accessible.  Instances where a post is not publicly accessible should create a capability URI which returns the post object.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;Alyssa decides to post a reply to the message from Bob she just liked above:&lt;/p&gt;
-
-&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;{
-  "@context": [
-    "https://www.w3.org/ns/activitystreams",
-    "https://litepub.social/litepub/lice-v0.0.1.jsonld"
-  ],
-  "to": ["https://example.social/users/alyssa/followers"],
-  "cc": ["https://www.w3.org/ns/activitystreams#Public"],
-  "type": "Create",
-  "actor": "https://www.w3.org/users/alyssa",
-  "object": {
-    "capabilities": {
-      "Create": "https://example.social/caps/97706df4-86c0-480d-b8f5-f362a1f45a01",
-      "Like": "https://example.social/caps/6db4bec5-619d-45a2-b3d7-82e5a30ce8a5"
-    },
-    "type": "Note",
-    "content": "I am really liking the new object capabilities feature too!",
-    "attributedTo": "https://example.social/users/alyssa"
-  }
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;An astute reader will note that the capability set is the same as the parent.  This is because the parent reserves the right to reject any post which requests more rights than were in the parent post's capability set.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;Alyssa POSTs this message to the &lt;code dir="ltr"&gt;Create&lt;/code&gt; capability from the original message and gets back a &lt;code dir="ltr"&gt;202 Accepted&lt;/code&gt; status from the server.  The server will then relay the message to her followers collection by dereferencing it remotely.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;A possible extension here would be to allow the Create message to become intransitive and combined with a proof.  This could be done by leaving the &lt;code dir="ltr"&gt;to&lt;/code&gt; and &lt;code dir="ltr"&gt;cc&lt;/code&gt; fields empty, and specifying &lt;code dir="ltr"&gt;audience&lt;/code&gt; instead or something along those lines.&lt;/p&gt;
-
-&lt;h2 dir="ltr"&gt;Considerations with backwards compatibility&lt;/h2&gt;
-
-&lt;p dir="ltr"&gt;Obviously, it goes without saying that an ActivityPub 1.0 implementation can ignore these capabilities and do whatever they want to do.  Thusly, it is suggested that messages with security labelling contrary to what is considered normal for ActivityPub 1.0 are not sent to ActivityPub 1.0 servers.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;Determining what servers are compatible ahead of time is still an area that needs significant research activity, but I believe it can be done!&lt;/p&gt;
-&lt;/div&gt;</description><pubDate>Fri, 18 Jan 2019 04:42:58 -0600</pubDate></item><item><title>Decoded: GNU coreutils</title><link>https://lobste.rs/s/n6sy9r</link><description>&lt;h1&gt;&lt;a href="http://www.maizure.org/projects/decoded-gnu-coreutils/"&gt;Decoded: GNU coreutils&lt;/a&gt;&lt;/h1&gt;&lt;p&gt;&lt;i&gt;October 2018&lt;/i&gt;&lt;/p&gt;&lt;img src="http://www.maizure.org/projects/decoded-gnu-coreutils/GNU.png" width="278" height="139" alt="coreutils brought to you by the GNU project"&gt;&lt;p&gt;This is a long-term project to decode all of the GNU coreutils in version 8.3.&lt;/p&gt;&lt;p dir="ltr"&gt;This resource is for novice programmers exploring the design of command-line utilities. It is best used as an accompaniment providing useful background while reading the &lt;a href="https://github.com/MaiZure/coreutils-8.3/tree/master/src" dir="ltr"&gt;source code&lt;/a&gt; of the utility you may be interested in. This is &lt;strong dir="ltr"&gt;not&lt;/strong&gt; a user guide -- Please see applicable &lt;a href="http://man7.org/linux/man-pages/dir_by_project.html#coreutils" dir="ltr"&gt;man pages&lt;/a&gt; for instructions on using these utilities.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Status&lt;/strong&gt;: Paused -- &lt;strong dir="ltr"&gt;52%&lt;/strong&gt; complete &amp;nbsp;(3 complete, 95 partial)&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Phase 1 [&lt;strong dir="ltr"&gt;complete&lt;/strong&gt;] - Each utility has a dedicated page discussing the namespace and execution overview.&lt;/LI&gt;&lt;LI&gt;Phase 2 - Line by line code walkthrough for each utility. Links from execution steps to v8.3 source. Expanded discussion about important ideas. Resuming 2H 2019.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;The GNU Core Utilities&lt;/h2&gt;&lt;p&gt;I'll link the utility pages here at the top. Click the command name for the detailed page decoding that utility. The discussion, source code, and walkthroughs are available on each page. Enjoy!&lt;/p&gt;&lt;table class="easy-table easy-table-default" border="0" dir="ltr"&gt;
+2bf95e73d665fbdcf525f08420573df075ea81759e46b7554a2afa1b68d3bebe&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This issue was reported to Bitnami on January 14, 2018. As per my suggestion, they released new versions of the virtual machine images for WordPress (and all Apache-powered catalog apps) to generate the default key at first-boot time. They also updated the existing documentation with instructions on how to furnish a new key before requesting the issuance of&amp;nbsp;an SSL certificate. The fix is included in WordPress image &lt;strong dir="ltr"&gt;version 4.9.2-1&lt;/strong&gt; and later.&lt;/p&gt;&lt;p&gt;After the original issue was fixed, and after I had reported several dozen certificates, I thought the case was closed. But then, over the course of 2018, I noticed that there were still new certificates being issued with the aforementioned compromised key, including, most recently, these two:&lt;/p&gt;&lt;table class="wp-block-table alignwide" dir="ltr"&gt;&lt;thead dir="ltr"&gt;&lt;tr dir="ltr"&gt;&lt;th dir="ltr"&gt;crt.sh ID&lt;/th&gt;&lt;th dir="ltr"&gt;Subject common name&lt;/th&gt;&lt;th dir="ltr"&gt;Issuer organization name&lt;/th&gt;&lt;th dir="ltr"&gt;Not after&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;&lt;td dir="ltr"&gt;&lt;a href="https://crt.sh/?id=877626319" rel="noreferrer noopener" aria-label=" (opens in a new tab)" dir="ltr"&gt;877626319&lt;/a&gt;&lt;/td&gt;&lt;td dir="ltr"&gt;&lt;code dir="ltr"&gt;greatwalksofaustralia.com.au&lt;/code&gt;&lt;/td&gt;&lt;td dir="ltr"&gt;DigiCert Inc&lt;/td&gt;&lt;td dir="ltr"&gt;2019-10-23&lt;/td&gt;&lt;/tr&gt;&lt;tr dir="ltr"&gt;&lt;td dir="ltr"&gt;&lt;a href="https://crt.sh/?id=829263927" rel="noreferrer noopener" aria-label=" (opens in a new tab)" dir="ltr"&gt;829263927&lt;/a&gt;&lt;/td&gt;&lt;td dir="ltr"&gt;&lt;code dir="ltr"&gt;childrenfirstfoundation.org.au&lt;/code&gt;&lt;/td&gt;&lt;td dir="ltr"&gt;DigiCert Inc&lt;/td&gt;&lt;td dir="ltr"&gt;2019-10-09&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;p&gt;Surprisingly (to me, at least), this means that:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Certificate authorities allow the same key to be reused by different customers. They do not appear to proactively check whether a key was used before, and block the key accordingly.&lt;/LI&gt;&lt;LI&gt;And worse, certificate authorities allow keys to be reused even after they themselves previously revoked a certificate with that key (with the reason code “keyCompromise”).&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;At least Comodo (now Sectico) eventually added the compromised key to their internal blacklist to prevent future issuance of certificates with that key. It appears this is not something certificate authorities do proactively when a key compromise is reported to them. As far as I understand, per the &lt;a href="https://cabforum.org/wp-content/uploads/CA-Browser-Forum-BR-1.6.2.pdf" rel="noreferrer noopener" aria-label=" (opens in a new tab)" dir="ltr"&gt;Baseline Requirements&lt;/a&gt;, they are not required to do so.&lt;/p&gt;&lt;p dir="ltr"&gt;In a brief email correspondence, Rob Stradling also pointed out that he previously made some &lt;a href="https://mailarchive.ietf.org/arch/msg/trans/tB8YhAapz_6RN9MJVMKlRCR9HK0" rel="noreferrer noopener" aria-label=" (opens in a new tab)" dir="ltr"&gt;suggestions&lt;/a&gt; for future improvements in this area.&lt;/p&gt;&lt;h3&gt;Share this:&lt;/h3&gt;</description><pubDate>Thu, 17 Jan 2019 13:44:40 -0600</pubDate></item><item><title>Decoded: GNU coreutils</title><link>https://lobste.rs/s/n6sy9r</link><description>&lt;h1&gt;&lt;a href="http://www.maizure.org/projects/decoded-gnu-coreutils/"&gt;Decoded: GNU coreutils&lt;/a&gt;&lt;/h1&gt;&lt;p&gt;&lt;i&gt;October 2018&lt;/i&gt;&lt;/p&gt;&lt;img src="http://www.maizure.org/projects/decoded-gnu-coreutils/GNU.png" width="278" height="139" alt="coreutils brought to you by the GNU project"&gt;&lt;p&gt;This is a long-term project to decode all of the GNU coreutils in version 8.3.&lt;/p&gt;&lt;p dir="ltr"&gt;This resource is for novice programmers exploring the design of command-line utilities. It is best used as an accompaniment providing useful background while reading the &lt;a href="https://github.com/MaiZure/coreutils-8.3/tree/master/src" dir="ltr"&gt;source code&lt;/a&gt; of the utility you may be interested in. This is &lt;strong dir="ltr"&gt;not&lt;/strong&gt; a user guide -- Please see applicable &lt;a href="http://man7.org/linux/man-pages/dir_by_project.html#coreutils" dir="ltr"&gt;man pages&lt;/a&gt; for instructions on using these utilities.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Status&lt;/strong&gt;: Paused -- &lt;strong dir="ltr"&gt;52%&lt;/strong&gt; complete &amp;nbsp;(3 complete, 95 partial)&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Phase 1 [&lt;strong dir="ltr"&gt;complete&lt;/strong&gt;] - Each utility has a dedicated page discussing the namespace and execution overview.&lt;/LI&gt;&lt;LI&gt;Phase 2 - Line by line code walkthrough for each utility. Links from execution steps to v8.3 source. Expanded discussion about important ideas. Resuming 2H 2019.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;The GNU Core Utilities&lt;/h2&gt;&lt;p&gt;I'll link the utility pages here at the top. Click the command name for the detailed page decoding that utility. The discussion, source code, and walkthroughs are available on each page. Enjoy!&lt;/p&gt;&lt;table class="easy-table easy-table-default" border="0" dir="ltr"&gt;
 &lt;thead dir="ltr"&gt;
 &lt;tr dir="ltr"&gt;&lt;th dir="ltr"&gt;Utilities&lt;/th&gt;
 &lt;th dir="ltr"&gt;&lt;/th&gt;
@@ -1038,7 +875,170 @@ Shortest utility: &lt;strong dir="ltr"&gt;false&lt;/strong&gt; (2 lines - tied w
 Shortest standalone utility: &lt;strong dir="ltr"&gt;true&lt;/strong&gt; (80 lines)&lt;br dir="ltr"&gt;
 Longest utility: &lt;strong dir="ltr"&gt;ls&lt;/strong&gt; (5308 lines)
 &lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Many utilities trace their origins to pre-System V UNIX (some as far back as &lt;a href="https://multicians.org/multics-commands.html" dir="ltr"&gt;Multics&lt;/a&gt;).&lt;/LI&gt;&lt;LI&gt;The distinct syntax of the &lt;em dir="ltr"&gt;dd&lt;/em&gt; utility is reminiscent of the OS/360 &lt;a href="https://en.wikipedia.org/wiki/Job_Control_Language#Concatenating_input_files" dir="ltr"&gt;job control language&lt;/a&gt; (early 1960s).&lt;/LI&gt;&lt;LI&gt;The &lt;em dir="ltr"&gt;sort&lt;/em&gt; program is the only utility that takes advantage of multi-threading&lt;/LI&gt;&lt;LI&gt;The &lt;em dir="ltr"&gt;fmt&lt;/em&gt; utility demonstrates optimization of lines and paragraphs using feature costs&lt;/LI&gt;&lt;LI&gt;The deceptively simple &lt;em dir="ltr"&gt;yes&lt;/em&gt; utility has high-performance output using page-aligned memory buffers&lt;/LI&gt;&lt;LI&gt;The &lt;em dir="ltr"&gt;df&lt;/em&gt; utility is faster than &lt;em dir="ltr"&gt;du&lt;/em&gt;. The former uses device metadata while the latter checks all files&lt;/LI&gt;&lt;LI&gt;&lt;em dir="ltr"&gt;cksum&lt;/em&gt; includes two entry points, one for normal operation and one to generate the CRC-32 table&lt;/LI&gt;&lt;LI&gt;There is no failure condition for the &lt;em dir="ltr"&gt;echo&lt;/em&gt; utility&lt;/LI&gt;&lt;LI&gt;The design of the &lt;em dir="ltr"&gt;test&lt;/em&gt; and &lt;em dir="ltr"&gt;expr&lt;/em&gt; utilities departs significantly from the typical utility&lt;/LI&gt;&lt;LI&gt;&lt;em dir="ltr"&gt;expr&lt;/em&gt; is a standalone example of left-associative expression evaluation that doesn't rely on automated tools&lt;/LI&gt;&lt;LI&gt;My personal least used utilities are &lt;em dir="ltr"&gt;tsort&lt;/em&gt; and &lt;em dir="ltr"&gt;ptx&lt;/em&gt; - haven't touched either since the 1990s&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;FAQ&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;No questions yet&lt;/strong&gt;&lt;br dir="ltr"&gt;
-&lt;/p&gt;</description><pubDate>Thu, 17 Jan 2019 12:35:42 -0600</pubDate></item><item><title>Building Spotifyd on NetBSD</title><link>https://lobste.rs/s/srqqsc</link><description>&lt;p&gt;&lt;em dir="ltr"&gt;Irrelevant preamble: When weighing up Spotify vs Apple Music I went with Spotify owing to it being cross platform. I have a NetBSD desktop (I may have mentioned) and it meant I could use the (now defunct) Flash based web player and all was good. Then the Flash player got discontinued for one that uses &lt;a href="https://www.widevine.com/" dir="ltr"&gt;widevine&lt;/a&gt; which doesn’t work on BSD and for awhile I was out of luck on NetBSD (I tried a few things like running the Linux client using compatibility). I wasn’t even aware of Spotify Connect clients, but stumbled across &lt;a href="https://github.com/dtcooper/raspotify" dir="ltr"&gt;raspotify&lt;/a&gt; which lead me &lt;a href="https://github.com/librespot-org/librespot" dir="ltr"&gt;librespot&lt;/a&gt; which led me to &lt;a href="https://github.com/Spotifyd/spotifyd" dir="ltr"&gt;spotifyd&lt;/a&gt;.&lt;/em&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;These are the steps I went through to build and run Spotifyd (this &lt;a href="https://github.com/Spotifyd/spotifyd/commit/47cc0bceffa8a47a94d99daaa4de75774783eea3" dir="ltr"&gt;commit&lt;/a&gt; at the time of writing) on NetBSD AMD64. It’s a &lt;a href="https://www.spotify.com/uk/connect/" dir="ltr"&gt;Spotify Connect&lt;/a&gt; client so it means I still need to control Spotify from another device (typically my phone), but the audio is played through my desktop… which is where my speakers and headphones are plugged in - it means I don’t have to unplug stuff and re-plug into my phone, work laptop, etc. This is 100% a “good enough for now solution” for me; I have had a quick play with the Go based &lt;a href="https://github.com/badfortrains/spotcontrol/tree/master/examples/micro-controller" dir="ltr"&gt;microcontroller&lt;/a&gt; from &lt;a href="https://github.com/badfortrains/spotcontrolk" dir="ltr"&gt;spotcontrol&lt;/a&gt; and that &lt;strong dir="ltr"&gt;allows a completely NetBSD only experience&lt;/strong&gt; (although it is just an example application so doesn’t provide many features - great as a basis to build on though).&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Install Rust via pkgsrc/pkgin. I used version 1.29 for this&lt;/LI&gt;&lt;LI&gt;Clone the &lt;a href="https://github.com/Spotifyd/spotifyd" dir="ltr"&gt;spotifyd&lt;/a&gt; repo&lt;/LI&gt;&lt;LI&gt;Try to build with &lt;code dir="ltr"&gt;cargo build --release --no-default-features --features pulseaudio_backend&lt;/code&gt;; Is there a way to do something like &lt;code dir="ltr"&gt;cargo fetch-dependencies&lt;/code&gt; and avoid having to try an initial build?&lt;/LI&gt;&lt;LI&gt;You machine will act like a bit of a jet engine… and fail on these which need patching (links to the commit in my forks):
+&lt;/p&gt;</description><pubDate>Thu, 17 Jan 2019 12:35:42 -0600</pubDate></item><item><title>What would ActivityPub look like with capability-based security, anyway?</title><link>https://lobste.rs/s/optr5u</link><description>&lt;BLOCKQUOTE&gt;&lt;p&gt;This is the third article in a series of articles about ActivityPub detailing the challenges of building a trustworthy, secure implementation of the protocol stack.&lt;/p&gt;&lt;p dir="ltr"&gt;In this case, it also does a significant technical deep dive into informally specifying a set of protocol extensions to ActivityPub.  Formal specification of these extensions will be done in the Litepub working group, and will likely see some amount of change, &lt;strong dir="ltr"&gt;&lt;em dir="ltr"&gt;so this blog entry should be considered non-normative in it's entirety&lt;/em&gt;&lt;/strong&gt;.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;Over the past few years of creating and revising ActivityPub, many people have made a push for the inclusion of a capability-based security model as the core security primitive (instead, the core security primitive is “this section is non-normative,” but I'm not salty), but what would that look like?&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;There's a few different proposals in the works at varying stages of development that could be used to retrofit capability-based security into ActivityPub:&lt;/p&gt;
+
+&lt;/div&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://w3c-ccg.github.io/ocap-ld/" rel="nofollow" dir="ltr"&gt;OCAP-LD&lt;/a&gt;, which adds a generic object capabilities framework for any consumer of JSON-LD (such as the Linked Data Platform, or the neutered version of LDP that is described as part of ActivityPub),&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Litepub Capability Enforcement, which is preliminarily described by this blog post, and&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://gitlab.com/dustyweb/polapub" rel="nofollow" dir="ltr"&gt;PolaPub aka CapabilityPub&lt;/a&gt; which is only an outline stored in an .org document.  It is presumed that PolaPub or CapabilityPub or whatever it is called next week will be built on OCAP-LD, but in fairness, this is pure speculation.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;div dir="ltr"&gt;
+
+&lt;h2 dir="ltr"&gt;Why capabilities instead of ACLs?&lt;/h2&gt;
+
+&lt;p dir="ltr"&gt;ActivityPub, like the fediverse in general, is an open world system.  Traditional ACLs fail to provide proper scalability to the possibility of 100s of millions of accounts across millions of instances.  Object capabilities, on the other hand, are opaque tokens which allow the bearer to possibly consume a set of permissions.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;The capability enforcement proposals presently proposed would be deployed as a hybrid approach: capabilities to provide horizontal scalability for the large number of accounts and instances, and deny lists to block specific interactions from actors.  The combination of capabilities and deny lists provides for a highly robust permissions system for the fediverse, and mimics previous work on federated open world systems.&lt;/p&gt;
+
+&lt;h2 dir="ltr"&gt;Drawing inspiration from previous work: the Second Life Open Grid Protocol&lt;/h2&gt;
+
+&lt;p dir="ltr"&gt;I've been following large scale interactive communications architectures for many years, which has allowed me to learn many things about the design and implementation of open world horizontally-scaled systems.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;One of the projects that I followed very closely was started in 2008, as a collaboration between Linden Lab, IBM and some other participants: the &lt;a href="http://wiki.secondlife.com/wiki/OGP_Explained" rel="nofollow" dir="ltr"&gt;Open Grid Protocol&lt;/a&gt;.  While the Open Grid Protocol itself ultimately did not work out for various reasons (largely political), a large amount of the work was recycled into a significant redesign of the Second Life service's backend, and the SL grid itself now resembles a federated network in many ways.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;OGP was built on the concept of using capability tokens as URIs, which would either map to an active web service or a confirmation.  Since the capability token was opaque and difficult to forge, it provided sufficient proof of authentication without sharing any actual information about the authorization itself: the web services act on the session established by the capability URIs instead of on an account directly.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;Like ActivityPub, OGP is an actor-centric messaging protocol: when logging in, the login server provides a set of “seed capabilities”, which allow use of the other services.  From the perspective of the other services, invocation of those capability URIs is seen as an account performing an action.  Sound familiar in a way?&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;The way Linden Lab implemented this part of OGP was by having a capabilities server which handled routing the invoked capability URIs to other web services.  This step in and of itself is not particularly required, an OGP implementation could handle consumption of the capability URIs directly, as OpenSim does for example.&lt;/p&gt;
+
+&lt;h2 dir="ltr"&gt;Bringing capability URIs into ActivityPub as a first step&lt;/h2&gt;
+
+&lt;p dir="ltr"&gt;So, we have established that capability URIs are an opaque token that can be called as a substitute for whatever backend web service was going to be used in the first place.  But, what does that get us?&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;The simplest way to look at it is this way: there are activities which are &lt;em dir="ltr"&gt;relayable&lt;/em&gt; and others which are &lt;em dir="ltr"&gt;not relayable&lt;/em&gt;.  Both can become capability-enabled, but require separate strategies.&lt;/p&gt;
+
+&lt;h3 dir="ltr"&gt;Relayable activities&lt;/h3&gt;
+
+&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;Create&lt;/code&gt; (in this context, thread replies) activities are relayable.  This means the capability can simply be invoked by treating it as an &lt;code dir="ltr"&gt;inbox&lt;/code&gt;, and the server the capability is invoked on will relay the side effects forward.  The exact mechanism for this is not yet defined, as it will require prototyping and verification, but it's not impossible.  Capability URIs for relayable activities can likely be directly aliased to the &lt;code dir="ltr"&gt;sharedInbox&lt;/code&gt; if one is available, however.&lt;/p&gt;
+
+&lt;h3 dir="ltr"&gt;Intransitive activities&lt;/h3&gt;
+
+&lt;p dir="ltr"&gt;Intransitive activities (ones which act on a pre-existing object that is not supplied) like &lt;code dir="ltr"&gt;Announce&lt;/code&gt;, &lt;code dir="ltr"&gt;Like&lt;/code&gt;, &lt;code dir="ltr"&gt;Follow&lt;/code&gt; will require proofs.  We can already provide proofs in the form of an &lt;code dir="ltr"&gt;Accept&lt;/code&gt; activity:&lt;/p&gt;
+
+&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;{
+  "@context": "https://www.w3.org/ns/activitystreams",
+  "id": "https://example.social/proofs/fa43926a-63e5-4133-9c52-36d5fc6094fa",
+  "type": "Accept",
+  "actor": "https://example.social/users/bob",
+  "object": {
+    "id": "https://example.social/activities/12945622-9ea5-46f9-9005-41c5a2364f9c",
+    "type": "Announce",
+    "object": "https://example.social/objects/d6cb8429-4d26-40fc-90ef-a100503afb73",
+    "actor": "https://example.social/users/alyssa",
+    "to": ["https://example.social/users/alyssa/followers"],
+    "cc": ["https://www.w3.org/ns/activitystreams#Public"]
+  }
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;This proof can be optionally signed with LDS in the same way as OCAP-LD proofs.  Signing the proof is not covered here, and the proof must be fetchable, as somebody looking to distribute their intransitive actions on objects known to be security labeled must validate the proof somehow.&lt;/p&gt;
+
+&lt;h3 dir="ltr"&gt;Object capability discovery&lt;/h3&gt;
+
+&lt;p dir="ltr"&gt;A security labelled object has a new field, &lt;code dir="ltr"&gt;capabilities&lt;/code&gt; which is an &lt;code dir="ltr"&gt;Object&lt;/code&gt; that contains a set of allowed actions and the corresponding capability URI for them:&lt;/p&gt;
+
+&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;{
+  "@context": [
+    "https://www.w3.org/ns/activitystreams",
+    "https://litepub.social/litepub/lice-v0.0.1.jsonld"
+  ],
+  "capabilities": {
+    "Announce": "https://example.social/caps/4f230498-5a01-4bb5-b06b-e3625fc03947",
+    "Create": "https://example.social/caps/d4c4d96a-36d9-4df5-b9da-4b8c74e02567",
+    "Like": "https://example.social/caps/21a946fb-1bad-48ae-82c1-e8d1d2ab28c3"
+  },
+  [...]
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
+
+&lt;h3 dir="ltr"&gt;Example: Invoking a capability&lt;/h3&gt;
+
+&lt;p dir="ltr"&gt;Bob makes a post, which he allows liking, and replying, but not announcing.  That post looks like this:&lt;/p&gt;
+
+&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;{
+  "@context": [
+    "https://www.w3.org/ns/activitystreams",
+    "https://litepub.social/litepub/lice-v0.0.1.jsonld"
+  ],
+  "capabilities": {
+    "Create": "https://example.social/caps/d4c4d96a-36d9-4df5-b9da-4b8c74e02567",
+    "Like": "https://example.social/caps/21a946fb-1bad-48ae-82c1-e8d1d2ab28c3"
+  },
+  "id": "https://example.social/objects/d6cb8429-4d26-40fc-90ef-a100503afb73",
+  "type": "Note",
+  "content": "I'm really excited about the new capabilities feature!",
+  "attributedTo": "https://example.social/users/bob"
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;As you can tell, the capabilities object does not include an &lt;code dir="ltr"&gt;Announce&lt;/code&gt; grant, which means that a proof will not be provided for &lt;code dir="ltr"&gt;Announce&lt;/code&gt; objects.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;Alyssa wants to like the post, so she creates a normal Like activity and sends it to the &lt;code dir="ltr"&gt;Like&lt;/code&gt; capability URI.  The server responds with an &lt;code dir="ltr"&gt;Accept&lt;/code&gt; object that she can forward to her recipients:&lt;/p&gt;
+
+&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;{
+  "@context": [
+    "https://www.w3.org/ns/activitystreams",
+    "https://litepub.social/litepub/lice-v0.0.1.jsonld"
+  ],
+  "id": "https://example.social/proofs/fa43926a-63e5-4133-9c52-36d5fc6094fa",
+  "type": "Accept",
+  "actor": "https://example.social/users/bob",
+  "object": {
+    "id": "https://example.social/activities/12945622-9ea5-46f9-9005-41c5a2364f9c",
+    "type": "Like",
+    "object": "https://example.social/objects/d6cb8429-4d26-40fc-90ef-a100503afb73",
+    "actor": "https://example.social/users/alyssa",
+    "to": [
+      "https://example.social/users/alyssa/followers",
+      "https://example.social/users/bob"
+    ]
+  }
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;Bob can be removed from the recipient list, as he already processed the side effects of the activity when he accepted it.  Alyssa can then forward this object on to her followers, which can verify the proof by fetching it, or alternatively verifying the LDS signature if present.&lt;/p&gt;
+
+&lt;h3 dir="ltr"&gt;Example: Invoking a relayable capability&lt;/h3&gt;
+
+&lt;p dir="ltr"&gt;Some capabilities, like &lt;code dir="ltr"&gt;Create&lt;/code&gt; result in the server hosting the invoked capability relaying the message forward instead of using proofs.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;In this example, the post being relayed is assumed to be publicly accessible.  Instances where a post is not publicly accessible should create a capability URI which returns the post object.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;Alyssa decides to post a reply to the message from Bob she just liked above:&lt;/p&gt;
+
+&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;{
+  "@context": [
+    "https://www.w3.org/ns/activitystreams",
+    "https://litepub.social/litepub/lice-v0.0.1.jsonld"
+  ],
+  "to": ["https://example.social/users/alyssa/followers"],
+  "cc": ["https://www.w3.org/ns/activitystreams#Public"],
+  "type": "Create",
+  "actor": "https://www.w3.org/users/alyssa",
+  "object": {
+    "capabilities": {
+      "Create": "https://example.social/caps/97706df4-86c0-480d-b8f5-f362a1f45a01",
+      "Like": "https://example.social/caps/6db4bec5-619d-45a2-b3d7-82e5a30ce8a5"
+    },
+    "type": "Note",
+    "content": "I am really liking the new object capabilities feature too!",
+    "attributedTo": "https://example.social/users/alyssa"
+  }
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;An astute reader will note that the capability set is the same as the parent.  This is because the parent reserves the right to reject any post which requests more rights than were in the parent post's capability set.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;Alyssa POSTs this message to the &lt;code dir="ltr"&gt;Create&lt;/code&gt; capability from the original message and gets back a &lt;code dir="ltr"&gt;202 Accepted&lt;/code&gt; status from the server.  The server will then relay the message to her followers collection by dereferencing it remotely.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;A possible extension here would be to allow the Create message to become intransitive and combined with a proof.  This could be done by leaving the &lt;code dir="ltr"&gt;to&lt;/code&gt; and &lt;code dir="ltr"&gt;cc&lt;/code&gt; fields empty, and specifying &lt;code dir="ltr"&gt;audience&lt;/code&gt; instead or something along those lines.&lt;/p&gt;
+
+&lt;h2 dir="ltr"&gt;Considerations with backwards compatibility&lt;/h2&gt;
+
+&lt;p dir="ltr"&gt;Obviously, it goes without saying that an ActivityPub 1.0 implementation can ignore these capabilities and do whatever they want to do.  Thusly, it is suggested that messages with security labelling contrary to what is considered normal for ActivityPub 1.0 are not sent to ActivityPub 1.0 servers.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;Determining what servers are compatible ahead of time is still an area that needs significant research activity, but I believe it can be done!&lt;/p&gt;
+&lt;/div&gt;</description><pubDate>Fri, 18 Jan 2019 04:42:58 -0600</pubDate></item><item><title>Building Spotifyd on NetBSD</title><link>https://lobste.rs/s/srqqsc</link><description>&lt;p&gt;&lt;em dir="ltr"&gt;Irrelevant preamble: When weighing up Spotify vs Apple Music I went with Spotify owing to it being cross platform. I have a NetBSD desktop (I may have mentioned) and it meant I could use the (now defunct) Flash based web player and all was good. Then the Flash player got discontinued for one that uses &lt;a href="https://www.widevine.com/" dir="ltr"&gt;widevine&lt;/a&gt; which doesn’t work on BSD and for awhile I was out of luck on NetBSD (I tried a few things like running the Linux client using compatibility). I wasn’t even aware of Spotify Connect clients, but stumbled across &lt;a href="https://github.com/dtcooper/raspotify" dir="ltr"&gt;raspotify&lt;/a&gt; which lead me &lt;a href="https://github.com/librespot-org/librespot" dir="ltr"&gt;librespot&lt;/a&gt; which led me to &lt;a href="https://github.com/Spotifyd/spotifyd" dir="ltr"&gt;spotifyd&lt;/a&gt;.&lt;/em&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;These are the steps I went through to build and run Spotifyd (this &lt;a href="https://github.com/Spotifyd/spotifyd/commit/47cc0bceffa8a47a94d99daaa4de75774783eea3" dir="ltr"&gt;commit&lt;/a&gt; at the time of writing) on NetBSD AMD64. It’s a &lt;a href="https://www.spotify.com/uk/connect/" dir="ltr"&gt;Spotify Connect&lt;/a&gt; client so it means I still need to control Spotify from another device (typically my phone), but the audio is played through my desktop… which is where my speakers and headphones are plugged in - it means I don’t have to unplug stuff and re-plug into my phone, work laptop, etc. This is 100% a “good enough for now solution” for me; I have had a quick play with the Go based &lt;a href="https://github.com/badfortrains/spotcontrol/tree/master/examples/micro-controller" dir="ltr"&gt;microcontroller&lt;/a&gt; from &lt;a href="https://github.com/badfortrains/spotcontrolk" dir="ltr"&gt;spotcontrol&lt;/a&gt; and that &lt;strong dir="ltr"&gt;allows a completely NetBSD only experience&lt;/strong&gt; (although it is just an example application so doesn’t provide many features - great as a basis to build on though).&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Install Rust via pkgsrc/pkgin. I used version 1.29 for this&lt;/LI&gt;&lt;LI&gt;Clone the &lt;a href="https://github.com/Spotifyd/spotifyd" dir="ltr"&gt;spotifyd&lt;/a&gt; repo&lt;/LI&gt;&lt;LI&gt;Try to build with &lt;code dir="ltr"&gt;cargo build --release --no-default-features --features pulseaudio_backend&lt;/code&gt;; Is there a way to do something like &lt;code dir="ltr"&gt;cargo fetch-dependencies&lt;/code&gt; and avoid having to try an initial build?&lt;/LI&gt;&lt;LI&gt;You machine will act like a bit of a jet engine… and fail on these which need patching (links to the commit in my forks):
     &lt;p dir="ltr"&gt;The files are all in &lt;code dir="ltr"&gt;$HOME/.cargo/registry/src/github.com-xxxxxxxxxxxx/...&lt;/code&gt;.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Build properly (so everything links) with:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt; RUSTFLAGS='-C link-args=-Wl,-rpath,/usr/lib,-rpath,/usr/pkg/lib' cargo build --release --no-default-features --features pulseaudio_backend --verbose
 &lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;It takes some minutes to build on my machine: There are lots of dependencies.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;(optional) Make sure your firewalls are ok so you can discover the client. I use &lt;code dir="ltr"&gt;npf&lt;/code&gt; and so ended up with something &lt;em dir="ltr"&gt;like&lt;/em&gt; this:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt; # Simple npf.conf for Desktop
  #
