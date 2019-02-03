@@ -89,172 +89,7 @@ little bit outdated. The best way to get learn more is by
 executing &lt;code dir="ltr"&gt;pijul help&lt;/code&gt;. This will list all the subcommands and we
 can read more about any of them by running &lt;code dir="ltr"&gt;pijul help &amp;lt;subcommand&amp;gt;&lt;/code&gt;.&lt;/p&gt;&lt;p&gt;The subcommands are interactive by default but we can pass data to
 them directly from the command line to avoid being asked
-question. All these options are explained in each subcommand help.&lt;/p&gt;</description><pubDate>Sun, 03 Feb 2019 06:08:36 -0600</pubDate></item><item><title>Pull-based Backups using OpenBSD base*</title><link>https://lobste.rs/s/gvpxy2</link><description>&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;*The approach and scripts discussed here use &lt;code dir="ltr"&gt;mysqldump&lt;/code&gt; to back up a database at one point. Yes I know this isn't in OpenBSD base, but this was added just for a specific system. It's easy not to add it, and everything else is done through tools from the base system.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;With any system, it's important backups and restores work properly. With Chargen.One, I wanted to protect user data, and be able to easily restore. The important things for the backup were:&lt;/p&gt;
-&lt;/div&gt;&lt;UL&gt;&lt;LI&gt;Single timestamped backup file&lt;/LI&gt;&lt;LI&gt;No additional software installed above what's already on the box&lt;/LI&gt;&lt;LI&gt;Backups are pulled from a central server, not pushed to one&lt;/LI&gt;&lt;LI&gt;Portable script&lt;/LI&gt;&lt;LI&gt;Use privilege separation so local accounts can't access backups&lt;/LI&gt;&lt;/UL&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;Most services like &lt;a href="https://www.borgbackup.org/" rel="nofollow" dir="ltr"&gt;borg backup&lt;/a&gt; work best with a backup server visible from the server being backed up. I use a huge NAS to store my backups, and a separate server to store backups of backups. The NAS is behind a Firewall and the other server can see the NAS but not the Internet. As such, I need a backup system that lets me use the NAS to pull from Chargen.One onto the NAS, and then allow my isolated backup server to pull from the NAS. If that sounds a little paranoid, at least you understand why I use OpenBSD.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;Backups are taken by root on a nightly basis, and put into a folder belonging to a dedicated backup user. Early in the morning, the backup is pulled from a system which deletes the backup from chargen.one. The remote backup system will store 30 days' worth of backups.&lt;/p&gt;
-
-&lt;h2 dir="ltr"&gt;Configuring a backup account&lt;/h2&gt;
-
-&lt;p dir="ltr"&gt;The &lt;strong dir="ltr"&gt;/home&lt;/strong&gt; partition is the largest on the VPS, so I created an account to store backups in a temporary folder, create an archive, delete the temporary folder and change permissions so the remote backup system can pull and remove the backup archive.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;To set up the backup user account, use the following commands (as root):&lt;/p&gt;
-
-&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;# useradd -m backup
-# chmod 700 /home/backup
-# su - backup
-$ cd .ssh
-&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;On the backup system, generate an ssh keypair using &lt;code dir="ltr"&gt;ssh-keygen -t ed25519&lt;/code&gt;. Copy the contends of &lt;strong dir="ltr"&gt;id_ed25519.pub&lt;/strong&gt; from the backup system into &lt;strong dir="ltr"&gt;/home/backup/.ssh/authorized_keys&lt;/strong&gt; on the server being backed up.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;SSH into the backup account on the server from the NAS to make sure everything works.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;Each backup archive is created by a script that creates and stores content in &lt;strong dir="ltr"&gt;/home/backup/backup/&lt;/strong&gt;. Once backed up, the script will create a timestamped archive file and delete the &lt;strong dir="ltr"&gt;/home/backup/backup/&lt;/strong&gt; directory. The script starts off very simply:&lt;/p&gt;
-
-&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;#!/bin/sh
-
-mkdir /home/backup/backup
-# Add stuff below here
-
-
-# Don't add stuff below here
-rm -rf /home/backup/backup
-&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
-
-&lt;h2 dir="ltr"&gt;Backing up MySQL data&lt;/h2&gt;
-
-&lt;/div&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;If you want to implement my backup scheme and don't run MariaDB or MySQL, then skip this section and backup using commands from base only.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;Because MySQL is configured to use passwords, a &lt;strong dir="ltr"&gt;/root/.my.cnf&lt;/strong&gt; file containing credentials for the mysqldump command is needed.&lt;/p&gt;
-
-&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;[mysqldump]
-user=root
-password=your_password_here
-&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;The &lt;code dir="ltr"&gt;mysqldump&lt;/code&gt; command fully backs up all mysql databases, routines, events and triggers.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;Add the following to the backup script (all one line):&lt;/p&gt;
-
-&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;mysqldump -A -R -E --triggers --single-transaction  &amp;gt; /home/backup/backup/mysql.gz
-&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;The &lt;code dir="ltr"&gt;--single-transaction&lt;/code&gt; option causes the backup to take place without locking tables.&lt;/p&gt;
-
-&lt;h2 dir="ltr"&gt;Backing up a package list&lt;/h2&gt;
-
-&lt;p dir="ltr"&gt;OpenBSD uses it's own package management system called pkg. To create a backup of installed packages add the following to the backup script:&lt;/p&gt;
-
-&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;pkg_info -mz &amp;gt; /home/backup/backup/packages.txt
-&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;This can then be restored from a backup using &lt;code dir="ltr"&gt;pkg_add -l packages.txt&lt;/code&gt;.&lt;/p&gt;
-
-&lt;h2 dir="ltr"&gt;Backing up files&lt;/h2&gt;
-
-&lt;p dir="ltr"&gt;The following files and directories should be backed up:&lt;/p&gt;
-&lt;/div&gt;&lt;UL&gt;&lt;LI&gt;/etc&lt;/LI&gt;&lt;LI&gt;/root&lt;/LI&gt;&lt;LI&gt;/var/www&lt;/LI&gt;&lt;LI&gt;/var/log&lt;/LI&gt;&lt;LI&gt;/var/cron&lt;/LI&gt;&lt;LI&gt;/home, excluding /home/backup&lt;/LI&gt;&lt;LI&gt;/usr/local/bin/writefreely&lt;/LI&gt;&lt;LI&gt;/usr/local/share/writefreely&lt;/LI&gt;&lt;/UL&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;Use the &lt;code dir="ltr"&gt;tar&lt;/code&gt; command to create backups. A discussion of the tar command is best left to &lt;code dir="ltr"&gt;man tar&lt;/code&gt;, but as the backup isn't very large, I'm not using incremental backups, which keeps things simple...up to a point.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;OpenBSD's &lt;code dir="ltr"&gt;tar&lt;/code&gt; implementation doesn't add the &lt;code dir="ltr"&gt;--exclude&lt;/code&gt; option as it's a GNU extension. Other BSDs such as FreeBSD &lt;em dir="ltr"&gt;do&lt;/em&gt; add the option, but the OpenBSD team prefer not to have it. I could've added the GNU tar package, but one of the stated goals of the script is to not require additional software to keep things portable. Paths such as /home/backup are excluded using shell expansion instead.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;To test this, try the following command:&lt;/p&gt;
-
-&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;# tar cvf bk.tar /home/!(backup)
-&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;The exclamation mark means &lt;em dir="ltr"&gt;exclude anything in the parentheses&lt;/em&gt;. For multiple directories, separate the names with a pipe symbol, e.g. &lt;code dir="ltr"&gt;!(backup|user)&lt;/code&gt; to exclude both backup and user directories.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;There are complications and error messages will be shown on each backup if absolute paths are added to the tar command. This means that an email would be generated every night, even if the backup succeeds. Ain't nobody got time for that.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;As a workaround, changing to the root directory at the start makes all paths relative, and allows the shell expansion to work. The &lt;code dir="ltr"&gt;-C&lt;/code&gt; switch can be used instead, but this breaks shell expansion.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;The final commands to go in the script look like this:&lt;/p&gt;
-
-&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;cd /
-tar cf /home/backup/backup/files.tar etc/!(spwd.db) root \
-	var/www var/log home/!(backup) /var/cron \
-	usr/local/bin/writefreely usr/local/bin/backup.sh \
-	usr/local/share/writefreely 
-&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;I've used backslashes to break up the lines for readability, but all the paths could be put on a single line if preferred.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;I've excluded &lt;strong dir="ltr"&gt;/etc/spwd.db&lt;/strong&gt; from the backup because OpenBSD's built-in tar uses a feature called pledge that restricts access to certain files. The file isn't particularly important to this specific backup, but contains the shadow password database, which I'm happy to recreate as part of the restore process.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;At this point you might wonder why &lt;code dir="ltr"&gt;gzip&lt;/code&gt; compression isn't being used in the tar archive. This is because the final archive will be compressed, and there's no point in compressing twice.&lt;/p&gt;
-
-&lt;h2 dir="ltr"&gt;Creating the final archive&lt;/h2&gt;
-
-&lt;p dir="ltr"&gt;To distinguish between backups by date, I used a timestamp, generated by the &lt;code dir="ltr"&gt;date&lt;/code&gt; command. By default there are spaces and colons, neither of which are good for interoperability across Operating Systems and filesystems. Use &lt;code dir="ltr"&gt;date +%F_%H%M%S&lt;/code&gt; to generate a more reasonable format. Using &lt;code dir="ltr"&gt;tar&lt;/code&gt;'s &lt;code dir="ltr"&gt;-C&lt;/code&gt; switch changes the &lt;code dir="ltr"&gt;tar&lt;/code&gt; working directory to /home/backup and stops a leading / error message appearing in the backup.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;The final &lt;code dir="ltr"&gt;tar&lt;/code&gt; command in the backup script should look like this:&lt;/p&gt;
-
-&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;tar zcf /home/backup/c1_$(date +%F_%H%M%S).tgz -C /home/backup backup
-&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;It's also important to change the file ownership to the backup user so the remote system can delete the backup after it's been created.&lt;/p&gt;
-
-&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;chown backup:backup /home/backup/c1_*
-&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;The full backup script on chargen.one looks like this:&lt;/p&gt;
-
-&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;#!/bin/sh
-
-mkdir /home/backup/backup
-# Add stuff below here
-
-# MySQL Backup
-mysqldump -u root -A -R -E --triggers --single-transaction | gzip -9 &amp;gt; /home/backup/backup/mysql.gz
-
-# Packages backup
-pkg_info -mz &amp;gt; /home/backup/backup/packages.txt
-
-# Files backup
-cd /
-tar cf /home/backup/backup/files.tar etc/!(spwd.db) root \
-	var/www var/log home/!(backup) /var/cron \
-	usr/local/bin/writefreely usr/local/bin/backup.sh \
-	usr/local/share/writefreely 
-
-# Final archive
-tar zcf /home/backup/c1_$(date +%F_%H%M%S).tgz \
-	-C /home/backup backup
-
-# Fix permissions
-chown backup:backup /home/backup/c1_*
-
-# Don't add stuff below here
-rm -rf /home/backup/backup
-&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
-
-&lt;h2 dir="ltr"&gt;Automating the backup&lt;/h2&gt;
-
-&lt;p dir="ltr"&gt;As root (via &lt;code dir="ltr"&gt;su -&lt;/code&gt;, not &lt;code dir="ltr"&gt;doas&lt;/code&gt;), use &lt;code dir="ltr"&gt;crontab -e&lt;/code&gt; and add the following entry:&lt;/p&gt;
-
-&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;0 1 * * * /usr/local/bin/backup.sh
-&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;A new backup is created at 1am, every morning. On the remote server, a cron job calls a script at 3am to pull the backup down via &lt;code dir="ltr"&gt;scp&lt;/code&gt; using the following:&lt;/p&gt;
-
-&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;#!/bin/sh
-
-find /Backups/c1/ -mtime +30 -exec rm {} \;
-scp -q backup@chargen.one:./c1_*.tgz /Backups/c1/
-ssh backup@chargen.one rm c1_*.tgz
-&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;And that's it! The secondary backup server pulls down the contents of /Backups from the NAS, so there's nothing left to do.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;I'll write a separate post about restoring, as this post is already getting long, but hopefully it's useful to people who want pull, rather than push backups.&lt;/p&gt;
-&lt;/div&gt;</description><pubDate>Sun, 03 Feb 2019 07:24:34 -0600</pubDate></item><item><title>Netflix and FreeBSD - Using Open Source to Deliver Streaming Video - FOSDEM 2019</title><link>https://fosdem.org/2019/schedule/event/netflix_freebsd/attachments/slides/3103/export/events/attachments/netflix_freebsd/slides/3103/FOSDEM_2019_Netflix_and_FreeBSD.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/0hppck/netflix_freebsd_using_open_source"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 03 Feb 2019 07:57:08 -0600</pubDate></item><item><title>Scams, American Express, and obfuscated Javascript</title><link>https://lobste.rs/s/bsbrbb</link><description>&lt;p&gt;Whenever I get a scam email that manages to circumvent both my and gmail’s email filters, I like to take a closer look at how it did it and what it’s trying to accomplish.&lt;/p&gt;&lt;p&gt;Today I got a curious looking email from “American Express” titled “RREMINDER: We’ve issue a concern”. They were not redirecting you to a URL - they attached an HTML file and told you to “verify your account” through that file.&lt;/p&gt;&lt;picture class="centered-image"&gt;&lt;source srcset="https://blog.jonlu.ca/images/amex-scam-email.webp" type="image/webp"&gt;&lt;source srcset="https://blog.jonlu.ca/images/amex-scam-email.png" type="image/jpeg"&gt;&lt;img alt="Amex scam email" src="https://blog.jonlu.ca/images/amex-scam-email.png" width="296" height="183"&gt;&lt;/picture&gt;&lt;p&gt;"American Express" Email&lt;/p&gt;&lt;p&gt;They managed to emulate the notice email very accurately, and even knew about the way Amex generates their card numbers.&lt;/p&gt;&lt;p dir="ltr"&gt;American Express card numbers always follow the format 3XXX XXXXXX XABBC&lt;sup dir="ltr"&gt;&lt;a href="https://blog.jonlu.ca/posts/deobfuscating-amex-scammer#fn:1" dir="ltr"&gt;1&lt;/a&gt;&lt;/sup&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;A&lt;/strong&gt; = Card sequence number (starts with 1 and will increase by 1 each time a new account number is issued, usually due to theft or lost card)&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;BB&lt;/strong&gt; = “00” for first primary card on the account. Increases by 1 for every new card on the account (01, 02, 03, etc.)&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;C&lt;/strong&gt; = Check digit according to the &amp;lt;a rel=”noopener”&lt;code dir="ltr"&gt; or &lt;/code&gt;rel=”noreferrer” href=”https://en.wikipedia.org/wiki/Luhn_algorithm”&amp;gt;Luhn algorithm&amp;lt;/a&amp;gt;&lt;/p&gt;&lt;p dir="ltr"&gt;The scammers correctly had &lt;code dir="ltr"&gt;00&lt;/code&gt; and had a 1 in 10 chance of guessing the Luhn check digit.&lt;/p&gt;&lt;p dir="ltr"&gt;The quality of the email was fairly high (I block image loading, otherwise it would look almost picture perfect), with the only real missteps being the double &lt;code dir="ltr"&gt;R&lt;/code&gt; in the subject line (&lt;code dir="ltr"&gt;RREMINDER&lt;/code&gt;) and the fact that the continue button did not link anywhere.&lt;/p&gt;&lt;h2&gt;Domain&lt;/h2&gt;&lt;p&gt;The first step was to look at where the email came from. The full headers are below.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;X-Apparently-To: jonluca.decaro@yahoo.com; Sat, 02 Feb 2019 22:19:06 +0000
+question. All these options are explained in each subcommand help.&lt;/p&gt;</description><pubDate>Sun, 03 Feb 2019 06:08:36 -0600</pubDate></item><item><title>Scams, American Express, and obfuscated Javascript</title><link>https://lobste.rs/s/bsbrbb</link><description>&lt;p&gt;Whenever I get a scam email that manages to circumvent both my and gmail’s email filters, I like to take a closer look at how it did it and what it’s trying to accomplish.&lt;/p&gt;&lt;p&gt;Today I got a curious looking email from “American Express” titled “RREMINDER: We’ve issue a concern”. They were not redirecting you to a URL - they attached an HTML file and told you to “verify your account” through that file.&lt;/p&gt;&lt;picture class="centered-image"&gt;&lt;source srcset="https://blog.jonlu.ca/images/amex-scam-email.webp" type="image/webp"&gt;&lt;source srcset="https://blog.jonlu.ca/images/amex-scam-email.png" type="image/jpeg"&gt;&lt;img alt="Amex scam email" src="https://blog.jonlu.ca/images/amex-scam-email.png" width="296" height="183"&gt;&lt;/picture&gt;&lt;p&gt;"American Express" Email&lt;/p&gt;&lt;p&gt;They managed to emulate the notice email very accurately, and even knew about the way Amex generates their card numbers.&lt;/p&gt;&lt;p dir="ltr"&gt;American Express card numbers always follow the format 3XXX XXXXXX XABBC&lt;sup dir="ltr"&gt;&lt;a href="https://blog.jonlu.ca/posts/deobfuscating-amex-scammer#fn:1" dir="ltr"&gt;1&lt;/a&gt;&lt;/sup&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;A&lt;/strong&gt; = Card sequence number (starts with 1 and will increase by 1 each time a new account number is issued, usually due to theft or lost card)&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;BB&lt;/strong&gt; = “00” for first primary card on the account. Increases by 1 for every new card on the account (01, 02, 03, etc.)&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;C&lt;/strong&gt; = Check digit according to the &amp;lt;a rel=”noopener”&lt;code dir="ltr"&gt; or &lt;/code&gt;rel=”noreferrer” href=”https://en.wikipedia.org/wiki/Luhn_algorithm”&amp;gt;Luhn algorithm&amp;lt;/a&amp;gt;&lt;/p&gt;&lt;p dir="ltr"&gt;The scammers correctly had &lt;code dir="ltr"&gt;00&lt;/code&gt; and had a 1 in 10 chance of guessing the Luhn check digit.&lt;/p&gt;&lt;p dir="ltr"&gt;The quality of the email was fairly high (I block image loading, otherwise it would look almost picture perfect), with the only real missteps being the double &lt;code dir="ltr"&gt;R&lt;/code&gt; in the subject line (&lt;code dir="ltr"&gt;RREMINDER&lt;/code&gt;) and the fact that the continue button did not link anywhere.&lt;/p&gt;&lt;h2&gt;Domain&lt;/h2&gt;&lt;p&gt;The first step was to look at where the email came from. The full headers are below.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;X-Apparently-To: jonluca.decaro@yahoo.com; Sat, 02 Feb 2019 22:19:06 +0000
 Return-Path: &amp;lt;onlineservices@member.amexmessages.com&amp;gt;
 Received-SPF: pass (domain of member.amexmessages.com designates 63.101.151.8 as permitted sender)
 X-YMailISG: &amp;lt;redacted-blob&amp;gt;
@@ -845,7 +680,172 @@ OS CPE: cpe:/o:linux:linux_kernel:2.6 cpe:/o:linux:linux_kernel:3
 OS details: Linux 2.6.32 - 3.13
 Network Distance: 17 hops
 Service Info: Hosts: localhost.localdomain, vz170.jpnsv.com; OS: Unix
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Conclusion&lt;/h3&gt;&lt;p&gt;It’s always fun to see how attackers are disguising their code and identity. This was a pretty fun exploration of a single attackers point of view. We really didn’t get much info, besides the registrant of the second compromised domain, but it was an interesting Saturday project none the less.&lt;/p&gt;</description><pubDate>Sun, 03 Feb 2019 14:01:16 -0600</pubDate></item><item><title>Dotfile madness</title><link>https://lobste.rs/s/oi54hk</link><description>&lt;p&gt;We are no longer in control of our home directories.&lt;/p&gt;&lt;p dir="ltr"&gt;My own home directory contains 25 ordinary files and 144 hidden files. The
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Conclusion&lt;/h3&gt;&lt;p&gt;It’s always fun to see how attackers are disguising their code and identity. This was a pretty fun exploration of a single attackers point of view. We really didn’t get much info, besides the registrant of the second compromised domain, but it was an interesting Saturday project none the less.&lt;/p&gt;</description><pubDate>Sun, 03 Feb 2019 14:01:16 -0600</pubDate></item><item><title>Pull-based Backups using OpenBSD base*</title><link>https://lobste.rs/s/gvpxy2</link><description>&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;*The approach and scripts discussed here use &lt;code dir="ltr"&gt;mysqldump&lt;/code&gt; to back up a database at one point. Yes I know this isn't in OpenBSD base, but this was added just for a specific system. It's easy not to add it, and everything else is done through tools from the base system.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;With any system, it's important backups and restores work properly. With Chargen.One, I wanted to protect user data, and be able to easily restore. The important things for the backup were:&lt;/p&gt;
+&lt;/div&gt;&lt;UL&gt;&lt;LI&gt;Single timestamped backup file&lt;/LI&gt;&lt;LI&gt;No additional software installed above what's already on the box&lt;/LI&gt;&lt;LI&gt;Backups are pulled from a central server, not pushed to one&lt;/LI&gt;&lt;LI&gt;Portable script&lt;/LI&gt;&lt;LI&gt;Use privilege separation so local accounts can't access backups&lt;/LI&gt;&lt;/UL&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;Most services like &lt;a href="https://www.borgbackup.org/" rel="nofollow" dir="ltr"&gt;borg backup&lt;/a&gt; work best with a backup server visible from the server being backed up. I use a huge NAS to store my backups, and a separate server to store backups of backups. The NAS is behind a Firewall and the other server can see the NAS but not the Internet. As such, I need a backup system that lets me use the NAS to pull from Chargen.One onto the NAS, and then allow my isolated backup server to pull from the NAS. If that sounds a little paranoid, at least you understand why I use OpenBSD.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;Backups are taken by root on a nightly basis, and put into a folder belonging to a dedicated backup user. Early in the morning, the backup is pulled from a system which deletes the backup from chargen.one. The remote backup system will store 30 days' worth of backups.&lt;/p&gt;
+
+&lt;h2 dir="ltr"&gt;Configuring a backup account&lt;/h2&gt;
+
+&lt;p dir="ltr"&gt;The &lt;strong dir="ltr"&gt;/home&lt;/strong&gt; partition is the largest on the VPS, so I created an account to store backups in a temporary folder, create an archive, delete the temporary folder and change permissions so the remote backup system can pull and remove the backup archive.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;To set up the backup user account, use the following commands (as root):&lt;/p&gt;
+
+&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;# useradd -m backup
+# chmod 700 /home/backup
+# su - backup
+$ cd .ssh
+&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;On the backup system, generate an ssh keypair using &lt;code dir="ltr"&gt;ssh-keygen -t ed25519&lt;/code&gt;. Copy the contends of &lt;strong dir="ltr"&gt;id_ed25519.pub&lt;/strong&gt; from the backup system into &lt;strong dir="ltr"&gt;/home/backup/.ssh/authorized_keys&lt;/strong&gt; on the server being backed up.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;SSH into the backup account on the server from the NAS to make sure everything works.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;Each backup archive is created by a script that creates and stores content in &lt;strong dir="ltr"&gt;/home/backup/backup/&lt;/strong&gt;. Once backed up, the script will create a timestamped archive file and delete the &lt;strong dir="ltr"&gt;/home/backup/backup/&lt;/strong&gt; directory. The script starts off very simply:&lt;/p&gt;
+
+&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;#!/bin/sh
+
+mkdir /home/backup/backup
+# Add stuff below here
+
+
+# Don't add stuff below here
+rm -rf /home/backup/backup
+&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
+
+&lt;h2 dir="ltr"&gt;Backing up MySQL data&lt;/h2&gt;
+
+&lt;/div&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;If you want to implement my backup scheme and don't run MariaDB or MySQL, then skip this section and backup using commands from base only.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;Because MySQL is configured to use passwords, a &lt;strong dir="ltr"&gt;/root/.my.cnf&lt;/strong&gt; file containing credentials for the mysqldump command is needed.&lt;/p&gt;
+
+&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;[mysqldump]
+user=root
+password=your_password_here
+&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;The &lt;code dir="ltr"&gt;mysqldump&lt;/code&gt; command fully backs up all mysql databases, routines, events and triggers.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;Add the following to the backup script (all one line):&lt;/p&gt;
+
+&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;mysqldump -A -R -E --triggers --single-transaction  &amp;gt; /home/backup/backup/mysql.gz
+&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;The &lt;code dir="ltr"&gt;--single-transaction&lt;/code&gt; option causes the backup to take place without locking tables.&lt;/p&gt;
+
+&lt;h2 dir="ltr"&gt;Backing up a package list&lt;/h2&gt;
+
+&lt;p dir="ltr"&gt;OpenBSD uses it's own package management system called pkg. To create a backup of installed packages add the following to the backup script:&lt;/p&gt;
+
+&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;pkg_info -mz &amp;gt; /home/backup/backup/packages.txt
+&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;This can then be restored from a backup using &lt;code dir="ltr"&gt;pkg_add -l packages.txt&lt;/code&gt;.&lt;/p&gt;
+
+&lt;h2 dir="ltr"&gt;Backing up files&lt;/h2&gt;
+
+&lt;p dir="ltr"&gt;The following files and directories should be backed up:&lt;/p&gt;
+&lt;/div&gt;&lt;UL&gt;&lt;LI&gt;/etc&lt;/LI&gt;&lt;LI&gt;/root&lt;/LI&gt;&lt;LI&gt;/var/www&lt;/LI&gt;&lt;LI&gt;/var/log&lt;/LI&gt;&lt;LI&gt;/var/cron&lt;/LI&gt;&lt;LI&gt;/home, excluding /home/backup&lt;/LI&gt;&lt;LI&gt;/usr/local/bin/writefreely&lt;/LI&gt;&lt;LI&gt;/usr/local/share/writefreely&lt;/LI&gt;&lt;/UL&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;Use the &lt;code dir="ltr"&gt;tar&lt;/code&gt; command to create backups. A discussion of the tar command is best left to &lt;code dir="ltr"&gt;man tar&lt;/code&gt;, but as the backup isn't very large, I'm not using incremental backups, which keeps things simple...up to a point.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;OpenBSD's &lt;code dir="ltr"&gt;tar&lt;/code&gt; implementation doesn't add the &lt;code dir="ltr"&gt;--exclude&lt;/code&gt; option as it's a GNU extension. Other BSDs such as FreeBSD &lt;em dir="ltr"&gt;do&lt;/em&gt; add the option, but the OpenBSD team prefer not to have it. I could've added the GNU tar package, but one of the stated goals of the script is to not require additional software to keep things portable. Paths such as /home/backup are excluded using shell expansion instead.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;To test this, try the following command:&lt;/p&gt;
+
+&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;# tar cvf bk.tar /home/!(backup)
+&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;The exclamation mark means &lt;em dir="ltr"&gt;exclude anything in the parentheses&lt;/em&gt;. For multiple directories, separate the names with a pipe symbol, e.g. &lt;code dir="ltr"&gt;!(backup|user)&lt;/code&gt; to exclude both backup and user directories.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;There are complications and error messages will be shown on each backup if absolute paths are added to the tar command. This means that an email would be generated every night, even if the backup succeeds. Ain't nobody got time for that.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;As a workaround, changing to the root directory at the start makes all paths relative, and allows the shell expansion to work. The &lt;code dir="ltr"&gt;-C&lt;/code&gt; switch can be used instead, but this breaks shell expansion.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;The final commands to go in the script look like this:&lt;/p&gt;
+
+&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;cd /
+tar cf /home/backup/backup/files.tar etc/!(spwd.db) root \
+	var/www var/log home/!(backup) /var/cron \
+	usr/local/bin/writefreely usr/local/bin/backup.sh \
+	usr/local/share/writefreely 
+&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;I've used backslashes to break up the lines for readability, but all the paths could be put on a single line if preferred.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;I've excluded &lt;strong dir="ltr"&gt;/etc/spwd.db&lt;/strong&gt; from the backup because OpenBSD's built-in tar uses a feature called pledge that restricts access to certain files. The file isn't particularly important to this specific backup, but contains the shadow password database, which I'm happy to recreate as part of the restore process.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;At this point you might wonder why &lt;code dir="ltr"&gt;gzip&lt;/code&gt; compression isn't being used in the tar archive. This is because the final archive will be compressed, and there's no point in compressing twice.&lt;/p&gt;
+
+&lt;h2 dir="ltr"&gt;Creating the final archive&lt;/h2&gt;
+
+&lt;p dir="ltr"&gt;To distinguish between backups by date, I used a timestamp, generated by the &lt;code dir="ltr"&gt;date&lt;/code&gt; command. By default there are spaces and colons, neither of which are good for interoperability across Operating Systems and filesystems. Use &lt;code dir="ltr"&gt;date +%F_%H%M%S&lt;/code&gt; to generate a more reasonable format. Using &lt;code dir="ltr"&gt;tar&lt;/code&gt;'s &lt;code dir="ltr"&gt;-C&lt;/code&gt; switch changes the &lt;code dir="ltr"&gt;tar&lt;/code&gt; working directory to /home/backup and stops a leading / error message appearing in the backup.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;The final &lt;code dir="ltr"&gt;tar&lt;/code&gt; command in the backup script should look like this:&lt;/p&gt;
+
+&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;tar zcf /home/backup/c1_$(date +%F_%H%M%S).tgz -C /home/backup backup
+&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;It's also important to change the file ownership to the backup user so the remote system can delete the backup after it's been created.&lt;/p&gt;
+
+&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;chown backup:backup /home/backup/c1_*
+&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;The full backup script on chargen.one looks like this:&lt;/p&gt;
+
+&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;#!/bin/sh
+
+mkdir /home/backup/backup
+# Add stuff below here
+
+# MySQL Backup
+mysqldump -u root -A -R -E --triggers --single-transaction | gzip -9 &amp;gt; /home/backup/backup/mysql.gz
+
+# Packages backup
+pkg_info -mz &amp;gt; /home/backup/backup/packages.txt
+
+# Files backup
+cd /
+tar cf /home/backup/backup/files.tar etc/!(spwd.db) root \
+	var/www var/log home/!(backup) /var/cron \
+	usr/local/bin/writefreely usr/local/bin/backup.sh \
+	usr/local/share/writefreely 
+
+# Final archive
+tar zcf /home/backup/c1_$(date +%F_%H%M%S).tgz \
+	-C /home/backup backup
+
+# Fix permissions
+chown backup:backup /home/backup/c1_*
+
+# Don't add stuff below here
+rm -rf /home/backup/backup
+&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
+
+&lt;h2 dir="ltr"&gt;Automating the backup&lt;/h2&gt;
+
+&lt;p dir="ltr"&gt;As root (via &lt;code dir="ltr"&gt;su -&lt;/code&gt;, not &lt;code dir="ltr"&gt;doas&lt;/code&gt;), use &lt;code dir="ltr"&gt;crontab -e&lt;/code&gt; and add the following entry:&lt;/p&gt;
+
+&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;0 1 * * * /usr/local/bin/backup.sh
+&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;A new backup is created at 1am, every morning. On the remote server, a cron job calls a script at 3am to pull the backup down via &lt;code dir="ltr"&gt;scp&lt;/code&gt; using the following:&lt;/p&gt;
+
+&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;#!/bin/sh
+
+find /Backups/c1/ -mtime +30 -exec rm {} \;
+scp -q backup@chargen.one:./c1_*.tgz /Backups/c1/
+ssh backup@chargen.one rm c1_*.tgz
+&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;And that's it! The secondary backup server pulls down the contents of /Backups from the NAS, so there's nothing left to do.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;I'll write a separate post about restoring, as this post is already getting long, but hopefully it's useful to people who want pull, rather than push backups.&lt;/p&gt;
+&lt;/div&gt;</description><pubDate>Sun, 03 Feb 2019 07:24:34 -0600</pubDate></item><item><title>Netflix and FreeBSD - Using Open Source to Deliver Streaming Video - FOSDEM 2019</title><link>https://fosdem.org/2019/schedule/event/netflix_freebsd/attachments/slides/3103/export/events/attachments/netflix_freebsd/slides/3103/FOSDEM_2019_Netflix_and_FreeBSD.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/0hppck/netflix_freebsd_using_open_source"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 03 Feb 2019 07:57:08 -0600</pubDate></item><item><title>Dotfile madness</title><link>https://lobste.rs/s/oi54hk</link><description>&lt;p&gt;We are no longer in control of our home directories.&lt;/p&gt;&lt;p dir="ltr"&gt;My own home directory contains 25 ordinary files and 144 hidden files. The
 dotfiles contain data that doesn't belong to me: it belongs to the programmers
 whose programs decided to hijack the primary location designed as a storage for
 my personal files. I can't place those dotfiles anywhere else and they will
@@ -2611,7 +2611,7 @@ hooks &lt;span dir="ltr"&gt;=&lt;/span&gt; fiber&lt;span dir="ltr"&gt;.&lt;/span
 &lt;span dir="ltr"&gt;// Call the component&lt;/span&gt;
 &lt;span dir="ltr"&gt;YourComponent&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
 &lt;span dir="ltr"&gt;// Remember the state of Hooks&lt;/span&gt;
-fiber&lt;span dir="ltr"&gt;.&lt;/span&gt;hooks &lt;span dir="ltr"&gt;=&lt;/span&gt; hooks&lt;span dir="ltr"&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;&lt;em dir="ltr"&gt;(If you’re curious, the real code is &lt;a href="https://github.com/facebook/react/blob/master/packages/react-reconciler/src/ReactFiberHooks.js" dir="ltr"&gt;here&lt;/a&gt;.)&lt;/em&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;This is roughly how each &lt;code dir="ltr"&gt;useState()&lt;/code&gt; call gets the right state. As we’ve learned &lt;a href="https://overreacted.io/react-as-a-ui-runtime/#reconciliation" dir="ltr"&gt;earlier&lt;/a&gt;, “matching things up” isn’t new to React — reconciliation relies on the elements matching up between renders in a similar way.&lt;/p&gt;&lt;h2&gt;What’s Left Out&lt;/h2&gt;&lt;p&gt;We’ve touched on pretty much all important aspects of the React runtime environment. If you finished this page, you probably know React in more detail than 90% of its users. And there’s nothing wrong with that!&lt;/p&gt;&lt;p dir="ltr"&gt;There are some parts I left out — mostly because they’re unclear even to us. React doesn’t currently have a good story for multipass rendering, i.e. when the parent render needs information about the children. Also, the &lt;a href="https://reactjs.org/docs/error-boundaries.html" dir="ltr"&gt;error handling API&lt;/a&gt; doesn’t yet have a Hooks version. It’s possible that these two problems can be solved together. Concurrent Mode is not stable yet, and there are interesting questions about how Suspense fits into this picture. Maybe I’ll do a follow-up when they’re fleshed out and Suspense is ready for more than &lt;a href="https://reactjs.org/blog/2018/10/23/react-v-16-6.html#reactlazy-code-splitting-with-suspense" dir="ltr"&gt;lazy loading&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;I think it speaks to the success of React’s API that you can get very far without ever thinking about most of these topics.&lt;/strong&gt; Good defaults like the reconciliation heuristics do the right thing in most cases. Warnings like the &lt;code dir="ltr"&gt;key&lt;/code&gt; warning nudge you when you risk shooting yourself in the foot.&lt;/p&gt;&lt;p&gt;If you’re a UI library nerd, I hope this post was somewhat entertaining and clarified how React works in more depth. Or maybe you decided React is too complicated and you’ll never look it again. In either case, I’d love to hear from you on Twitter! Thank you for reading.&lt;/p&gt;</description><pubDate>Sun, 03 Feb 2019 05:27:12 -0600</pubDate></item><item><title>Everything You Never Wanted to Know About CMake</title><link>https://lobste.rs/s/tzkmn6</link><description>&lt;header&gt;&lt;time datetime="2019-02-02 03:12:00 -0800 PST"&gt;&lt;em&gt;February 2, 2019&lt;/em&gt;&lt;/time&gt;&lt;/header&gt;&lt;p&gt;14 minutes&lt;/p&gt;&lt;p dir="ltr"&gt;Just hearing the word CMake is typically enough to make a shiver run down my
+fiber&lt;span dir="ltr"&gt;.&lt;/span&gt;hooks &lt;span dir="ltr"&gt;=&lt;/span&gt; hooks&lt;span dir="ltr"&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;&lt;em dir="ltr"&gt;(If you’re curious, the real code is &lt;a href="https://github.com/facebook/react/blob/master/packages/react-reconciler/src/ReactFiberHooks.js" dir="ltr"&gt;here&lt;/a&gt;.)&lt;/em&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;This is roughly how each &lt;code dir="ltr"&gt;useState()&lt;/code&gt; call gets the right state. As we’ve learned &lt;a href="https://overreacted.io/react-as-a-ui-runtime/#reconciliation" dir="ltr"&gt;earlier&lt;/a&gt;, “matching things up” isn’t new to React — reconciliation relies on the elements matching up between renders in a similar way.&lt;/p&gt;&lt;h2&gt;What’s Left Out&lt;/h2&gt;&lt;p&gt;We’ve touched on pretty much all important aspects of the React runtime environment. If you finished this page, you probably know React in more detail than 90% of its users. And there’s nothing wrong with that!&lt;/p&gt;&lt;p dir="ltr"&gt;There are some parts I left out — mostly because they’re unclear even to us. React doesn’t currently have a good story for multipass rendering, i.e. when the parent render needs information about the children. Also, the &lt;a href="https://reactjs.org/docs/error-boundaries.html" dir="ltr"&gt;error handling API&lt;/a&gt; doesn’t yet have a Hooks version. It’s possible that these two problems can be solved together. Concurrent Mode is not stable yet, and there are interesting questions about how Suspense fits into this picture. Maybe I’ll do a follow-up when they’re fleshed out and Suspense is ready for more than &lt;a href="https://reactjs.org/blog/2018/10/23/react-v-16-6.html#reactlazy-code-splitting-with-suspense" dir="ltr"&gt;lazy loading&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;I think it speaks to the success of React’s API that you can get very far without ever thinking about most of these topics.&lt;/strong&gt; Good defaults like the reconciliation heuristics do the right thing in most cases. Warnings like the &lt;code dir="ltr"&gt;key&lt;/code&gt; warning nudge you when you risk shooting yourself in the foot.&lt;/p&gt;&lt;p&gt;If you’re a UI library nerd, I hope this post was somewhat entertaining and clarified how React works in more depth. Or maybe you decided React is too complicated and you’ll never look it again. In either case, I’d love to hear from you on Twitter! Thank you for reading.&lt;/p&gt;</description><pubDate>Sun, 03 Feb 2019 05:27:12 -0600</pubDate></item><item><title>Tutorial: Creating an LLVM Backend for the Cpu0 Architecture</title><link>http://jonathan2251.github.io/lbd/</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/g6i0kg/tutorial_creating_llvm_backend_for_cpu0"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 03 Feb 2019 13:06:52 -0600</pubDate></item><item><title>Everything You Never Wanted to Know About CMake</title><link>https://lobste.rs/s/tzkmn6</link><description>&lt;header&gt;&lt;time datetime="2019-02-02 03:12:00 -0800 PST"&gt;&lt;em&gt;February 2, 2019&lt;/em&gt;&lt;/time&gt;&lt;/header&gt;&lt;p&gt;14 minutes&lt;/p&gt;&lt;p dir="ltr"&gt;Just hearing the word CMake is typically enough to make a shiver run down my
 spine. I’ve been deep in the muck of its behavior and tooling the last few
 weeks as I finish up a CMake library titled &lt;a href="https://github.com/slurps-mad-rips/ixm" dir="ltr"&gt;IXM&lt;/a&gt;. While the various
 minutiae of how IXM works, why I wrote it, and all the nice little usage
@@ -2887,7 +2887,7 @@ Also, this series is going to come off as if I dislike WebAssembly. I love WebAs
 &lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Except whoops! That doesn’t work! In the current version of WebAssembly, blocks can’t take arguments and so the only way to implement &lt;code dir="ltr"&gt;if&lt;/code&gt; with &lt;code dir="ltr"&gt;block&lt;/code&gt;/&lt;code dir="ltr"&gt;br_if&lt;/code&gt; is with locals, which without extra optimisations are significantly less efficient. I touch on this in my previous article but there’s &lt;a href="https://github.com/WebAssembly/multi-value/blob/master/proposals/multi-value/Overview.md" dir="ltr"&gt;a proposal to fix this&lt;/a&gt;. Let’s say this gets fixed though, and blocks gain the ability to take arguments. In this case, not only are these two pieces of code identical, but even a baseline non-optimising compiler will produce identical assembly for both of them. The second one takes more bytes to represent but it’s a simple recurring pattern, which makes it easy to write domain-specific compression for it&lt;sup dir="ltr"&gt;&lt;a href="http://troubles.md/posts/why-do-we-need-the-relooper-algorithm-again/#fn:macros" dir="ltr"&gt;1&lt;/a&gt;&lt;/sup&gt;.&lt;/p&gt;&lt;h2&gt;Deeper down the rabbit hole&lt;/h2&gt;&lt;p dir="ltr"&gt;It’s not news to most programmers that really all of these constructs are redundant if WebAssembly had &lt;code dir="ltr"&gt;goto&lt;/code&gt;. If you had &lt;code dir="ltr"&gt;goto&lt;/code&gt; and some &lt;code dir="ltr"&gt;goto_if&lt;/code&gt; variant that conditionally jumped to a label you could implement all of these constructs. So why doesn’t WebAssembly support &lt;code dir="ltr"&gt;goto&lt;/code&gt;?&lt;/p&gt;&lt;p dir="ltr"&gt;The classic argument against &lt;code dir="ltr"&gt;goto&lt;/code&gt; is that it leads to spaghetti code. WebAssembly isn’t designed as a front-end language for general programming though, so what’s the problem? Well, WebAssembly does have some constraints, specifically it must produce code that is valid. WebAssembly is a stack machine, and you can’t jump to just any label since that label might point to code that pops too many values off the stack, or pops the wrong types off the stack, or pushes too many values onto the stack&lt;sup dir="ltr"&gt;&lt;a href="http://troubles.md/posts/why-do-we-need-the-relooper-algorithm-again/#fn:java" dir="ltr"&gt;2&lt;/a&gt;&lt;/sup&gt;. Essentially raw &lt;code dir="ltr"&gt;goto&lt;/code&gt;s allow you to do all kinds of evil stuff. What you really want is a list of &lt;code dir="ltr"&gt;block&lt;/code&gt;s like WebAssembly has now, each taking some number of arguments and returning some number of values onto the stack, and that you can call like function. Now you can have arbitrary flow between these blocks, like a typed version of &lt;code dir="ltr"&gt;goto&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Now I’m not some visionary genius and I didn’t come up with this idea, nor was I the first to apply this to WebAssembly. The concept has been implemented in compilers for a very long time, where it is known as a &lt;a href="https://en.wikipedia.org/wiki/Control_flow_graph" dir="ltr"&gt;control flow graph&lt;/a&gt; or CFG. A CFG is usually combined with a code representation in SSA form, and if you’ve read my previous article you probably know where this is going by now but let’s work through it together anyway. As for implementing it in WebAssembly, I was introduced to this as it applies to WebAssembly by the author of the &lt;a href="https://github.com/WebAssembly/funclets/blob/master/proposals/funclets/Overview.md" dir="ltr"&gt;WebAssembly Funclets proposal&lt;/a&gt;, which implements this basic idea.&lt;/p&gt;&lt;h2&gt;Why bother?&lt;/h2&gt;&lt;p dir="ltr"&gt;CFGs are the backbone of almost every static language compiler out there. Both LLVM and GCC use a CFG to combine the different control flow constructs like &lt;code dir="ltr"&gt;for&lt;/code&gt;, &lt;code dir="ltr"&gt;while&lt;/code&gt;, &lt;code dir="ltr"&gt;if&lt;/code&gt; and even &lt;code dir="ltr"&gt;goto&lt;/code&gt; into a single representation that can be used to define them all. This causes a problem for compiling to WebAssembly. Since WebAssembly doesn’t allow arbitrary control-flow graphs, compilers have to detect when some set of nodes in the CFG can be represented using WebAssembly’s control flow constructs and emit them, falling back to a complicated algorithm like &lt;a href="http://mozakai.blogspot.com/2012/05/reloop-all-blocks.html" dir="ltr"&gt;Relooper&lt;/a&gt; or Stackifier (no link for the latter, it’s only mentioned by this name in LLVM internal discussions) to emulate complex control flow. Essentially the fallback algorithm converts the CFG into a the equivalent of a loop combined with a switch statement, which can be extremely slow.&lt;/p&gt;&lt;p&gt;Currently compilers that convert WebAssembly to native cannot generate performant assembly for this “fallback” code, despite the fact that supporting arbitrary CFGs in WebAssembly comes with no downside in terms of runtime performance, security or correctness. WebAssembly control flow is a lossy conversion - we start with a CFG in LLVM which gets converted to WebAssembly control flow, then the native compiler converts that control flow back into a less-efficient CFG which then has optimisations applied and is then compiled to native. For most compilers the only way to get efficient code is to detect the loop-and-switch emitted by Relooper and Stackifier and convert it back into the arbitrary CFG that it started as. You’re basically having to write a slow, error-prone algorithm to convert a CFG to Wasm and then another slow, error-prone algorithm to convert the Wasm back into the CFG that it started as. No wonder GCC developers simply gave up implementing a WebAssembly backend as it was much too difficult to correctly implement a relooper-style algorithm over their CFG representation.&lt;/p&gt;&lt;h2&gt;Why is this not already implemented?&lt;/h2&gt;&lt;p&gt;Well for a start it requires arguments to blocks and multiple returns to be supported, neither of which are in the MVP. As for why those aren’t supported in the MVP, I don’t really have a good answer. As with my previous article, the question really comes down to WebAssembly’s history as a statically-typed binary encoding of JavaScript and the lack of serious implementations while the specification was being written. Unlike the previous article, I find it utterly baffling that the issues with compiling to WebAssembly’s inexpressive control flow from any modern compiler weren’t so glaringly obvious as to prevent the release of the MVP until they were fixed. The development of emscripten should be enough proof that structured control flow like this is a very poor compilation target. I wasn’t there for the development of the specification though and so I can’t speak for what was going on behind the scenes.&lt;/p&gt;&lt;p&gt;There is one thing that may have been a major factor to the decision not to adopt arbitrary CFGs for WebAssembly control flow. I believe that V8 is an exception to most compilers in that it doesn’t represent code as a CFG at all - it maintains roughly JS-compatible control flow all the way from front-end to codegen. In order to support this V8 would have to be converted to use CFGs, they’d have to implement something like Relooper internally, or they’d have to write a new WebAssembly runtime from scratch. Google was and is a major roadblock to getting this implemented as they have multiple people on the committee in charge of WebAssembly who have veto power.&lt;/p&gt;&lt;p&gt;Join us next time for a peek at the stack. I promise that this next one will be the last negative post.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;The simplest compression method would be to implement macros - in the header you define a macro that takes some arguments and produces one or more instructions. I’m not certain if there’s an implementation of this that would provide better results than simply using a general-purpose compression algorithm, however.
  &lt;a href="http://troubles.md/posts/why-do-we-need-the-relooper-algorithm-again/#fnref:macros" dir="ltr"&gt;&lt;sup dir="ltr"&gt;[return]&lt;/sup&gt;&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;The JVM is a stack machine that uses &lt;code dir="ltr"&gt;goto&lt;/code&gt; with untyped blocks for control flow, but to maintain safety it must disable the JIT entirely when hitting code that can’t be converted into control flow that resembles the restricted control flow of current WebAssembly. Instead, it falls back to an interpreter for the bytecode. Unlike the JVM, however, we have the option of building typed blocks into our format from the start.
  &lt;a href="http://troubles.md/posts/why-do-we-need-the-relooper-algorithm-again/#fnref:java" dir="ltr"&gt;&lt;sup dir="ltr"&gt;[return]&lt;/sup&gt;&lt;/a&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;© 2017-2018, all rights reserved.
-&lt;/p&gt;</description><pubDate>Sat, 02 Feb 2019 20:11:44 -0600</pubDate></item><item><title>Tutorial: Creating an LLVM Backend for the Cpu0 Architecture</title><link>http://jonathan2251.github.io/lbd/</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/g6i0kg/tutorial_creating_llvm_backend_for_cpu0"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 03 Feb 2019 13:06:52 -0600</pubDate></item><item><title>A Python Interpreter Written in Rust</title><link>https://lobste.rs/s/s9z7oo</link><description>&lt;h1&gt;RustPython&lt;/h1&gt;&lt;p&gt;A Python-3 (CPython &amp;gt;= 3.5.0) Interpreter written in Rust &lt;/p&gt;&lt;img alt="snake" height="19" width="19" src="https://github.githubassets.com/images/icons/emoji/unicode/1f40d.png"&gt;&lt;img alt="scream" height="19" width="19" src="https://github.githubassets.com/images/icons/emoji/unicode/1f631.png"&gt;&lt;img alt="metal" height="19" width="19" src="https://github.githubassets.com/images/icons/emoji/unicode/1f918.png"&gt;&lt;p&gt;.&lt;/p&gt;&lt;img src="https://camo.githubusercontent.com/fb7cccfd031d15215ec7bb2b9e31569c557a5a4e/68747470733a2f2f7472617669732d63692e6f72672f52757374507974686f6e2f52757374507974686f6e2e7376673f6272616e63683d6d6173746572" alt="Build Status" width="90" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/76f0e887c183ccc31c1cb63c33d2dbf48cb2df51/68747470733a2f2f696d672e736869656c64732e696f2f62616467652f4c6963656e73652d4d49542d677265656e2e737667" alt="License: MIT" width="82" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/926ca81f11ceabcbac75cc7ff44d16f14f9b4cca/68747470733a2f2f696d672e736869656c64732e696f2f6769746875622f636f6e7472696275746f72732f52757374507974686f6e2f52757374507974686f6e2e737667" alt="Contributors" width="100" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/1361bb3b490b72eab5bafeeab1cc871312133c60/68747470733a2f2f6261646765732e6769747465722e696d2f52757374507974686f6e2f4c6f6262792e737667" alt="Gitter" width="92" height="20"&gt;&lt;h3 dir="ltr"&gt;Check out our &lt;a href="https://rustpython.github.io/demo/" rel="nofollow" dir="ltr"&gt;online demo&lt;/a&gt; running on WebAssembly.&lt;/h3&gt;&lt;p&gt;To test RustPython, do the following:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ git clone https://github.com/RustPython/RustPython
+&lt;/p&gt;</description><pubDate>Sat, 02 Feb 2019 20:11:44 -0600</pubDate></item><item><title>A Python Interpreter Written in Rust</title><link>https://lobste.rs/s/s9z7oo</link><description>&lt;h1&gt;RustPython&lt;/h1&gt;&lt;p&gt;A Python-3 (CPython &amp;gt;= 3.5.0) Interpreter written in Rust &lt;/p&gt;&lt;img alt="snake" height="19" width="19" src="https://github.githubassets.com/images/icons/emoji/unicode/1f40d.png"&gt;&lt;img alt="scream" height="19" width="19" src="https://github.githubassets.com/images/icons/emoji/unicode/1f631.png"&gt;&lt;img alt="metal" height="19" width="19" src="https://github.githubassets.com/images/icons/emoji/unicode/1f918.png"&gt;&lt;p&gt;.&lt;/p&gt;&lt;img src="https://camo.githubusercontent.com/fb7cccfd031d15215ec7bb2b9e31569c557a5a4e/68747470733a2f2f7472617669732d63692e6f72672f52757374507974686f6e2f52757374507974686f6e2e7376673f6272616e63683d6d6173746572" alt="Build Status" width="90" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/76f0e887c183ccc31c1cb63c33d2dbf48cb2df51/68747470733a2f2f696d672e736869656c64732e696f2f62616467652f4c6963656e73652d4d49542d677265656e2e737667" alt="License: MIT" width="82" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/926ca81f11ceabcbac75cc7ff44d16f14f9b4cca/68747470733a2f2f696d672e736869656c64732e696f2f6769746875622f636f6e7472696275746f72732f52757374507974686f6e2f52757374507974686f6e2e737667" alt="Contributors" width="100" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/1361bb3b490b72eab5bafeeab1cc871312133c60/68747470733a2f2f6261646765732e6769747465722e696d2f52757374507974686f6e2f4c6f6262792e737667" alt="Gitter" width="92" height="20"&gt;&lt;h3 dir="ltr"&gt;Check out our &lt;a href="https://rustpython.github.io/demo/" rel="nofollow" dir="ltr"&gt;online demo&lt;/a&gt; running on WebAssembly.&lt;/h3&gt;&lt;p&gt;To test RustPython, do the following:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ git clone https://github.com/RustPython/RustPython
 $ cd RustPython
 $ cargo run demo.py
 Hello, RustPython!
@@ -2930,7 +2930,7 @@ the text box or browser devtools with:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt
   }
 );&lt;/PRE&gt;&lt;p dir="ltr"&gt;Alternatively, you can run &lt;code dir="ltr"&gt;npm run build&lt;/code&gt; to build the app once, without watching
 for changes, or &lt;code dir="ltr"&gt;npm run dist&lt;/code&gt; to build the app in release mode, both for the
-crate and webpack.&lt;/p&gt;&lt;h1&gt;Code style&lt;/h1&gt;&lt;p&gt;The code style used is the default rustfmt codestyle. Please format your code accordingly.&lt;/p&gt;&lt;h1&gt;Community&lt;/h1&gt;&lt;p dir="ltr"&gt;Chat with us on &lt;a href="https://gitter.im/rustpython/Lobby" rel="nofollow" dir="ltr"&gt;gitter&lt;/a&gt;.&lt;/p&gt;&lt;h1&gt;Credit&lt;/h1&gt;&lt;p dir="ltr"&gt;The initial work was based on &lt;a href="https://github.com/windelbouwman/rspython" dir="ltr"&gt;windelbouwman/rspython&lt;/a&gt; and &lt;a href="https://github.com/shinglyu/RustPython" dir="ltr"&gt;shinglyu/RustPython&lt;/a&gt;&lt;/p&gt;&lt;h1&gt;Links&lt;/h1&gt;&lt;p&gt;These are some useful links to related projects:&lt;/p&gt;</description><pubDate>Sat, 02 Feb 2019 14:10:52 -0600</pubDate></item><item><title>What would a EvE online Internet look like?</title><link>https://lobste.rs/s/nycmjn</link><description>&lt;p dir="ltr"&gt;EvE online is a fascinating game. It’s one of the few &lt;a href="https://en.wikipedia.org/wiki/Massively_multiplayer_online_game" dir="ltr"&gt;MMO’s&lt;/a&gt;
+crate and webpack.&lt;/p&gt;&lt;h1&gt;Code style&lt;/h1&gt;&lt;p&gt;The code style used is the default rustfmt codestyle. Please format your code accordingly.&lt;/p&gt;&lt;h1&gt;Community&lt;/h1&gt;&lt;p dir="ltr"&gt;Chat with us on &lt;a href="https://gitter.im/rustpython/Lobby" rel="nofollow" dir="ltr"&gt;gitter&lt;/a&gt;.&lt;/p&gt;&lt;h1&gt;Credit&lt;/h1&gt;&lt;p dir="ltr"&gt;The initial work was based on &lt;a href="https://github.com/windelbouwman/rspython" dir="ltr"&gt;windelbouwman/rspython&lt;/a&gt; and &lt;a href="https://github.com/shinglyu/RustPython" dir="ltr"&gt;shinglyu/RustPython&lt;/a&gt;&lt;/p&gt;&lt;h1&gt;Links&lt;/h1&gt;&lt;p&gt;These are some useful links to related projects:&lt;/p&gt;</description><pubDate>Sat, 02 Feb 2019 14:10:52 -0600</pubDate></item><item><title>Collection of novels in Org-mode</title><link>https://lobste.rs/s/spz1hz</link><description>&lt;h1&gt;Licenses&lt;/h1&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;Books&lt;/b&gt;: Public Domain&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;Novels.org&lt;/b&gt;: &lt;i dir="ltr"&gt;GPL-3.0&lt;/i&gt;&lt;/p&gt;</description><pubDate>Sun, 03 Feb 2019 06:39:45 -0600</pubDate></item><item><title>What would a EvE online Internet look like?</title><link>https://lobste.rs/s/nycmjn</link><description>&lt;p dir="ltr"&gt;EvE online is a fascinating game. It’s one of the few &lt;a href="https://en.wikipedia.org/wiki/Massively_multiplayer_online_game" dir="ltr"&gt;MMO’s&lt;/a&gt;
 that only have a single “server” to log into, meaning everyone is playing on the same logical world.
 It’s also &lt;a href="https://www.wired.com/2014/02/eve-online-battle-of-b-r/" dir="ltr"&gt;had&lt;/a&gt; a
 &lt;a href="https://kotaku.com/the-year-long-undercover-plot-to-blow-up-eve-onlines-m-1831574442" dir="ltr"&gt;fascinating&lt;/a&gt; set of
@@ -3026,7 +3026,7 @@ other functions.&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;h2&gt;Other Resources&lt;/h2
 &lt;a href="https://git.sr.ht/~jack/libtelnet-haskell/tree/master/example/Main.hs" dir="ltr"&gt;&lt;code dir="ltr"&gt;example/Main.hs&lt;/code&gt;&lt;/a&gt;.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Questions should go to the
 &lt;a href="https://lists.sr.ht/~jack/libtelnet-haskell-discuss" dir="ltr"&gt;libtelnet-haskell-discuss&lt;/a&gt;
 mailing list.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Bug reports should go to the
-&lt;a href="https://todo.sr.ht/~jack/libtelnet-haskell" dir="ltr"&gt;bug tracker&lt;/a&gt;.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Sun, 03 Feb 2019 01:56:08 -0600</pubDate></item><item><title>Collection of novels in Org-mode</title><link>https://lobste.rs/s/spz1hz</link><description>&lt;h1&gt;Licenses&lt;/h1&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;Books&lt;/b&gt;: Public Domain&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;Novels.org&lt;/b&gt;: &lt;i dir="ltr"&gt;GPL-3.0&lt;/i&gt;&lt;/p&gt;</description><pubDate>Sun, 03 Feb 2019 06:39:45 -0600</pubDate></item><item><title>FreeBSD upgrade procedure using GPT</title><link>https://lobste.rs/s/ut3qsm</link><description>&lt;div dir="ltr"&gt;
+&lt;a href="https://todo.sr.ht/~jack/libtelnet-haskell" dir="ltr"&gt;bug tracker&lt;/a&gt;.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Sun, 03 Feb 2019 01:56:08 -0600</pubDate></item><item><title>FreeBSD upgrade procedure using GPT</title><link>https://lobste.rs/s/ut3qsm</link><description>&lt;div dir="ltr"&gt;
 			&lt;span dir="ltr"&gt;Feb. 1, 2019, 1:34 a.m.&lt;/span&gt;
 		&lt;/div&gt;&lt;img src="https://oshogbo.vexillium.org/image/disk-logo.png" width="60" height="47"&gt;&lt;p&gt;You have a few different ways to upgrade your operating system. For example, if you are using ZFS as your root file system you can use boot environments to accomplish this task in a quick, simple and safe way. Boot environments are the new ‘it’ thing in FreeBSD. However, today we will discuss a more old-school approach to this problem using the GPT flags. This approach may be used to upgrade your operating system if you don't use ZFS, and you want your system to be on the read-only partition, for example when you are building an appliance.&lt;/p&gt;&lt;p dir="ltr"&gt;To analyze this challenge, we will use the GPT poster made by Jared Atkinson.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;img src="https://oshogbo.vexillium.org/image/62/poster.png" alt="" width="331" height="248"&gt;&lt;p dir="ltr"&gt;The GPT is divided into two parts: GPT Header and partition array. As we can see every partition entry contains some attributes. Each operating system may implement a different one. According to &lt;a href="https://en.wikipedia.org/wiki/GUID_Partition_Table" dir="ltr"&gt;Wikipedia&lt;/a&gt;&amp;nbsp;Microsoft is already using bits 60 (read-only), 62 (hidden) and 63 (do not automount). FreeBSD implements three extra ones: BOOTME, BOOTONCE and BOOTFAILED, that respectively use the 59th, 58th and 57th bit - which are not used by antyhing else. The BOOTME attribute points to the partition which should be used to boot from. If there is a partition with two flags, BOOTME and BOOTONCE, then this partition is chosen to be booted from, but it will be used only once. How does bootloader accomplish that? Simply by removing the BOOTME attribute from it. The BOOTFAILED attribute is used to indicate that this partition was used once but the booting process was interrupted.&lt;/p&gt;&lt;p dir="ltr"&gt;Let's look at a sample scenario of a failed boot. Let's create a GPT table which contains 4 partitions:&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p&gt;&lt;span dir="ltr"&gt;# gpart create -s GPT md0&lt;br dir="ltr"&gt;# gpart add -t freebsd-boot -s64k md0&lt;br dir="ltr"&gt;# gpart add -t freebsd-ufs -s4G md0&lt;br dir="ltr"&gt;# gpart add -t freebsd-ufs md0&lt;br dir="ltr"&gt;# gpart set -a bootme -i2 md0&lt;br dir="ltr"&gt;# gpart show md0&lt;br dir="ltr"&gt;=&amp;gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; 40&amp;nbsp; 25165744&amp;nbsp; md0&amp;nbsp; GPT&amp;nbsp; (12G)&lt;br dir="ltr"&gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; 40&amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp;128&amp;nbsp; &amp;nbsp; 1&amp;nbsp; freebsd-boot&amp;nbsp; (64K)&lt;br dir="ltr"&gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp;168&amp;nbsp; &amp;nbsp;8388608&amp;nbsp; &amp;nbsp; 2&amp;nbsp; freebsd-ufs&amp;nbsp; [bootme]&amp;nbsp; (4.0G)&lt;br dir="ltr"&gt;&amp;nbsp; &amp;nbsp;8388776&amp;nbsp; &amp;nbsp;8388608&amp;nbsp; &amp;nbsp; 3&amp;nbsp; freebsd-ufs (4.0G)&lt;br dir="ltr"&gt;&amp;nbsp; 16777384&amp;nbsp; &amp;nbsp;8388400&amp;nbsp; &amp;nbsp; 4&amp;nbsp; freebsd-ufs (4.0G)&lt;/span&gt;&lt;/p&gt;&lt;p&gt;The scenario goes like:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Boot from partition UFS with flag BOOTME&amp;nbsp;(md0p2)&lt;/LI&gt;&lt;LI&gt;Upload upgrade and override UFS partition&lt;br dir="ltr"&gt;&lt;span&gt;# dd if=some.img of=/dev/md0p3&lt;/span&gt;&lt;/LI&gt;&lt;LI&gt;Set BOOTONCE and BOOTME flags on md0p3. Setting the BOOTONCE will automatically also set BOOTME&amp;nbsp;attribute. &lt;span dir="ltr"&gt;# gpart set -a bootonce -i3 md0&lt;br dir="ltr"&gt;# gpart show md0&lt;br dir="ltr"&gt;=&amp;gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; 40&amp;nbsp; 25165744&amp;nbsp; md0&amp;nbsp; GPT&amp;nbsp; (12G)&lt;br dir="ltr"&gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; 40&amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp;128&amp;nbsp; &amp;nbsp; 1&amp;nbsp; freebsd-boot (64K)&lt;br dir="ltr"&gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp;168&amp;nbsp; &amp;nbsp;8388608&amp;nbsp; &amp;nbsp; 2&amp;nbsp; freebsd-ufs [bootme] (4.0G)&lt;br dir="ltr"&gt;&amp;nbsp; &amp;nbsp;8388776&amp;nbsp; &amp;nbsp;8388608&amp;nbsp; &amp;nbsp; 3&amp;nbsp; freebsd-ufs [bootonce,bootme] (4.0G)&lt;br dir="ltr"&gt;&amp;nbsp; 16777384&amp;nbsp; &amp;nbsp;8388400&amp;nbsp; &amp;nbsp; 4&amp;nbsp; freebsd-ufs (4.0G)&lt;/span&gt;&lt;/LI&gt;&lt;LI&gt;Reboot machine&lt;/LI&gt;&lt;LI&gt;The BOOTME&amp;nbsp;flag is removed by the bootloader&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp;168&amp;nbsp; &amp;nbsp;8388608&amp;nbsp; &amp;nbsp; 2&amp;nbsp; freebsd-ufs [bootme] (4.0G)&lt;br dir="ltr"&gt;&amp;nbsp; &amp;nbsp;8388776&amp;nbsp; &amp;nbsp;8388608&amp;nbsp; &amp;nbsp; 3&amp;nbsp; freebsd-ufs [bootonce] (4.0G)&lt;/span&gt;&lt;/LI&gt;&lt;LI&gt;Upgrade error accrued (for example we were unable to boot kernel)&lt;/LI&gt;&lt;LI&gt;Machine is rebooted&lt;/LI&gt;&lt;LI&gt;Bootloader will replace the BOOTONCE flag with BOOTFAILED&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp;168&amp;nbsp; &amp;nbsp;8388608&amp;nbsp; &amp;nbsp; 2&amp;nbsp; freebsd-ufs [bootme] (4.0G)&lt;br dir="ltr"&gt;&amp;nbsp; &amp;nbsp;8388776&amp;nbsp; &amp;nbsp;8388608&amp;nbsp; &amp;nbsp; 3&amp;nbsp; freebsd-ufs [bootfailed] (4.0G)&lt;/span&gt;&lt;/LI&gt;&lt;LI&gt;If there is another partition with BOOTONCE and BOOTME attributes it will be tried now&lt;/LI&gt;&lt;LI&gt;Boot from partition UFS with flag BOOTME&lt;/LI&gt;&lt;LI&gt;Report failure&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;When an upgrade was successful the difference is that the system will remove the BOOTONCE flag and report the success. The reporting is done by the startup script /etc/rc.d/gptboot. If we are using the BOOTONCE flag as an upgrade procedure, it is a good idea to modify this script and if the upgrade was successful change BOOTONCE&amp;nbsp;to a BOOTME&amp;nbsp;flag and remove other BOOTME&amp;nbsp;flags.&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;The logic in the bootloader is also more complicated than presented here. We can have multiple BOOTONCE&amp;nbsp;and BOOTME&amp;nbsp;attributes. If these are set and the only problem is with the booting kernel there is no need to reboot the machine; the loader will try other kernels. I pointed out that I prefer to do the reboot because it is useful if our upgrade process is handling more complicated things like for example upgrading the database. We can imagine that we have one additional partition with data which contains the database instance. In one of the startup scripts, we are upgrading the database. If the upgrade fails, we roll back the changes and boot from the old partition.&lt;/p&gt;</description><pubDate>Sun, 03 Feb 2019 03:45:13 -0600</pubDate></item><item><title>An epic treatise on scheduling, bug tracking, and triage</title><link>https://lobste.rs/s/7oa5td</link><description>&lt;UL&gt;[&lt;b dir="ltr"&gt;Note 2017-12-29:&lt;/b&gt; the &lt;a href="https://news.ycombinator.com/item?id=15912929" dir="ltr"&gt;news.ycombinator.com
 discussion of this post&lt;/a&gt; is unusually useful.  You may want to read it
