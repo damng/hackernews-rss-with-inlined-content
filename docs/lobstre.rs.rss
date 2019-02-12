@@ -564,7 +564,132 @@ There are two parts to a random number generator.  We can see them as two functi
             Posted on February 10, 2019 at 5:20 pm by &lt;a href="http://dtrace.org/blogs/bmc" title="Visit bmc’s website" rel="external" dir="ltr"&gt;bmc&lt;/a&gt; · &lt;a href="http://dtrace.org/blogs/bmc/2019/02/10/reflecting-on-the-soul-of-a-new-machine/" rel="bookmark" title="Permanent link to this post" dir="ltr"&gt;Permalink&lt;/a&gt;
 &lt;br dir="ltr"&gt;
 In:&amp;nbsp;&lt;a href="http://dtrace.org/blogs/bmc/category/uncategorized/" title="View all posts in Uncategorized" rel="category tag" dir="ltr"&gt;Uncategorized&lt;/a&gt;
-          &lt;/div&gt;</description><pubDate>Sun, 10 Feb 2019 20:30:10 -0600</pubDate></item><item><title>Solving Knights and Knaves with Alloy</title><link>https://lobste.rs/s/jp1hcg</link><description>&lt;div&gt;&lt;span&gt;&lt;span&gt;Posted on &lt;/span&gt;&lt;/span&gt;&lt;/div&gt;&lt;div dir="ltr"&gt;&lt;span dir="ltr"&gt;
+          &lt;/div&gt;</description><pubDate>Sun, 10 Feb 2019 20:30:10 -0600</pubDate></item><item><title>oss-sec: CVE-2019-5736: runc container breakout (all versions)</title><link>https://lobste.rs/s/yoibye</link><description>&lt;img src="https://seclists.org/images/oss-sec-logo.png" width="80" alt="oss-sec logo" height="40"&gt;&lt;td bgcolor="#FFFFFF" dir="ltr"&gt;
+
+
+
+
+&lt;font size="+2" dir="ltr"&gt;&lt;b dir="ltr"&gt;CVE-2019-5736: runc container breakout (all versions)&lt;/b&gt;&lt;/font&gt;
+&lt;/td&gt;&lt;td bgcolor="#FFFFFF" dir="ltr"&gt;
+
+
+
+
+&lt;em dir="ltr"&gt;From&lt;/em&gt;: Aleksa Sarai &amp;lt;cyphar () cyphar com&amp;gt;&lt;br dir="ltr"&gt;
+
+&lt;em dir="ltr"&gt;Date&lt;/em&gt;: Tue, 12 Feb 2019 00:05:20 +1100&lt;br dir="ltr"&gt;
+
+
+
+&lt;/td&gt;&lt;PRE&gt;[[        Patch CRD: 2019-02-11 15:00 CET ]]
+[[ Exploit Code CRD: 2019-02-18 15:00 CET ]]
+
+Hello,
+
+I am one of the maintainers of runc (the underlying container runtime
+underneath Docker, cri-o, containerd, Kubernetes, and so on). We
+recently had a vulnerability reported which we have verified and have a
+patch for.
+
+The researchers who found this vulnerability are:
+  * Adam Iwaniuk
+  * Borys Popławski
+
+In addition, Aleksa Sarai (me) discovered that LXC was also vulnerable
+to a more convoluted version of this flaw.
+
+== OVERVIEW ==
+
+The vulnerability allows a malicious container to (with minimal user
+interaction) overwrite the host runc binary and thus gain root-level
+code execution on the host. The level of user interaction is being able
+to run any command (it doesn't matter if the command is not
+attacker-controlled) as root within a container in either of these
+contexts:
+
+  * Creating a new container using an attacker-controlled image.
+  * Attaching (docker exec) into an existing container which the
+    attacker had previous write access to.
+
+This vulnerability is *not* blocked by the default AppArmor policy, nor
+by the default SELinux policy on Fedora[++] (because container processes
+appear to be running as container_runtime_t). However, it *is* blocked
+through correct use of user namespaces (where the host root is not
+mapped into the container's user namespace).
+
+Our CVSSv3 vector is (with a score of 7.2):
+
+  AV:L/AC:H/PR:L/UI:R/S:C/C:N/I:H/A:H
+
+The assigned CVE for this issue is CVE-2019-5736.
+
+[++]: This is only the case for the "moby-engine" package on Fedora. The
+          "docker" package as well as podman are protected against this
+          exploit because they run container processes as container_t.
+
+== PATCHES ==
+
+I have attached the relevant patch which fixes this issue. This patch is
+based on HEAD, but the code in libcontainer/nsenter/ changes so
+infrequently that it should apply cleanly to any old version of the runc
+codebase you are dealing with.
+
+Please note that the patch I have pushed to runc master[1] is a modified
+version of this patch -- even though it is functionally identical
+(though we would recommend using the upstream one if you haven't patched
+using the attached one already).
+
+== NON-ESSENTIAL EXPLOIT CODE ==
+
+Several vendors have asked for exploit code to ensure that the patches
+actually solve the issue. Due to the severity of the issue (especially
+for public cloud vendors), we decided to provide the attached exploit
+code. This exploit code was written by me, and is more generic than the
+original exploit code provided by the researchers and works against LXC
+(it could likely be used on other vulnerable runtimes with no
+significant modification). Details on how to use the exploit code are
+provided in the README.
+
+As per OpenWall rules, this exploit code will be published *publicly* 7
+days after the CRD (which is 2019-02-18). *If you have a container
+runtime, please verify that you are not vulnerable to this issue
+beforehand.*
+
+== IMPACT ON OTHER PROJECTS ==
+
+It should be noted that upon further investigation I've discovered that
+LXC has a similar vulnerability, and they have also pushed a similar
+patch[2] which we co-developed. LXC is a bit harder to exploit, but the
+same fundamental flaw exists.
+
+After some discussion with the systemd-nspawn folks, it appears that
+they aren't vulnerable (because their method of attaching to a container
+uses a different method to LXC and runc).
+
+I have been contacted by folks from Apache Mesos who said they were also
+vulnerable (I believe just using the exploit code that will be
+provided). It is quite likely that most container runtimes are
+vulnerable to this flaw, unless they took very strange mitigations
+before-hand.
+
+== OTHER NEWS ==
+
+We have set up an announcement list for future security vulnerabilities,
+and you can see the process for joining here[3] (it's based on the
+Kubernetes security-announce mailing list). Please join if you
+distribute any container runtimes that depend on runc (or other OCI
+projects).
+
+[1]: &lt;a rel="nofollow" href="https://github.com/opencontainers/runc/commit/0a8e4117e7f715d5fbeef398405813ce8e88558b" dir="ltr"&gt;https://github.com/opencontainers/runc/commit/0a8e4117e7f715d5fbeef398405813ce8e88558b&lt;/a&gt;
+[2]: &lt;a rel="nofollow" href="https://github.com/lxc/lxc/commit/6400238d08cdf1ca20d49bafb85f4e224348bf9d" dir="ltr"&gt;https://github.com/lxc/lxc/commit/6400238d08cdf1ca20d49bafb85f4e224348bf9d&lt;/a&gt;
+[3]: &lt;a rel="nofollow" href="https://github.com/opencontainers/org/blob/master/security.md" dir="ltr"&gt;https://github.com/opencontainers/org/blob/master/security.md&lt;/a&gt;
+
+-- 
+Aleksa Sarai
+Senior Software Engineer (Containers)
+SUSE Linux GmbH
+&amp;lt;&lt;a rel="nofollow" href="https://www.cyphar.com/" dir="ltr"&gt;https://www.cyphar.com/&lt;/a&gt;&amp;gt;
+&lt;/PRE&gt;</description><pubDate>Mon, 11 Feb 2019 12:42:24 -0600</pubDate></item><item><title>Solving Knights and Knaves with Alloy</title><link>https://lobste.rs/s/jp1hcg</link><description>&lt;div&gt;&lt;span&gt;&lt;span&gt;Posted on &lt;/span&gt;&lt;/span&gt;&lt;/div&gt;&lt;div dir="ltr"&gt;&lt;span dir="ltr"&gt;
   &lt;time datetime="2019-02-11T00:00:00Z" dir="ltr"&gt;Feb 11, 2019&lt;/time&gt;
 &lt;/span&gt;
 
@@ -708,132 +833,7 @@ F: "E said there is one knight among us."
 A: Drunk Knave
 &lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Other variations of the puzzle, such as day and night knights or knights/knaves/spies are also easy to include in this format.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Some FM folks don’t see model finding as that different from model checking. If you want to find a model that satisfies &lt;code dir="ltr"&gt;x&lt;/code&gt;, you can just write a spec that claims &lt;code dir="ltr"&gt;!x&lt;/code&gt; and find a counterexample. But model-checking should consistently return the same counterexample, while model-finding should return a set of matching examples.
  &lt;a href="https://www.hillelwayne.com/post/knights-knaves/#fnref:modelfinding" dir="ltr"&gt;&lt;sup dir="ltr"&gt;[return]&lt;/sup&gt;&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;The output is as a visualized graph but I’m too lazy to embed images here.
- &lt;a href="https://www.hillelwayne.com/post/knights-knaves/#fnref:visualizer" dir="ltr"&gt;&lt;sup dir="ltr"&gt;[return]&lt;/sup&gt;&lt;/a&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;div&gt;&lt;span&gt;Categories: &lt;/span&gt;&lt;/div&gt;</description><pubDate>Mon, 11 Feb 2019 17:40:52 -0600</pubDate></item><item><title>oss-sec: CVE-2019-5736: runc container breakout (all versions)</title><link>https://lobste.rs/s/yoibye</link><description>&lt;img src="https://seclists.org/images/oss-sec-logo.png" width="80" alt="oss-sec logo" height="40"&gt;&lt;td bgcolor="#FFFFFF" dir="ltr"&gt;
-
-
-
-
-&lt;font size="+2" dir="ltr"&gt;&lt;b dir="ltr"&gt;CVE-2019-5736: runc container breakout (all versions)&lt;/b&gt;&lt;/font&gt;
-&lt;/td&gt;&lt;td bgcolor="#FFFFFF" dir="ltr"&gt;
-
-
-
-
-&lt;em dir="ltr"&gt;From&lt;/em&gt;: Aleksa Sarai &amp;lt;cyphar () cyphar com&amp;gt;&lt;br dir="ltr"&gt;
-
-&lt;em dir="ltr"&gt;Date&lt;/em&gt;: Tue, 12 Feb 2019 00:05:20 +1100&lt;br dir="ltr"&gt;
-
-
-
-&lt;/td&gt;&lt;PRE&gt;[[        Patch CRD: 2019-02-11 15:00 CET ]]
-[[ Exploit Code CRD: 2019-02-18 15:00 CET ]]
-
-Hello,
-
-I am one of the maintainers of runc (the underlying container runtime
-underneath Docker, cri-o, containerd, Kubernetes, and so on). We
-recently had a vulnerability reported which we have verified and have a
-patch for.
-
-The researchers who found this vulnerability are:
-  * Adam Iwaniuk
-  * Borys Popławski
-
-In addition, Aleksa Sarai (me) discovered that LXC was also vulnerable
-to a more convoluted version of this flaw.
-
-== OVERVIEW ==
-
-The vulnerability allows a malicious container to (with minimal user
-interaction) overwrite the host runc binary and thus gain root-level
-code execution on the host. The level of user interaction is being able
-to run any command (it doesn't matter if the command is not
-attacker-controlled) as root within a container in either of these
-contexts:
-
-  * Creating a new container using an attacker-controlled image.
-  * Attaching (docker exec) into an existing container which the
-    attacker had previous write access to.
-
-This vulnerability is *not* blocked by the default AppArmor policy, nor
-by the default SELinux policy on Fedora[++] (because container processes
-appear to be running as container_runtime_t). However, it *is* blocked
-through correct use of user namespaces (where the host root is not
-mapped into the container's user namespace).
-
-Our CVSSv3 vector is (with a score of 7.2):
-
-  AV:L/AC:H/PR:L/UI:R/S:C/C:N/I:H/A:H
-
-The assigned CVE for this issue is CVE-2019-5736.
-
-[++]: This is only the case for the "moby-engine" package on Fedora. The
-          "docker" package as well as podman are protected against this
-          exploit because they run container processes as container_t.
-
-== PATCHES ==
-
-I have attached the relevant patch which fixes this issue. This patch is
-based on HEAD, but the code in libcontainer/nsenter/ changes so
-infrequently that it should apply cleanly to any old version of the runc
-codebase you are dealing with.
-
-Please note that the patch I have pushed to runc master[1] is a modified
-version of this patch -- even though it is functionally identical
-(though we would recommend using the upstream one if you haven't patched
-using the attached one already).
-
-== NON-ESSENTIAL EXPLOIT CODE ==
-
-Several vendors have asked for exploit code to ensure that the patches
-actually solve the issue. Due to the severity of the issue (especially
-for public cloud vendors), we decided to provide the attached exploit
-code. This exploit code was written by me, and is more generic than the
-original exploit code provided by the researchers and works against LXC
-(it could likely be used on other vulnerable runtimes with no
-significant modification). Details on how to use the exploit code are
-provided in the README.
-
-As per OpenWall rules, this exploit code will be published *publicly* 7
-days after the CRD (which is 2019-02-18). *If you have a container
-runtime, please verify that you are not vulnerable to this issue
-beforehand.*
-
-== IMPACT ON OTHER PROJECTS ==
-
-It should be noted that upon further investigation I've discovered that
-LXC has a similar vulnerability, and they have also pushed a similar
-patch[2] which we co-developed. LXC is a bit harder to exploit, but the
-same fundamental flaw exists.
-
-After some discussion with the systemd-nspawn folks, it appears that
-they aren't vulnerable (because their method of attaching to a container
-uses a different method to LXC and runc).
-
-I have been contacted by folks from Apache Mesos who said they were also
-vulnerable (I believe just using the exploit code that will be
-provided). It is quite likely that most container runtimes are
-vulnerable to this flaw, unless they took very strange mitigations
-before-hand.
-
-== OTHER NEWS ==
-
-We have set up an announcement list for future security vulnerabilities,
-and you can see the process for joining here[3] (it's based on the
-Kubernetes security-announce mailing list). Please join if you
-distribute any container runtimes that depend on runc (or other OCI
-projects).
-
-[1]: &lt;a rel="nofollow" href="https://github.com/opencontainers/runc/commit/0a8e4117e7f715d5fbeef398405813ce8e88558b" dir="ltr"&gt;https://github.com/opencontainers/runc/commit/0a8e4117e7f715d5fbeef398405813ce8e88558b&lt;/a&gt;
-[2]: &lt;a rel="nofollow" href="https://github.com/lxc/lxc/commit/6400238d08cdf1ca20d49bafb85f4e224348bf9d" dir="ltr"&gt;https://github.com/lxc/lxc/commit/6400238d08cdf1ca20d49bafb85f4e224348bf9d&lt;/a&gt;
-[3]: &lt;a rel="nofollow" href="https://github.com/opencontainers/org/blob/master/security.md" dir="ltr"&gt;https://github.com/opencontainers/org/blob/master/security.md&lt;/a&gt;
-
--- 
-Aleksa Sarai
-Senior Software Engineer (Containers)
-SUSE Linux GmbH
-&amp;lt;&lt;a rel="nofollow" href="https://www.cyphar.com/" dir="ltr"&gt;https://www.cyphar.com/&lt;/a&gt;&amp;gt;
-&lt;/PRE&gt;</description><pubDate>Mon, 11 Feb 2019 12:42:24 -0600</pubDate></item><item><title>What are you working on this week?</title><link>https://lobste.rs/s/a5zknh</link><description>&lt;p&gt;This is the weekly thread to discuss what you have done recently and are working on this week.&lt;/p&gt;&lt;p&gt;Please be descriptive and don’t hesitate to champion your accomplishments or ask for help, advice or other guidance.&lt;/p&gt;</description><pubDate>Mon, 11 Feb 2019 06:44:21 -0600</pubDate></item><item><title>Lighting up my DasKeyboard with Blood Sugar changes using my body's REST API</title><link>https://lobste.rs/s/5umv0e</link><description>&lt;img title="image" alt="image" src="https://www.hanselman.com/blog/content/binary/Windows-Live-Writer/7f12abfd1339_8F69/image_e1555a61-2491-4294-ba03-5ec83bca4962.png" width="330" height="191"&gt;&lt;p dir="ltr"&gt;If you're a Type 1 Diabetic using a CGM - a continuous glucose meter - you'll want to set up &lt;a href="http://www.nightscout.info/" dir="ltr"&gt;Nightscout&lt;/a&gt; so you can have a REST API for your sugar. The CGM checks my blood sugar every 5 minutes, it hops via BLE over to my phone and then to the cloud. You'll want your sugars stored in cloud storage that YOU control. &lt;a href="https://www.hanselman.com/blog/BridgingDexcomShareCGMReceiversAndNightscout.aspx" dir="ltr"&gt;CGM vendors have their own cloud&lt;/a&gt;, but we can easily &lt;a href="https://www.hanselman.com/blog/BridgingDexcomShareCGMReceiversAndNightscout.aspx" dir="ltr"&gt;bridge&lt;/a&gt; over to a MongoDB database.&lt;/p&gt;&lt;p&gt;I run Nightscout in Azure and my body has a REST API. I can do an HTTP GET like this:&lt;/p&gt;&lt;font face="Courier New"&gt;/api/v1/entries.json?count=3&lt;/font&gt;&lt;p&gt;and get this&lt;/p&gt;&lt;p&gt;I can change the URL from a .json to a .txt and get this&lt;/p&gt;&lt;PRE&gt;2019-02-10T18:00:26.000Z    1549821626000    143    Flat    &lt;br dir="ltr"&gt;2019-02-10T17:55:26.000Z    1549821326000    134    Flat    &lt;br dir="ltr"&gt;2019-02-10T17:50:26.000Z    1549821026000    130    Flat    &lt;/PRE&gt;&lt;p&gt;The "flat" value at the end is part of an enum that can give me a generalized trend value. Diabetics need to manage our sugars at the least hour by house and sometimes minute by minute. As such it's super important that we have "glanceable displays." That means anything at all that gives me a sense (a sixth sense, if you will) of how I'm doing. &lt;/p&gt;&lt;p&gt;That might be:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;A &lt;a href="https://www.hanselman.com/blog/HowToBuildAWallMountedFamilyCalendarAndDashboardWithARaspberryPiAndCheapMonitor.aspx" dir="ltr"&gt;wall-mounted dakBoard Family Calendar&lt;/a&gt; in a shared space that also shows my blood sugar&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;I got a Das Keyboard 5Q recently - I first &lt;a href="https://www.hanselman.com/blog/DasKeyboard.aspx" dir="ltr"&gt;blogged about Das Keyboard in 2006&lt;/a&gt;! and noted that it's got it's own local REST API. I'm working on using their &lt;a href="https://www.daskeyboard.io/" dir="ltr"&gt;Das Keyboard Q software's Applet API&lt;/a&gt; to light up just the top row of keys in response to my blood sugar changing. It'll &lt;a href="https://github.com/shanselman/DasKeyboard-Q-NightScout?WT.mc_id=-blog-scottha" dir="ltr"&gt;use their Node packages and JavaScript and run in the context of their software&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;However, since the keyboard has a localhost REST API and so does my blood sugar, I busted out this silly little shell script. Add a cron job and my keyboard can turn from orange (low), to green, yellow, red (high) as my sugar changes. That provides a nice ambient notifier of how my sugars are doing. Someone on Twitter said "who looks at their keyboard?" I mean, OK, that's just silly. If my entire keyboard turns run I will notice it. Again, ambient. I could certainly add an alert and make a klaxon go off if you'd like. &lt;/p&gt;&lt;PRE&gt;#!/bin/sh&lt;br dir="ltr"&gt;# This script colorize all LEDs of a 5Q keyboard&lt;br dir="ltr"&gt;# by sending JSON signals to the Q desktop public API.&lt;br dir="ltr"&gt;# based on Blood Sugar values from Nightscout&lt;br dir="ltr"&gt;set -e # quit on first error.&lt;br dir="ltr"&gt;PORT=27301&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;# Colorize the 5Q keyboard&lt;br dir="ltr"&gt;PID="DK5QPID" # product ID&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;# Zone are LED groups. There are less than 166 zones on a 5Q.&lt;br dir="ltr"&gt;# This should cover the whole device.&lt;br dir="ltr"&gt;MAX_ZONE_ID=166&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;# Get blood sugar from Nightscout as TEXT&lt;br dir="ltr"&gt;red=#f00&lt;br dir="ltr"&gt;green=#0f0&lt;br dir="ltr"&gt;yellow=#ff0&lt;br dir="ltr"&gt;#deep orange is LOW sugar&lt;br dir="ltr"&gt;COLOR=#f50 &lt;br dir="ltr"&gt;bgvalue=$(curl -s  https://MYSITE/api/v1/entries.txt?count=1 | grep -Eo '000\s([0-9]{1,3})+\s' | cut -f 2)&lt;br dir="ltr"&gt;if [ $bgvalue -gt 80 ]&lt;br dir="ltr"&gt;then &lt;br dir="ltr"&gt;    COLOR=$green&lt;br dir="ltr"&gt;    if [ $bgvalue -gt 140 ]&lt;br dir="ltr"&gt;    then&lt;br dir="ltr"&gt;        COLOR=$yellow&lt;br dir="ltr"&gt;        if [ $bgvalue -gt 200 ]&lt;br dir="ltr"&gt;        then&lt;br dir="ltr"&gt;            COLOR=$red&lt;br dir="ltr"&gt;        fi&lt;br dir="ltr"&gt;    fi&lt;br dir="ltr"&gt;fi&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;echo "Sugar is $bgvalue and color is $COLOR!"&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;for i in `seq $MAX_ZONE_ID`&lt;br dir="ltr"&gt;do&lt;br dir="ltr"&gt;    #echo "Sending signal to zoneId: $i"&lt;br dir="ltr"&gt;    # important NOTE: if field "name" and "message" are empty then the signal is&lt;br dir="ltr"&gt;    # only displayed on the devices LEDs, not in the signal center&lt;br dir="ltr"&gt;    curl -s -S --output /dev/null -X POST --header 'Content-Type: application/json' --header 'Accept: application/json' -d '{&lt;br dir="ltr"&gt;        "name": "Nightscout",&lt;br dir="ltr"&gt;        "id": "'$i'",&lt;br dir="ltr"&gt;        "message": "Blood sugar is '$bgvalue'",&lt;br dir="ltr"&gt;        "pid": "'$PID'",&lt;br dir="ltr"&gt;        "zoneId": "'"$i"'",&lt;br dir="ltr"&gt;        "color": "'$COLOR'",&lt;br dir="ltr"&gt;        "effect": "SET_COLOR"&lt;br dir="ltr"&gt;       &lt;br dir="ltr"&gt;    }' "http://localhost:$PORT/api/1.0/signals"&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;done&lt;br dir="ltr"&gt;echo "\nDone.\n\"&lt;/PRE&gt;&lt;p dir="ltr"&gt;This local keyboard API is &lt;em dir="ltr"&gt;meant &lt;/em&gt;to send a signal to a single zone or key, so it's hacky of me (and them, really) to make 100+ REST calls to color the whole keyboard. But, it's a localhost call and it's not that spendy. This will go away when I move to their new API. Here's &lt;a href="https://twitter.com/shanselman/status/1093994908140982272" dir="ltr"&gt;a video of it working&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;You can also hit the volume button on the keyboard an any "signaled" (lit up) key and get a popup with the actual blood sugar value (that's 'message' in the second curl command above). Again, this is a hack but I'm going to make it a formal applet you can just install from the store. If you want to help (I'm slow) head to the code here &lt;a title="https://github.com/shanselman/DasKeyboard-Q-NightScout" href="https://github.com/shanselman/DasKeyboard-Q-NightScout?WT.mc_id=-blog-scottha" dir="ltr"&gt;https://github.com/shanselman/DasKeyboard-Q-NightScout&lt;/a&gt;&lt;/p&gt;&lt;p&gt;What are some other good ideas for ambient sugar alerts? An LCD strip around the monitor (bias lighting)? A Phillips Hue smart light? &lt;/p&gt;&lt;p&gt;Consider also that you could use the glanceable display idea for pulse, anxiety, blood pressure - anything in your body you could hook up to in real- or near-realtime.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Sponsor:&lt;/strong&gt; &lt;a href="https://hnsl.mn/2HVX8n0" dir="ltr"&gt;Get the latest JetBrains Rider&lt;/a&gt; with Code Vision, Rename Project refactoring, and the Assembly Explorer. Improved support for C#, &lt;a href="http://vb.net/" dir="ltr"&gt;VB.NET&lt;/a&gt;, F#, TypeScript, and Angular is all included.&lt;/p&gt;</description><pubDate>Mon, 11 Feb 2019 04:20:08 -0600</pubDate></item><item><title>What's next for SemVer</title><link>https://lobste.rs/s/6hg6zx</link><description>&lt;p dir="ltr"&gt;On December 18, 2009&lt;sup dir="ltr"&gt;&lt;a href="https://words.steveklabnik.com/what-s-next-for-semver#fn1" rel="footnote" dir="ltr"&gt;1&lt;/a&gt;&lt;/sup&gt;, the Semantic Versioning specification was announced. More commonly known as SemVer, it provided guidance for developers regarding software versions:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;I propose a simple set of rules and requirements that dictate how version numbers are assigned and incremented. For this system to work, you first need to declare a public API. This may consist of documentation or be enforced by the code itself. Regardless, it is important that this API be clear and precise. Once you identify your public API, you communicate changes to it with specific increments to your version number. Consider a version format of X.Y.Z (Major.Minor.Patch). Bug fixes not affecting the API increment the patch version, backwards compatible API additions/changes increment the minor version, and backwards incompatible API changes increment the major version.&lt;/p&gt;&lt;p&gt;I call this system “Semantic Versioning.” Under this scheme, version numbers and the way they change convey meaning about the underlying code and what has been modified from one version to the next.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;The author came from the Ruby world, and around the same time, some big things were brewing. &lt;a href="https://bundler.io/" dir="ltr"&gt;Bundler&lt;/a&gt; was being brought into the world. Bundler brought a few new things, but the most important features involved specifying dependencies for your projects. Normally, you’d specify which version of a gem your project needed. Instead, Bundler allowed you to specify a range of versions you’d accept, and it would help figure out which version you should use, according to the SemVer rules.&lt;/p&gt;&lt;p&gt;In January of 2010, npm, a similar program for the shiny new Node.js, also shipped, and also used SemVer.&lt;/p&gt;&lt;p&gt;Thanks to these tools, Ruby and Node enjoyed (and still do, to this day) a vibrant open source ecosystem. SemVer is the underlying concept that made this possible.&lt;/p&gt;&lt;p dir="ltr"&gt;However, SemVer is not perfect. In some ways, I think of SemVer as the &lt;code dir="ltr"&gt;gofmt&lt;/code&gt; of versioning:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Gofmt’s style is no one’s favorite, yet gofmt is everyone’s favorite.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;SemVer has its flaws, but it empirically works better than previous attempts at such a thing. That such a thing exists is far more important than how perfect it is. Fundamentally, version numbers are a communication tool, and SemVer provides a framework for said communication.&lt;/p&gt;&lt;p dir="ltr"&gt;That said, SemVer &lt;em dir="ltr"&gt;does&lt;/em&gt; have flaws. Bundler, &lt;code dir="ltr"&gt;npm&lt;/code&gt;, Rust’s Cargo, NuGet, and a variety of tools have implemented the specification. But there are edge cases, as well as gaping holes, in the spec, and so in some ways, these tools are incompatible.&lt;/p&gt;&lt;p dir="ltr"&gt;Over the last few months, several of us&lt;sup dir="ltr"&gt;&lt;a href="https://words.steveklabnik.com/what-s-next-for-semver#fn2" rel="footnote" dir="ltr"&gt;2&lt;/a&gt;&lt;/sup&gt; have been talking, and today, we have an announcement to make. We’ve formed a semver team, and we intend to start work on producing a new version of the spec.&lt;/p&gt;&lt;p dir="ltr"&gt;Who is “we”? The team roster will be &lt;a href="https://github.com/orgs/semver/teams/maintainers/members" dir="ltr"&gt;in a GitHub team&lt;/a&gt;&lt;sup dir="ltr"&gt;&lt;a href="https://words.steveklabnik.com/what-s-next-for-semver#fn3" rel="footnote" dir="ltr"&gt;3&lt;/a&gt;&lt;/sup&gt;, but for posterity’s sake, here’s the initial list of members, in the same order GitHub lists them:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Anand Gaurav, NuGet&lt;/LI&gt;&lt;LI&gt;Dave Herman, Notion&lt;/LI&gt;&lt;LI&gt;André Arko, Bundler&lt;/LI&gt;&lt;LI&gt;isaacs, npm&lt;/LI&gt;&lt;LI&gt;Samuel Giddins, CocoaPods&lt;/LI&gt;&lt;LI&gt;Steve Klabnik, Cargo&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;(I’m putting myself as “Cargo,” because Cargo is the main client of my SemVer implementation. In most of these projects, the person who maintains the SemVer implementation is the same as the project, but in Rust, they’re separate. Cargo is the higher-order bit here, though.)&lt;/p&gt;&lt;p dir="ltr"&gt;We have not yet started the work on the next iteration of the specification, but we have agreed on a governance model for SemVer. Described in the new &lt;a href="https://github.com/semver/semver/blob/master/CONTRIBUTING.md" dir="ltr"&gt;&lt;code dir="ltr"&gt;CONTRIBUTING.md&lt;/code&gt;&lt;/a&gt;, we’re going with an RFC process, similar to the Rust programming language and many other projects. In short, “substantial” changes to the SemVer spec need to go through a process by which a written description of the changes are proposed, and the team reaches consensus on acceptance.&lt;/p&gt;&lt;p&gt;It also contains some principles we have for the future of SemVer. I’ve copied the important ones for the specification itself here:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;No RFC will be approved if it is deemed to cause significant breakage to any of the SemVer-using communities represented by the SemVer Maintainers group.&lt;/LI&gt;&lt;LI&gt;RFCs will be considered formally adopted only when they are approved by the SemVer Maintainers group, and implemented in a simple majority of represented implementations.&lt;/LI&gt;&lt;LI&gt;Implementations may add functionality in advance of an approved RFC but all such functionality must be flagged as “experimental”, so that users understand it may change in the future.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;In essence, we don’t intend to re-write the spec, but instead, fill in holes in the spec, find out where our implementations differ, and unify all of our implementations as much as is feasible. We believe that this will not only help all of us, but also help new tools as well. Being compatible with each other is an important part of the value of these tools.&lt;/p&gt;&lt;p&gt;I look forward to letting you know when our work is done! If you’d like to get involved, please watch that governance repository, and submit RFCs! While we’re all excited about the future of SemVer, it’s nobody’s job to do this work. As such, we’ll be moving fairly slowly. Please be patient. Thanks :)&lt;/p&gt;&lt;p dir="ltr"&gt;You may also want to read &lt;a href="https://haacked.com/archive/2019/02/11/semver-collective/" dir="ltr"&gt;Phil’s post&lt;/a&gt;, reflecting on this transition from the other side. Thanks for being so much of a good steward of SemVer so far, Phil!&lt;/p&gt;</description><pubDate>Mon, 11 Feb 2019 14:39:55 -0600</pubDate></item><item><title>Can You Find The Bug in This Code?</title><link>https://lobste.rs/s/qaqn3c</link><description>&lt;h2&gt;This is an actual bug I had once.&lt;/h2&gt;&lt;p&gt;Here’s a bit of Javascript that prints “Hello World!” on two lines:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;function&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+ &lt;a href="https://www.hillelwayne.com/post/knights-knaves/#fnref:visualizer" dir="ltr"&gt;&lt;sup dir="ltr"&gt;[return]&lt;/sup&gt;&lt;/a&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;div&gt;&lt;span&gt;Categories: &lt;/span&gt;&lt;/div&gt;</description><pubDate>Mon, 11 Feb 2019 17:40:52 -0600</pubDate></item><item><title>What are you working on this week?</title><link>https://lobste.rs/s/a5zknh</link><description>&lt;p&gt;This is the weekly thread to discuss what you have done recently and are working on this week.&lt;/p&gt;&lt;p&gt;Please be descriptive and don’t hesitate to champion your accomplishments or ask for help, advice or other guidance.&lt;/p&gt;</description><pubDate>Mon, 11 Feb 2019 06:44:21 -0600</pubDate></item><item><title>Lighting up my DasKeyboard with Blood Sugar changes using my body's REST API</title><link>https://lobste.rs/s/5umv0e</link><description>&lt;img title="image" alt="image" src="https://www.hanselman.com/blog/content/binary/Windows-Live-Writer/7f12abfd1339_8F69/image_e1555a61-2491-4294-ba03-5ec83bca4962.png" width="330" height="191"&gt;&lt;p dir="ltr"&gt;If you're a Type 1 Diabetic using a CGM - a continuous glucose meter - you'll want to set up &lt;a href="http://www.nightscout.info/" dir="ltr"&gt;Nightscout&lt;/a&gt; so you can have a REST API for your sugar. The CGM checks my blood sugar every 5 minutes, it hops via BLE over to my phone and then to the cloud. You'll want your sugars stored in cloud storage that YOU control. &lt;a href="https://www.hanselman.com/blog/BridgingDexcomShareCGMReceiversAndNightscout.aspx" dir="ltr"&gt;CGM vendors have their own cloud&lt;/a&gt;, but we can easily &lt;a href="https://www.hanselman.com/blog/BridgingDexcomShareCGMReceiversAndNightscout.aspx" dir="ltr"&gt;bridge&lt;/a&gt; over to a MongoDB database.&lt;/p&gt;&lt;p&gt;I run Nightscout in Azure and my body has a REST API. I can do an HTTP GET like this:&lt;/p&gt;&lt;font face="Courier New"&gt;/api/v1/entries.json?count=3&lt;/font&gt;&lt;p&gt;and get this&lt;/p&gt;&lt;p&gt;I can change the URL from a .json to a .txt and get this&lt;/p&gt;&lt;PRE&gt;2019-02-10T18:00:26.000Z    1549821626000    143    Flat    &lt;br dir="ltr"&gt;2019-02-10T17:55:26.000Z    1549821326000    134    Flat    &lt;br dir="ltr"&gt;2019-02-10T17:50:26.000Z    1549821026000    130    Flat    &lt;/PRE&gt;&lt;p&gt;The "flat" value at the end is part of an enum that can give me a generalized trend value. Diabetics need to manage our sugars at the least hour by house and sometimes minute by minute. As such it's super important that we have "glanceable displays." That means anything at all that gives me a sense (a sixth sense, if you will) of how I'm doing. &lt;/p&gt;&lt;p&gt;That might be:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;A &lt;a href="https://www.hanselman.com/blog/HowToBuildAWallMountedFamilyCalendarAndDashboardWithARaspberryPiAndCheapMonitor.aspx" dir="ltr"&gt;wall-mounted dakBoard Family Calendar&lt;/a&gt; in a shared space that also shows my blood sugar&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;I got a Das Keyboard 5Q recently - I first &lt;a href="https://www.hanselman.com/blog/DasKeyboard.aspx" dir="ltr"&gt;blogged about Das Keyboard in 2006&lt;/a&gt;! and noted that it's got it's own local REST API. I'm working on using their &lt;a href="https://www.daskeyboard.io/" dir="ltr"&gt;Das Keyboard Q software's Applet API&lt;/a&gt; to light up just the top row of keys in response to my blood sugar changing. It'll &lt;a href="https://github.com/shanselman/DasKeyboard-Q-NightScout?WT.mc_id=-blog-scottha" dir="ltr"&gt;use their Node packages and JavaScript and run in the context of their software&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;However, since the keyboard has a localhost REST API and so does my blood sugar, I busted out this silly little shell script. Add a cron job and my keyboard can turn from orange (low), to green, yellow, red (high) as my sugar changes. That provides a nice ambient notifier of how my sugars are doing. Someone on Twitter said "who looks at their keyboard?" I mean, OK, that's just silly. If my entire keyboard turns run I will notice it. Again, ambient. I could certainly add an alert and make a klaxon go off if you'd like. &lt;/p&gt;&lt;PRE&gt;#!/bin/sh&lt;br dir="ltr"&gt;# This script colorize all LEDs of a 5Q keyboard&lt;br dir="ltr"&gt;# by sending JSON signals to the Q desktop public API.&lt;br dir="ltr"&gt;# based on Blood Sugar values from Nightscout&lt;br dir="ltr"&gt;set -e # quit on first error.&lt;br dir="ltr"&gt;PORT=27301&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;# Colorize the 5Q keyboard&lt;br dir="ltr"&gt;PID="DK5QPID" # product ID&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;# Zone are LED groups. There are less than 166 zones on a 5Q.&lt;br dir="ltr"&gt;# This should cover the whole device.&lt;br dir="ltr"&gt;MAX_ZONE_ID=166&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;# Get blood sugar from Nightscout as TEXT&lt;br dir="ltr"&gt;red=#f00&lt;br dir="ltr"&gt;green=#0f0&lt;br dir="ltr"&gt;yellow=#ff0&lt;br dir="ltr"&gt;#deep orange is LOW sugar&lt;br dir="ltr"&gt;COLOR=#f50 &lt;br dir="ltr"&gt;bgvalue=$(curl -s  https://MYSITE/api/v1/entries.txt?count=1 | grep -Eo '000\s([0-9]{1,3})+\s' | cut -f 2)&lt;br dir="ltr"&gt;if [ $bgvalue -gt 80 ]&lt;br dir="ltr"&gt;then &lt;br dir="ltr"&gt;    COLOR=$green&lt;br dir="ltr"&gt;    if [ $bgvalue -gt 140 ]&lt;br dir="ltr"&gt;    then&lt;br dir="ltr"&gt;        COLOR=$yellow&lt;br dir="ltr"&gt;        if [ $bgvalue -gt 200 ]&lt;br dir="ltr"&gt;        then&lt;br dir="ltr"&gt;            COLOR=$red&lt;br dir="ltr"&gt;        fi&lt;br dir="ltr"&gt;    fi&lt;br dir="ltr"&gt;fi&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;echo "Sugar is $bgvalue and color is $COLOR!"&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;for i in `seq $MAX_ZONE_ID`&lt;br dir="ltr"&gt;do&lt;br dir="ltr"&gt;    #echo "Sending signal to zoneId: $i"&lt;br dir="ltr"&gt;    # important NOTE: if field "name" and "message" are empty then the signal is&lt;br dir="ltr"&gt;    # only displayed on the devices LEDs, not in the signal center&lt;br dir="ltr"&gt;    curl -s -S --output /dev/null -X POST --header 'Content-Type: application/json' --header 'Accept: application/json' -d '{&lt;br dir="ltr"&gt;        "name": "Nightscout",&lt;br dir="ltr"&gt;        "id": "'$i'",&lt;br dir="ltr"&gt;        "message": "Blood sugar is '$bgvalue'",&lt;br dir="ltr"&gt;        "pid": "'$PID'",&lt;br dir="ltr"&gt;        "zoneId": "'"$i"'",&lt;br dir="ltr"&gt;        "color": "'$COLOR'",&lt;br dir="ltr"&gt;        "effect": "SET_COLOR"&lt;br dir="ltr"&gt;       &lt;br dir="ltr"&gt;    }' "http://localhost:$PORT/api/1.0/signals"&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;done&lt;br dir="ltr"&gt;echo "\nDone.\n\"&lt;/PRE&gt;&lt;p dir="ltr"&gt;This local keyboard API is &lt;em dir="ltr"&gt;meant &lt;/em&gt;to send a signal to a single zone or key, so it's hacky of me (and them, really) to make 100+ REST calls to color the whole keyboard. But, it's a localhost call and it's not that spendy. This will go away when I move to their new API. Here's &lt;a href="https://twitter.com/shanselman/status/1093994908140982272" dir="ltr"&gt;a video of it working&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;You can also hit the volume button on the keyboard an any "signaled" (lit up) key and get a popup with the actual blood sugar value (that's 'message' in the second curl command above). Again, this is a hack but I'm going to make it a formal applet you can just install from the store. If you want to help (I'm slow) head to the code here &lt;a title="https://github.com/shanselman/DasKeyboard-Q-NightScout" href="https://github.com/shanselman/DasKeyboard-Q-NightScout?WT.mc_id=-blog-scottha" dir="ltr"&gt;https://github.com/shanselman/DasKeyboard-Q-NightScout&lt;/a&gt;&lt;/p&gt;&lt;p&gt;What are some other good ideas for ambient sugar alerts? An LCD strip around the monitor (bias lighting)? A Phillips Hue smart light? &lt;/p&gt;&lt;p&gt;Consider also that you could use the glanceable display idea for pulse, anxiety, blood pressure - anything in your body you could hook up to in real- or near-realtime.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Sponsor:&lt;/strong&gt; &lt;a href="https://hnsl.mn/2HVX8n0" dir="ltr"&gt;Get the latest JetBrains Rider&lt;/a&gt; with Code Vision, Rename Project refactoring, and the Assembly Explorer. Improved support for C#, &lt;a href="http://vb.net/" dir="ltr"&gt;VB.NET&lt;/a&gt;, F#, TypeScript, and Angular is all included.&lt;/p&gt;</description><pubDate>Mon, 11 Feb 2019 04:20:08 -0600</pubDate></item><item><title>What's next for SemVer</title><link>https://lobste.rs/s/6hg6zx</link><description>&lt;p dir="ltr"&gt;On December 18, 2009&lt;sup dir="ltr"&gt;&lt;a href="https://words.steveklabnik.com/what-s-next-for-semver#fn1" rel="footnote" dir="ltr"&gt;1&lt;/a&gt;&lt;/sup&gt;, the Semantic Versioning specification was announced. More commonly known as SemVer, it provided guidance for developers regarding software versions:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;I propose a simple set of rules and requirements that dictate how version numbers are assigned and incremented. For this system to work, you first need to declare a public API. This may consist of documentation or be enforced by the code itself. Regardless, it is important that this API be clear and precise. Once you identify your public API, you communicate changes to it with specific increments to your version number. Consider a version format of X.Y.Z (Major.Minor.Patch). Bug fixes not affecting the API increment the patch version, backwards compatible API additions/changes increment the minor version, and backwards incompatible API changes increment the major version.&lt;/p&gt;&lt;p&gt;I call this system “Semantic Versioning.” Under this scheme, version numbers and the way they change convey meaning about the underlying code and what has been modified from one version to the next.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;The author came from the Ruby world, and around the same time, some big things were brewing. &lt;a href="https://bundler.io/" dir="ltr"&gt;Bundler&lt;/a&gt; was being brought into the world. Bundler brought a few new things, but the most important features involved specifying dependencies for your projects. Normally, you’d specify which version of a gem your project needed. Instead, Bundler allowed you to specify a range of versions you’d accept, and it would help figure out which version you should use, according to the SemVer rules.&lt;/p&gt;&lt;p&gt;In January of 2010, npm, a similar program for the shiny new Node.js, also shipped, and also used SemVer.&lt;/p&gt;&lt;p&gt;Thanks to these tools, Ruby and Node enjoyed (and still do, to this day) a vibrant open source ecosystem. SemVer is the underlying concept that made this possible.&lt;/p&gt;&lt;p dir="ltr"&gt;However, SemVer is not perfect. In some ways, I think of SemVer as the &lt;code dir="ltr"&gt;gofmt&lt;/code&gt; of versioning:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Gofmt’s style is no one’s favorite, yet gofmt is everyone’s favorite.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;SemVer has its flaws, but it empirically works better than previous attempts at such a thing. That such a thing exists is far more important than how perfect it is. Fundamentally, version numbers are a communication tool, and SemVer provides a framework for said communication.&lt;/p&gt;&lt;p dir="ltr"&gt;That said, SemVer &lt;em dir="ltr"&gt;does&lt;/em&gt; have flaws. Bundler, &lt;code dir="ltr"&gt;npm&lt;/code&gt;, Rust’s Cargo, NuGet, and a variety of tools have implemented the specification. But there are edge cases, as well as gaping holes, in the spec, and so in some ways, these tools are incompatible.&lt;/p&gt;&lt;p dir="ltr"&gt;Over the last few months, several of us&lt;sup dir="ltr"&gt;&lt;a href="https://words.steveklabnik.com/what-s-next-for-semver#fn2" rel="footnote" dir="ltr"&gt;2&lt;/a&gt;&lt;/sup&gt; have been talking, and today, we have an announcement to make. We’ve formed a semver team, and we intend to start work on producing a new version of the spec.&lt;/p&gt;&lt;p dir="ltr"&gt;Who is “we”? The team roster will be &lt;a href="https://github.com/orgs/semver/teams/maintainers/members" dir="ltr"&gt;in a GitHub team&lt;/a&gt;&lt;sup dir="ltr"&gt;&lt;a href="https://words.steveklabnik.com/what-s-next-for-semver#fn3" rel="footnote" dir="ltr"&gt;3&lt;/a&gt;&lt;/sup&gt;, but for posterity’s sake, here’s the initial list of members, in the same order GitHub lists them:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Anand Gaurav, NuGet&lt;/LI&gt;&lt;LI&gt;Dave Herman, Notion&lt;/LI&gt;&lt;LI&gt;André Arko, Bundler&lt;/LI&gt;&lt;LI&gt;isaacs, npm&lt;/LI&gt;&lt;LI&gt;Samuel Giddins, CocoaPods&lt;/LI&gt;&lt;LI&gt;Steve Klabnik, Cargo&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;(I’m putting myself as “Cargo,” because Cargo is the main client of my SemVer implementation. In most of these projects, the person who maintains the SemVer implementation is the same as the project, but in Rust, they’re separate. Cargo is the higher-order bit here, though.)&lt;/p&gt;&lt;p dir="ltr"&gt;We have not yet started the work on the next iteration of the specification, but we have agreed on a governance model for SemVer. Described in the new &lt;a href="https://github.com/semver/semver/blob/master/CONTRIBUTING.md" dir="ltr"&gt;&lt;code dir="ltr"&gt;CONTRIBUTING.md&lt;/code&gt;&lt;/a&gt;, we’re going with an RFC process, similar to the Rust programming language and many other projects. In short, “substantial” changes to the SemVer spec need to go through a process by which a written description of the changes are proposed, and the team reaches consensus on acceptance.&lt;/p&gt;&lt;p&gt;It also contains some principles we have for the future of SemVer. I’ve copied the important ones for the specification itself here:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;No RFC will be approved if it is deemed to cause significant breakage to any of the SemVer-using communities represented by the SemVer Maintainers group.&lt;/LI&gt;&lt;LI&gt;RFCs will be considered formally adopted only when they are approved by the SemVer Maintainers group, and implemented in a simple majority of represented implementations.&lt;/LI&gt;&lt;LI&gt;Implementations may add functionality in advance of an approved RFC but all such functionality must be flagged as “experimental”, so that users understand it may change in the future.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;In essence, we don’t intend to re-write the spec, but instead, fill in holes in the spec, find out where our implementations differ, and unify all of our implementations as much as is feasible. We believe that this will not only help all of us, but also help new tools as well. Being compatible with each other is an important part of the value of these tools.&lt;/p&gt;&lt;p&gt;I look forward to letting you know when our work is done! If you’d like to get involved, please watch that governance repository, and submit RFCs! While we’re all excited about the future of SemVer, it’s nobody’s job to do this work. As such, we’ll be moving fairly slowly. Please be patient. Thanks :)&lt;/p&gt;&lt;p dir="ltr"&gt;You may also want to read &lt;a href="https://haacked.com/archive/2019/02/11/semver-collective/" dir="ltr"&gt;Phil’s post&lt;/a&gt;, reflecting on this transition from the other side. Thanks for being so much of a good steward of SemVer so far, Phil!&lt;/p&gt;</description><pubDate>Mon, 11 Feb 2019 14:39:55 -0600</pubDate></item><item><title>Can You Find The Bug in This Code?</title><link>https://lobste.rs/s/qaqn3c</link><description>&lt;h2&gt;This is an actual bug I had once.&lt;/h2&gt;&lt;p&gt;Here’s a bit of Javascript that prints “Hello World!” on two lines:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;function&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
   &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;function&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
     console&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;log&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;'Hello'&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
   &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
