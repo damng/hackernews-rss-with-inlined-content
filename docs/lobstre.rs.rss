@@ -376,61 +376,7 @@ manager implementation to suit your application if the built-in ones
 don’t cut it.&lt;/p&gt;&lt;h2&gt;And a Conclusion&lt;/h2&gt;&lt;p&gt;That may seem like a lot of “bad”, but all of those points are
 straightforward tradeoffs that I believe are worth it in the long run
 given the ergonomics that continuations on the web buy you.  Plus,
-writing code in this way is just so. much. fun!&lt;/p&gt;</description><pubDate>Sun, 07 Apr 2019 12:43:14 -0500</pubDate></item><item><title>Cloud Management with Prolog (Cont.)</title><link>https://lobste.rs/s/exjrsb</link><description>&lt;h2&gt;Introduction&lt;/h2&gt;&lt;p&gt;This is a small update and tutorial on something I've been working on over the last few weekends to make
-						cloud management better. There are a few pain points I'm trying to address and my solution is to treat the
-						cloud as a Prolog database. Infrastructure as code is nice if that's your starting point and you already
-						have "code" but most people start without the code and then hit a wall because clicking around in a GUI
-						stops scaling. Or even if they do start out with "code" some failure along the way invalidates an
-						assumption/invariant and the tool that was used for the code part is missing some feature that would allow
-						restoring the violated invariant or makes it much more inconvenient that it needs to be. My hypothesis is
-						that Prolog gets rid of this entire class of problems because it is Turing complete and truly declarative.
-					&lt;/p&gt;&lt;h2&gt;Infrastructure as a Prolog Database&lt;/h2&gt;&lt;p&gt;If you read the previous article then this will mostly be a review but if you didn't then here is a short
-						summary.&lt;/p&gt;&lt;p&gt;The cloud can be viewed as a graph database. The various resources are nodes in the graph and the edges
-						describe attributes and dependencies on other resources, i.e. an EC2 instance lives in a VPC, has associated
-						security groups that are linked to other security groups, has an IP address, and sits behind a load balancer
-						and serves traffic on some port. Putting all these facts together gives us a kind of attributed graph and if
-						we express these facts in Prolog then we can write predicates to query and operate on it.&lt;/p&gt;&lt;p&gt;If you're familiar with AWS then you can probably imagine a few use cases for such a database. The most
-						frequent issues I deal with are security groups and policies around snapshot management. So one thing I can
-						do with a database like this is write a predicate that enforces an association between EC2 instances and
-						security groups, i.e. every "type" of EC2 instance must be tagged with a type tag and must have a specific
-						security group associated with it. You can certainly write a script for this use case or just force everyone
-						to use a specific workflow that enforces this "invariant". I have tried both approaches enough times to know
-						that it's not scalable. Forcing people into a specific workflow curtails their choices if they don't
-						understand the tools used in the workflow (not everyone knows or needs to know how terraform modules work)
-						and it makes people think that infrastructure/operations is someone else's problem. By decoupling the
-						policies from personal workflows as much as possible we let people use whatever is best for them and through
-						proper tooling provide the feedback necessary for them to learn why they should change their workflows
-						without being authoritarian about it.&lt;/p&gt;&lt;p&gt;The policy described in the previous paragraph is just a few lines of Prolog (this is an aspirational
-						example so don't expect it to work with the current code just yet)&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;valid_sg_association(E) :-
-  ec2(E),
-  link(E, tag, "type", V),
-  security_group(S),
-  link(S, name, V),
-  link(E, security_group, S).&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The above predicate says that an EC2 instance &lt;code dir="ltr"&gt;E&lt;/code&gt; has a valid security group association if it
-						has a tag with key &lt;code dir="ltr"&gt;"type"&lt;/code&gt; and the value &lt;code dir="ltr"&gt;V&lt;/code&gt; of that tag is the name of the security
-						group that is associated with it. So by iterating through the set of EC2 instances we can find all the
-						instances that satisfy that policy and then take the complement to get all the instances that violate the
-						policy. With a bit more tooling we could automate telling people their instance is in violation of the above
-						policy by pinging them on slack or sending them an email with instructions on how to rectify the situation.
-						Ideally this tooling would also be in Prolog but doesn't have to be.&lt;/p&gt;&lt;p&gt;The predicates/policies can be as complicated or as simple as we want because we are working in a Turing
-						complete and declarative language. There are no theoretical limits to what we can express and simple
-						properties end up being a few lines of Prolog instead of 100s of lines of Ruby or Python. My opinion is that
-						Prolog scales sub-linearly with the complexity of the policy whereas other languages scale super-linearly
-						and hit a wall pretty quickly.&lt;/p&gt;&lt;p&gt;Having this database and being able to enforce policies isn't the end of the story. Ideally we'd treat this
-						database as the source of truth and evolve it with "migrations" to keep things synchronized. I'm still
-						working on this part and how best to do it. Currently there is code to take the graph from the cloud
-						provider and turn the resources into a set of Prolog files that can be loaded into any compliant interpreter
-						(I've been using SWI-Prolog). The next milestone will be figuring out how to integrate it with an imperative
-						component that will take a "migration" and affect the remote state. I have a few ideas around this as well.
-						The current plan is to have a sub-process that take action plans, executes them, and then reports back the
-						results to the main Prolog process so the database can be updated with the relevant results.&lt;/p&gt;&lt;h2&gt;Small Tutorial&lt;/h2&gt;&lt;p dir="ltr"&gt;The code I have so far lives at &lt;a href="https://github.com/cloudbootup/cwacop" rel="noopener noreferrer" dir="ltr"&gt;cwacop&lt;/a&gt;. It stands for "cloudy
-						with a chance of prolog". It's a typical Ruby project so cloning and running &lt;code dir="ltr"&gt;bundle&lt;/code&gt; will get
-						you everything you need (except for a Prolog interpreter)&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ git clone https://github.com/cloudbootup/cwacop.git
-$ cd cwacop &amp;amp;&amp;amp; bundle
-$ bundle exec ruby graphs.rb&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The last line is what generates the graph and right now it just gathers resources and facts from a few AWS
-						regions. The resulting Prolog files are segmented by region for convenience and nothing prevents you from
-						loading all the regional files into the interpreter and querying and working with multiple regions at once.
-						Feedback is welcome and if these ideas sound appealing to you then don't hesitate to &lt;a href="mailto:artisan@cloudbootup.com" rel="noopener noreferrer" dir="ltr"&gt;get in touch&lt;/a&gt;.&lt;/p&gt;&lt;PRE&gt;$ ./keygen.sh 6428f5771007cf005037d47c9aeac9bfcc8925f9  -&lt;/PRE&gt;</description><pubDate>Sun, 07 Apr 2019 13:44:19 -0500</pubDate></item><item><title>How I discovered an easter egg in Android's security and didn't land a job at Google</title><link>https://lobste.rs/s/izv547</link><description>&lt;div&gt;&lt;span&gt;
+writing code in this way is just so. much. fun!&lt;/p&gt;</description><pubDate>Sun, 07 Apr 2019 12:43:14 -0500</pubDate></item><item><title>How I discovered an easter egg in Android's security and didn't land a job at Google</title><link>https://lobste.rs/s/izv547</link><description>&lt;div&gt;&lt;span&gt;
     Translation
   &lt;/span&gt;&lt;/div&gt;&lt;img src="https://habrastorage.org/webt/cx/0o/3t/cx0o3tqoavfz_opnsomw9-65h_i.jpeg"&gt;&lt;div xmlns="http://www.w3.org/1999/xhtml" dir="ltr"&gt; Google loves easter eggs. It loves them so much, in fact, that you could find them in virtually every product of theirs. The tradition of Android easter eggs began in the very earliest versions of the OS (I think everyone there knows what happens when you go into the general settings and tap the version number a few times).&lt;br dir="ltr"&gt;
 &lt;br dir="ltr"&gt;
@@ -644,7 +590,61 @@ Two months went by. To say I felt prepared would be an understatement. Google Do
 &lt;br dir="ltr"&gt;
 Why there are messages in DroidGuard asking to chat, I still have no idea. Probably just for stats. The guy I wrote to in the first place told me that people actually write there, but the frequency varies: sometimes they get 3 replies in a week, sometimes 1 a year.&lt;br dir="ltr"&gt;
 &lt;br dir="ltr"&gt;
-I believe there are easier ways to get an interview at Google. After all, you could just ask any of the 100,000 employees (though not all of them are developers, admittedly). But it was a fun experience nonetheless.&lt;/div&gt;&lt;div&gt;&lt;span&gt;+18 &lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;13.1k &lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;3&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/div&gt;</description><pubDate>Sat, 06 Apr 2019 21:21:43 -0500</pubDate></item><item><title>A Tale of Two Servers</title><link>https://potatofrom.space/post/a-tale-of-two-servers/</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/7wc4xh/tale_two_servers"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 07 Apr 2019 06:55:36 -0500</pubDate></item><item><title>Perl6 is the Worlds Worst ML (with addendum by Damian Conway)</title><link>https://lobste.rs/s/slmzdy</link><description>&lt;p dir="ltr"&gt;
+I believe there are easier ways to get an interview at Google. After all, you could just ask any of the 100,000 employees (though not all of them are developers, admittedly). But it was a fun experience nonetheless.&lt;/div&gt;&lt;div&gt;&lt;span&gt;+18 &lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;13.1k &lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;3&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/div&gt;</description><pubDate>Sat, 06 Apr 2019 21:21:43 -0500</pubDate></item><item><title>Cloud Management with Prolog (Cont.)</title><link>https://lobste.rs/s/exjrsb</link><description>&lt;h2&gt;Introduction&lt;/h2&gt;&lt;p&gt;This is a small update and tutorial on something I've been working on over the last few weekends to make
+						cloud management better. There are a few pain points I'm trying to address and my solution is to treat the
+						cloud as a Prolog database. Infrastructure as code is nice if that's your starting point and you already
+						have "code" but most people start without the code and then hit a wall because clicking around in a GUI
+						stops scaling. Or even if they do start out with "code" some failure along the way invalidates an
+						assumption/invariant and the tool that was used for the code part is missing some feature that would allow
+						restoring the violated invariant or makes it much more inconvenient that it needs to be. My hypothesis is
+						that Prolog gets rid of this entire class of problems because it is Turing complete and truly declarative.
+					&lt;/p&gt;&lt;h2&gt;Infrastructure as a Prolog Database&lt;/h2&gt;&lt;p&gt;If you read the previous article then this will mostly be a review but if you didn't then here is a short
+						summary.&lt;/p&gt;&lt;p&gt;The cloud can be viewed as a graph database. The various resources are nodes in the graph and the edges
+						describe attributes and dependencies on other resources, i.e. an EC2 instance lives in a VPC, has associated
+						security groups that are linked to other security groups, has an IP address, and sits behind a load balancer
+						and serves traffic on some port. Putting all these facts together gives us a kind of attributed graph and if
+						we express these facts in Prolog then we can write predicates to query and operate on it.&lt;/p&gt;&lt;p&gt;If you're familiar with AWS then you can probably imagine a few use cases for such a database. The most
+						frequent issues I deal with are security groups and policies around snapshot management. So one thing I can
+						do with a database like this is write a predicate that enforces an association between EC2 instances and
+						security groups, i.e. every "type" of EC2 instance must be tagged with a type tag and must have a specific
+						security group associated with it. You can certainly write a script for this use case or just force everyone
+						to use a specific workflow that enforces this "invariant". I have tried both approaches enough times to know
+						that it's not scalable. Forcing people into a specific workflow curtails their choices if they don't
+						understand the tools used in the workflow (not everyone knows or needs to know how terraform modules work)
+						and it makes people think that infrastructure/operations is someone else's problem. By decoupling the
+						policies from personal workflows as much as possible we let people use whatever is best for them and through
+						proper tooling provide the feedback necessary for them to learn why they should change their workflows
+						without being authoritarian about it.&lt;/p&gt;&lt;p&gt;The policy described in the previous paragraph is just a few lines of Prolog (this is an aspirational
+						example so don't expect it to work with the current code just yet)&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;valid_sg_association(E) :-
+  ec2(E),
+  link(E, tag, "type", V),
+  security_group(S),
+  link(S, name, V),
+  link(E, security_group, S).&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The above predicate says that an EC2 instance &lt;code dir="ltr"&gt;E&lt;/code&gt; has a valid security group association if it
+						has a tag with key &lt;code dir="ltr"&gt;"type"&lt;/code&gt; and the value &lt;code dir="ltr"&gt;V&lt;/code&gt; of that tag is the name of the security
+						group that is associated with it. So by iterating through the set of EC2 instances we can find all the
+						instances that satisfy that policy and then take the complement to get all the instances that violate the
+						policy. With a bit more tooling we could automate telling people their instance is in violation of the above
+						policy by pinging them on slack or sending them an email with instructions on how to rectify the situation.
+						Ideally this tooling would also be in Prolog but doesn't have to be.&lt;/p&gt;&lt;p&gt;The predicates/policies can be as complicated or as simple as we want because we are working in a Turing
+						complete and declarative language. There are no theoretical limits to what we can express and simple
+						properties end up being a few lines of Prolog instead of 100s of lines of Ruby or Python. My opinion is that
+						Prolog scales sub-linearly with the complexity of the policy whereas other languages scale super-linearly
+						and hit a wall pretty quickly.&lt;/p&gt;&lt;p&gt;Having this database and being able to enforce policies isn't the end of the story. Ideally we'd treat this
+						database as the source of truth and evolve it with "migrations" to keep things synchronized. I'm still
+						working on this part and how best to do it. Currently there is code to take the graph from the cloud
+						provider and turn the resources into a set of Prolog files that can be loaded into any compliant interpreter
+						(I've been using SWI-Prolog). The next milestone will be figuring out how to integrate it with an imperative
+						component that will take a "migration" and affect the remote state. I have a few ideas around this as well.
+						The current plan is to have a sub-process that take action plans, executes them, and then reports back the
+						results to the main Prolog process so the database can be updated with the relevant results.&lt;/p&gt;&lt;h2&gt;Small Tutorial&lt;/h2&gt;&lt;p dir="ltr"&gt;The code I have so far lives at &lt;a href="https://github.com/cloudbootup/cwacop" rel="noopener noreferrer" dir="ltr"&gt;cwacop&lt;/a&gt;. It stands for "cloudy
+						with a chance of prolog". It's a typical Ruby project so cloning and running &lt;code dir="ltr"&gt;bundle&lt;/code&gt; will get
+						you everything you need (except for a Prolog interpreter)&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ git clone https://github.com/cloudbootup/cwacop.git
+$ cd cwacop &amp;amp;&amp;amp; bundle
+$ bundle exec ruby graphs.rb&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The last line is what generates the graph and right now it just gathers resources and facts from a few AWS
+						regions. The resulting Prolog files are segmented by region for convenience and nothing prevents you from
+						loading all the regional files into the interpreter and querying and working with multiple regions at once.
+						Feedback is welcome and if these ideas sound appealing to you then don't hesitate to &lt;a href="mailto:artisan@cloudbootup.com" rel="noopener noreferrer" dir="ltr"&gt;get in touch&lt;/a&gt;.&lt;/p&gt;&lt;PRE&gt;$ ./keygen.sh 6428f5771007cf005037d47c9aeac9bfcc8925f9  -&lt;/PRE&gt;</description><pubDate>Sun, 07 Apr 2019 13:44:19 -0500</pubDate></item><item><title>A Tale of Two Servers</title><link>https://potatofrom.space/post/a-tale-of-two-servers/</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/7wc4xh/tale_two_servers"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 07 Apr 2019 06:55:36 -0500</pubDate></item><item><title>Perl6 is the Worlds Worst ML (with addendum by Damian Conway)</title><link>https://lobste.rs/s/slmzdy</link><description>&lt;p dir="ltr"&gt;
       &lt;time datetime="2019-04-05T09:39:00+00:00" itemprop="datePublished" dir="ltr"&gt;Apr 5, 2019
       &lt;/time&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;While reading through the docs for &lt;a href="https://docs.perl6.org/language/functions#Multi-dispatch" dir="ltr"&gt;Perl6’s multi-dispatch&lt;/a&gt;, I noticed something familiar: the language chooses which &lt;code dir="ltr"&gt;multi&lt;/code&gt; function to call depending on which routine’s signature matches the argument first. Since Perl6 uses the smartmatch operator &lt;code dir="ltr"&gt;~~&lt;/code&gt; to match up type signatures, that means that we can also match on arguments by value….&lt;/p&gt;&lt;p&gt;10 minutes later, and I’ve created this abomination:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;proto len(@ --&amp;gt; Int) {*}
 multi len([] --&amp;gt; 0) { }
@@ -2199,81 +2199,37 @@ stub &lt;code dir="ltr"&gt;libbitblit&lt;/code&gt; and write calls to the Linux 
 something similar (SDL, perhaps?). This way, MGR could live again and
 this time on modern graphics hardware. If you pick this up, please
 notify me. It would be a nice hack.&lt;/p&gt;&lt;h2&gt;Screenshot&lt;/h2&gt;&lt;p&gt;This screenshot was taken on a Sun SPARCstation ELC workstation
-running SunOS:&lt;/p&gt;&lt;img src="https://hack.org/mc/mgr/images/mgrscreen-small.png" alt="" title="" width="576" height="450"&gt;&lt;p&gt;Click on the image above for the real screenshot.&lt;/p&gt;&lt;p&gt;Last updated: &amp;lt;2016-04-13 11:17:50 MEST&amp;gt;&lt;/p&gt;</description><pubDate>Sat, 06 Apr 2019 22:28:15 -0500</pubDate></item><item><title>Mypy 0.700 Released: Up To 4x Faster</title><link>https://lobste.rs/s/y8h1aw</link><description>&lt;p dir="ltr"&gt;We’ve just uploaded mypy 0.700 to the Python Package Index (&lt;a href="https://pypi.python.org/pypi" dir="ltr"&gt;PyPI&lt;/a&gt;). Mypy is a static type checker for Python. This release switches to a compiled version of mypy,  &lt;b dir="ltr"&gt;which is up to 4x faster than the previous release&lt;/b&gt;. It also includes new features, bug fixes and library stub (typeshed) updates. You can install it as follows:
+running SunOS:&lt;/p&gt;&lt;img src="https://hack.org/mc/mgr/images/mgrscreen-small.png" alt="" title="" width="576" height="450"&gt;&lt;p&gt;Click on the image above for the real screenshot.&lt;/p&gt;&lt;p&gt;Last updated: &amp;lt;2016-04-13 11:17:50 MEST&amp;gt;&lt;/p&gt;</description><pubDate>Sat, 06 Apr 2019 22:28:15 -0500</pubDate></item><item><title>50 years of RFCs</title><link>https://lobste.rs/s/nqre5v</link><description>&lt;div dir="ltr"&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;by &lt;a href="https://tinysubversions.com/" rel="nofollow" dir="ltr"&gt;Darius Kazemi&lt;/a&gt;, April 7 2019&lt;/em&gt;&lt;/p&gt;
 
+&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;In 2019 I'm reading one RFC a day in chronological order starting from the very first one. &lt;a href="https://write.as/365-rfcs/365-ietf-rfcs-a-50th-anniversary-dive" rel="nofollow" dir="ltr"&gt;More on this project here.&lt;/a&gt; There is a &lt;a href="https://write.as/365-rfcs/table-of-contents" rel="nofollow" dir="ltr"&gt;table of contents&lt;/a&gt; for all my RFC posts.&lt;/em&gt;&lt;/p&gt;
 
-&lt;/p&gt;&lt;PRE&gt;    python3 -m pip install -U mypy
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;You can read the documentation for this release on &lt;a href="http://mypy.readthedocs.io/" dir="ltr"&gt;Read the Docs&lt;/a&gt;.
+&lt;/div&gt;&lt;img src="https://tinysubversions.com/pics/rfc-50-years.png" alt="Typewritten text from the cover page of RFC-1" width="296" height="155"&gt;&lt;div dir="ltr"&gt;
 
-&lt;/p&gt;&lt;h2&gt;Much Improved performance&lt;/h2&gt;&lt;p dir="ltr"&gt;We are now shipping a mypy binary compiled with &lt;a href="https://github.com/mypyc/mypyc" dir="ltr"&gt;mypyc&lt;/a&gt; by default, which is up to 4x faster than the interpreted version shipped previously. The compiled version has been available as a separate PyPI distribution for a while now, and this is first release where it’s installed by default. Mypyc is a compiler that compiles type-annotated Python modules into efficient CPython C extension modules.
+&lt;p dir="ltr"&gt;Fifty years ago today, on April 7th, 1969, Steve Crocker published a document that would come to be known as  &lt;a href="https://www.rfc-editor.org/rfc/rfc1.txt" rel="nofollow" dir="ltr"&gt;RFC-1&lt;/a&gt;. Crocker was working on a piece of the ARPA Network, or &lt;a href="https://en.wikipedia.org/wiki/ARPANET" rel="nofollow" dir="ltr"&gt;ARPANET&lt;/a&gt;, a US military funded project to create a network of computers using a new telecommunications concept called &lt;a href="https://en.wikipedia.org/wiki/Packet_switching" rel="nofollow" dir="ltr"&gt;packet switching&lt;/a&gt;.&lt;/p&gt;
 
-&lt;/p&gt;&lt;p dir="ltr"&gt;Note that the legacy, optional &lt;tt dir="ltr"&gt;mypy_mypyc&lt;/tt&gt; package will not be updated any more. If you used the &lt;tt dir="ltr"&gt;mypy_mypyc&lt;/tt&gt; package for an earlier mypy release, you should uninstall it first, before updating to the new package (you can safely ignore this if don’t know what this is):
+&lt;p dir="ltr"&gt;Crocker, who was a 25 year old UCLA grad student in the spring of 1969, noticed a problem that will be familiar to any computer programmer who has ever worked with other people: there was a lot of important knowledge being held in people's heads that was not documented anywhere.&lt;/p&gt;
 
+&lt;p dir="ltr"&gt;So Crocker decided to document what people were thinking and what people had come to tentative agreements on. RFC-1 is this documentation; RFC stands for “Request for Comments” and is intended to invite conversation rather than stand as a record of authoritative ideas. This document was typewritten and contained hand-drawn diagrams. Many modern readers assume that the early RFCs were distributed by email or something similar, but recall that email and indeed the internet didn't exist! These documents were mostly typewritten and sent by the postal service, a manually operated mailing list. (I talk more about RFC-1 and provide additional context in &lt;a href="https://write.as/365-rfcs/rfc-1" rel="nofollow" dir="ltr"&gt;my blog post about RFC-1&lt;/a&gt;. You can see a scan of RFC-1 &lt;a href="https://archive.computerhistory.org/resources/access/text/2019/01/102661172-05-01-acc.pdf" rel="nofollow" dir="ltr"&gt;at the Computer History Museum's online archive&lt;/a&gt;).&lt;/p&gt;
 
-&lt;/p&gt;&lt;PRE&gt;    python3 -m pip uninstall mypy_mypyc
-&lt;/PRE&gt;&lt;p&gt;The compiled version is supported on 64-bit macOS, Windows and Linux platforms (Python 3.5 and later). On other platforms an interpreted version is used instead, which doesn’t provide any performance improvement. The compiled version is mostly compatible with the interpreted version, but some mypy plugins may be incompatible with it. You can still install the interpreted version of 0.700 like this:
+&lt;p dir="ltr"&gt;RFCs were a way to get a geographically distributed group of programmers to collaborate fluidly and efficiently. As &lt;a href="https://en.wikipedia.org/wiki/Elizabeth_J._Feinler" rel="nofollow" dir="ltr"&gt;Elizabeth “Jake” Feinler&lt;/a&gt; recalls in &lt;a href="https://www.rfc-editor.org/rfc/rfc2555.txt" rel="nofollow" dir="ltr"&gt;RFC-2555&lt;/a&gt;,&lt;/p&gt;
 
+&lt;/div&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;by the time the third RFC was published, many of the concepts of how to do business in this new networking environment had been established—there would be a working group of implementers (NWG) actually discussing and trying things out; ideas were to be free-wheeling; communications would be informal; documents would be deposited (online when possible) at the NIC and distributed freely to members of the working group; and anyone with something to contribute could come to the party.  With this one document a swath was instantly cut through miles of red tape and pedantic process.  Was this radical for the times or what!  And we were only up to RFC 3!&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;div dir="ltr"&gt;
 
-&lt;/p&gt;&lt;PRE&gt;    $ python3 -m pip install --no-binary mypy -U mypy
-&lt;/PRE&gt;&lt;h2&gt;Stricter Equality Checks&lt;/h2&gt;&lt;p dir="ltr"&gt;If you run mypy with &lt;tt dir="ltr"&gt;--strict-equality&lt;/tt&gt;, mypy will detect equality and &lt;tt dir="ltr"&gt;in&lt;/tt&gt; checks that are likely to always result in &lt;tt dir="ltr"&gt;True&lt;/tt&gt; or &lt;tt dir="ltr"&gt;False&lt;/tt&gt;, since the operand types are not overlapping. For example, it will warn about comparing a &lt;tt dir="ltr"&gt;str&lt;/tt&gt; value to a &lt;tt dir="ltr"&gt;bytes&lt;/tt&gt; value, which can never be equal. See the &lt;a href="https://mypy.readthedocs.io/en/latest/command_line.html?highlight=strict-equality#miscellaneous-strictness-flags" dir="ltr"&gt;documentation&lt;/a&gt; for more information.
+&lt;h3 dir="ltr"&gt;365 RFCs&lt;/h3&gt;
 
-&lt;/p&gt;&lt;h2&gt;Python 3.4 Unsupported for Running Mypy&lt;/h2&gt;&lt;p&gt;You can no longer run mypy using Python 3.4, since Python 3.4 has reached its end of life. You can still type check code that targets Python 3.4, and we have no plans to drop support for this.
+&lt;p dir="ltr"&gt;While the technical content of early RFCs is genuinely interesting to me, it's the aspect that Feinler highlights of how they aided in collaboration and, yes, innovation (I hate that word) that fascinates me and motivated me to begin this project.&lt;/p&gt;
 
-&lt;/p&gt;&lt;h2&gt;Plugin System Improvements&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;Add a &lt;tt dir="ltr"&gt;get_additional_deps&lt;/tt&gt;&lt;tt dir="ltr"&gt;()&lt;/tt&gt;  plugin hook to support &lt;tt dir="ltr"&gt;django-stubs&lt;/tt&gt; (PR &lt;a href="https://github.com/python/mypy/pull/6598" dir="ltr"&gt;6598&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;Use the &lt;tt dir="ltr"&gt;get_attribute&lt;/tt&gt;&lt;tt dir="ltr"&gt;_hook()&lt;/tt&gt; plugin hook for dynamic classes (lincolnq, PR &lt;a href="https://github.com/python/mypy/pull/6371" dir="ltr"&gt;6371&lt;/a&gt;)
-&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Other Improvements&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;Allow &lt;tt dir="ltr"&gt;# type: ignore&lt;/tt&gt; comments after type comments (Ethan Smith, PR &lt;a href="https://github.com/python/mypy/pull/6591" dir="ltr"&gt;6591&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;Don't resolve callable NamedTuple fields to their return type (Danny Weinberg, PR &lt;a href="https://github.com/python/mypy/pull/6576" dir="ltr"&gt;6576&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;Support indexing unions containing tuples (PR &lt;a href="https://github.com/python/mypy/pull/6475" dir="ltr"&gt;6475&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;Fix member access on generic classes (PR &lt;a href="https://github.com/python/mypy/pull/6418" dir="ltr"&gt;6418&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;Fix interaction of &lt;tt dir="ltr"&gt;isinstance()&lt;/tt&gt; with &lt;tt dir="ltr"&gt;Type[...]&lt;/tt&gt; (PR &lt;a href="https://github.com/python/mypy/pull/6419" dir="ltr"&gt;6419&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;Fixes to tuple fallback types (PR &lt;a href="https://github.com/python/mypy/pull/6442" dir="ltr"&gt;6442&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;Fix missing built-in type aliases (PR &lt;a href="https://github.com/python/mypy/pull/6441" dir="ltr"&gt;6441&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;Make processing mypy cache faster (PR &lt;a href="https://github.com/python/mypy/pull/6405" dir="ltr"&gt;6405&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;Add an experimental mechanism for avoiding hashing sources on mypy daemon start (PR &lt;a href="https://github.com/python/mypy/pull/6389" dir="ltr"&gt;6389&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;Add flag &lt;tt dir="ltr"&gt;--skip-cache-mtime-checks&lt;/tt&gt; to skip mtime checks on cache files (PR &lt;a href="https://github.com/python/mypy/pull/6391" dir="ltr"&gt;6391&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;Give a better error message (and don't crash) if there is bad JSON in the cache (Ethan Smith, PR &lt;a href="https://github.com/python/mypy/pull/6277" dir="ltr"&gt;6277&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;Stubgen: improvements to stubs generated from docstrings (Wiktor Niesiobędzki, PR &lt;a href="https://github.com/python/mypy/pull/6368" dir="ltr"&gt;6368&lt;/a&gt;)
-&lt;/LI&gt;&lt;/UL&gt;&lt;UL&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;orjson&lt;/tt&gt;: Add new stub file (ijl, PR &lt;a href="https://github.com/python/typeshed/pull/2747" dir="ltr"&gt;2747&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;bleach&lt;/tt&gt;: Add new stub file (Sebastian Rittau, PR &lt;a href="https://github.com/python/typeshed/pull/2709" dir="ltr"&gt;2709&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;pycurl&lt;/tt&gt;: Support Python 3 (JinyuanShanghai, PR &lt;a href="https://github.com/python/typeshed/pull/2867" dir="ltr"&gt;2867&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;pydoc&lt;/tt&gt;: Support Python 3 (Rebecca Chen, PR &lt;a href="https://github.com/python/typeshed/pull/2873" dir="ltr"&gt;2873&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;multiprocessing&lt;/tt&gt;: Add &lt;tt dir="ltr"&gt;multiprocessing.spawn&lt;/tt&gt; submodule and &lt;tt dir="ltr"&gt;multiprocessing.pool&lt;/tt&gt; stubs (Sean McLemon, PR &lt;a href="https://github.com/python/typeshed/pull/2823" dir="ltr"&gt;2823&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;builtins&lt;/tt&gt;: Add &lt;tt dir="ltr"&gt;isascii&lt;/tt&gt; methods to &lt;tt dir="ltr"&gt;str&lt;/tt&gt;, &lt;tt dir="ltr"&gt;bytes&lt;/tt&gt;, and &lt;tt dir="ltr"&gt;bytearray&lt;/tt&gt; for Python 3.7 (Brandt Bucher, PR &lt;a href="https://github.com/python/typeshed/pull/2834" dir="ltr"&gt;2834&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;builtins&lt;/tt&gt;: Add missing &lt;tt dir="ltr"&gt;BaseException.__suppress_context__&lt;/tt&gt; attribute (wouter bolsterlee, PR &lt;a href="https://github.com/python/typeshed/pull/2876" dir="ltr"&gt;2876&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;platform&lt;/tt&gt;: Add types to some cross-platform functions (Paul Dagnelie, PR &lt;a href="https://github.com/python/typeshed/pull/2781" dir="ltr"&gt;2781&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;codecs&lt;/tt&gt;: Support the &lt;tt dir="ltr"&gt;errors&lt;/tt&gt; argument in factory functions (Aymeric Augustin, PR &lt;a href="https://github.com/python/typeshed/pull/2752" dir="ltr"&gt;2752&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;charset&lt;/tt&gt;: Improve the stubs under Python 3 (Josh Morton, PR &lt;a href="https://github.com/python/typeshed/pull/2768" dir="ltr"&gt;2768&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;asyncio&lt;/tt&gt;: Fix signature of &lt;tt dir="ltr"&gt;asyncio.create_server&lt;/tt&gt; (Aymeric Augustin, PR &lt;a href="https://github.com/python/typeshed/pull/2763" dir="ltr"&gt;2763&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;asyncio&lt;/tt&gt;: Update &lt;tt dir="ltr"&gt;asyncio.streams&lt;/tt&gt; stub (Gleb Chipiga, PR &lt;a href="https://github.com/python/typeshed/pull/2845" dir="ltr"&gt;2845&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;werkzeug&lt;/tt&gt;: Some small tweaks (lincolnq, PR &lt;a href="https://github.com/python/typeshed/pull/2784" dir="ltr"&gt;2784&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;urllib[2]&lt;/tt&gt;: Add stubs for HTTP Handler classes in Python 2 &lt;tt dir="ltr"&gt;urllib2&lt;/tt&gt; and Python 3 &lt;tt dir="ltr"&gt;urllib.request&lt;/tt&gt; (Michael Brandt, PR &lt;a href="https://github.com/python/typeshed/pull/2710" dir="ltr"&gt;2710&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;urllib2&lt;/tt&gt;: Add some annotations (Philipp Hahn, PR &lt;a href="https://github.com/python/typeshed/pull/2688" dir="ltr"&gt;2688&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;cyaml&lt;/tt&gt;: Add some missing annotations (秋葉, PR &lt;a href="https://github.com/python/typeshed/pull/2769" dir="ltr"&gt;2769&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;calendar&lt;/tt&gt;: Add &lt;tt dir="ltr"&gt;itermonthdays3&lt;/tt&gt; and &lt;tt dir="ltr"&gt;itermonthdays4&lt;/tt&gt;, fix incorrect &lt;tt dir="ltr"&gt;cssclass_today&lt;/tt&gt; (Sean McLemon, PR &lt;a href="https://github.com/python/typeshed/pull/2825" dir="ltr"&gt;2825&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;enum&lt;/tt&gt;: Add underscore names (秋葉, PR &lt;a href="https://github.com/python/typeshed/pull/2822" dir="ltr"&gt;2822&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;logging&lt;/tt&gt;: Changed parameter name of several methods from 'lvl' to 'level' to match the implementation (Eric Traut, PR &lt;a href="https://github.com/python/typeshed/pull/2840" dir="ltr"&gt;2840&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;attr&lt;/tt&gt;: Update &lt;tt dir="ltr"&gt;attr&lt;/tt&gt; stubs to 19.1.0 (Gleb Chipiga, PR &lt;a href="https://github.com/python/typeshed/pull/2846" dir="ltr"&gt;2846&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;ast&lt;/tt&gt;: Support new features and node types introduced in Python 3.8 (PR &lt;a href="https://github.com/python/typeshed/pull/2859" dir="ltr"&gt;2859&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;flask&lt;/tt&gt;: Fix several types (Gabriel Corona, PR &lt;a href="https://github.com/python/typeshed/pull/2858" dir="ltr"&gt;2858&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;webbrowser&lt;/tt&gt;: Update signature of &lt;tt dir="ltr"&gt;webbrowser.register&lt;/tt&gt; for Python 3.7 (Cary Yang, PR &lt;a href="https://github.com/python/typeshed/pull/2865" dir="ltr"&gt;2865&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;pdb&lt;/tt&gt;: Add missing class &lt;tt dir="ltr"&gt;Pdb&lt;/tt&gt; (Rebecca Chen, PR &lt;a href="https://github.com/python/typeshed/pull/2872" dir="ltr"&gt;2872&lt;/a&gt;)
-&lt;/LI&gt;&lt;LI&gt;&lt;tt dir="ltr"&gt;yaml&lt;/tt&gt;: add &lt;tt dir="ltr"&gt;full_load&lt;/tt&gt; and &lt;tt dir="ltr"&gt;full_load_all&lt;/tt&gt; stubs (Christopher Dignam, PR &lt;a href="https://github.com/python/typeshed/pull/2892" dir="ltr"&gt;2892&lt;/a&gt;)
-&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Acknowledgments&lt;/h2&gt;&lt;p&gt;First of all, we’d like to thank our employer, Dropbox, for funding the mypy core team.
+&lt;p dir="ltr"&gt;I'm lucky enough to be involved in discussions and experiments about what networked computing might look like in the future. I don't normally go into my own work here but if you would like an example of my (necessarily limited) view of these discussions you can read a blog post I made recently, &lt;a href="https://blog.datproject.org/2019/03/22/three-protocols-and-a-future-of-the-decentralized-internet/" rel="nofollow" dir="ltr"&gt;Three protocols and a future of the decentralized internet&lt;/a&gt;.&lt;/p&gt;
 
-&lt;/p&gt;&lt;p&gt;Thanks to all mypy contributors who contributed to this release:
+&lt;p dir="ltr"&gt;My motivation for writing this blog is directly related to my work on what a future internet could look like: if I'm trying to work with a disparate group of people to create a new internet, it would be ridiculous of me to ignore how a similar group of people organized to build the original internet half a century earlier. And if I'm doing the reading, I might as well share it with others.&lt;/p&gt;
 
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Anthony Sottile
-&lt;/LI&gt;&lt;LI&gt;Bernát Gábor
-&lt;/LI&gt;&lt;LI&gt;Danny Weinberg
-&lt;/LI&gt;&lt;LI&gt;Ethan Smith
-&lt;/LI&gt;&lt;LI&gt;Jelle Zijlstra
-&lt;/LI&gt;&lt;LI&gt;lincolnq
-&lt;/LI&gt;&lt;LI&gt;Mark Mendoza
-&lt;/LI&gt;&lt;LI&gt;Michael
-&lt;/LI&gt;&lt;LI&gt;Michael Lee
-&lt;/LI&gt;&lt;LI&gt;oremanj
-&lt;/LI&gt;&lt;LI&gt;Richard Eames
-&lt;/LI&gt;&lt;LI&gt;Sean McLemon
-&lt;/LI&gt;&lt;LI&gt;Sebastian Rittau
-&lt;/LI&gt;&lt;LI&gt;Wiktor Niesiobędzki
-&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Sat, 06 Apr 2019 04:17:11 -0500</pubDate></item></channel></rss>
+&lt;p dir="ltr"&gt;Due to work and travel I've been falling behind on my plan to read one RFC each day (I am almost 20 days behind right now), but I plan to catch up in short order.&lt;/p&gt;
+
+&lt;h2 dir="ltr"&gt;About this blog&lt;/h2&gt;
+
+&lt;p dir="ltr"&gt;You can subscribe to &lt;a href="https://write.as/365-rfcs/feed/" rel="nofollow" dir="ltr"&gt;this blog's RSS feed&lt;/a&gt; or if you're on a federated ActivityPub social network like Mastodon or Pleroma you can search for the user “@365-rfcs@write.as” and follow it there.&lt;/p&gt;
+
+&lt;h2 dir="ltr"&gt;About me&lt;/h2&gt;
+
+&lt;p dir="ltr"&gt;I'm &lt;a href="https://tinysubversions.com/" rel="nofollow" dir="ltr"&gt;Darius Kazemi&lt;/a&gt;. I'm a Mozilla Fellow and I do a lot of work on the decentralized web with both &lt;a href="https://github.com/dariusk/express-activitypub" rel="nofollow" dir="ltr"&gt;ActivityPub&lt;/a&gt; and the &lt;a href="https://datproject.org/" rel="nofollow" dir="ltr"&gt;Dat Project&lt;/a&gt;.&lt;/p&gt;
+&lt;/div&gt;</description><pubDate>Sun, 07 Apr 2019 08:50:47 -0500</pubDate></item></channel></rss>
