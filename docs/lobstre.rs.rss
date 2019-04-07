@@ -79,131 +79,7 @@ say len &amp;lt;1 2 3 4 5 10&amp;gt;;
 # or say len (1, 2, 3, 4, 5, 10);
 # or say len 1...5, 10;
 # or List.new(1,2,3,4,5,10).&amp;amp;len.say;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;and argues that this is all just as readable (if not more) than the Haskell version. I’m inclined to agree.&lt;/p&gt;</description><pubDate>Sat, 06 Apr 2019 19:42:07 -0500</pubDate></item><item><title>Deploying A Self-Hosted Portable Notification Service</title><link>https://lobste.rs/s/knaneu</link><description>&lt;img src="https://www.haxors.club/gotify-logo.png" alt="Gotify" width="296" height="240"&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;In a previous article I wrote about how I've changed my relationship with my phone. One of the benefits of degoogling is that your device is a little less spied upon. The downside of running &lt;a href="https://lineage.microg.org/" rel="nofollow" dir="ltr"&gt;lineage for microg&lt;/a&gt; is that certain functionality is a bit harder to come by.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;I like minimal notifications, but there are things happening I want to know about. On iOS I used growl to tell me about reboots. As there's no f-droid client I found myself without a emergency notification system. I saw &lt;a href="https://gotify.net/" rel="nofollow" dir="ltr"&gt;gotify&lt;/a&gt; in the &lt;a href="https://f-droid.org/" rel="nofollow" dir="ltr"&gt;f-droid&lt;/a&gt; app and thought I'd give it a go. So far, I'm pretty happy with it.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;I recently rebuilt an old unused box to self-host low-priority services. I'm a big fan of self-hosting having been burnt several times by online services. I'm not against online services making a living, but I'd rather own my stuff than rent.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;The box was rebuilt to use docker and docker-compose. I find docker a double-edged sword. You either have to maintain your own docker repository or trust someone else's. This box only runs low-priority services. I'm ok running images from other people's repositories.&lt;/p&gt;
-
-&lt;h2 dir="ltr"&gt;Installing Gotify Server With Docker-Compose&lt;/h2&gt;
-
-&lt;p dir="ltr"&gt;I set up caddy as a front-end service to manage letsencrypt. I prefer nginx but for docker, Caddy's fine. I also use ouroboros to auto-update images when new ones come out. If I'm going to use other people's repos I may as well get some value out of it.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;Creating a gotify docker-compose entry was easy. I've included ouroboros and the caddy frontend in mine below:&lt;/p&gt;
-
-&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;version: '3'
-services:
-  ouroboros:
-    container_name: ouroboros
-    hostname: ouroboros
-    image: pyouroboros/ouroboros
-    environment:
-      - CLEANUP=true
-      - INTERVAL=300
-      - LOG_LEVEL=info
-      - SELF_UPDATE=true
-      - IGNORE=mongo influxdb postgres mariadb
-      - TZ=Europe/London
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-	
-  caddy:
-    container_name: caddy
-    image: abiosoft/caddy:no-stats
-    restart: unless-stopped
-    volumes:
-      - ./caddy/Caddyfile:/etc/Caddyfile
-      - ./caddy/caddycerts:/etc/caddycerts
-      - ./caddy/data:/data:ro
-    ports:
-      - "80:80"
-      - "443:443"
-    env_file:
-      - ./caddy/caddy.env
-	
-  gotify:
-    container_name: gotify
-    image: gotify/server
-    restart: unless-stopped
-    volumes:
-      - ./apps/gotify/data:/app/data
-&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;My caddy config needed an additional section for the new host:&lt;/p&gt;
-
-&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;gotify.steves.box {
-  root /data
-  log stdout
-  errors stdout
-  tls s@steves.box
-  gzip
-  proxy / gotify:80 {
-    transparent
-    websocket
-  }
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;Hostnames have been changed to protect the innocent. When using caddy, specify websocket in the proxy section. The Android app uses websockets to handle notifications.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;A quick &lt;code dir="ltr"&gt;docker-compose up -d&lt;/code&gt; and I was up and running. The default username and password is &lt;strong dir="ltr"&gt;admin/admin&lt;/strong&gt;. Change that first, then create a user account to receive notifications.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;After creating the user account, log out of admin, and log back in &lt;em dir="ltr"&gt;as the new user&lt;/em&gt;. Notifications are per-application &lt;em dir="ltr"&gt;and&lt;/em&gt; per-user. You'll have to send notifications for each user. I hope group notifications will be possible at some point.&lt;/p&gt;
-
-&lt;/div&gt;&lt;img src="https://www.haxors.club/gotify-notification.png" alt="Gotify notifications" width="296" height="161"&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;I added a cute puppy picture to my app, making unexpected reboots all the more cute. The installed the gotify app from f-droid and added my server. I checked the app and server logs for HTTP 400 errors. This would stop notifications from working.&lt;/p&gt;
-
-&lt;h2 dir="ltr"&gt;A Portable Commandline Notification Tool&lt;/h2&gt;
-
-&lt;p dir="ltr"&gt;I wrote a quick python-based tool to send notifications from the command line. You can use the official gotify client tool, or even curl. I wanted something portable that would work without 3rd-party libraries.&lt;/p&gt;
-
-&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;#!/usr/bin/env python
-# gotipy.py - A python gotify client using only built-in modules
-	
-import json, urllib, urllib2, argparse
-	
-parser = argparse.ArgumentParser(description='gotify python client')
-	
-parser.add_argument('-p','--priority', help="priority number (higher's more intrusive)", type=int, required=True)
-parser.add_argument('-t','--title', help="title notification", required=True)
-parser.add_argument('-m','--message', help="message to display", required=True)
-parser.add_argument('-v','--verbose', help="print response", action='store_true')
-args = parser.parse_args()
-	
-url = 'https://gotify.steves.box/message?token=changeme'
-data = urllib.urlencode({"message": args.message, 
-			"priority": args.priority,
-			"title": args.title})
-	
-req = urllib2.Request(url, data)
-resp = urllib2.urlopen(req)
-if args.verbose:
-	print resp.read()
-&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;If you use the script, don't forget to change the token value in the &lt;strong dir="ltr"&gt;url&lt;/strong&gt; variable to one for your app.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;The final thing to do is to set up a reboot notification for the chargen.one box. We can do this on OpenBSD using a cron job. I've copied &lt;code dir="ltr"&gt;gotipy.py&lt;/code&gt; into &lt;code dir="ltr"&gt;/usr/local/bin&lt;/code&gt; and set up a cron job as a normal user to run on reboot:&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;@reboot python2 /usr/local/bin/gotipy.py -p 8 -t "Chargen.one" -m "Rebooted at `date`"&lt;/code&gt;&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;Now if we reboot the system, we can check that it's working by looking in &lt;code dir="ltr"&gt;/var/cron/log&lt;/code&gt;:&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;Apr  6 16:11:10 chargen cron[41858]: (asdf) CMD (python2 /usr/local/bin/gotipy.py -p 8 -t "Chargen.one" -m "Rebooted at `date`")&lt;/code&gt;&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;Please note that some OSes only run @reboot jobs for root. If you're having trouble, check your cron daemon supports non-root @reboot jobs.&lt;/p&gt;
-
-&lt;p dir="ltr"&gt;If you're wondering what else I plan to use this for, it's not really much. I like only having serious event notifications and want to keep it minimal. Some of the things I'll use this for include:&lt;/p&gt;
-&lt;/div&gt;&lt;UL&gt;&lt;LI&gt;Reboot notifications across servers&lt;/LI&gt;&lt;LI&gt;New device connected to home networks&lt;/LI&gt;&lt;LI&gt;Motioneye detected movement in the conservatory&lt;/LI&gt;&lt;/UL&gt;&lt;div dir="ltr"&gt;
-
-&lt;p dir="ltr"&gt;For pretty much everything else, there's email and I can pick that up in slow time.&lt;/p&gt;
-&lt;/div&gt;</description><pubDate>Sat, 06 Apr 2019 10:06:39 -0500</pubDate></item><item><title>How I discovered an easter egg in Android's security and didn't land a job at Google</title><link>https://lobste.rs/s/izv547</link><description>&lt;div&gt;&lt;span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;and argues that this is all just as readable (if not more) than the Haskell version. I’m inclined to agree.&lt;/p&gt;</description><pubDate>Sat, 06 Apr 2019 19:42:07 -0500</pubDate></item><item><title>How I discovered an easter egg in Android's security and didn't land a job at Google</title><link>https://lobste.rs/s/izv547</link><description>&lt;div&gt;&lt;span&gt;
     Translation
   &lt;/span&gt;&lt;/div&gt;&lt;img src="https://habrastorage.org/webt/cx/0o/3t/cx0o3tqoavfz_opnsomw9-65h_i.jpeg"&gt;&lt;div xmlns="http://www.w3.org/1999/xhtml" dir="ltr"&gt; Google loves easter eggs. It loves them so much, in fact, that you could find them in virtually every product of theirs. The tradition of Android easter eggs began in the very earliest versions of the OS (I think everyone there knows what happens when you go into the general settings and tap the version number a few times).&lt;br dir="ltr"&gt;
 &lt;br dir="ltr"&gt;
@@ -417,7 +293,131 @@ Two months went by. To say I felt prepared would be an understatement. Google Do
 &lt;br dir="ltr"&gt;
 Why there are messages in DroidGuard asking to chat, I still have no idea. Probably just for stats. The guy I wrote to in the first place told me that people actually write there, but the frequency varies: sometimes they get 3 replies in a week, sometimes 1 a year.&lt;br dir="ltr"&gt;
 &lt;br dir="ltr"&gt;
-I believe there are easier ways to get an interview at Google. After all, you could just ask any of the 100,000 employees (though not all of them are developers, admittedly). But it was a fun experience nonetheless.&lt;/div&gt;&lt;div&gt;&lt;span&gt;+18 &lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;13.1k &lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;3&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/div&gt;</description><pubDate>Sat, 06 Apr 2019 21:21:43 -0500</pubDate></item><item><title>HermiTux: A binary-compatible unikernel</title><link>https://lobste.rs/s/wupmu1</link><description>&lt;p dir="ltr"&gt;HermiTux is a &lt;a href="http://unikernel.org/" dir="ltr"&gt;unikernel&lt;/a&gt;: a minimal operating system
+I believe there are easier ways to get an interview at Google. After all, you could just ask any of the 100,000 employees (though not all of them are developers, admittedly). But it was a fun experience nonetheless.&lt;/div&gt;&lt;div&gt;&lt;span&gt;+18 &lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;13.1k &lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;3&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/div&gt;</description><pubDate>Sat, 06 Apr 2019 21:21:43 -0500</pubDate></item><item><title>Deploying A Self-Hosted Portable Notification Service</title><link>https://lobste.rs/s/knaneu</link><description>&lt;img src="https://www.haxors.club/gotify-logo.png" alt="Gotify" width="296" height="240"&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;In a previous article I wrote about how I've changed my relationship with my phone. One of the benefits of degoogling is that your device is a little less spied upon. The downside of running &lt;a href="https://lineage.microg.org/" rel="nofollow" dir="ltr"&gt;lineage for microg&lt;/a&gt; is that certain functionality is a bit harder to come by.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;I like minimal notifications, but there are things happening I want to know about. On iOS I used growl to tell me about reboots. As there's no f-droid client I found myself without a emergency notification system. I saw &lt;a href="https://gotify.net/" rel="nofollow" dir="ltr"&gt;gotify&lt;/a&gt; in the &lt;a href="https://f-droid.org/" rel="nofollow" dir="ltr"&gt;f-droid&lt;/a&gt; app and thought I'd give it a go. So far, I'm pretty happy with it.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;I recently rebuilt an old unused box to self-host low-priority services. I'm a big fan of self-hosting having been burnt several times by online services. I'm not against online services making a living, but I'd rather own my stuff than rent.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;The box was rebuilt to use docker and docker-compose. I find docker a double-edged sword. You either have to maintain your own docker repository or trust someone else's. This box only runs low-priority services. I'm ok running images from other people's repositories.&lt;/p&gt;
+
+&lt;h2 dir="ltr"&gt;Installing Gotify Server With Docker-Compose&lt;/h2&gt;
+
+&lt;p dir="ltr"&gt;I set up caddy as a front-end service to manage letsencrypt. I prefer nginx but for docker, Caddy's fine. I also use ouroboros to auto-update images when new ones come out. If I'm going to use other people's repos I may as well get some value out of it.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;Creating a gotify docker-compose entry was easy. I've included ouroboros and the caddy frontend in mine below:&lt;/p&gt;
+
+&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;version: '3'
+services:
+  ouroboros:
+    container_name: ouroboros
+    hostname: ouroboros
+    image: pyouroboros/ouroboros
+    environment:
+      - CLEANUP=true
+      - INTERVAL=300
+      - LOG_LEVEL=info
+      - SELF_UPDATE=true
+      - IGNORE=mongo influxdb postgres mariadb
+      - TZ=Europe/London
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+	
+  caddy:
+    container_name: caddy
+    image: abiosoft/caddy:no-stats
+    restart: unless-stopped
+    volumes:
+      - ./caddy/Caddyfile:/etc/Caddyfile
+      - ./caddy/caddycerts:/etc/caddycerts
+      - ./caddy/data:/data:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    env_file:
+      - ./caddy/caddy.env
+	
+  gotify:
+    container_name: gotify
+    image: gotify/server
+    restart: unless-stopped
+    volumes:
+      - ./apps/gotify/data:/app/data
+&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;My caddy config needed an additional section for the new host:&lt;/p&gt;
+
+&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;gotify.steves.box {
+  root /data
+  log stdout
+  errors stdout
+  tls s@steves.box
+  gzip
+  proxy / gotify:80 {
+    transparent
+    websocket
+  }
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;Hostnames have been changed to protect the innocent. When using caddy, specify websocket in the proxy section. The Android app uses websockets to handle notifications.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;A quick &lt;code dir="ltr"&gt;docker-compose up -d&lt;/code&gt; and I was up and running. The default username and password is &lt;strong dir="ltr"&gt;admin/admin&lt;/strong&gt;. Change that first, then create a user account to receive notifications.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;After creating the user account, log out of admin, and log back in &lt;em dir="ltr"&gt;as the new user&lt;/em&gt;. Notifications are per-application &lt;em dir="ltr"&gt;and&lt;/em&gt; per-user. You'll have to send notifications for each user. I hope group notifications will be possible at some point.&lt;/p&gt;
+
+&lt;/div&gt;&lt;img src="https://www.haxors.club/gotify-notification.png" alt="Gotify notifications" width="296" height="161"&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;I added a cute puppy picture to my app, making unexpected reboots all the more cute. The installed the gotify app from f-droid and added my server. I checked the app and server logs for HTTP 400 errors. This would stop notifications from working.&lt;/p&gt;
+
+&lt;h2 dir="ltr"&gt;A Portable Commandline Notification Tool&lt;/h2&gt;
+
+&lt;p dir="ltr"&gt;I wrote a quick python-based tool to send notifications from the command line. You can use the official gotify client tool, or even curl. I wanted something portable that would work without 3rd-party libraries.&lt;/p&gt;
+
+&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;#!/usr/bin/env python
+# gotipy.py - A python gotify client using only built-in modules
+	
+import json, urllib, urllib2, argparse
+	
+parser = argparse.ArgumentParser(description='gotify python client')
+	
+parser.add_argument('-p','--priority', help="priority number (higher's more intrusive)", type=int, required=True)
+parser.add_argument('-t','--title', help="title notification", required=True)
+parser.add_argument('-m','--message', help="message to display", required=True)
+parser.add_argument('-v','--verbose', help="print response", action='store_true')
+args = parser.parse_args()
+	
+url = 'https://gotify.steves.box/message?token=changeme'
+data = urllib.urlencode({"message": args.message, 
+			"priority": args.priority,
+			"title": args.title})
+	
+req = urllib2.Request(url, data)
+resp = urllib2.urlopen(req)
+if args.verbose:
+	print resp.read()
+&lt;/code&gt;&lt;/PRE&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;If you use the script, don't forget to change the token value in the &lt;strong dir="ltr"&gt;url&lt;/strong&gt; variable to one for your app.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;The final thing to do is to set up a reboot notification for the chargen.one box. We can do this on OpenBSD using a cron job. I've copied &lt;code dir="ltr"&gt;gotipy.py&lt;/code&gt; into &lt;code dir="ltr"&gt;/usr/local/bin&lt;/code&gt; and set up a cron job as a normal user to run on reboot:&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;@reboot python2 /usr/local/bin/gotipy.py -p 8 -t "Chargen.one" -m "Rebooted at `date`"&lt;/code&gt;&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;Now if we reboot the system, we can check that it's working by looking in &lt;code dir="ltr"&gt;/var/cron/log&lt;/code&gt;:&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;Apr  6 16:11:10 chargen cron[41858]: (asdf) CMD (python2 /usr/local/bin/gotipy.py -p 8 -t "Chargen.one" -m "Rebooted at `date`")&lt;/code&gt;&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;Please note that some OSes only run @reboot jobs for root. If you're having trouble, check your cron daemon supports non-root @reboot jobs.&lt;/p&gt;
+
+&lt;p dir="ltr"&gt;If you're wondering what else I plan to use this for, it's not really much. I like only having serious event notifications and want to keep it minimal. Some of the things I'll use this for include:&lt;/p&gt;
+&lt;/div&gt;&lt;UL&gt;&lt;LI&gt;Reboot notifications across servers&lt;/LI&gt;&lt;LI&gt;New device connected to home networks&lt;/LI&gt;&lt;LI&gt;Motioneye detected movement in the conservatory&lt;/LI&gt;&lt;/UL&gt;&lt;div dir="ltr"&gt;
+
+&lt;p dir="ltr"&gt;For pretty much everything else, there's email and I can pick that up in slow time.&lt;/p&gt;
+&lt;/div&gt;</description><pubDate>Sat, 06 Apr 2019 10:06:39 -0500</pubDate></item><item><title>HermiTux: A binary-compatible unikernel</title><link>https://lobste.rs/s/wupmu1</link><description>&lt;p dir="ltr"&gt;HermiTux is a &lt;a href="http://unikernel.org/" dir="ltr"&gt;unikernel&lt;/a&gt;: a minimal operating system
 with low memory/disk footprint and sub-second boot time, executing an
 application within a single address space on top of an hypervisor. Moreover,
 HermiTux is &lt;strong dir="ltr"&gt;binary-compatible&lt;/strong&gt; with Linux: it can run native Linux
@@ -533,7 +533,7 @@ Duff implemented this technique in C by using C's &lt;a href="https://en.m.wikip
 &lt;/p&gt;&lt;h2 tabindex="0" aria-haspopup="true" aria-controls="content-collapsible-block-3"&gt;&lt;span&gt;Performance&lt;/span&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;Many compilers will optimize the switch into a &lt;a href="https://en.m.wikipedia.org/wiki/Jump_table" title="Jump table" dir="ltr"&gt;jump table&lt;/a&gt; just as would be done in an assembly implementation.
 &lt;/p&gt;&lt;p dir="ltr"&gt;The primary increase in speed versus a simple, straightforward loop, comes from &lt;a href="https://en.m.wikipedia.org/wiki/Loop_unwinding" title="Loop unwinding" dir="ltr"&gt;loop unwinding&lt;/a&gt; that reduces the number of performed branches, which are computationally expensive due to the need to flush‍—‌and hence stall‍—‌the &lt;a href="https://en.m.wikipedia.org/wiki/Instruction_pipeline" title="Instruction pipeline" dir="ltr"&gt;instruction pipeline&lt;/a&gt;. The &lt;code dir="ltr"&gt;switch&lt;/code&gt; statement is used to handle the remainder of the data not evenly divisible by the number of operations unrolled (in this example, eight byte moves are unrolled, so the &lt;code dir="ltr"&gt;switch&lt;/code&gt; handles an extra 1–7 bytes automatically).
 &lt;/p&gt;&lt;p dir="ltr"&gt;This automatic handling of the remainder may not be the best solution on all systems and compilers&amp;nbsp;–  in some cases two loops may actually be faster (one loop, unrolled, to do the main copy, and a second loop to handle the remainder). The problem appears to come down to the ability of the compiler to correctly optimize the device; it may also interfere with pipelining and &lt;a href="https://en.m.wikipedia.org/wiki/Branch_prediction" title="Branch prediction" dir="ltr"&gt;branch prediction&lt;/a&gt; on some architectures.&lt;sup dir="ltr"&gt;&lt;a href="https://en.m.wikipedia.org/wiki/Duff%27s_device#cite_note-6" dir="ltr"&gt;[6]&lt;/a&gt;&lt;/sup&gt; When numerous instances of Duff's device were removed from the XFree86 Server in version 4.0, there was an improvement in performance and a noticeable reduction in size of the executable.&lt;sup dir="ltr"&gt;&lt;a href="https://en.m.wikipedia.org/wiki/Duff%27s_device#cite_note-lkml-0008.2/0171-7" dir="ltr"&gt;[7]&lt;/a&gt;&lt;/sup&gt; Therefore, when considering this code as a &lt;a href="https://en.m.wikipedia.org/wiki/Program_optimization" title="Program optimization" dir="ltr"&gt;program optimization&lt;/a&gt;, it may be worth running a few &lt;a href="https://en.m.wikipedia.org/wiki/Benchmark_(computing)" title="Benchmark (computing)" dir="ltr"&gt;benchmarks&lt;/a&gt; to verify that it actually is the fastest code on the target architecture, at the target optimization level, with the target compiler, as well as weighing the risk that the optimized code will later be used on different platforms where it is not the fastest code.
-&lt;/p&gt;&lt;p dir="ltr"&gt;For the purpose of memory-to-memory copies (which, as mentioned above, was not the original use of Duff's device), the &lt;a href="https://en.m.wikipedia.org/wiki/Standard_C_library" title="Standard C library" dir="ltr"&gt;standard C library&lt;/a&gt; provides function &lt;code dir="ltr"&gt;&lt;a href="https://en.m.wikipedia.org/wiki/Memcpy" title="Memcpy" dir="ltr"&gt;memcpy&lt;/a&gt;&lt;/code&gt;&lt;sup dir="ltr"&gt;&lt;a href="https://en.m.wikipedia.org/wiki/Duff%27s_device#cite_note-memcpy-cppreference-8" dir="ltr"&gt;[8]&lt;/a&gt;&lt;/sup&gt;; it will not perform worse than a memory-to-memory copy version of this code, and may contain architecture-specific optimizations that will make it significantly faster.&lt;sup dir="ltr"&gt;&lt;a href="https://en.m.wikipedia.org/wiki/Duff%27s_device#cite_note-amd2002-9" dir="ltr"&gt;[9]&lt;/a&gt;&lt;/sup&gt;&lt;sup dir="ltr"&gt;&lt;a href="https://en.m.wikipedia.org/wiki/Duff%27s_device#cite_note-fog2012-10" dir="ltr"&gt;[10]&lt;/a&gt;&lt;/sup&gt;&lt;/p&gt;</description><pubDate>Sat, 06 Apr 2019 21:57:30 -0500</pubDate></item><item><title>Lessons learned porting 50k loc from Java to Go</title><link>https://lobste.rs/s/wersfx</link><description>&lt;p&gt;
+&lt;/p&gt;&lt;p dir="ltr"&gt;For the purpose of memory-to-memory copies (which, as mentioned above, was not the original use of Duff's device), the &lt;a href="https://en.m.wikipedia.org/wiki/Standard_C_library" title="Standard C library" dir="ltr"&gt;standard C library&lt;/a&gt; provides function &lt;code dir="ltr"&gt;&lt;a href="https://en.m.wikipedia.org/wiki/Memcpy" title="Memcpy" dir="ltr"&gt;memcpy&lt;/a&gt;&lt;/code&gt;&lt;sup dir="ltr"&gt;&lt;a href="https://en.m.wikipedia.org/wiki/Duff%27s_device#cite_note-memcpy-cppreference-8" dir="ltr"&gt;[8]&lt;/a&gt;&lt;/sup&gt;; it will not perform worse than a memory-to-memory copy version of this code, and may contain architecture-specific optimizations that will make it significantly faster.&lt;sup dir="ltr"&gt;&lt;a href="https://en.m.wikipedia.org/wiki/Duff%27s_device#cite_note-amd2002-9" dir="ltr"&gt;[9]&lt;/a&gt;&lt;/sup&gt;&lt;sup dir="ltr"&gt;&lt;a href="https://en.m.wikipedia.org/wiki/Duff%27s_device#cite_note-fog2012-10" dir="ltr"&gt;[10]&lt;/a&gt;&lt;/sup&gt;&lt;/p&gt;</description><pubDate>Sat, 06 Apr 2019 21:57:30 -0500</pubDate></item><item><title>Challenge accepted: OpenBSD on a laptop</title><link>https://lobste.rs/s/6b89x2</link><description>&lt;h1&gt;&lt;a href="https://jpmens.net/2019/04/06/challenge-accepted-openbsd-on-a-laptop/"&gt;Challenge accepted: OpenBSD on a laptop&lt;/a&gt;&lt;/h1&gt;&lt;p&gt;It must have been in 1989 that I literally spent weeks of my life trying to get X11 compiled and running on a 486 Compaq running SCO Unix; compilation times were a thing which took many hours, but having to cross fingers that the parameters for the screen wouldn’t burn anything is what I recall most vividly. Times have changed of course, and I’d think there are not many people who do that any more – I for one have thankfully forgotten most of it, but it still rankles, and when I think of (non-commercial) Unix on a laptop I see the ghost of RAMDAC in my nightmares.&lt;/p&gt;&lt;p&gt;I know many who use some variant of GNU/Linux (or systemd/Linux? ;-) on a laptop, and I’ve done it myself, albeit typically sans X11, but the combination has never tempted me away from a Mac. I can’t nail it: Linux is more than fast enough (probably faster than BSDs), certainly reliable enough – that’s not it. I think it’s an increasing dislike of the environment in terms of the documentation, the disparity of syadmin procedures and utilities, the adoption of systemd, the differences across distributions, and the feeling that there’s so much wrong in that environment due to different groups recreating the same stuff in different wrappings, losing track of what bug has been fixed where, and has it been upstreamed, and has it been re-downstreamed, etc. It’s difficult for me to put a finger on it. Linux is here to stay, of course, and that’s good, but I don’t feel like carrying it around with me.&lt;/p&gt;&lt;p dir="ltr"&gt;Early February I &lt;a href="https://twitter.com/jpmens/status/1092712057919688704" dir="ltr"&gt;had an idea&lt;/a&gt; which sparked a bit of response:&lt;/p&gt;&lt;img src="https://jpmens.net/media/2019b/airjp878.png" alt="tweet suggesting talk" width="540" height="228"&gt;&lt;p&gt;So the question I wanted answered is: can you make a laptop so attractive that I’ll be tempted to move away from a Mac? TL;DR: you can.&lt;/p&gt;&lt;p dir="ltr"&gt;For some time now I’ve been happy with &lt;a href="https://www.openbsd.org/" dir="ltr"&gt;OpenBSD&lt;/a&gt;; the installer is slim and fast, the software is very stable, and the documentation is almost unbeatably good. Have you an idea how valuable it is to type &lt;code dir="ltr"&gt;man&lt;/code&gt; and get a manual page which actually describes the program or file that’s on your system? I had an &lt;a href="https://jpmens.net/2018/06/19/on-a-pos-pole-display-and-an-open-source-os/" dir="ltr"&gt;excellent experience with OpenBSD&lt;/a&gt; a year ago when I slapped the OS onto an old Thinkpad.&lt;/p&gt;&lt;p&gt;I quit smoking 922 days ago (at the time of this writing, and yes, I still keep count), and have kept track of the real money I’ve saved. I took some of that and splurged: I purchased a Lenovo Thinkpad X1 Carbon 6th gen, and I was really very impressed when I opened the carton: quite an Apple-like look-and-feel on unboxing.&lt;/p&gt;&lt;img src="https://jpmens.net/media/2019b/ZZ0D502760.png" alt="root xwd" width="600" height="337"&gt;&lt;p&gt;The device is lovely, and I think it’s slimmer even than my MacBook Air, and it feels lighter. I booted it up, intending to shrink the Windows 10 installation (who knows what a copy of Windows might be good for one day), and changed my mind on that after waiting for many minutes for Windows to welcome me.&lt;/p&gt;&lt;p dir="ltr"&gt;I had decided I wanted FreeBSD because of ZFS and the possibility of running VirtualBox. I started off installing the latest version of TrueOS as it’s supposed to be a good method for noobs in terms of ease of installation. The installer was fine until &lt;a href="https://mastodon.social/@jpmens/101868606051902277" dir="ltr"&gt;when creating a user&lt;/a&gt; (username &lt;code dir="ltr"&gt;jpm&lt;/code&gt;) it said “Jan-Piet Mens” contains an invalid character. For the gecos field. I kid you not. The result was a bootable system (on a &lt;a href="https://mastodon.social/@jpmens/101868838715313439" dir="ltr"&gt;second try&lt;/a&gt;), but it left me crying as to the sluggishness of almost everyting. Then I installed &lt;a href="https://project-trident.org/" dir="ltr"&gt;Trident&lt;/a&gt; as TrueOS’ successor but had to attach an external USB mouse to click the GUI installer. The result didn’t boot; didn’t boot as in “it doesn’t boot”, if you know what I mean.&lt;/p&gt;&lt;p dir="ltr"&gt;I should have stuck to plain FreeBSD of course, so I installed that. Several times. And then &lt;a href="https://mastodon.social/@jpmens/101867953896322214" dir="ltr"&gt;I stopped&lt;/a&gt;. I gave up having basically bricked the X1 in terms of not being able to give it to somebody who wants a Windows laptop.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://bsd.network/@henrikjohansen/101868903064602898" dir="ltr"&gt;Henrik&lt;/a&gt; again (he’s tireless in that respect) said &lt;a href="https://www.openbsd.org/" dir="ltr"&gt;OpenBSD&lt;/a&gt;, so I tried. To be honest my expectations in terms of “laptop and graphics and wifi and all that jazz with OpenBSD” were rock-bottom. OpenBSD as server? Any time, but on a laptop … ?&lt;/p&gt;&lt;p dir="ltr"&gt;The installation worked, and &lt;a href="https://mastodon.social/@jpmens/101868934208360262" dir="ltr"&gt;I got more than I expected&lt;/a&gt; (which surprised the heck out of me), but the result was dreadful: FireFox hardly able to scroll a page, no video output (YouTube), a miserable window manager, … I went to bed and read a book.&lt;/p&gt;&lt;p dir="ltr"&gt;It was Henrik (yeah, the same chap), who pointed me to a blog post by Cullum Smith entitled &lt;a href="https://www.c0ffee.net/blog/openbsd-on-a-laptop/" dir="ltr"&gt;OpenBSD on a Laptop&lt;/a&gt;. After spending a few hours working through that text, I was gratified with a very workable environment using an “i3”-like window manager called &lt;a href="https://man.openbsd.org/cwmrc.5" dir="ltr"&gt;cwm&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;All in all the result is a laptop which can, for me, almost compete with a Mac, at least for most of my use-cases. It has full-disk encryption, working Ethernet and Wifi (imagine being able to type &lt;code dir="ltr"&gt;man iwm&lt;/code&gt; for the name of the WiFi network interface and being shown up-to-date documentation with examples). S3 works as do volume buttons on the keyboard. I have a development environment (C compiler with all the Unix utilities I’d ever want), I’ve got &lt;a href="https://syncthing.net/" dir="ltr"&gt;syncthing&lt;/a&gt;, &lt;a href="https://jpmens.net/2017/08/22/my-backup-software-of-choice-restic/" dir="ltr"&gt;restic&lt;/a&gt;, and &lt;a href="https://jpmens.net/2018/01/30/discovering-mattermost/" dir="ltr"&gt;matterhorn&lt;/a&gt; installed, and I have OpenBSD’s built-in &lt;em dir="ltr"&gt;httpd&lt;/em&gt; and &lt;em dir="ltr"&gt;smtpd&lt;/em&gt; up and running. (The former because I sometimes test clients and need an HTTP server, and the latter because I like being able to send mails with pastes etc, to myself or others.).&lt;/p&gt;&lt;p dir="ltr"&gt;There are, at the end of this first day, a few things for which I need solutions: VLC plays audio but doesn’t show an image (moving pictures work in Firefox and Chrome), and there are a few “usability” things I have to either tweak or get used to, e.g. copy/paste from an xterm into a Web browser or vice versa. &lt;del dir="ltr"&gt;Also, the right side of the laptop gets very hot; I haven’t yet determined where the CPUs are, but I’m guessing right there in which case something’s running too hot, literally. (&lt;code dir="ltr"&gt;top&lt;/code&gt; doesn’t show anything untoward.)&lt;/del&gt; It was Thunderbolt BIOS setting.&lt;/p&gt;&lt;p dir="ltr"&gt;It’s really pleasant to work on a system in which, when I want to use, say &lt;em dir="ltr"&gt;mosquitto&lt;/em&gt;, all I do is &lt;code dir="ltr"&gt;pkg_add mosquitto&lt;/code&gt;, and I get all binaries, and libraries, and header files without having to guess what the package with the binaries and the package with the libraries is called. (I’m looking mainly at you, Debian.) Everything is properly documented, all programs and files have man-pages, and the quality of the &lt;a href="https://www.openbsd.org/faq/index.html" dir="ltr"&gt;guides&lt;/a&gt; is very good.&lt;/p&gt;&lt;p&gt;I’m not done, and I’m not sure I will abandon Macs and macOS, but this is very promising. Some things which I’ve relied upon are going to be difficult or impossible to replace. They include:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;iTerm2&lt;/LI&gt;&lt;LI&gt;Enpass&lt;/LI&gt;&lt;LI&gt;Calendar.app&lt;/LI&gt;&lt;LI&gt;being asked to connect to WiFi networks&lt;/LI&gt;&lt;LI&gt;and instantaneous wakeup on opening the laptop’s lid&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;There might be workarounds for some or all of these, but they’d be just that. All in all, however, I’m impressed with the result so far. FWIW, it’s likely that an appropriately configured Linux laptop would be just as good or maybe even better; as I said earlier: I cannot put my finger on it.&lt;/p&gt;&lt;p&gt;The question I have is: will I be brave enough to take this machine to BSDCan and do a presentation with it? We’ll see. (Certainly not if I cannot practice projecting beforehand.)&lt;/p&gt;&lt;p&gt;Further reading:&lt;/p&gt;</description><pubDate>Sun, 07 Apr 2019 01:23:47 -0500</pubDate></item><item><title>Lessons learned porting 50k loc from Java to Go</title><link>https://lobste.rs/s/wersfx</link><description>&lt;p&gt;
 I was contracted to port a large Java code base to Go.&lt;/p&gt;&lt;p dir="ltr"&gt;
 The code in question is a Java client for &lt;a href="https://ravendb.net/" dir="ltr"&gt;RavenDB&lt;/a&gt;, a NoSQL JSON document database. Code with tests was around 50 thousand lines.&lt;/p&gt;&lt;p dir="ltr"&gt;
 The result of the port is a &lt;a href="https://github.com/ravendb/ravendb-go-client" dir="ltr"&gt;Go client&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;
@@ -1112,7 +1112,7 @@ that promise to faster retire more issues will not have a guaranteed return on i
 (depending on the context where applied), and that a long-held truth in software engineering
 should not be considered a global truism.”&lt;/p&gt;
 
-            &lt;p&gt;&lt;a href="https://lobste.rs/s/6ywivn/are_delayed_issues_harder_resolve"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sat, 06 Apr 2019 09:20:13 -0500</pubDate></item><item><title>Challenge accepted: OpenBSD on a laptop</title><link>https://lobste.rs/s/6b89x2</link><description>&lt;h1&gt;&lt;a href="https://jpmens.net/2019/04/06/challenge-accepted-openbsd-on-a-laptop/"&gt;Challenge accepted: OpenBSD on a laptop&lt;/a&gt;&lt;/h1&gt;&lt;p&gt;It must have been in 1989 that I literally spent weeks of my life trying to get X11 compiled and running on a 486 Compaq running SCO Unix; compilation times were a thing which took many hours, but having to cross fingers that the parameters for the screen wouldn’t burn anything is what I recall most vividly. Times have changed of course, and I’d think there are not many people who do that any more – I for one have thankfully forgotten most of it, but it still rankles, and when I think of (non-commercial) Unix on a laptop I see the ghost of RAMDAC in my nightmares.&lt;/p&gt;&lt;p&gt;I know many who use some variant of GNU/Linux (or systemd/Linux? ;-) on a laptop, and I’ve done it myself, albeit typically sans X11, but the combination has never tempted me away from a Mac. I can’t nail it: Linux is more than fast enough (probably faster than BSDs), certainly reliable enough – that’s not it. I think it’s an increasing dislike of the environment in terms of the documentation, the disparity of syadmin procedures and utilities, the adoption of systemd, the differences across distributions, and the feeling that there’s so much wrong in that environment due to different groups recreating the same stuff in different wrappings, losing track of what bug has been fixed where, and has it been upstreamed, and has it been re-downstreamed, etc. It’s difficult for me to put a finger on it. Linux is here to stay, of course, and that’s good, but I don’t feel like carrying it around with me.&lt;/p&gt;&lt;p dir="ltr"&gt;Early February I &lt;a href="https://twitter.com/jpmens/status/1092712057919688704" dir="ltr"&gt;had an idea&lt;/a&gt; which sparked a bit of response:&lt;/p&gt;&lt;img src="https://jpmens.net/media/2019b/airjp878.png" alt="tweet suggesting talk" width="540" height="228"&gt;&lt;p&gt;So the question I wanted answered is: can you make a laptop so attractive that I’ll be tempted to move away from a Mac? TL;DR: you can.&lt;/p&gt;&lt;p dir="ltr"&gt;For some time now I’ve been happy with &lt;a href="https://www.openbsd.org/" dir="ltr"&gt;OpenBSD&lt;/a&gt;; the installer is slim and fast, the software is very stable, and the documentation is almost unbeatably good. Have you an idea how valuable it is to type &lt;code dir="ltr"&gt;man&lt;/code&gt; and get a manual page which actually describes the program or file that’s on your system? I had an &lt;a href="https://jpmens.net/2018/06/19/on-a-pos-pole-display-and-an-open-source-os/" dir="ltr"&gt;excellent experience with OpenBSD&lt;/a&gt; a year ago when I slapped the OS onto an old Thinkpad.&lt;/p&gt;&lt;p&gt;I quit smoking 922 days ago (at the time of this writing, and yes, I still keep count), and have kept track of the real money I’ve saved. I took some of that and splurged: I purchased a Lenovo Thinkpad X1 Carbon 6th gen, and I was really very impressed when I opened the carton: quite an Apple-like look-and-feel on unboxing.&lt;/p&gt;&lt;img src="https://jpmens.net/media/2019b/ZZ0D502760.png" alt="root xwd" width="600" height="337"&gt;&lt;p&gt;The device is lovely, and I think it’s slimmer even than my MacBook Air, and it feels lighter. I booted it up, intending to shrink the Windows 10 installation (who knows what a copy of Windows might be good for one day), and changed my mind on that after waiting for many minutes for Windows to welcome me.&lt;/p&gt;&lt;p dir="ltr"&gt;I had decided I wanted FreeBSD because of ZFS and the possibility of running VirtualBox. I started off installing the latest version of TrueOS as it’s supposed to be a good method for noobs in terms of ease of installation. The installer was fine until &lt;a href="https://mastodon.social/@jpmens/101868606051902277" dir="ltr"&gt;when creating a user&lt;/a&gt; (username &lt;code dir="ltr"&gt;jpm&lt;/code&gt;) it said “Jan-Piet Mens” contains an invalid character. For the gecos field. I kid you not. The result was a bootable system (on a &lt;a href="https://mastodon.social/@jpmens/101868838715313439" dir="ltr"&gt;second try&lt;/a&gt;), but it left me crying as to the sluggishness of almost everyting. Then I installed &lt;a href="https://project-trident.org/" dir="ltr"&gt;Trident&lt;/a&gt; as TrueOS’ successor but had to attach an external USB mouse to click the GUI installer. The result didn’t boot; didn’t boot as in “it doesn’t boot”, if you know what I mean.&lt;/p&gt;&lt;p dir="ltr"&gt;I should have stuck to plain FreeBSD of course, so I installed that. Several times. And then &lt;a href="https://mastodon.social/@jpmens/101867953896322214" dir="ltr"&gt;I stopped&lt;/a&gt;. I gave up having basically bricked the X1 in terms of not being able to give it to somebody who wants a Windows laptop.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://bsd.network/@henrikjohansen/101868903064602898" dir="ltr"&gt;Henrik&lt;/a&gt; again (he’s tireless in that respect) said &lt;a href="https://www.openbsd.org/" dir="ltr"&gt;OpenBSD&lt;/a&gt;, so I tried. To be honest my expectations in terms of “laptop and graphics and wifi and all that jazz with OpenBSD” were rock-bottom. OpenBSD as server? Any time, but on a laptop … ?&lt;/p&gt;&lt;p dir="ltr"&gt;The installation worked, and &lt;a href="https://mastodon.social/@jpmens/101868934208360262" dir="ltr"&gt;I got more than I expected&lt;/a&gt; (which surprised the heck out of me), but the result was dreadful: FireFox hardly able to scroll a page, no video output (YouTube), a miserable window manager, … I went to bed and read a book.&lt;/p&gt;&lt;p dir="ltr"&gt;It was Henrik (yeah, the same chap), who pointed me to a blog post by Cullum Smith entitled &lt;a href="https://www.c0ffee.net/blog/openbsd-on-a-laptop/" dir="ltr"&gt;OpenBSD on a Laptop&lt;/a&gt;. After spending a few hours working through that text, I was gratified with a very workable environment using an “i3”-like window manager called &lt;a href="https://man.openbsd.org/cwmrc.5" dir="ltr"&gt;cwm&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;All in all the result is a laptop which can, for me, almost compete with a Mac, at least for most of my use-cases. It has full-disk encryption, working Ethernet and Wifi (imagine being able to type &lt;code dir="ltr"&gt;man iwm&lt;/code&gt; for the name of the WiFi network interface and being shown up-to-date documentation with examples). S3 works as do volume buttons on the keyboard. I have a development environment (C compiler with all the Unix utilities I’d ever want), I’ve got &lt;a href="https://syncthing.net/" dir="ltr"&gt;syncthing&lt;/a&gt;, &lt;a href="https://jpmens.net/2017/08/22/my-backup-software-of-choice-restic/" dir="ltr"&gt;restic&lt;/a&gt;, and &lt;a href="https://jpmens.net/2018/01/30/discovering-mattermost/" dir="ltr"&gt;matterhorn&lt;/a&gt; installed, and I have OpenBSD’s built-in &lt;em dir="ltr"&gt;httpd&lt;/em&gt; and &lt;em dir="ltr"&gt;smtpd&lt;/em&gt; up and running. (The former because I sometimes test clients and need an HTTP server, and the latter because I like being able to send mails with pastes etc, to myself or others.).&lt;/p&gt;&lt;p dir="ltr"&gt;There are, at the end of this first day, a few things for which I need solutions: VLC plays audio but doesn’t show an image (moving pictures work in Firefox and Chrome), and there are a few “usability” things I have to either tweak or get used to, e.g. copy/paste from an xterm into a Web browser or vice versa. &lt;del dir="ltr"&gt;Also, the right side of the laptop gets very hot; I haven’t yet determined where the CPUs are, but I’m guessing right there in which case something’s running too hot, literally. (&lt;code dir="ltr"&gt;top&lt;/code&gt; doesn’t show anything untoward.)&lt;/del&gt; It was Thunderbolt BIOS setting.&lt;/p&gt;&lt;p dir="ltr"&gt;It’s really pleasant to work on a system in which, when I want to use, say &lt;em dir="ltr"&gt;mosquitto&lt;/em&gt;, all I do is &lt;code dir="ltr"&gt;pkg_add mosquitto&lt;/code&gt;, and I get all binaries, and libraries, and header files without having to guess what the package with the binaries and the package with the libraries is called. (I’m looking mainly at you, Debian.) Everything is properly documented, all programs and files have man-pages, and the quality of the &lt;a href="https://www.openbsd.org/faq/index.html" dir="ltr"&gt;guides&lt;/a&gt; is very good.&lt;/p&gt;&lt;p&gt;I’m not done, and I’m not sure I will abandon Macs and macOS, but this is very promising. Some things which I’ve relied upon are going to be difficult or impossible to replace. They include:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;iTerm2&lt;/LI&gt;&lt;LI&gt;Enpass&lt;/LI&gt;&lt;LI&gt;Calendar.app&lt;/LI&gt;&lt;LI&gt;being asked to connect to WiFi networks&lt;/LI&gt;&lt;LI&gt;and instantaneous wakeup on opening the laptop’s lid&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;There might be workarounds for some or all of these, but they’d be just that. All in all, however, I’m impressed with the result so far. FWIW, it’s likely that an appropriately configured Linux laptop would be just as good or maybe even better; as I said earlier: I cannot put my finger on it.&lt;/p&gt;&lt;p&gt;The question I have is: will I be brave enough to take this machine to BSDCan and do a presentation with it? We’ll see. (Certainly not if I cannot practice projecting beforehand.)&lt;/p&gt;&lt;p&gt;Further reading:&lt;/p&gt;</description><pubDate>Sun, 07 Apr 2019 01:23:47 -0500</pubDate></item><item><title>QNX Windows (1991)</title><link>https://lobste.rs/s/w6mjei</link><description>&lt;font&gt;   User Interfaces&lt;/font&gt;&lt;font&gt;QNX Windows&lt;/font&gt;&lt;font&gt;&lt;a name="00A5_0000"&gt;Lan Barnes&lt;/a&gt;&lt;/font&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;i&gt;&lt;a name="00A5_0000"&gt;Lan Barnes is a microcomputer systems programmer and database consultant working in MS-DOS and QNX. He has written a full-screen QNX editor that he is converting to QNX Windows in his spare time. Readers may contact him at 822 Guilford Ave., Suite 147, Baltimore, MD 21202.&lt;/a&gt;&lt;/i&gt;&lt;/p&gt;&lt;p&gt;&lt;a name="00A5_0000"&gt;
+            &lt;p&gt;&lt;a href="https://lobste.rs/s/6ywivn/are_delayed_issues_harder_resolve"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sat, 06 Apr 2019 09:20:13 -0500</pubDate></item><item><title>QNX Windows (1991)</title><link>https://lobste.rs/s/w6mjei</link><description>&lt;font&gt;   User Interfaces&lt;/font&gt;&lt;font&gt;QNX Windows&lt;/font&gt;&lt;font&gt;&lt;a name="00A5_0000"&gt;Lan Barnes&lt;/a&gt;&lt;/font&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;i&gt;&lt;a name="00A5_0000"&gt;Lan Barnes is a microcomputer systems programmer and database consultant working in MS-DOS and QNX. He has written a full-screen QNX editor that he is converting to QNX Windows in his spare time. Readers may contact him at 822 Guilford Ave., Suite 147, Baltimore, MD 21202.&lt;/a&gt;&lt;/i&gt;&lt;/p&gt;&lt;p&gt;&lt;a name="00A5_0000"&gt;
 In recent years the QNX operating system has become a favorite of systems designers. QNX is a networked OS (or NOS) for microcomputers capable of combining real-time performance with a user interface that can support "friendly" applications. The system has been around for awhile — Quantum Software Systems, QNX's vendor, has been shipping one form or another for ten years. Nevertheless, QNX is less dated than many younger operating systems. Its underlying modular, message-passing architecture still stands as a fresh and powerful alternative to conventional OS and NOS designs.&lt;/a&gt;&lt;/p&gt;&lt;p&gt;&lt;a name="00A5_0000"&gt;
 The friendliness of QNX's user interface, however, can be challenged. The traditional QNX shell interface can best be described as "UNIX without the frills." While programmers and network administrators tend to appreciate QNX's spare elegance, new QNX users — even the more technical users typical of a real-time environment — have always been subjected to a steep learning curve. In today's micro culture of graphical user interfaces, QNX developers felt an obvious need for a GUI for QNX.&lt;/a&gt;&lt;/p&gt;&lt;p&gt;&lt;a name="00A5_0000"&gt;
 Such a GUI was announced and released at the QNX Developers Conference in Ottawa last fall. I provide here a high-level overview of that GUI, called QNX Windows.&lt;/a&gt;&lt;/p&gt;&lt;font&gt;&lt;a name="00A5_0065"&gt;Open Look Standard&lt;/a&gt;&lt;/font&gt;&lt;a name="00A5_0065"&gt;
