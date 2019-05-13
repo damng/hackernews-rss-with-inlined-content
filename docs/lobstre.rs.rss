@@ -805,7 +805,225 @@ He walked out of the office and announced he had reduced the memory footprint to
 As horrified as I was back then about such a "barbaric" practice, I have to admit that I'm warming up to it. I haven't gotten into the frame of mind where I can put it to use yet, but I can see how sometimes, when you're up against the wall, having a bit of memory tucked away for a rainy day can really make a difference. Funny how time and experience changes everything. 
 &lt;/p&gt;&lt;p dir="ltr"&gt;
 &lt;em dir="ltr"&gt;- Noel Llopis&lt;/em&gt;
-&lt;/p&gt;</description><pubDate>Sun, 12 May 2019 10:24:17 -0500</pubDate></item><item><title>When Lower Load Triggers Higher Latencies</title><link>https://lobste.rs/s/vz4vxa</link><description>&lt;h2&gt;Backdrop&lt;/h2&gt;&lt;p dir="ltr"&gt;As in &lt;a href="https://mahdytech.com/2019/01/13/curious-case-999-latency-hike/" dir="ltr"&gt;most posts&lt;/a&gt; - a distributed service was misbehaving, let’s call this service Alvin. This time, I didn’t discover the issue myself, it was instead reported by the team owning the client.&lt;/p&gt;&lt;p&gt; One day, I woke up to a disgruntled email due to high latencies caused by Alvin, that we were planning to launch soon. In particular, the client was facing 99th latency around 50ms, way above our latency budget. That was surprising, as I have thoroughly tested this service, especially the latency - the point of complaint.&lt;/p&gt;&lt;p dir="ltr"&gt; Before declaring Alvin &lt;em dir="ltr"&gt;testable&lt;/em&gt;, I had run many experiments with 40k QPS, all showing less than 10ms latency. I got ready to reply dismissing their results. However, another look at the email showed something new: I didn’t &lt;em dir="ltr"&gt;exactly&lt;/em&gt; test the conditions they mentioned, their &lt;a href="https://en.wikipedia.org/wiki/Queries_per_second" dir="ltr"&gt;QPS&lt;/a&gt; was much lower than mine. While I was testing with 40k QPS, they were testing with only 1k. I ran my experiment once again, with lower QPS this time, just to humour them.&lt;/p&gt;&lt;p&gt;Since I am blogging about this - you probably figured it out already: their numbers were correct. I re-ran my dummy client again and again, all with the same result: Lower QPS, not only leads to higher latencies, but just plain higher number of requests with latency over 10ms. In other words, if at 40k QPS 50 queries every second were over 50ms, at 1k QPS there were 100 queries every second above 50ms. Paradox!&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Note: if you’re not seeing the graphs refresh this page. I will try and remove this dependency in the next iteration.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h2&gt;Narrowing it Down&lt;/h2&gt;&lt;p&gt;In a distributed system with many components, the first thing to do when faced with a latency issue is to shortlist the suspects. Let’s dig a bit deeper into Alvin’s architecture:&lt;/p&gt;&lt;img src="https://mahdytech.com/AlvinStore-9635ff334dcfcdac97abb7cef6f8711c.svg" alt="AlvinStore" width="318" height="120"&gt;&lt;p&gt;A good starting point is to list the IO hops done (Network calls/Disk seeks, etc), and try and figure out which one contains the latency delay. Besides the obvious IO between Alvin and its client,  Alvin is doing an extra IO step - it is calling into a Data Store. However, this Data Store lives in the same cluster with Alvin, so it should be a smaller network hop than the one between Client &amp;lt;=&amp;gt; Alvin. The following suspect list lines up:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Network call from &lt;code dir="ltr"&gt;Client&lt;/code&gt; to &lt;code dir="ltr"&gt;Alvin&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Network call from &lt;code dir="ltr"&gt;Alvin&lt;/code&gt; to &lt;code dir="ltr"&gt;Data Store&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;Data Store&lt;/code&gt; disk seek&lt;/LI&gt;&lt;LI&gt;Network call from &lt;code dir="ltr"&gt;Data Store&lt;/code&gt; to &lt;code dir="ltr"&gt;Alvin&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Network call from &lt;code dir="ltr"&gt;Alvin&lt;/code&gt; to &lt;code dir="ltr"&gt;Client&lt;/code&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;Let’s try to strike through some names.&lt;/p&gt;&lt;h3&gt;Data Store is Innocent&lt;/h3&gt;&lt;p&gt;First thing I did was converting Alvin into a ping-ping server, a server that does no request processing and once it gets a request, returns an empty response. If latency improves, then my implementation for Alvin or Data Store has a bug - nothing unheard of. This yielded the graph for the first experiment:&lt;/p&gt;&lt;p&gt;As the graph shows, there is no improvement when using a ping-pong server, meaning that Data Store is not contributing to the latency hike, our suspect list is shortened to half:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Network call from &lt;code dir="ltr"&gt;Client&lt;/code&gt; to &lt;code dir="ltr"&gt;Alvin&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Network call from &lt;code dir="ltr"&gt;Alvin&lt;/code&gt; to &lt;code dir="ltr"&gt;Client&lt;/code&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;Great! Our list is getting quickly smaller. I thought I was almost there.&lt;/p&gt;&lt;h3&gt;gRPC&lt;/h3&gt;&lt;p dir="ltr"&gt;Now is a good time to introduce a new player to the scene: &lt;a href="https://github.com/grpc/grpc" dir="ltr"&gt;gRPC&lt;/a&gt;. &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; is an open-source library by Google for intra-process &lt;a href="https://en.wikipedia.org/wiki/Remote_procedure_call" dir="ltr"&gt;RPC&lt;/a&gt; communication. While &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; is highly optimized and heavily adopted, this was my first time using it on scale, and I was expecting that my usage was not optimal - to put it mildly.&lt;/p&gt;&lt;p dir="ltr"&gt;Having &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; on board introduced a new question: is it my implementation, or is &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; causing the latency problem? A new suspect is added to the list:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Client calls into &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; library&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gRPC&lt;/code&gt; library on the Client performs a network call into  &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; library on the Server&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gRPC&lt;/code&gt; library calls into &lt;code dir="ltr"&gt;Alvin&lt;/code&gt; request processing callback (A no-op in the case of ping-pong server)&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;To have an idea what the code looked like at this point, my Client/Alvin implementation did not look much different from client/server &lt;a href="https://github.com/grpc/grpc/tree/v1.19.0/examples/cpp/helloworld" dir="ltr"&gt;async examples&lt;/a&gt;.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Note: The list above is a bit of a simplification, since &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; gives consumers power (boilerplate?) of using their own threading model resulting in an intertwined execution stack between &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; and consumer implementation. Let’s stick with this model for the sake of simplicity.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h3&gt;Profile Cures All&lt;/h3&gt;&lt;p dir="ltr"&gt;After striking out &lt;code dir="ltr"&gt;Data Store&lt;/code&gt; I had thought I was almost done. I figured: “Easy! I will take a profile and find out which part is causing the delay”. I am a &lt;a href="https://mahdytech.com/2019/01/13/curious-case-999-latency-hike/" dir="ltr"&gt;big fan of precise profiling&lt;/a&gt;, because CPUs are blazing fast, and most often they are not the bottleneck. The CPU having to stop processing to do something else is what brings about most delays. Precise CPU profiling is made just for that: it has an accurate record of all &lt;a href="https://www.tutorialspoint.com/what-is-context-switching-in-operating-system" dir="ltr"&gt;context switches&lt;/a&gt;, and in so an idea of where delays are.&lt;/p&gt;&lt;p&gt;I took four profiles: one under high QPS (low latency), and one with ping-pong low QPS server (high latency), on both the client and server sides. And just for the heck of it, I also took a sampled CPU profile. When comparing profiles, I usually look for an abnormal callstack. For example, the bad side with high latency showing a lot more context switches (10x or more) than the good side with low latency. But what I found was an almost matching context switching between good and bad runs. To my dismay, however, nothing of substance was there.&lt;/p&gt;&lt;h2&gt;More Debugging&lt;/h2&gt;&lt;p&gt;I was getting desperate. My toolbox was empty, and my next plan was to basically wing it, iterating over experiments rather than diagnosing the problem.&lt;/p&gt;&lt;h3&gt;What if&lt;/h3&gt;&lt;p dir="ltr"&gt;From the start, the 50ms latency number has been bugging me. 50ms is &lt;em dir="ltr"&gt;a lot&lt;/em&gt; of time. I decided that my goal is to keep cutting pieces from my code until I can figure out which part is exactly causing this error. Next came the experiment that worked.&lt;/p&gt;&lt;p dir="ltr"&gt;It was pretty simple, and hindsight is 20/20 as usual. I placed my client in the same machine as Alvin, and sent the request to &lt;code dir="ltr"&gt;localhost&lt;/code&gt;. And the latency increase was gone!  &lt;/p&gt;&lt;p&gt;Something was wrong with the network.&lt;/p&gt;&lt;h3&gt;Ignite the Network Engineer Within&lt;/h3&gt;&lt;p&gt;I have a confession: my networking knowledge is abysmal, relatively to how much I deal with networks on a daily basis. Usually I’d say that’s to show how good abstraction layers work. However, network was the suspect #1, and I needed to learn how to debug that.&lt;/p&gt;&lt;p&gt;Fortunately, internet is kind to those wanting to learn. A combination of ping and tracert seemed like a good enough start for debugging network transport issues.&lt;/p&gt;&lt;p dir="ltr"&gt;First, I ran &lt;a href="https://docs.microsoft.com/en-us/sysinternals/downloads/psping" dir="ltr"&gt;PsPing&lt;/a&gt; and targeted the TCP port Alvin was listening on. I used default parameters - nothing fancy. Despite running over a 1000 pings, I didn’t see any of which exceed 10ms, except for the first one for warmup. This contradicts the observed 50ms 99% latency increase, we should have seen about one 50ms request for each 100 requests sent.&lt;/p&gt;&lt;p dir="ltr"&gt;Then, I tried &lt;a href="https://support.microsoft.com/en-ca/help/314868/how-to-use-tracert-to-troubleshoot-tcp-ip-problems-in-windows" dir="ltr"&gt;tracert&lt;/a&gt;, maybe there was an issue with one of the hops requests were hitting on the way between Alvin and the client. However,  tracert came back empty-handed.&lt;/p&gt;&lt;p&gt;So, it was not my code, gRPC implementation or the network causing the delays. I was starting to get worried I am never going to figure this out.&lt;/p&gt;&lt;h3&gt;Now, which OS are we on&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;gRPC&lt;/code&gt; is widely adopted on Linux, however its Windows adoption is not even close. I decided to run the experiment that worked: I spun a Linux VM and compiled Alvin for Linux, and deployed it.  &lt;/p&gt;&lt;p dir="ltr"&gt;Lo and behold: Linux ping-pong server didn’t have the latency issues of its Windows peer, despite using my source being the same. &lt;code dir="ltr"&gt;gRPC&lt;/code&gt;’s Windows implementation had a problem.&lt;/p&gt;&lt;h3&gt;Nagle’s algorithm&lt;/h3&gt;&lt;p dir="ltr"&gt;All along, I had thought I was missing a &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; flag, now I realized it might actually be &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; that was missing a Windows flag. I searched an internal RPC library that I knew to behave well for all the &lt;a href="https://docs.microsoft.com/en-us/windows/desktop/winsock/windows-sockets-start-page-2" dir="ltr"&gt;Winsock&lt;/a&gt; flags it set. I then went ahead and added all of them to gRPC, and deployed Alvin on Windows, and that fixed Windows ping-pong server!  &lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Almost&lt;/em&gt; there: I removed the flags I added  one by one until regression returned, so that I could pin the one flag that made the difference. It was the infamous &lt;a href="https://docs.microsoft.com/en-us/windows/desktop/api/winsock/nf-winsock-setsockopt" dir="ltr"&gt;TCP_NODELAY&lt;/a&gt;, the switch for Nagle’s algorithm.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://en.wikipedia.org/wiki/Nagle%27s_algorithm" dir="ltr"&gt;Nagle’s algorithm&lt;/a&gt; tries to decrease number of packets sent over the network, by delaying message transmission until outstanding size exceeds certain number of bytes. While this can be nice for the average user, this is devastating for real-time servers, as it means OS will delay some messages, causing the latency hikes observed under low QPS. &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; had this flag on for its Linux implementation for TCP sockets, but not for Windows, I have fixed that with &lt;a href="https://github.com/grpc/grpc/commit/1dce1009e67ea4b5934a61b1bcf8a217bd12cc76" dir="ltr"&gt;1dce1009&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p dir="ltr"&gt;Latency was high at low QPS due to an OS optimization. In hindsight, profile did not catch the delays because they were on the Kernel side of things, not in &lt;a href="https://blog.codinghorror.com/understanding-user-and-kernel-mode/" dir="ltr"&gt;User Mode&lt;/a&gt;. I do not know if Nagle’s algorithm could be observed through ETW captures, but that would be interesting.&lt;/p&gt;&lt;p dir="ltr"&gt;As for the &lt;a href="https://mahdytech.com/low-qps-higher-latency/#what-if" dir="ltr"&gt;localhost experiment&lt;/a&gt;, it probably did not touch actual network code, and Nagle’s algorithm was not triggered, hence latency issues went away when client called Alvin through localhost.&lt;/p&gt;&lt;p&gt;The next time you see higher latency coinciding with lower QPS, Nagle’s algorithm should be on your checklist!&lt;/p&gt;&lt;p dir="ltr"&gt;Help &lt;a href="https://github.com/aybassiouny/mahdytech" dir="ltr"&gt;improve this text&lt;/a&gt; or discuss it on &lt;a href="https://www.reddit.com/r/programming/comments/bntthh/more_is_sometimes_less_when_lower_load_can/" dir="ltr"&gt;reddit&lt;/a&gt;, &lt;a href="https://news.ycombinator.com/item?id=19894402" dir="ltr"&gt;hackernews&lt;/a&gt;.&lt;/p&gt;&lt;img src="data:image/jpeg;base64,/9j/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wgARCAAUABQDASIAAhEBAxEB/8QAGAABAQEBAQAAAAAAAAAAAAAAAAIEAQP/xAAXAQEAAwAAAAAAAAAAAAAAAAABAAID/9oADAMBAAIQAxAAAAG9OOM7deRb0CQIf//EABoQAAIDAQEAAAAAAAAAAAAAAAEDAAIREjH/2gAIAQEAAQUCDLLet9tDiqOI6r6xTTZImTZ//8QAGBEAAgMAAAAAAAAAAAAAAAAAACEBEBH/2gAIAQMBAT8BxCJr/8QAFREBAQAAAAAAAAAAAAAAAAAAESD/2gAIAQIBAT8BY//EAB4QAAIBAwUAAAAAAAAAAAAAAAABEQIDURASIUFx/9oACAEBAAY/Aq3Et9EXElOB0rIkvCOCdo9f/8QAGRABAQEBAQEAAAAAAAAAAAAAAREAMUFR/9oACAEBAAE/IQDpLlXpczHJWfcYY1QA+s5ok2+jiLO6CuV93//aAAwDAQACAAMAAAAQXwg+/8QAGREAAwADAAAAAAAAAAAAAAAAAAEREDFB/9oACAEDAQE/EIddFSrNsf/EABgRAAIDAAAAAAAAAAAAAAAAAAABEBEh/9oACAECAQE/EE1Gij//xAAdEAEBAAICAwEAAAAAAAAAAAABEQAhMWFBUXHw/9oACAEBAAE/EINR5Sum31rKmWxTqWN9mGe7wOk/TAIGwWrvrHLPSpo4rjIaBiR8XnrEDSAvWUDy7+ZqlQALn//Z" alt="Ahmed Mahdy" width="50" height="50"&gt;&lt;p dir="ltr"&gt;This is &lt;strong dir="ltr"&gt;Ahmed Mahdy&lt;/strong&gt;, and these are some of my thoughts on Cloud Computing. &lt;a href="https://twitter.com/aybassiouny" dir="ltr"&gt;Follow me on Twitter&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 12 May 2019 18:44:34 -0500</pubDate></item><item><title>Inko 0.4.0 released</title><link>https://lobste.rs/s/zdgqlq</link><description>&lt;p dir="ltr"&gt;
+&lt;/p&gt;</description><pubDate>Sun, 12 May 2019 10:24:17 -0500</pubDate></item><item><title>When Lower Load Triggers Higher Latencies</title><link>https://lobste.rs/s/vz4vxa</link><description>&lt;h2&gt;Backdrop&lt;/h2&gt;&lt;p dir="ltr"&gt;As in &lt;a href="https://mahdytech.com/2019/01/13/curious-case-999-latency-hike/" dir="ltr"&gt;most posts&lt;/a&gt; - a distributed service was misbehaving, let’s call this service Alvin. This time, I didn’t discover the issue myself, it was instead reported by the team owning the client.&lt;/p&gt;&lt;p&gt; One day, I woke up to a disgruntled email due to high latencies caused by Alvin, that we were planning to launch soon. In particular, the client was facing 99th latency around 50ms, way above our latency budget. That was surprising, as I have thoroughly tested this service, especially the latency - the point of complaint.&lt;/p&gt;&lt;p dir="ltr"&gt; Before declaring Alvin &lt;em dir="ltr"&gt;testable&lt;/em&gt;, I had run many experiments with 40k QPS, all showing less than 10ms latency. I got ready to reply dismissing their results. However, another look at the email showed something new: I didn’t &lt;em dir="ltr"&gt;exactly&lt;/em&gt; test the conditions they mentioned, their &lt;a href="https://en.wikipedia.org/wiki/Queries_per_second" dir="ltr"&gt;QPS&lt;/a&gt; was much lower than mine. While I was testing with 40k QPS, they were testing with only 1k. I ran my experiment once again, with lower QPS this time, just to humour them.&lt;/p&gt;&lt;p&gt;Since I am blogging about this - you probably figured it out already: their numbers were correct. I re-ran my dummy client again and again, all with the same result: Lower QPS, not only leads to higher latencies, but just plain higher number of requests with latency over 10ms. In other words, if at 40k QPS 50 queries every second were over 50ms, at 1k QPS there were 100 queries every second above 50ms. Paradox!&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Note: if you’re not seeing the graphs refresh this page. I will try and remove this dependency in the next iteration.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h2&gt;Narrowing it Down&lt;/h2&gt;&lt;p&gt;In a distributed system with many components, the first thing to do when faced with a latency issue is to shortlist the suspects. Let’s dig a bit deeper into Alvin’s architecture:&lt;/p&gt;&lt;img src="https://mahdytech.com/AlvinStore-9635ff334dcfcdac97abb7cef6f8711c.svg" alt="AlvinStore" width="318" height="120"&gt;&lt;p&gt;A good starting point is to list the IO hops done (Network calls/Disk seeks, etc), and try and figure out which one contains the latency delay. Besides the obvious IO between Alvin and its client,  Alvin is doing an extra IO step - it is calling into a Data Store. However, this Data Store lives in the same cluster with Alvin, so it should be a smaller network hop than the one between Client &amp;lt;=&amp;gt; Alvin. The following suspect list lines up:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Network call from &lt;code dir="ltr"&gt;Client&lt;/code&gt; to &lt;code dir="ltr"&gt;Alvin&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Network call from &lt;code dir="ltr"&gt;Alvin&lt;/code&gt; to &lt;code dir="ltr"&gt;Data Store&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;Data Store&lt;/code&gt; disk seek&lt;/LI&gt;&lt;LI&gt;Network call from &lt;code dir="ltr"&gt;Data Store&lt;/code&gt; to &lt;code dir="ltr"&gt;Alvin&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Network call from &lt;code dir="ltr"&gt;Alvin&lt;/code&gt; to &lt;code dir="ltr"&gt;Client&lt;/code&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;Let’s try to strike through some names.&lt;/p&gt;&lt;h3&gt;Data Store is Innocent&lt;/h3&gt;&lt;p&gt;First thing I did was converting Alvin into a ping-ping server, a server that does no request processing and once it gets a request, returns an empty response. If latency improves, then my implementation for Alvin or Data Store has a bug - nothing unheard of. This yielded the graph for the first experiment:&lt;/p&gt;&lt;p&gt;As the graph shows, there is no improvement when using a ping-pong server, meaning that Data Store is not contributing to the latency hike, our suspect list is shortened to half:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Network call from &lt;code dir="ltr"&gt;Client&lt;/code&gt; to &lt;code dir="ltr"&gt;Alvin&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Network call from &lt;code dir="ltr"&gt;Alvin&lt;/code&gt; to &lt;code dir="ltr"&gt;Client&lt;/code&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;Great! Our list is getting quickly smaller. I thought I was almost there.&lt;/p&gt;&lt;h3&gt;gRPC&lt;/h3&gt;&lt;p dir="ltr"&gt;Now is a good time to introduce a new player to the scene: &lt;a href="https://github.com/grpc/grpc" dir="ltr"&gt;gRPC&lt;/a&gt;. &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; is an open-source library by Google for intra-process &lt;a href="https://en.wikipedia.org/wiki/Remote_procedure_call" dir="ltr"&gt;RPC&lt;/a&gt; communication. While &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; is highly optimized and heavily adopted, this was my first time using it on scale, and I was expecting that my usage was not optimal - to put it mildly.&lt;/p&gt;&lt;p dir="ltr"&gt;Having &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; on board introduced a new question: is it my implementation, or is &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; causing the latency problem? A new suspect is added to the list:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Client calls into &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; library&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gRPC&lt;/code&gt; library on the Client performs a network call into  &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; library on the Server&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gRPC&lt;/code&gt; library calls into &lt;code dir="ltr"&gt;Alvin&lt;/code&gt; request processing callback (A no-op in the case of ping-pong server)&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;To have an idea what the code looked like at this point, my Client/Alvin implementation did not look much different from client/server &lt;a href="https://github.com/grpc/grpc/tree/v1.19.0/examples/cpp/helloworld" dir="ltr"&gt;async examples&lt;/a&gt;.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Note: The list above is a bit of a simplification, since &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; gives consumers power (boilerplate?) of using their own threading model resulting in an intertwined execution stack between &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; and consumer implementation. Let’s stick with this model for the sake of simplicity.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h3&gt;Profile Cures All&lt;/h3&gt;&lt;p dir="ltr"&gt;After striking out &lt;code dir="ltr"&gt;Data Store&lt;/code&gt; I had thought I was almost done. I figured: “Easy! I will take a profile and find out which part is causing the delay”. I am a &lt;a href="https://mahdytech.com/2019/01/13/curious-case-999-latency-hike/" dir="ltr"&gt;big fan of precise profiling&lt;/a&gt;, because CPUs are blazing fast, and most often they are not the bottleneck. The CPU having to stop processing to do something else is what brings about most delays. Precise CPU profiling is made just for that: it has an accurate record of all &lt;a href="https://www.tutorialspoint.com/what-is-context-switching-in-operating-system" dir="ltr"&gt;context switches&lt;/a&gt;, and in so an idea of where delays are.&lt;/p&gt;&lt;p&gt;I took four profiles: one under high QPS (low latency), and one with ping-pong low QPS server (high latency), on both the client and server sides. And just for the heck of it, I also took a sampled CPU profile. When comparing profiles, I usually look for an abnormal callstack. For example, the bad side with high latency showing a lot more context switches (10x or more) than the good side with low latency. But what I found was an almost matching context switching between good and bad runs. To my dismay, however, nothing of substance was there.&lt;/p&gt;&lt;h2&gt;More Debugging&lt;/h2&gt;&lt;p&gt;I was getting desperate. My toolbox was empty, and my next plan was to basically wing it, iterating over experiments rather than diagnosing the problem.&lt;/p&gt;&lt;h3&gt;What if&lt;/h3&gt;&lt;p dir="ltr"&gt;From the start, the 50ms latency number has been bugging me. 50ms is &lt;em dir="ltr"&gt;a lot&lt;/em&gt; of time. I decided that my goal is to keep cutting pieces from my code until I can figure out which part is exactly causing this error. Next came the experiment that worked.&lt;/p&gt;&lt;p dir="ltr"&gt;It was pretty simple, and hindsight is 20/20 as usual. I placed my client in the same machine as Alvin, and sent the request to &lt;code dir="ltr"&gt;localhost&lt;/code&gt;. And the latency increase was gone!  &lt;/p&gt;&lt;p&gt;Something was wrong with the network.&lt;/p&gt;&lt;h3&gt;Ignite the Network Engineer Within&lt;/h3&gt;&lt;p&gt;I have a confession: my networking knowledge is abysmal, relatively to how much I deal with networks on a daily basis. Usually I’d say that’s to show how good abstraction layers work. However, network was the suspect #1, and I needed to learn how to debug that.&lt;/p&gt;&lt;p&gt;Fortunately, internet is kind to those wanting to learn. A combination of ping and tracert seemed like a good enough start for debugging network transport issues.&lt;/p&gt;&lt;p dir="ltr"&gt;First, I ran &lt;a href="https://docs.microsoft.com/en-us/sysinternals/downloads/psping" dir="ltr"&gt;PsPing&lt;/a&gt; and targeted the TCP port Alvin was listening on. I used default parameters - nothing fancy. Despite running over a 1000 pings, I didn’t see any of which exceed 10ms, except for the first one for warmup. This contradicts the observed 50ms 99% latency increase, we should have seen about one 50ms request for each 100 requests sent.&lt;/p&gt;&lt;p dir="ltr"&gt;Then, I tried &lt;a href="https://support.microsoft.com/en-ca/help/314868/how-to-use-tracert-to-troubleshoot-tcp-ip-problems-in-windows" dir="ltr"&gt;tracert&lt;/a&gt;, maybe there was an issue with one of the hops requests were hitting on the way between Alvin and the client. However,  tracert came back empty-handed.&lt;/p&gt;&lt;p&gt;So, it was not my code, gRPC implementation or the network causing the delays. I was starting to get worried I am never going to figure this out.&lt;/p&gt;&lt;h3&gt;Now, which OS are we on&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;gRPC&lt;/code&gt; is widely adopted on Linux, however its Windows adoption is not even close. I decided to run the experiment that worked: I spun a Linux VM and compiled Alvin for Linux, and deployed it.  &lt;/p&gt;&lt;p dir="ltr"&gt;Lo and behold: Linux ping-pong server didn’t have the latency issues of its Windows peer, despite using my source being the same. &lt;code dir="ltr"&gt;gRPC&lt;/code&gt;’s Windows implementation had a problem.&lt;/p&gt;&lt;h3&gt;Nagle’s algorithm&lt;/h3&gt;&lt;p dir="ltr"&gt;All along, I had thought I was missing a &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; flag, now I realized it might actually be &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; that was missing a Windows flag. I searched an internal RPC library that I knew to behave well for all the &lt;a href="https://docs.microsoft.com/en-us/windows/desktop/winsock/windows-sockets-start-page-2" dir="ltr"&gt;Winsock&lt;/a&gt; flags it set. I then went ahead and added all of them to gRPC, and deployed Alvin on Windows, and that fixed Windows ping-pong server!  &lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Almost&lt;/em&gt; there: I removed the flags I added  one by one until regression returned, so that I could pin the one flag that made the difference. It was the infamous &lt;a href="https://docs.microsoft.com/en-us/windows/desktop/api/winsock/nf-winsock-setsockopt" dir="ltr"&gt;TCP_NODELAY&lt;/a&gt;, the switch for Nagle’s algorithm.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://en.wikipedia.org/wiki/Nagle%27s_algorithm" dir="ltr"&gt;Nagle’s algorithm&lt;/a&gt; tries to decrease number of packets sent over the network, by delaying message transmission until outstanding size exceeds certain number of bytes. While this can be nice for the average user, this is devastating for real-time servers, as it means OS will delay some messages, causing the latency hikes observed under low QPS. &lt;code dir="ltr"&gt;gRPC&lt;/code&gt; had this flag on for its Linux implementation for TCP sockets, but not for Windows, I have fixed that with &lt;a href="https://github.com/grpc/grpc/commit/1dce1009e67ea4b5934a61b1bcf8a217bd12cc76" dir="ltr"&gt;1dce1009&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p dir="ltr"&gt;Latency was high at low QPS due to an OS optimization. In hindsight, profile did not catch the delays because they were on the Kernel side of things, not in &lt;a href="https://blog.codinghorror.com/understanding-user-and-kernel-mode/" dir="ltr"&gt;User Mode&lt;/a&gt;. I do not know if Nagle’s algorithm could be observed through ETW captures, but that would be interesting.&lt;/p&gt;&lt;p dir="ltr"&gt;As for the &lt;a href="https://mahdytech.com/low-qps-higher-latency/#what-if" dir="ltr"&gt;localhost experiment&lt;/a&gt;, it probably did not touch actual network code, and Nagle’s algorithm was not triggered, hence latency issues went away when client called Alvin through localhost.&lt;/p&gt;&lt;p&gt;The next time you see higher latency coinciding with lower QPS, Nagle’s algorithm should be on your checklist!&lt;/p&gt;&lt;p dir="ltr"&gt;Help &lt;a href="https://github.com/aybassiouny/mahdytech" dir="ltr"&gt;improve this text&lt;/a&gt; or discuss it on &lt;a href="https://www.reddit.com/r/programming/comments/bntthh/more_is_sometimes_less_when_lower_load_can/" dir="ltr"&gt;reddit&lt;/a&gt;, &lt;a href="https://news.ycombinator.com/item?id=19894402" dir="ltr"&gt;hackernews&lt;/a&gt;.&lt;/p&gt;&lt;img src="data:image/jpeg;base64,/9j/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wgARCAAUABQDASIAAhEBAxEB/8QAGAABAQEBAQAAAAAAAAAAAAAAAAIEAQP/xAAXAQEAAwAAAAAAAAAAAAAAAAABAAID/9oADAMBAAIQAxAAAAG9OOM7deRb0CQIf//EABoQAAIDAQEAAAAAAAAAAAAAAAEDAAIREjH/2gAIAQEAAQUCDLLet9tDiqOI6r6xTTZImTZ//8QAGBEAAgMAAAAAAAAAAAAAAAAAACEBEBH/2gAIAQMBAT8BxCJr/8QAFREBAQAAAAAAAAAAAAAAAAAAESD/2gAIAQIBAT8BY//EAB4QAAIBAwUAAAAAAAAAAAAAAAABEQIDURASIUFx/9oACAEBAAY/Aq3Et9EXElOB0rIkvCOCdo9f/8QAGRABAQEBAQEAAAAAAAAAAAAAAREAMUFR/9oACAEBAAE/IQDpLlXpczHJWfcYY1QA+s5ok2+jiLO6CuV93//aAAwDAQACAAMAAAAQXwg+/8QAGREAAwADAAAAAAAAAAAAAAAAAAEREDFB/9oACAEDAQE/EIddFSrNsf/EABgRAAIDAAAAAAAAAAAAAAAAAAABEBEh/9oACAECAQE/EE1Gij//xAAdEAEBAAICAwEAAAAAAAAAAAABEQAhMWFBUXHw/9oACAEBAAE/EINR5Sum31rKmWxTqWN9mGe7wOk/TAIGwWrvrHLPSpo4rjIaBiR8XnrEDSAvWUDy7+ZqlQALn//Z" alt="Ahmed Mahdy" width="50" height="50"&gt;&lt;p dir="ltr"&gt;This is &lt;strong dir="ltr"&gt;Ahmed Mahdy&lt;/strong&gt;, and these are some of my thoughts on Cloud Computing. &lt;a href="https://twitter.com/aybassiouny" dir="ltr"&gt;Follow me on Twitter&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 12 May 2019 18:44:34 -0500</pubDate></item><item><title>f() vs f(void) in C vs C++</title><link>https://lobste.rs/s/bcohm8</link><description>&lt;p dir="ltr"&gt;
+        
+
+
+
+
+
+
+
+
+  
+
+
+&lt;time datetime="2019-05-12T13:42:00-07:00" pubdate="" data-updated="true" dir="ltr"&gt;May 12&lt;span dir="ltr"&gt;th&lt;/span&gt;, 2019&lt;/time&gt;
+        
+         | &lt;a href="http://nickdesaulniers.github.io/blog/2019/05/12/f-vs-f-void-in-c-vs-c-plus-plus/#disqus_thread" dir="ltr"&gt;Comments&lt;/a&gt;
+        
+      &lt;/p&gt;&lt;p&gt;TL;DR&lt;/p&gt;&lt;p dir="ltr"&gt;Prefer &lt;code dir="ltr"&gt;f(void)&lt;/code&gt; in C to &lt;em dir="ltr"&gt;potentially&lt;/em&gt; save a 2B instruction per function call
+when targeting x86_64 as a micro-optimization. &lt;code dir="ltr"&gt;-Wstrict-prototypes&lt;/code&gt; can help.
+Doesn’t matter for C++.&lt;/p&gt;&lt;h2&gt;The Problem&lt;/h2&gt;&lt;p dir="ltr"&gt;While messing around with some C code in
+&lt;a href="http://godbolt.org/" dir="ltr"&gt;godbolt Compiler Explorer&lt;/a&gt;,
+I kept noticing a particular funny case.  It seemed with my small test cases
+that sometimes function calls would zero out the return register before calling
+a function that took no arguments, but other times not.  Upon closer
+inspection, it seemed like a difference between function definitions,
+particularly &lt;code dir="ltr"&gt;f()&lt;/code&gt; vs &lt;code dir="ltr"&gt;f(void)&lt;/code&gt;.  For example, the following C code:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
+&lt;span dir="ltr"&gt;2&lt;/span&gt;
+&lt;span dir="ltr"&gt;3&lt;/span&gt;
+&lt;span dir="ltr"&gt;4&lt;/span&gt;
+&lt;span dir="ltr"&gt;5&lt;/span&gt;
+&lt;span dir="ltr"&gt;6&lt;/span&gt;
+&lt;span dir="ltr"&gt;7&lt;/span&gt;
+&lt;span dir="ltr"&gt;8&lt;/span&gt;
+&lt;/PRE&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;foo&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;bar&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;baz&lt;/span&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;foo&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;bar&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;would generate the following assembly:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
+&lt;span dir="ltr"&gt;2&lt;/span&gt;
+&lt;span dir="ltr"&gt;3&lt;/span&gt;
+&lt;span dir="ltr"&gt;4&lt;/span&gt;
+&lt;span dir="ltr"&gt;5&lt;/span&gt;
+&lt;span dir="ltr"&gt;6&lt;/span&gt;
+&lt;span dir="ltr"&gt;7&lt;/span&gt;
+&lt;span dir="ltr"&gt;8&lt;/span&gt;
+&lt;/PRE&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;baz:&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;pushq&lt;/span&gt; &lt;span dir="ltr"&gt;%rax&lt;/span&gt; &lt;span dir="ltr"&gt;# realign stack for callq&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;xorl&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt; &lt;span dir="ltr"&gt;# zero %al, non variadic&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;callq&lt;/span&gt; &lt;span dir="ltr"&gt;foo&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;callq&lt;/span&gt; &lt;span dir="ltr"&gt;bar&lt;/span&gt; &lt;span dir="ltr"&gt;# why you no zero %al?&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;xorl&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;popq&lt;/span&gt; &lt;span dir="ltr"&gt;%rcx&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;retq&lt;/span&gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;In particular, focus on the call the &lt;code dir="ltr"&gt;foo&lt;/code&gt; vs the call to &lt;code dir="ltr"&gt;bar&lt;/code&gt;.  &lt;code dir="ltr"&gt;foo&lt;/code&gt; is
+preceded with &lt;code dir="ltr"&gt;xorl %eax, %eax&lt;/code&gt; (X ^ X == 0, and is the shortest encoding for
+an instruction that zeroes a register on the variable length encoded x86_64,
+which is why its used a lot such as in setting the return value).  (If you’re
+curious about the pushq/popq, see
+&lt;a href="http://nickdesaulniers.github.io/blog/2014/04/18/lets-write-some-x86-64/" dir="ltr"&gt;point #1&lt;/a&gt;.)
+Now I’ve seen zeroing before (see
+&lt;a href="http://nickdesaulniers.github.io/blog/2014/04/18/lets-write-some-x86-64/" dir="ltr"&gt;point #3&lt;/a&gt;
+and remember that &lt;code dir="ltr"&gt;%al&lt;/code&gt; is the lowest byte of &lt;code dir="ltr"&gt;%eax&lt;/code&gt; and &lt;code dir="ltr"&gt;%rax&lt;/code&gt;), but if it was
+done for the call to &lt;code dir="ltr"&gt;foo&lt;/code&gt;, then why was it not additionally done for the call
+to &lt;code dir="ltr"&gt;bar&lt;/code&gt;? &lt;code dir="ltr"&gt;%eax&lt;/code&gt; being x86_64’s return register for the C ABI should be treated
+as call clobbered.  So if you set it, then made a function call that may have
+clobbered it (and you can’t deduce otherwise), then wouldn’t you have to reset
+it to make an additional function call?&lt;/p&gt;&lt;p dir="ltr"&gt;Let’s look at a few more cases and see if we can find the pattern.  Let’s take
+a look at 2 sequential calls to &lt;code dir="ltr"&gt;foo&lt;/code&gt; vs 2 sequential calls to &lt;code dir="ltr"&gt;bar&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
+&lt;span dir="ltr"&gt;2&lt;/span&gt;
+&lt;span dir="ltr"&gt;3&lt;/span&gt;
+&lt;span dir="ltr"&gt;4&lt;/span&gt;
+&lt;span dir="ltr"&gt;5&lt;/span&gt;
+&lt;span dir="ltr"&gt;6&lt;/span&gt;
+&lt;/PRE&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;foo&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;quux&lt;/span&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;foo&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt; &lt;span dir="ltr"&gt;// notice %eax is always zeroed&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;foo&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt; &lt;span dir="ltr"&gt;// notice %eax is always zeroed&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
+&lt;span dir="ltr"&gt;2&lt;/span&gt;
+&lt;span dir="ltr"&gt;3&lt;/span&gt;
+&lt;span dir="ltr"&gt;4&lt;/span&gt;
+&lt;span dir="ltr"&gt;5&lt;/span&gt;
+&lt;span dir="ltr"&gt;6&lt;/span&gt;
+&lt;span dir="ltr"&gt;7&lt;/span&gt;
+&lt;span dir="ltr"&gt;8&lt;/span&gt;
+&lt;span dir="ltr"&gt;9&lt;/span&gt;
+&lt;/PRE&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;quux:&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;pushq&lt;/span&gt; &lt;span dir="ltr"&gt;%rax&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;xorl&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;callq&lt;/span&gt; &lt;span dir="ltr"&gt;foo&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;xorl&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;callq&lt;/span&gt; &lt;span dir="ltr"&gt;foo&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;xorl&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;popq&lt;/span&gt; &lt;span dir="ltr"&gt;%rcx&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;retq&lt;/span&gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
+&lt;span dir="ltr"&gt;2&lt;/span&gt;
+&lt;span dir="ltr"&gt;3&lt;/span&gt;
+&lt;span dir="ltr"&gt;4&lt;/span&gt;
+&lt;span dir="ltr"&gt;5&lt;/span&gt;
+&lt;span dir="ltr"&gt;6&lt;/span&gt;
+&lt;/PRE&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;bar&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;quuz&lt;/span&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;bar&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt; &lt;span dir="ltr"&gt;// notice %eax is not zeroed&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;bar&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt; &lt;span dir="ltr"&gt;// notice %eax is not zeroed&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
+&lt;span dir="ltr"&gt;2&lt;/span&gt;
+&lt;span dir="ltr"&gt;3&lt;/span&gt;
+&lt;span dir="ltr"&gt;4&lt;/span&gt;
+&lt;span dir="ltr"&gt;5&lt;/span&gt;
+&lt;span dir="ltr"&gt;6&lt;/span&gt;
+&lt;span dir="ltr"&gt;7&lt;/span&gt;
+&lt;/PRE&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;quuz:&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;pushq&lt;/span&gt; &lt;span dir="ltr"&gt;%rax&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;callq&lt;/span&gt; &lt;span dir="ltr"&gt;bar&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;callq&lt;/span&gt; &lt;span dir="ltr"&gt;bar&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;xorl&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;popq&lt;/span&gt; &lt;span dir="ltr"&gt;%rcx&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;retq&lt;/span&gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;So it should be pretty clear now that the pattern is &lt;code dir="ltr"&gt;f(void)&lt;/code&gt; does not
+generate the &lt;code dir="ltr"&gt;xorl %eax, %eax&lt;/code&gt;, while &lt;code dir="ltr"&gt;f()&lt;/code&gt; does.  What gives, aren’t they
+declaring &lt;code dir="ltr"&gt;f&lt;/code&gt; the same; a function that takes no parameters?  Unfortunately, in
+C the answer is no, and C and C++ differ here.&lt;/p&gt;&lt;h2&gt;An explanation&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;f()&lt;/code&gt; is not necessarily “&lt;code dir="ltr"&gt;f&lt;/code&gt; takes no arguments” but more of “I’m not telling
+you what arguments &lt;code dir="ltr"&gt;f&lt;/code&gt; takes (but it’s not variadic).”  Consider this perfectly
+legal C and C++ code:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
+&lt;span dir="ltr"&gt;2&lt;/span&gt;
+&lt;/PRE&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;foo&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;foo&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;x&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt; &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;42&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;It seems that C++ inherited this from C, but only in C++ does &lt;code dir="ltr"&gt;f()&lt;/code&gt; seems to
+have the semantics of “&lt;code dir="ltr"&gt;f&lt;/code&gt; takes no arguments,” as the previous examples all no
+longer have the &lt;code dir="ltr"&gt;xorl %eax, %eax&lt;/code&gt;.  Same for &lt;code dir="ltr"&gt;f(void)&lt;/code&gt; in C or C++. That’s
+because &lt;code dir="ltr"&gt;foo()&lt;/code&gt; and &lt;code dir="ltr"&gt;foo(int)&lt;/code&gt; are two different function in C++ thanks to
+operator overloading (thanks reddit user /u/OldWolf2). Also, it seems that C
+supported this difference for backwards compatibility w/ K &amp;amp; R C.&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
+&lt;span dir="ltr"&gt;2&lt;/span&gt;
+&lt;/PRE&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;bar&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;bar&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;x&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt; &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;x&lt;/span&gt; &lt;span dir="ltr"&gt;+&lt;/span&gt; &lt;span dir="ltr"&gt;42&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Is an error in C, but in C++ thanks to operator overloading these are two
+separate functions! (&lt;code dir="ltr"&gt;_Z3barv&lt;/code&gt; vs &lt;code dir="ltr"&gt;_Z3bari&lt;/code&gt;). (Thanks HN user
+&lt;a href="https://news.ycombinator.com/item?id=19895079" dir="ltr"&gt;pdpi&lt;/a&gt;, for helping me
+understand this. Cunningham’s Law ftw.)&lt;/p&gt;&lt;p dir="ltr"&gt;Needless to say, If you write code like that where your function declarations
+and definitions do not match, you will be put in prison.
+&lt;a href="https://youtu.be/D2ydY5sBnIg?t=97" dir="ltr"&gt;Do not pass go, do not collect $200&lt;/a&gt;).
+&lt;a href="https://clang.llvm.org/docs/ControlFlowIntegrity.html" dir="ltr"&gt;Control flow integrity&lt;/a&gt;
+analysis is particularly sensitive to these cases, manifesting in runtime
+crashes.&lt;/p&gt;&lt;h2&gt;What could a sufficiently smart compiler do to help?&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;-Wall&lt;/code&gt; and &lt;code dir="ltr"&gt;-Wextra&lt;/code&gt; will just flag the &lt;code dir="ltr"&gt;-Wunused-parameter&lt;/code&gt;.  We need the
+help of &lt;code dir="ltr"&gt;-Wmissing-prototypes&lt;/code&gt; to flag the mismatch between declaration and
+definition. (An aside; I had a hard time remembering which was the declaration
+and which was the definition when learning C++.  The mnemonic I came up with
+and still use today is: think of definition as in muscle definition; where the
+meat of the function is.  Declarations are just hot air.)  It’s not until we
+get to &lt;code dir="ltr"&gt;-Wstrict-prototypes&lt;/code&gt; do we get a warning that we should use &lt;code dir="ltr"&gt;f(void)&lt;/code&gt;.
+&lt;code dir="ltr"&gt;-Wstrict-prototypes&lt;/code&gt; is kind of a stylistic warning, so that’s why it’s not
+part of &lt;code dir="ltr"&gt;-Wall&lt;/code&gt; or &lt;code dir="ltr"&gt;-Wextra&lt;/code&gt;.  Stylistic warnings are in bikeshed territory
+(*cough* &lt;code dir="ltr"&gt;-Wparentheses&lt;/code&gt; *cough*).&lt;/p&gt;&lt;p dir="ltr"&gt;One issue with C and C++’s style of code sharing and encapsulation via headers
+is that declarations often aren’t enough for the powerful analysis techniques
+of production optimizing compilers (whether or not a pointer
+&lt;a href="https://jonasdevlieghere.com/escape-analysis-capture-tracking-in-llvm/" dir="ltr"&gt;“escapes”&lt;/a&gt;
+is a big one that comes to mind).  Let’s see if a “sufficiently smart compiler”
+could notice when we’ve declared &lt;code dir="ltr"&gt;f()&lt;/code&gt;, but via observation of the definition
+of &lt;code dir="ltr"&gt;f()&lt;/code&gt; noticed that we really only needed the semantics of &lt;code dir="ltr"&gt;f(void)&lt;/code&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
+&lt;span dir="ltr"&gt;2&lt;/span&gt;
+&lt;span dir="ltr"&gt;3&lt;/span&gt;
+&lt;span dir="ltr"&gt;4&lt;/span&gt;
+&lt;span dir="ltr"&gt;5&lt;/span&gt;
+&lt;span dir="ltr"&gt;6&lt;/span&gt;
+&lt;span dir="ltr"&gt;7&lt;/span&gt;
+&lt;span dir="ltr"&gt;8&lt;/span&gt;
+&lt;span dir="ltr"&gt;9&lt;/span&gt;
+&lt;span dir="ltr"&gt;10&lt;/span&gt;
+&lt;span dir="ltr"&gt;11&lt;/span&gt;
+&lt;/PRE&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;puts&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;char&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;__attribute__&lt;/span&gt;&lt;span dir="ltr"&gt;((&lt;/span&gt;&lt;span dir="ltr"&gt;noinline&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt; &lt;span dir="ltr"&gt;foo2&lt;/span&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;puts&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"hello"&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;quacks&lt;/span&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;foo2&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;foo2&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
+&lt;span dir="ltr"&gt;2&lt;/span&gt;
+&lt;span dir="ltr"&gt;3&lt;/span&gt;
+&lt;span dir="ltr"&gt;4&lt;/span&gt;
+&lt;span dir="ltr"&gt;5&lt;/span&gt;
+&lt;span dir="ltr"&gt;6&lt;/span&gt;
+&lt;span dir="ltr"&gt;7&lt;/span&gt;
+&lt;/PRE&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;quacks:&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;pushq&lt;/span&gt; &lt;span dir="ltr"&gt;%rax&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;callq&lt;/span&gt; &lt;span dir="ltr"&gt;foo2&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;callq&lt;/span&gt; &lt;span dir="ltr"&gt;foo2&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;xorl&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;popq&lt;/span&gt; &lt;span dir="ltr"&gt;%rcx&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;retq&lt;/span&gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;A ha! So by having the full definition of &lt;code dir="ltr"&gt;foo2&lt;/code&gt; in this case in the same
+translation unit, Clang was able to deduce that &lt;code dir="ltr"&gt;foo2&lt;/code&gt; didn’t actually need the
+semantics of &lt;code dir="ltr"&gt;f()&lt;/code&gt;, so it could skip the &lt;code dir="ltr"&gt;xorl %eax, %eax&lt;/code&gt; we’d seen for &lt;code dir="ltr"&gt;f()&lt;/code&gt;
+style definitions earlier.  If we change &lt;code dir="ltr"&gt;foo2&lt;/code&gt; to a declaration (such as would
+be the case if it was defined in an &lt;code dir="ltr"&gt;external&lt;/code&gt; translation unit, and its
+declaration included via header), then Clang can no longer observe whether
+&lt;code dir="ltr"&gt;foo2&lt;/code&gt; definition differs or not from the declaration.&lt;/p&gt;&lt;p dir="ltr"&gt;So Clang can potentially save you a single instruction (&lt;code dir="ltr"&gt;xorl %eax, %eax&lt;/code&gt;)
+whose encoding is only 2B, per function call to functions declared in the style
+&lt;code dir="ltr"&gt;f()&lt;/code&gt;, but only IF the definition is in the same translation unit and doesn’t
+differ from the declaration, and you happen to be targeting x86_64. *deflated
+whew* But usually it can’t because it’s only been provided the declaration via
+header.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p dir="ltr"&gt;I certainly think &lt;code dir="ltr"&gt;f()&lt;/code&gt; is &lt;em dir="ltr"&gt;prettier&lt;/em&gt; than &lt;code dir="ltr"&gt;f(void)&lt;/code&gt; (so C++ got this right),
+but pretty code may not always be the fastest and it’s not always
+straightforward when to prefer one over the other.&lt;/p&gt;&lt;p dir="ltr"&gt;So it seems that &lt;code dir="ltr"&gt;f()&lt;/code&gt; is ok for strictly C++ code.  For C or mixed C and C++,
+&lt;code dir="ltr"&gt;f(void)&lt;/code&gt; might be better.&lt;/p&gt;</description><pubDate>Sun, 12 May 2019 21:29:26 -0500</pubDate></item><item><title>Inko 0.4.0 released</title><link>https://lobste.rs/s/zdgqlq</link><description>&lt;p dir="ltr"&gt;
 Published on:
 &lt;time datetime="2019-05-10T22:10:13+00:00" dir="ltr"&gt;
 May 10, 2019
@@ -2272,225 +2490,7 @@ Rpath on Windows: &lt;i dir="ltr"&gt;achieved&lt;/i&gt;.&lt;br dir="ltr"&gt;
 Is this practical?&lt;/h2&gt;&lt;div&gt;
 It's hard to say. I have not tested this on anything except toy programs but it does seem to work. It's unclear if this was the intended behaviour, but Microsoft does take backwards compatibility fairly seriously so one would expect it to keep working. The bigger problem is that the VS toolchain creates many other files, such as pdb debug info files, that probably don't like being renamed like this. These files are mostly undocumented so it's difficult to estimate how much work it would take to make binary hotpatching work reliably.&lt;/div&gt;&lt;div&gt;
 The best solution would be for Microsoft to add a new linker argument to their toolchain that would write dependency info to the files as absolute paths and to provide a program to rewrite those entries as discussed above. Apple already provides all of this functionality in their core toolchain. It would be nice for MS to do the same. This would simplify cross platform development because it would make all the major platforms behave in the same way.&lt;/div&gt;&lt;div dir="ltr"&gt;
-It would be nice to get the same tools for Linux, too, but it's not &lt;i dir="ltr"&gt;that&lt;/i&gt; urgent since build systems already can do this reliably on their own.&lt;/div&gt;</description><pubDate>Sun, 12 May 2019 21:30:32 -0500</pubDate></item><item><title>f() vs f(void) in C vs C++</title><link>https://lobste.rs/s/bcohm8</link><description>&lt;p dir="ltr"&gt;
-        
-
-
-
-
-
-
-
-
-  
-
-
-&lt;time datetime="2019-05-12T13:42:00-07:00" pubdate="" data-updated="true" dir="ltr"&gt;May 12&lt;span dir="ltr"&gt;th&lt;/span&gt;, 2019&lt;/time&gt;
-        
-         | &lt;a href="http://nickdesaulniers.github.io/blog/2019/05/12/f-vs-f-void-in-c-vs-c-plus-plus/#disqus_thread" dir="ltr"&gt;Comments&lt;/a&gt;
-        
-      &lt;/p&gt;&lt;p&gt;TL;DR&lt;/p&gt;&lt;p dir="ltr"&gt;Prefer &lt;code dir="ltr"&gt;f(void)&lt;/code&gt; in C to &lt;em dir="ltr"&gt;potentially&lt;/em&gt; save a 2B instruction per function call
-when targeting x86_64 as a micro-optimization. &lt;code dir="ltr"&gt;-Wstrict-prototypes&lt;/code&gt; can help.
-Doesn’t matter for C++.&lt;/p&gt;&lt;h2&gt;The Problem&lt;/h2&gt;&lt;p dir="ltr"&gt;While messing around with some C code in
-&lt;a href="http://godbolt.org/" dir="ltr"&gt;godbolt Compiler Explorer&lt;/a&gt;,
-I kept noticing a particular funny case.  It seemed with my small test cases
-that sometimes function calls would zero out the return register before calling
-a function that took no arguments, but other times not.  Upon closer
-inspection, it seemed like a difference between function definitions,
-particularly &lt;code dir="ltr"&gt;f()&lt;/code&gt; vs &lt;code dir="ltr"&gt;f(void)&lt;/code&gt;.  For example, the following C code:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
-&lt;span dir="ltr"&gt;2&lt;/span&gt;
-&lt;span dir="ltr"&gt;3&lt;/span&gt;
-&lt;span dir="ltr"&gt;4&lt;/span&gt;
-&lt;span dir="ltr"&gt;5&lt;/span&gt;
-&lt;span dir="ltr"&gt;6&lt;/span&gt;
-&lt;span dir="ltr"&gt;7&lt;/span&gt;
-&lt;span dir="ltr"&gt;8&lt;/span&gt;
-&lt;/PRE&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;foo&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;bar&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;baz&lt;/span&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;foo&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;bar&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;would generate the following assembly:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
-&lt;span dir="ltr"&gt;2&lt;/span&gt;
-&lt;span dir="ltr"&gt;3&lt;/span&gt;
-&lt;span dir="ltr"&gt;4&lt;/span&gt;
-&lt;span dir="ltr"&gt;5&lt;/span&gt;
-&lt;span dir="ltr"&gt;6&lt;/span&gt;
-&lt;span dir="ltr"&gt;7&lt;/span&gt;
-&lt;span dir="ltr"&gt;8&lt;/span&gt;
-&lt;/PRE&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;baz:&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;pushq&lt;/span&gt; &lt;span dir="ltr"&gt;%rax&lt;/span&gt; &lt;span dir="ltr"&gt;# realign stack for callq&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;xorl&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt; &lt;span dir="ltr"&gt;# zero %al, non variadic&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;callq&lt;/span&gt; &lt;span dir="ltr"&gt;foo&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;callq&lt;/span&gt; &lt;span dir="ltr"&gt;bar&lt;/span&gt; &lt;span dir="ltr"&gt;# why you no zero %al?&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;xorl&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;popq&lt;/span&gt; &lt;span dir="ltr"&gt;%rcx&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;retq&lt;/span&gt;
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;In particular, focus on the call the &lt;code dir="ltr"&gt;foo&lt;/code&gt; vs the call to &lt;code dir="ltr"&gt;bar&lt;/code&gt;.  &lt;code dir="ltr"&gt;foo&lt;/code&gt; is
-preceded with &lt;code dir="ltr"&gt;xorl %eax, %eax&lt;/code&gt; (X ^ X == 0, and is the shortest encoding for
-an instruction that zeroes a register on the variable length encoded x86_64,
-which is why its used a lot such as in setting the return value).  (If you’re
-curious about the pushq/popq, see
-&lt;a href="http://nickdesaulniers.github.io/blog/2014/04/18/lets-write-some-x86-64/" dir="ltr"&gt;point #1&lt;/a&gt;.)
-Now I’ve seen zeroing before (see
-&lt;a href="http://nickdesaulniers.github.io/blog/2014/04/18/lets-write-some-x86-64/" dir="ltr"&gt;point #3&lt;/a&gt;
-and remember that &lt;code dir="ltr"&gt;%al&lt;/code&gt; is the lowest byte of &lt;code dir="ltr"&gt;%eax&lt;/code&gt; and &lt;code dir="ltr"&gt;%rax&lt;/code&gt;), but if it was
-done for the call to &lt;code dir="ltr"&gt;foo&lt;/code&gt;, then why was it not additionally done for the call
-to &lt;code dir="ltr"&gt;bar&lt;/code&gt;? &lt;code dir="ltr"&gt;%eax&lt;/code&gt; being x86_64’s return register for the C ABI should be treated
-as call clobbered.  So if you set it, then made a function call that may have
-clobbered it (and you can’t deduce otherwise), then wouldn’t you have to reset
-it to make an additional function call?&lt;/p&gt;&lt;p dir="ltr"&gt;Let’s look at a few more cases and see if we can find the pattern.  Let’s take
-a look at 2 sequential calls to &lt;code dir="ltr"&gt;foo&lt;/code&gt; vs 2 sequential calls to &lt;code dir="ltr"&gt;bar&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
-&lt;span dir="ltr"&gt;2&lt;/span&gt;
-&lt;span dir="ltr"&gt;3&lt;/span&gt;
-&lt;span dir="ltr"&gt;4&lt;/span&gt;
-&lt;span dir="ltr"&gt;5&lt;/span&gt;
-&lt;span dir="ltr"&gt;6&lt;/span&gt;
-&lt;/PRE&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;foo&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;quux&lt;/span&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;foo&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt; &lt;span dir="ltr"&gt;// notice %eax is always zeroed&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;foo&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt; &lt;span dir="ltr"&gt;// notice %eax is always zeroed&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
-&lt;span dir="ltr"&gt;2&lt;/span&gt;
-&lt;span dir="ltr"&gt;3&lt;/span&gt;
-&lt;span dir="ltr"&gt;4&lt;/span&gt;
-&lt;span dir="ltr"&gt;5&lt;/span&gt;
-&lt;span dir="ltr"&gt;6&lt;/span&gt;
-&lt;span dir="ltr"&gt;7&lt;/span&gt;
-&lt;span dir="ltr"&gt;8&lt;/span&gt;
-&lt;span dir="ltr"&gt;9&lt;/span&gt;
-&lt;/PRE&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;quux:&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;pushq&lt;/span&gt; &lt;span dir="ltr"&gt;%rax&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;xorl&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;callq&lt;/span&gt; &lt;span dir="ltr"&gt;foo&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;xorl&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;callq&lt;/span&gt; &lt;span dir="ltr"&gt;foo&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;xorl&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;popq&lt;/span&gt; &lt;span dir="ltr"&gt;%rcx&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;retq&lt;/span&gt;
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
-&lt;span dir="ltr"&gt;2&lt;/span&gt;
-&lt;span dir="ltr"&gt;3&lt;/span&gt;
-&lt;span dir="ltr"&gt;4&lt;/span&gt;
-&lt;span dir="ltr"&gt;5&lt;/span&gt;
-&lt;span dir="ltr"&gt;6&lt;/span&gt;
-&lt;/PRE&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;bar&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;quuz&lt;/span&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;bar&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt; &lt;span dir="ltr"&gt;// notice %eax is not zeroed&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;bar&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt; &lt;span dir="ltr"&gt;// notice %eax is not zeroed&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
-&lt;span dir="ltr"&gt;2&lt;/span&gt;
-&lt;span dir="ltr"&gt;3&lt;/span&gt;
-&lt;span dir="ltr"&gt;4&lt;/span&gt;
-&lt;span dir="ltr"&gt;5&lt;/span&gt;
-&lt;span dir="ltr"&gt;6&lt;/span&gt;
-&lt;span dir="ltr"&gt;7&lt;/span&gt;
-&lt;/PRE&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;quuz:&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;pushq&lt;/span&gt; &lt;span dir="ltr"&gt;%rax&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;callq&lt;/span&gt; &lt;span dir="ltr"&gt;bar&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;callq&lt;/span&gt; &lt;span dir="ltr"&gt;bar&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;xorl&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;popq&lt;/span&gt; &lt;span dir="ltr"&gt;%rcx&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;retq&lt;/span&gt;
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;So it should be pretty clear now that the pattern is &lt;code dir="ltr"&gt;f(void)&lt;/code&gt; does not
-generate the &lt;code dir="ltr"&gt;xorl %eax, %eax&lt;/code&gt;, while &lt;code dir="ltr"&gt;f()&lt;/code&gt; does.  What gives, aren’t they
-declaring &lt;code dir="ltr"&gt;f&lt;/code&gt; the same; a function that takes no parameters?  Unfortunately, in
-C the answer is no, and C and C++ differ here.&lt;/p&gt;&lt;h2&gt;An explanation&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;f()&lt;/code&gt; is not necessarily “&lt;code dir="ltr"&gt;f&lt;/code&gt; takes no arguments” but more of “I’m not telling
-you what arguments &lt;code dir="ltr"&gt;f&lt;/code&gt; takes (but it’s not variadic).”  Consider this perfectly
-legal C and C++ code:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
-&lt;span dir="ltr"&gt;2&lt;/span&gt;
-&lt;/PRE&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;foo&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;foo&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;x&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt; &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;42&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;It seems that C++ inherited this from C, but only in C++ does &lt;code dir="ltr"&gt;f()&lt;/code&gt; seems to
-have the semantics of “&lt;code dir="ltr"&gt;f&lt;/code&gt; takes no arguments,” as the previous examples all no
-longer have the &lt;code dir="ltr"&gt;xorl %eax, %eax&lt;/code&gt;.  Same for &lt;code dir="ltr"&gt;f(void)&lt;/code&gt; in C or C++. That’s
-because &lt;code dir="ltr"&gt;foo()&lt;/code&gt; and &lt;code dir="ltr"&gt;foo(int)&lt;/code&gt; are two different function in C++ thanks to
-operator overloading (thanks reddit user /u/OldWolf2). Also, it seems that C
-supported this difference for backwards compatibility w/ K &amp;amp; R C.&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
-&lt;span dir="ltr"&gt;2&lt;/span&gt;
-&lt;/PRE&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;bar&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;bar&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;x&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt; &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;x&lt;/span&gt; &lt;span dir="ltr"&gt;+&lt;/span&gt; &lt;span dir="ltr"&gt;42&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Is an error in C, but in C++ thanks to operator overloading these are two
-separate functions! (&lt;code dir="ltr"&gt;_Z3barv&lt;/code&gt; vs &lt;code dir="ltr"&gt;_Z3bari&lt;/code&gt;). (Thanks HN user
-&lt;a href="https://news.ycombinator.com/item?id=19895079" dir="ltr"&gt;pdpi&lt;/a&gt;, for helping me
-understand this. Cunningham’s Law ftw.)&lt;/p&gt;&lt;p dir="ltr"&gt;Needless to say, If you write code like that where your function declarations
-and definitions do not match, you will be put in prison.
-&lt;a href="https://youtu.be/D2ydY5sBnIg?t=97" dir="ltr"&gt;Do not pass go, do not collect $200&lt;/a&gt;).
-&lt;a href="https://clang.llvm.org/docs/ControlFlowIntegrity.html" dir="ltr"&gt;Control flow integrity&lt;/a&gt;
-analysis is particularly sensitive to these cases, manifesting in runtime
-crashes.&lt;/p&gt;&lt;h2&gt;What could a sufficiently smart compiler do to help?&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;-Wall&lt;/code&gt; and &lt;code dir="ltr"&gt;-Wextra&lt;/code&gt; will just flag the &lt;code dir="ltr"&gt;-Wunused-parameter&lt;/code&gt;.  We need the
-help of &lt;code dir="ltr"&gt;-Wmissing-prototypes&lt;/code&gt; to flag the mismatch between declaration and
-definition. (An aside; I had a hard time remembering which was the declaration
-and which was the definition when learning C++.  The mnemonic I came up with
-and still use today is: think of definition as in muscle definition; where the
-meat of the function is.  Declarations are just hot air.)  It’s not until we
-get to &lt;code dir="ltr"&gt;-Wstrict-prototypes&lt;/code&gt; do we get a warning that we should use &lt;code dir="ltr"&gt;f(void)&lt;/code&gt;.
-&lt;code dir="ltr"&gt;-Wstrict-prototypes&lt;/code&gt; is kind of a stylistic warning, so that’s why it’s not
-part of &lt;code dir="ltr"&gt;-Wall&lt;/code&gt; or &lt;code dir="ltr"&gt;-Wextra&lt;/code&gt;.  Stylistic warnings are in bikeshed territory
-(*cough* &lt;code dir="ltr"&gt;-Wparentheses&lt;/code&gt; *cough*).&lt;/p&gt;&lt;p dir="ltr"&gt;One issue with C and C++’s style of code sharing and encapsulation via headers
-is that declarations often aren’t enough for the powerful analysis techniques
-of production optimizing compilers (whether or not a pointer
-&lt;a href="https://jonasdevlieghere.com/escape-analysis-capture-tracking-in-llvm/" dir="ltr"&gt;“escapes”&lt;/a&gt;
-is a big one that comes to mind).  Let’s see if a “sufficiently smart compiler”
-could notice when we’ve declared &lt;code dir="ltr"&gt;f()&lt;/code&gt;, but via observation of the definition
-of &lt;code dir="ltr"&gt;f()&lt;/code&gt; noticed that we really only needed the semantics of &lt;code dir="ltr"&gt;f(void)&lt;/code&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
-&lt;span dir="ltr"&gt;2&lt;/span&gt;
-&lt;span dir="ltr"&gt;3&lt;/span&gt;
-&lt;span dir="ltr"&gt;4&lt;/span&gt;
-&lt;span dir="ltr"&gt;5&lt;/span&gt;
-&lt;span dir="ltr"&gt;6&lt;/span&gt;
-&lt;span dir="ltr"&gt;7&lt;/span&gt;
-&lt;span dir="ltr"&gt;8&lt;/span&gt;
-&lt;span dir="ltr"&gt;9&lt;/span&gt;
-&lt;span dir="ltr"&gt;10&lt;/span&gt;
-&lt;span dir="ltr"&gt;11&lt;/span&gt;
-&lt;/PRE&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;puts&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;char&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;__attribute__&lt;/span&gt;&lt;span dir="ltr"&gt;((&lt;/span&gt;&lt;span dir="ltr"&gt;noinline&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt; &lt;span dir="ltr"&gt;foo2&lt;/span&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;puts&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"hello"&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;quacks&lt;/span&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;foo2&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;foo2&lt;/span&gt;&lt;span dir="ltr"&gt;();&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
-&lt;span dir="ltr"&gt;2&lt;/span&gt;
-&lt;span dir="ltr"&gt;3&lt;/span&gt;
-&lt;span dir="ltr"&gt;4&lt;/span&gt;
-&lt;span dir="ltr"&gt;5&lt;/span&gt;
-&lt;span dir="ltr"&gt;6&lt;/span&gt;
-&lt;span dir="ltr"&gt;7&lt;/span&gt;
-&lt;/PRE&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;quacks:&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;pushq&lt;/span&gt; &lt;span dir="ltr"&gt;%rax&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;callq&lt;/span&gt; &lt;span dir="ltr"&gt;foo2&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;callq&lt;/span&gt; &lt;span dir="ltr"&gt;foo2&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;xorl&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;%eax&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;popq&lt;/span&gt; &lt;span dir="ltr"&gt;%rcx&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;retq&lt;/span&gt;
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;A ha! So by having the full definition of &lt;code dir="ltr"&gt;foo2&lt;/code&gt; in this case in the same
-translation unit, Clang was able to deduce that &lt;code dir="ltr"&gt;foo2&lt;/code&gt; didn’t actually need the
-semantics of &lt;code dir="ltr"&gt;f()&lt;/code&gt;, so it could skip the &lt;code dir="ltr"&gt;xorl %eax, %eax&lt;/code&gt; we’d seen for &lt;code dir="ltr"&gt;f()&lt;/code&gt;
-style definitions earlier.  If we change &lt;code dir="ltr"&gt;foo2&lt;/code&gt; to a declaration (such as would
-be the case if it was defined in an &lt;code dir="ltr"&gt;external&lt;/code&gt; translation unit, and its
-declaration included via header), then Clang can no longer observe whether
-&lt;code dir="ltr"&gt;foo2&lt;/code&gt; definition differs or not from the declaration.&lt;/p&gt;&lt;p dir="ltr"&gt;So Clang can potentially save you a single instruction (&lt;code dir="ltr"&gt;xorl %eax, %eax&lt;/code&gt;)
-whose encoding is only 2B, per function call to functions declared in the style
-&lt;code dir="ltr"&gt;f()&lt;/code&gt;, but only IF the definition is in the same translation unit and doesn’t
-differ from the declaration, and you happen to be targeting x86_64. *deflated
-whew* But usually it can’t because it’s only been provided the declaration via
-header.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p dir="ltr"&gt;I certainly think &lt;code dir="ltr"&gt;f()&lt;/code&gt; is &lt;em dir="ltr"&gt;prettier&lt;/em&gt; than &lt;code dir="ltr"&gt;f(void)&lt;/code&gt; (so C++ got this right),
-but pretty code may not always be the fastest and it’s not always
-straightforward when to prefer one over the other.&lt;/p&gt;&lt;p dir="ltr"&gt;So it seems that &lt;code dir="ltr"&gt;f()&lt;/code&gt; is ok for strictly C++ code.  For C or mixed C and C++,
-&lt;code dir="ltr"&gt;f(void)&lt;/code&gt; might be better.&lt;/p&gt;</description><pubDate>Sun, 12 May 2019 21:29:26 -0500</pubDate></item><item><title>Derive yourself a Kalman filter</title><link>https://lobste.rs/s/qmeejz</link><description>&lt;p dir="ltr"&gt;If you have already tried to understand &lt;a href="https://en.wikipedia.org/wiki/Kalman_filter" dir="ltr"&gt;Kalman filters&lt;/a&gt;, you may very likely have found yourself dumbfounded, as I was when I did. Yet Kalman filters are actually quite simple. In this post, I will try to explain them as I would have liked them to be explained to me. What follows is a quite personal take on them and may hence fail to use the usual vocabulary of the field, or lack exhaustiveness, sorry about that.&lt;/p&gt;&lt;h2&gt;Introduction&lt;/h2&gt;&lt;p&gt;The classical example of the use of a Kalman filter is the following. Say you want to program a remote piloting interface for a small robot. This robot is moving around and we want to track its position.
+It would be nice to get the same tools for Linux, too, but it's not &lt;i dir="ltr"&gt;that&lt;/i&gt; urgent since build systems already can do this reliably on their own.&lt;/div&gt;</description><pubDate>Sun, 12 May 2019 21:30:32 -0500</pubDate></item><item><title>Derive yourself a Kalman filter</title><link>https://lobste.rs/s/qmeejz</link><description>&lt;p dir="ltr"&gt;If you have already tried to understand &lt;a href="https://en.wikipedia.org/wiki/Kalman_filter" dir="ltr"&gt;Kalman filters&lt;/a&gt;, you may very likely have found yourself dumbfounded, as I was when I did. Yet Kalman filters are actually quite simple. In this post, I will try to explain them as I would have liked them to be explained to me. What follows is a quite personal take on them and may hence fail to use the usual vocabulary of the field, or lack exhaustiveness, sorry about that.&lt;/p&gt;&lt;h2&gt;Introduction&lt;/h2&gt;&lt;p&gt;The classical example of the use of a Kalman filter is the following. Say you want to program a remote piloting interface for a small robot. This robot is moving around and we want to track its position.
 To track the position of this robot we have two possible sources of information:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;We have access to some continuous measurement of the position of the robot (say GPS)&lt;/LI&gt;&lt;LI&gt;We also know the starting position of the robot and the movements that should have been done so far ("We have commanded the wheels to move &lt;em dir="ltr"&gt;x&lt;/em&gt; centimeters in such or such direction."). From this two things, we can compute the position where the robot should currently stand.&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;Now this two sources of information may disagree, and we are left with the question of how to merge them into one. One may wish to simply average all the estimators of the position we have access to, but a more rigorous analysis is possible.&lt;/p&gt;&lt;h2&gt;Formal setting&lt;/h2&gt;&lt;p&gt;Lets consider a dynamical system with state $x_{i}$ evolving in discrete steps, and that at each step, we can get some measure $y_{i}$ of the state.
 Then Kalman filters are an algorithm allowing you estimate the state $x_n$ of your system at step $n$, given measurements $y_1$ ... $y_n$, provided that your system follows the following constraints.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;em dir="ltr"&gt;Affine system evolution + Gaussian noise&lt;/em&gt;:
 $$x_{n+1} = F_{n+1} \cdot x_{n} + u_n + v_{n}$$
@@ -2551,7 +2551,13 @@ $$
 \Sigma_{n+1} = \Sigma_X - \Sigma_X H_{n+1}^T \left(H_{n+1}\Sigma_X H_{n+1}^T + Cov(W_n)\right)^{-1}H_{n+1}\Sigma_X
 $$&lt;/p&gt;&lt;p&gt;These formulas are the usual one of Kalman filters, and, going back to our robot example, give a rigorous way of estimating the position of our robot. If the dynamic of your system is not linear, then you can use what is called an "extended Kalman filter", which is just a fancy name for linearizing the dynamic of your system (i.e. taking $F_i$ equal to the Jacobian) and applying the usual Kalman filter.&lt;/p&gt;&lt;img src="https://ngr.yt/logo.svg" alt="Logo" height="90" width="100"&gt;</description><pubDate>Sun, 12 May 2019 17:17:56 -0500</pubDate></item><item><title>DeepCheck: A Non-intrusive Control-flow Integrity Checking based on Deep Learning</title><link>https://arxiv.org/pdf/1905.01858.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/4zy0a2/deepcheck_non_intrusive_control_flow"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 12 May 2019 13:23:27 -0500</pubDate></item><item><title>Thoughts on why CRDT didn't work out as well for collaborative editing xi-editor</title><link>https://lobste.rs/s/jembrx</link><description>&lt;form action="/prompt_dismissals/signup" accept-charset="UTF-8" method="post"&gt;&lt;button type="submit" data-ga-click="(Logged out) Sign up prompt, clicked Dismiss, text:dismiss"&gt;
               Dismiss
-            &lt;/button&gt;&lt;/form&gt;&lt;h3&gt;Join GitHub today&lt;/h3&gt;&lt;p&gt;GitHub is home to over 36 million developers working together to host and review code, manage projects, and build software together.&lt;/p&gt;</description><pubDate>Sat, 11 May 2019 10:11:59 -0500</pubDate></item><item><title>Janet 0.5.0</title><link>https://lobste.rs/s/zmri60</link><description>&lt;p dir="ltr"&gt;
+            &lt;/button&gt;&lt;/form&gt;&lt;h3&gt;Join GitHub today&lt;/h3&gt;&lt;p&gt;GitHub is home to over 36 million developers working together to host and review code, manage projects, and build software together.&lt;/p&gt;</description><pubDate>Sat, 11 May 2019 10:11:59 -0500</pubDate></item><item><title>PEG.js – Parser Generator for JavaScript</title><link>https://lobste.rs/s/ytpnqf</link><description>&lt;p&gt;PEG.js is a simple parser generator for JavaScript that produces fast
+  parsers with excellent error reporting. You can use it to process complex data
+  or computer languages and build transformers, interpreters, compilers and
+  other tools easily.&lt;/p&gt;&lt;h2&gt;Features&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;Simple and expressive grammar syntax&lt;/LI&gt;&lt;LI&gt;Integrates both lexical and syntactical analysis&lt;/LI&gt;&lt;LI&gt;Parsers have excellent error reporting out of the box&lt;/LI&gt;&lt;LI&gt;Based on &lt;a href="https://en.wikipedia.org/wiki/Parsing_expression_grammar" dir="ltr"&gt;parsing
+    expression grammar&lt;/a&gt; formalism — more powerful than traditional
+    LL(&lt;em dir="ltr"&gt;k&lt;/em&gt;) and LR(&lt;em dir="ltr"&gt;k&lt;/em&gt;) parsers&lt;/LI&gt;&lt;LI&gt;Usable &lt;a href="https://pegjs.org/online" dir="ltr"&gt;from your browser&lt;/a&gt;,
+    from the command line, or via JavaScript API&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Sun, 12 May 2019 10:28:27 -0500</pubDate></item><item><title>Janet 0.5.0</title><link>https://lobste.rs/s/zmri60</link><description>&lt;p dir="ltr"&gt;
         &lt;a data-hovercard-type="user" data-hovercard-url="/hovercards?user_id=6185660" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="https://github.com/bakpakin" dir="ltr"&gt;bakpakin&lt;/a&gt;
         released this
           &lt;relative-time datetime="2019-05-09T18:04:55Z" title="May 9, 2019, 2:04 PM EDT" dir="ltr"&gt;3 days ago3 days ago&lt;/relative-time&gt;
@@ -2787,125 +2793,4 @@ Author's Address
 
    Email: jrbarton@gmail.com
 
-&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;About&lt;/h2&gt;&lt;p&gt;At Railscamp X it became clear there is a gap in the current HTTP specification.&lt;/p&gt;&lt;p&gt;There are many ways for a developer to screw up their implementation, but no code to share the nature of the error with the end user.&lt;/p&gt;&lt;h2&gt;Building&lt;/h2&gt;&lt;p&gt;Maintain RFC in 7xx.md&lt;/p&gt;&lt;p dir="ltr"&gt;Relies on &lt;a href="https://github.com/miekg/mmark" dir="ltr"&gt;mmark&lt;/a&gt; to convert markdown to proper RFC format.&lt;/p&gt;&lt;PRE&gt;make&lt;/PRE&gt;</description><pubDate>Sun, 12 May 2019 09:10:45 -0500</pubDate></item><item><title>Why Go? – Key advantages you may have overlooked</title><link>https://lobste.rs/s/wffksu</link><description>&lt;div&gt;yourbasic.org/golang&lt;/div&gt;&lt;p&gt;Go makes it easier (than Java or Python) to write correct, clear and efficient code.&lt;/p&gt;&lt;img src="https://yourbasic.org/golang/unicorn.png" alt="Unicorn racing towards the Rainbow" width="328" height="208"&gt;&lt;p dir="ltr"&gt;Choosing a programming language isn’t easy.
-The separate features of a language may look great at first,
-but it takes &lt;em dir="ltr"&gt;time&lt;/em&gt; and &lt;em dir="ltr"&gt;experience&lt;/em&gt; to&amp;nbsp;spot the&amp;nbsp;drawbacks.&lt;/p&gt;&lt;p dir="ltr"&gt;As a CS professor and longtime Go and Java developer, I’d like to
-share some of my&amp;nbsp;thoughts and explain why I prefer &lt;strong dir="ltr"&gt;&lt;a href="https://golang.org/" dir="ltr"&gt;Go&lt;/a&gt;&lt;/strong&gt;
-to &lt;strong dir="ltr"&gt;&lt;a href="https://www.java.com/" dir="ltr"&gt;Java&lt;/a&gt;&lt;/strong&gt; or &lt;strong dir="ltr"&gt;&lt;a href="https://www.python.org/" dir="ltr"&gt;Python&lt;/a&gt;&lt;/strong&gt; –
-Go makes it much easier for me to write good&amp;nbsp;code.&lt;/p&gt;&lt;p dir="ltr"&gt;Go has been my main programming tool since&amp;nbsp;2012,
-replacing Java, which in&amp;nbsp;turn replaced C in&amp;nbsp;1998.
-I&amp;nbsp;use Python mostly for teaching.
-My journey as a pro­gram­mer started back in 1978 on
-a&amp;nbsp;&lt;a href="https://en.wikipedia.org/wiki/TI-57" dir="ltr"&gt;TI-57&lt;/a&gt; with 50&amp;nbsp;program steps and 8&amp;nbsp;registers.&lt;/p&gt;&lt;h2&gt;Minimalism&lt;/h2&gt;&lt;img src="https://yourbasic.org/golang/minimalist-field-bw.jpg" alt="Unicorn racing towards the Rainbow" width="330" height="115"&gt;&lt;p dir="ltr"&gt;Go is a &lt;strong dir="ltr"&gt;minimalist language&lt;/strong&gt;, and that’s (mostly) a&amp;nbsp;blessing.&lt;/p&gt;&lt;p dir="ltr"&gt;The formal &lt;a href="https://golang.org/ref/spec" dir="ltr"&gt;Go language specification&lt;/a&gt; is only 50&amp;nbsp;pages,
-has plenty of examples, and&amp;nbsp;is fairly easy to&amp;nbsp;read.
-A&amp;nbsp;skilled programmer could probably learn Go from the specification alone.&lt;/p&gt;&lt;p dir="ltr"&gt;The core language consists of a few &lt;strong dir="ltr"&gt;simple&lt;/strong&gt;, &lt;strong dir="ltr"&gt;&lt;a href="https://en.wikipedia.org/wiki/Orthogonality_(programming)" dir="ltr"&gt;orthogonal&lt;/a&gt;&lt;/strong&gt; features
-that can be combined in a relatively small number of ways.
-This makes it easier to learn the language, and to read and write programs.&lt;/p&gt;&lt;p dir="ltr"&gt;When you add new features to a language,
-the complexity doesn’t just add up, it often multiplies:
-language features can interact in many ways.
-This is a significant problem – language complexity affects &lt;strong dir="ltr"&gt;all developers&lt;/strong&gt;
-(not just the ones writing the&amp;nbsp;spec and implementing the compiler).&lt;/p&gt;&lt;p&gt;Here are some core Go features:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The &lt;strong dir="ltr"&gt;built-in&lt;/strong&gt; frameworks for &lt;a href="https://golang.org/doc/code.html#Testing" dir="ltr"&gt;testing&lt;/a&gt; and
-&lt;a href="https://blog.golang.org/profiling-go-programs" dir="ltr"&gt;profiling&lt;/a&gt;
-are small and easy to learn, but still fully functional.
-There are plenty of third-party add-ons, but chances are you won’t need them.&lt;/LI&gt;&lt;LI&gt;It’s possible to &lt;strong dir="ltr"&gt;&lt;a href="https://blog.golang.org/debugging-what-you-deploy" dir="ltr"&gt;debug&lt;/a&gt;&lt;/strong&gt;
-and &lt;strong dir="ltr"&gt;&lt;a href="https://blog.golang.org/profiling-go-programs" dir="ltr"&gt;profile&lt;/a&gt;&lt;/strong&gt;
-an optimized binary running in production through an&amp;nbsp;HTTP server.&lt;/LI&gt;&lt;LI&gt;Go has &lt;a href="https://blog.golang.org/godoc-documenting-go-code" dir="ltr"&gt;automatically generated documentation&lt;/a&gt;
-with &lt;a href="https://blog.golang.org/examples" dir="ltr"&gt;testable examples&lt;/a&gt;.
-Once again, the &lt;strong dir="ltr"&gt;interface is minimal&lt;/strong&gt;, and there is very little to&amp;nbsp;learn.&lt;/LI&gt;&lt;LI&gt;Go is &lt;strong dir="ltr"&gt;strongly&lt;/strong&gt; and &lt;strong dir="ltr"&gt;statically&lt;/strong&gt; typed with
-&lt;strong dir="ltr"&gt;&lt;a href="https://yourbasic.org/golang/conversions/" dir="ltr"&gt;no implicit conversions&lt;/a&gt;&lt;/strong&gt;,
-but the syntactic overhead is still surprisingly small.
-This is achieved by simple &lt;a href="https://tour.golang.org/basics/14" dir="ltr"&gt;type inference in assign­ments&lt;/a&gt;
-together with &lt;a href="https://yourbasic.org/golang/untyped-constants/" dir="ltr"&gt;untyped numeric constants&lt;/a&gt;.
-This gives Go stronger type&amp;nbsp;safety than Java (which has implicit conversions),
-but the code reads more like Python (which has untyped variables).&lt;/LI&gt;&lt;LI&gt;Programs are constructed from &lt;a href="https://yourbasic.org/golang/packages-explained/" dir="ltr"&gt;packages&lt;/a&gt; that offer clear
-&lt;strong dir="ltr"&gt;&lt;a href="https://yourbasic.org/golang/public-private/" dir="ltr"&gt;code separation&lt;/a&gt;&lt;/strong&gt;
-and allow efficient management of dependencies.
-The package mechanism is perhaps the single most well-designed feature of the language,
-and certainly one of the most overlooked.&lt;/LI&gt;&lt;LI&gt;Structurally typed &lt;a href="https://yourbasic.org/golang/interfaces-explained/" dir="ltr"&gt;interfaces&lt;/a&gt;
-provide runtime &lt;strong dir="ltr"&gt;polymorphism&lt;/strong&gt; through &lt;a href="https://en.wikipedia.org/wiki/Runtime_polymorphism" dir="ltr"&gt;dynamic dispatch&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://yourbasic.org/golang/concurrent-programming/" dir="ltr"&gt;Concurrency&lt;/a&gt; is an &lt;strong dir="ltr"&gt;integral part&lt;/strong&gt; of Go, supported
-by &lt;a href="https://yourbasic.org/golang/goroutines-explained/" dir="ltr"&gt;goroutines&lt;/a&gt;,
-&lt;a href="https://yourbasic.org/golang/channels-explained/" dir="ltr"&gt;channels&lt;/a&gt; and
-the &lt;a href="https://yourbasic.org/golang/select-explained/" dir="ltr"&gt;select statement&lt;/a&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;See &lt;a href="https://yourbasic.org/golang/go-vs-java/" dir="ltr"&gt;Go vs. Java: 15 main differences&lt;/a&gt; for a small code example,
-and a sample of basic data types, methods and control structures.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h3&gt;Features for the future&lt;/h3&gt;&lt;img src="https://yourbasic.org/golang/futurist-mouse-trap.jpg" alt="Futurist mouse trap" width="330" height="167"&gt;&lt;p dir="ltr"&gt;Go &lt;strong dir="ltr"&gt;omits several features&lt;/strong&gt; found in other modern languages.&lt;/p&gt;&lt;p dir="ltr"&gt;Here’s the &lt;a href="https://golang.org/doc/faq#Design" dir="ltr"&gt;language designers’ answer&lt;/a&gt;
-to &lt;em dir="ltr"&gt;Why does Go not have feature X?&lt;/em&gt;&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Every language contains novel features and omits someone’s favorite feature.
-Go was designed with an eye on felicity of programming, speed of compilation, orthogonality of concepts,
-and the need to support features such as concurrency and garbage collection.
-Your favorite feature may be missing because it doesn’t fit,
-because it affects compilation speed or clarity of design,
-or because it would make the fundamental system model too difficult.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;New features are considered only if there is a pressing need
-demon­strated by &lt;a href="https://github.com/golang/go/wiki/ExperienceReports" dir="ltr"&gt;experience reports&lt;/a&gt;
-from real-world projects.&lt;/p&gt;&lt;p&gt;There are a few likely major additions in the&amp;nbsp;pipeline:&lt;/p&gt;&lt;p dir="ltr"&gt;Currently, some &lt;a href="https://blog.golang.org/go2-here-we-come" dir="ltr"&gt;minor additions&lt;/a&gt; are considered
-to help create and test a &lt;a href="https://blog.golang.org/toward-go2" dir="ltr"&gt;community-driven process&lt;/a&gt; for developing&amp;nbsp;Go.&lt;/p&gt;&lt;p dir="ltr"&gt;However, features such as &lt;a href="https://yourbasic.org/golang/overload-overwrite-optional-parameter/" dir="ltr"&gt;optional parameters, default parameter values and method overloading&lt;/a&gt;
-probably won’t be part of a future &lt;a href="https://blog.golang.org/go2-here-we-come" dir="ltr"&gt;Go&amp;nbsp;2&lt;/a&gt;.&lt;/p&gt;&lt;h3&gt;Java comparison&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;a href="https://docs.oracle.com/javase/specs/jls/se12/jls12.pdf" dir="ltr"&gt;The Java® Language Specification&lt;/a&gt; is currently 750 pages.
-Much of the complexity is due to &lt;a href="https://en.wikipedia.org/wiki/Feature_creep" dir="ltr"&gt;feature&amp;nbsp;creep&lt;/a&gt;.
-Here are but three examples.&lt;/p&gt;&lt;p dir="ltr"&gt;Java &lt;a href="https://en.wikipedia.org/wiki/Inner_class" dir="ltr"&gt;inner classes&lt;/a&gt; suddenly appeared in 1997;
-it took more than a year to update the specification, and it became almost twice as big as a result.
-That’s a high price to pay for a non-essential feature.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://en.wikipedia.org/wiki/Generics_in_Java" dir="ltr"&gt;Generics in Java&lt;/a&gt;,
-implemented by &lt;a href="https://en.wikipedia.org/wiki/Type_erasure" dir="ltr"&gt;type erasure&lt;/a&gt;,
-make some code cleaner and allow for additional runtime checks,
-but quickly become complex when you move beyond basic examples:
-&lt;a href="http://www.tothenew.com/blog/why-is-generic-array-creation-not-allowed-in-java/" dir="ltr"&gt;generic arrays&lt;/a&gt; aren’t supported
-and &lt;a href="https://docs.oracle.com/javase/tutorial/extra/generics/wildcards.html" dir="ltr"&gt;type wildcards&lt;/a&gt;
-with upper and lower bounds are quite complicated.
-The string “generic” appears 280 times in the specification.
-It’s not clear to me if this feature is worth its cost.&lt;/p&gt;&lt;p dir="ltr"&gt;A Java &lt;a href="https://docs.oracle.com/javase/tutorial/java/javaOO/enum.html" dir="ltr"&gt;enum&lt;/a&gt;, introduced in 2004,
-is a special type of class that represents a group of constants.
-It’s certainly nice to have, but offers little that couldn’t be done with ordinary classes.
-The string “enum” appears 241 times in the specification.&lt;/p&gt;&lt;h2&gt;Code transparency&lt;/h2&gt;&lt;img src="https://yourbasic.org/golang/tangled-cables.jpg" alt="Tangled cables" width="330" height="149"&gt;&lt;div&gt;ILLIAC IV Processing Unit&lt;/div&gt;&lt;p&gt;Your project is doomed if you can’t read and understand your code.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;You &lt;strong dir="ltr"&gt;always&lt;/strong&gt; need to know &lt;strong dir="ltr"&gt;exactly what&lt;/strong&gt; your coding is doing,&lt;/LI&gt;&lt;LI&gt;and &lt;strong dir="ltr"&gt;sometimes&lt;/strong&gt; need to &lt;strong dir="ltr"&gt;estimate the resources&lt;/strong&gt; (time and memory) it uses.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Go tries to meet both of these goals.&lt;/p&gt;&lt;p dir="ltr"&gt;The syntax is designed to be transparent and there is
-&lt;strong dir="ltr"&gt;one&lt;/strong&gt; &lt;a href="https://golang.org/doc/effective_go.html#formatting" dir="ltr"&gt;standard code format&lt;/a&gt;,
-automatically generated by the &lt;a href="https://blog.golang.org/go-fmt-your-code" dir="ltr"&gt;fmt&amp;nbsp;tool&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Another example is that Go programs with
-&lt;a href="https://yourbasic.org/golang/unused-imports/" dir="ltr"&gt;unused package imports do not compile&lt;/a&gt;.
-This improves code clarity and long-term performance.&lt;/p&gt;&lt;p dir="ltr"&gt;I suspect that the Go designers made some things &lt;strong dir="ltr"&gt;difficult on purpose&lt;/strong&gt;.
-You need to jump through hoops to &lt;a href="https://yourbasic.org/golang/recover-from-panic/" dir="ltr"&gt;catch a panic&lt;/a&gt; (exception) and
-you are forced to sprinkle your code with the word “unsafe” to step around type safety.&lt;/p&gt;&lt;h3&gt;Python comparison&lt;/h3&gt;&lt;p dir="ltr"&gt;The Python code snippet &lt;code dir="ltr"&gt;del a[i]&lt;/code&gt;
-deletes the element at index&amp;nbsp;&lt;code dir="ltr"&gt;i&lt;/code&gt; from a list&amp;nbsp;&lt;code dir="ltr"&gt;a&lt;/code&gt;.
-This code certainly is quite &lt;strong dir="ltr"&gt;readable&lt;/strong&gt;, but not so &lt;strong dir="ltr"&gt;transparent&lt;/strong&gt;:
-it’s easy to miss that the &lt;a href="https://yourbasic.org/algorithms/time-complexity-explained/" dir="ltr"&gt;time complexity&lt;/a&gt;
-is &lt;i dir="ltr"&gt;O&lt;/i&gt;(&lt;i dir="ltr"&gt;n&lt;/i&gt;), where &lt;i dir="ltr"&gt;n&lt;/i&gt;&amp;nbsp;is the number of elements in the&amp;nbsp;list.&lt;/p&gt;&lt;p dir="ltr"&gt;Go doesn’t have a similar utility function.
-This is definitely &lt;strong dir="ltr"&gt;less convenient&lt;/strong&gt;, but also &lt;strong dir="ltr"&gt;more transparent&lt;/strong&gt;.
-Your code needs to explicitly state if it copies a section of the list.
-See &lt;a href="https://yourbasic.org/golang/delete-element-slice/" dir="ltr"&gt;2&amp;nbsp;ways to delete an element from a&amp;nbsp;slice&lt;/a&gt;
-for a Go code&amp;nbsp;example.&lt;/p&gt;&lt;h3&gt;Java comparison&lt;/h3&gt;&lt;p dir="ltr"&gt;Code transparency is not just a syntactic issue.
-Here are two examples where the rules for
-&lt;a href="https://yourbasic.org/golang/package-init-function-main-execution-order/" dir="ltr"&gt;Go package initialization and program execution order&lt;/a&gt;
-make it easier to reason about and maintain a project.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://en.wikipedia.org/wiki/Circular_dependency" dir="ltr"&gt;Circular dependencies&lt;/a&gt;
-can cause many unwanted effects.
-As opposed to Java, a Go program with initialization cycles will not compile.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;When the main function of a Go program returns, the program exits.
-A&amp;nbsp;Java programs exits when all user non-daemon threads finish.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;This means that you may need to study large parts of a Java program
-to understand some of its behavior.
-This may even be impossible if you use third-party libraries.&lt;/p&gt;&lt;h2&gt;Compatibility&lt;/h2&gt;&lt;img src="https://yourbasic.org/golang/wrench.jpg" alt="Wrench with perfect fit" width="330" height="152"&gt;&lt;p dir="ltr"&gt;A language that &lt;strong dir="ltr"&gt;changes abruptly&lt;/strong&gt;, or becomes &lt;strong dir="ltr"&gt;unavailable&lt;/strong&gt;,
-can end your project.&lt;/p&gt;&lt;p dir="ltr"&gt;Go&amp;nbsp;1 has succinct and strict &lt;strong dir="ltr"&gt;&lt;a href="https://golang.org/doc/go1compat" dir="ltr"&gt;compatibility guarantees&lt;/a&gt;&lt;/strong&gt;
-for the core language and standard packages –
-Go programs that work today should continue to work with future releases of Go&amp;nbsp;1.
-Backward compatibility has been excellent so&amp;nbsp;far.&lt;/p&gt;&lt;p dir="ltr"&gt;Go is an &lt;strong dir="ltr"&gt;open source&lt;/strong&gt; project and comes with a &lt;a href="https://golang.org/LICENSE" dir="ltr"&gt;BSD-style license&lt;/a&gt;
-that permits commercial use, modification, distribution, and private use.
-Copyright belongs to &lt;a href="https://golang.org/AUTHORS" dir="ltr"&gt;The Go Authors&lt;/a&gt;,
-those of us who &lt;a href="https://golang.org/doc/contribute.html" dir="ltr"&gt;contributed&lt;/a&gt; to the project.
-There is also a &lt;a href="https://golang.org/PATENTS" dir="ltr"&gt;patent grant&lt;/a&gt; by&amp;nbsp;Google.&lt;/p&gt;&lt;h3&gt;Python comparison&lt;/h3&gt;&lt;p dir="ltr"&gt;If you’re a Python developer, you know the pain of having to deal with the
-&lt;a href="https://sebastianraschka.com/Articles/2014_python_2_3_key_diff.html" dir="ltr"&gt;differ­ences between Python&amp;nbsp;2.7.x and Python&amp;nbsp;3.x&lt;/a&gt;.
-There are &lt;a href="https://wiki.python.org/moin/Python2orPython3" dir="ltr"&gt;strong reasons&lt;/a&gt; for choosing Python&amp;nbsp;3,
-but if you depend on libraries that are only available for an older version, you may not be&amp;nbsp;able.&lt;/p&gt;&lt;h3&gt;Java comparison&lt;/h3&gt;&lt;img src="https://yourbasic.org/golang/dark-clouds-lightning.jpg" alt="Lightning And Dark Clouds" width="330" height="129"&gt;&lt;p dir="ltr"&gt;Java has a very good history of backward compatibility and the &lt;a href="https://www.oracle.com/technetwork/java/javase/8-compatibility-guide-2156366.html" dir="ltr"&gt;Compatibility Guide for JDK 8&lt;/a&gt; is extensive.
-Also, Java has been freely available to developers for a long time.&lt;/p&gt;&lt;p dir="ltr"&gt;Unfortunately, there are some dark clouds on the horizon with the &lt;a href="https://en.wikipedia.org/wiki/Oracle_America,_Inc._v._Google,_Inc." dir="ltr"&gt;Oracle America, Inc. v. Google, Inc.&lt;/a&gt; legal case about the nature of computer code and copyright law,
-and Oracle’s new &lt;a href="https://www.infoworld.com/article/3284164/oracle-now-requires-a-subscription-to-use-java-se.html" dir="ltr"&gt;Java licensing model&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;Performance&lt;/h2&gt;&lt;img src="https://yourbasic.org/golang/motorbike-racer.jpg" alt="Lightning And Dark Clouds" width="330" height="171"&gt;&lt;p dir="ltr"&gt;The exterior of Go is far from flashy, but there is a &lt;strong dir="ltr"&gt;fine-tuned engine&lt;/strong&gt; underneath.&lt;/p&gt;&lt;p&gt;It makes little sense to discuss performance issues out of context.
-Running time and memory use is heavily influenced by factors such as algorithms, data structures, input,
-coding skill, operating systems, and hardware.&lt;/p&gt;&lt;p dir="ltr"&gt;Still, &lt;strong dir="ltr"&gt;language&lt;/strong&gt;, &lt;strong dir="ltr"&gt;runtime&lt;/strong&gt; and &lt;strong dir="ltr"&gt;standard libraries&lt;/strong&gt; can have a large effect on perfor­mance.
-This discussion is limited to high-level issues and design decisions.
-See the&amp;nbsp;&lt;a href="https://golang.org/doc/faq" dir="ltr"&gt;Go FAQ&lt;/a&gt;
-for a more detailed look at the &lt;a href="https://golang.org/doc/faq#Implementation" dir="ltr"&gt;implementation&lt;/a&gt; and its
-&lt;a href="https://golang.org/doc/faq#Performance" dir="ltr"&gt;performance&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;First, Go is a &lt;strong dir="ltr"&gt;compiled&lt;/strong&gt; language.
-An executable Go program typically consists of a &lt;strong dir="ltr"&gt;single standalone binary&lt;/strong&gt;,
-with no separate dynamic libraries or virtual machines,
-which can be &lt;strong dir="ltr"&gt;directly deployed&lt;/strong&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Size and speed of generated code&lt;/strong&gt; will vary depending on target architecture.
-Go&amp;nbsp;code generation is &lt;a href="https://about.sourcegraph.com/go/generating-better-machine-code-with-ssa/" dir="ltr"&gt;fairly mature&lt;/a&gt;
-and the major OSes (Linux, macOS, Windows)
-and architectures (Intel x86/x86-64, ARM64, WebAssembly, ARM), as well as many others, are supported.
-You can expect performance to be on a similar level to that of C++ or Java.
-Compared to interpreted Python code, the improvement can be huge.&lt;/p&gt;&lt;p dir="ltr"&gt;Go is &lt;strong dir="ltr"&gt;garbage collected&lt;/strong&gt;, protecting against memory leaks.
-The collection has &lt;strong dir="ltr"&gt;&lt;a href="https://blog.golang.org/ismmkeynote" dir="ltr"&gt;very low latency&lt;/a&gt;&lt;/strong&gt;.
-In fact, you may never notice that the GC thread is there.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;strong dir="ltr"&gt;standard libraries&lt;/strong&gt; are typically of high quality, with optimized code using efficient algorithms.
-As an example, &lt;a href="https://yourbasic.org/golang/regexp-cheat-sheet/" dir="ltr"&gt;regular expressions&lt;/a&gt; are very efficient in Go
-with running time linear in the size of the input.
-Unfortunately, this is &lt;a href="https://swtch.com/~rsc/regexp/regexp1.html" dir="ltr"&gt;not true for Java and Python&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Build speeds&lt;/strong&gt;, in absolute terms, are currently fairly good.
-More importantly, Go is&amp;nbsp;&lt;strong dir="ltr"&gt;designed&lt;/strong&gt; to make compilation and dependency analysis easy,
-making it possible to create programming tools that &lt;strong dir="ltr"&gt;scales well&lt;/strong&gt; with growing projects.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;b dir="ltr"&gt;Share:&lt;/b&gt;&lt;/span&gt;&amp;nbsp;&amp;nbsp;
-&lt;/p&gt;&lt;img width="40" src="https://yourbasic.org/res/twitter-logo.svg" height="33"&gt;&lt;img width="36" src="https://yourbasic.org/res/facebook-logo.svg" height="36"&gt;&lt;img width="36" src="https://yourbasic.org/res/reddit-logo.svg" height="36"&gt;&lt;img width="30" src="https://yourbasic.org/res/mail-logo.svg" height="30"&gt;</description><pubDate>Sat, 11 May 2019 20:08:36 -0500</pubDate></item></channel></rss>
+&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;About&lt;/h2&gt;&lt;p&gt;At Railscamp X it became clear there is a gap in the current HTTP specification.&lt;/p&gt;&lt;p&gt;There are many ways for a developer to screw up their implementation, but no code to share the nature of the error with the end user.&lt;/p&gt;&lt;h2&gt;Building&lt;/h2&gt;&lt;p&gt;Maintain RFC in 7xx.md&lt;/p&gt;&lt;p dir="ltr"&gt;Relies on &lt;a href="https://github.com/miekg/mmark" dir="ltr"&gt;mmark&lt;/a&gt; to convert markdown to proper RFC format.&lt;/p&gt;&lt;PRE&gt;make&lt;/PRE&gt;</description><pubDate>Sun, 12 May 2019 09:10:45 -0500</pubDate></item></channel></rss>
