@@ -37,145 +37,7 @@ Acknowledgments&lt;/h4&gt;&lt;p&gt;Thanks to Hillel Wayne, Chris Khoo, and Ellio
 &lt;input class="follow-by-email-submit" name="subscribe" type="submit" value="Subscribe" dir="ltr"&gt;
 &lt;/td&gt;
 &lt;/tr&gt;
-&lt;/tbody&gt;&lt;/table&gt;&lt;h4&gt;Related Articles&lt;/h4&gt;</description><pubDate>Thu, 16 May 2019 22:26:24 -0500</pubDate></item><item><title>What are you doing this weekend?</title><link>https://lobste.rs/s/uecxfl</link><description>&lt;p&gt;Feel free to tell what you plan on doing this weekend and even ask for help or feedback.&lt;/p&gt;&lt;p&gt;Please keep in mind it’s more than OK to do nothing at all too!&lt;/p&gt;</description><pubDate>Fri, 17 May 2019 10:39:46 -0500</pubDate></item><item><title>Linux loader for flat binary (DOS like .COM) files</title><link>https://lobste.rs/s/lsgtqk</link><description>&lt;div&gt;25.08.2016 18:09&lt;/div&gt;&lt;p dir="ltr"&gt;Back in the olden days of DOS, there was a thing called a &lt;a href="https://en.wikipedia.org/wiki/COM_file" dir="ltr"&gt;.com executable&lt;/a&gt;. They were obsolete even then, being basically inherited from CP/M and replaced by &lt;a href="http://wiki.osdev.org/MZ" dir="ltr"&gt;DOS MZ&lt;/a&gt; executables. Compared to modern binary formats like ELF, .com files were exceedingly simple. There was no file header, no metadata, no division between code and data sections. The operating system would load the entire file into a 16-bit memory segment at offset 0x100, set the stack and the program segment prefix and jump to the first instruction. It was more of a &lt;i dir="ltr"&gt;convention&lt;/i&gt; than a file format.&lt;/p&gt;&lt;p dir="ltr"&gt;While this simplicity created many limitations, it also gave rise to many fun little hacks. You could write a binary executable directly in &lt;a href="http://www.eicar.org/86-0-Intended-use.html" dir="ltr"&gt;a text editor&lt;/a&gt;. The absence of headers meant that you could make extremely &lt;a href="http://www.sizecoding.org/wiki/Main_Page" dir="ltr"&gt;small programs&lt;/a&gt;. A minimal executable in Linux these days is somewhere in the vicinity of 10 kB. With some clever hacking you might get it down to &lt;a href="http://timelessname.com/elfbin/" dir="ltr"&gt;a hundred bytes&lt;/a&gt; or so. A small .com executable can be on the order of bytes.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://news.ycombinator.com/item?id=12328902" dir="ltr"&gt;A comment&lt;/a&gt; on Hacker News recently caught my attention. &lt;i dir="ltr"&gt;One could write a .com loader for Linux pretty easily.&lt;/i&gt; How easily would that be? I had to try it out.&lt;/p&gt;&lt;PRE&gt;/* Map address space from 0x00000 to 0x10000. */
-
-&lt;b dir="ltr"&gt;void *p = mmap(	(void*)0x00000, 0x10000, 
-		PROT_EXEC|PROT_READ|PROT_WRITE,
-		MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,
-		-1, 0);&lt;/b&gt;
-
-/* Load file at address 0x100. */
-
-(a boring loop here reading from a file to memory.)
-
-/* Set stack pointer to end of allocated area, jump to 0x100. */
-
-&lt;b dir="ltr"&gt;asm(
-	"mov    $0x10000, %rsp\n"
-	"jmp    0x100\n"
-);&lt;/b&gt;
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;This is the gist of it for Linux on x86_64. First we have to map 64 kB of memory at the bottom of our virtual address space. This is where &lt;i dir="ltr"&gt;NULL&lt;/i&gt; pointers and other such beasts roam, so it's unallocated by default on Linux. In fact, as &lt;a href="https://wiki.debian.org/mmap_min_addr" dir="ltr"&gt;a security feature&lt;/a&gt; the kernel will actively prevent such calls to &lt;i dir="ltr"&gt;mmap()&lt;/i&gt;. We have to disable this protection first with:&lt;/p&gt;&lt;PRE&gt;$ &lt;b dir="ltr"&gt;sysctl vm.mmap_min_addr=0&lt;/b&gt;
-&lt;/PRE&gt;&lt;p&gt;Memory mappings have to be aligned with page boundaries, so we can't simply map the file at address 0x100. To work around this we use an anonymous map starting at address 0 and then fill it in manually with the contents of the .com file at the correct offset. Since we have the whole 64 bit linear address space to play with, choosing 0x100 is a bit silly (code section usually lives somewhere around 0x400000 on Linux), but then again, so is this entire exercise.&lt;/p&gt;&lt;p dir="ltr"&gt;Once we have everything set up, we set the stack pointer to the top of our 64 kB and jump to the code using some in-line assembly. If we were being pedantic, we could set up &lt;a href="https://en.wikipedia.org/wiki/Program_Segment_Prefix" dir="ltr"&gt;the PSP&lt;/a&gt; as well. Most of it doesn't make much sense on Linux though (except for command-line parameters maybe). I didn't bother.&lt;/p&gt;&lt;p&gt;Now that we have the loader ready, how do we create a .com binary that will work with it? We have to turn to assembly:&lt;/p&gt;&lt;PRE&gt;&lt;b dir="ltr"&gt;    call   greet
-    mov    rax, 60
-    mov    rdi, 0
-    syscall
-&lt;/b&gt;
-# A function call, just to show off our working stack.
-&lt;b dir="ltr"&gt;greet:
-    mov     rax, 1
-    mov     rdi, 1
-    mov     rsi, msg
-    mov     rdx, 14
-    syscall
-    ret
-
-    msg db      "Hello, World!", 10&lt;/b&gt;
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;This will compile nicely into an x86_64 ELF object file with &lt;a href="http://www.nasm.us/" dir="ltr"&gt;NASM&lt;/a&gt;. We then have to link it into an ELF executable using a custom linker script that tells the linker that all sections will be placed in a chunk of memory starting at 0x100:&lt;/p&gt;&lt;PRE&gt;MEMORY
-{
-	RAM (rwx) : ORIGIN = 0x0100, LENGTH = 0xff00
-}
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;Linker will create an executable which contains our code with all the proper offsets, but still has all the ELF cruft around it (it will segfault nicely if you try to run it with kernel's default ELF loader). As the final step, we must dump its contents into a bare binary file using &lt;i dir="ltr"&gt;objcopy&lt;/i&gt;:&lt;/p&gt;&lt;PRE&gt;$ &lt;b dir="ltr"&gt;objcopy -S --output-target=binary hello.elf hello.com&lt;/b&gt;
-&lt;/PRE&gt;&lt;p&gt;Finally, we can run our .com file with our loader:&lt;/p&gt;&lt;PRE&gt;$ &lt;b dir="ltr"&gt;./loader hello.com&lt;/b&gt;
-Hello, World!
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;As an extra convenience, we can &lt;a href="https://en.wikipedia.org/wiki/Binfmt_misc" dir="ltr"&gt;register&lt;/a&gt; our new loader with the kernel, so that it will be invoked each time you try to execute a file with the .com extension (&lt;i dir="ltr"&gt;update-binfmts&lt;/i&gt; is part of the &lt;i dir="ltr"&gt;binfmt-support&lt;/i&gt; package on Debian):&lt;/p&gt;&lt;PRE&gt;$ &lt;b dir="ltr"&gt;update-binfmts --install com /path/to/loader --extension com&lt;/b&gt;
-$ &lt;b dir="ltr"&gt;./hello.com&lt;/b&gt;
-Hello, World!
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;And there you have it, a nice 59 byte "Hello, World" binary for Linux. If you want to play with it yourself, see the &lt;a href="https://github.com/avian2/linux-com-loader" dir="ltr"&gt;complete example&lt;/a&gt; on GitHub that has a Makefile for your convenience. If you make something small and fun with it, please drop me a note.&lt;/p&gt;&lt;p dir="ltr"&gt;One more thing. In case it's not clear at this point, this loader will &lt;i dir="ltr"&gt;not work&lt;/i&gt; with DOS executables (or CP/M in that case). Those expect to be run in 16-bit real mode and rely on DOS services. Needless to say, my loader makes no attempts to provide those. Code will run in the same environment as other Linux user space processes (albeit at a weird address) and must use the usual kernel syscalls. If you want to run old DOS stuff, use &lt;a href="https://www.dosbox.com/" dir="ltr"&gt;DOSBox&lt;/a&gt; or something similar.&lt;/p&gt;&lt;div dir="ltr"&gt;
-Posted by &lt;span dir="ltr"&gt;Tomaž&lt;/span&gt;
-
-| Categories:
-
-&lt;a href="https://www.tablix.org/~avian/blog/archives/code/" rel="category tag" dir="ltr"&gt;Code&lt;/a&gt;
-
-
-
-&lt;/div&gt;&lt;p dir="ltr"&gt;
-&lt;label dir="ltr"&gt;Your name&lt;br dir="ltr"&gt;
-
-&lt;/label&gt;
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-&lt;label dir="ltr"&gt;Your email (optional, will be published)&lt;br dir="ltr"&gt;
-&lt;/label&gt;
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-&lt;label dir="ltr"&gt;Your web site (optional)&lt;br dir="ltr"&gt;
-&lt;/label&gt;
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-&lt;label dir="ltr"&gt;Write the hexadecimal number 0x2A in decimal.&lt;br dir="ltr"&gt;
-&lt;/label&gt;
-
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-
-&lt;br dir="ltr"&gt;
-(No HTML tags allowed. Separate paragraphs with a blank line.)
-&lt;/p&gt;</description><pubDate>Fri, 17 May 2019 01:36:04 -0500</pubDate></item><item><title>Zero Cost Abstractions</title><link>https://lobste.rs/s/mgvcvu</link><description>&lt;p dir="ltr"&gt;The idea of a &lt;strong dir="ltr"&gt;zero cost abstraction&lt;/strong&gt; is very important to certain
-programming languages, like Rust and C++, which intend to enable users to write
-programs with excellent performance profiles with relatively little effort.
-Since this idea is fundamental to the design of Rust and my work, I want to
-investigate, for a moment, what exactly a zero cost abstraction even is.&lt;/p&gt;&lt;p&gt;The idea is summarized in its original by Bjarne Stroustrup, the original
-developer of C++:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;What you don’t use, you don’t pay for. And further: What you do use, you
-couldn’t hand code any better.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;In this definition, there are two factors that make something a proper zero
-cost abstraction:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;No global costs:&lt;/strong&gt; A zero cost abstraction ought not to negatively impact
-the performance of programs that don’t use it. For example, it can’t require
-every program carry a heavy language runtime to benefit the only programs that
-use the feature.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Optimal performance:&lt;/strong&gt; A zero cost abstractoin ought to compile to the
-best implementation of the solution that someone would have written with the
-lower level primitives. It can’t introduce additional costs that could be
-avoided without the abstraction.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;However, I think its important to keep in mind that there is a third
-requirement for something to be a zero cost abstraction. It’s often overlooked
-because its simply a requirement of all good abstractions, zero cost or not:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Improve users’ experience:&lt;/strong&gt; The point of abstraction is to provide a new
-tool, assembled from lower level components, which enable users to more easily
-write the programs they want ot write. A zero cost abstraction, like all
-abstractions, must actually offer a better experience than the alternative.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;All of these are of course ideals that can never be fully realized, and this
-third in particular, well - there’s no accounting for taste. But for zero cost
-abstractions, the third point is actually especially important, because zero
-cost abstractions are competing with &lt;em dir="ltr"&gt;two&lt;/em&gt; different alternatives. On the one
-hand, it must be better than handwriting code with the same performance profile
-yourself, that’s rather clear. But on the other, it must also be better than
-eating the performance cost and using an abstraction which isn’t zero cost.
-That doesn’t mean we need to be strictly better than the non-zero cost
-abstraction, because the performance cost is a factor, but we do have to be
-within spitting distance so that whatever additional programmer overhead you
-take on to be “zero cost” feels worthwhile.&lt;/p&gt;&lt;p dir="ltr"&gt;(I think to some extent Rust has tried to cheat this by making non-zero cost
-abstractions actively unpleasant to write, making it &lt;em dir="ltr"&gt;feel&lt;/em&gt; like the zero cost
-abstraction is better. I think this is a mistake that hurts the overall UX of
-the language and probably just keeps some people from using it at all, hurting
-our overall goals.)&lt;/p&gt;&lt;p&gt;I want to say, also, that actually creating a zero cost abstraction that
-achieves this trifecta is both incredibly difficult and incredibly awesome.
-Rust has only really done this excellently a few times (all extremely high
-impact), and having been involved in what I think is going to be one of those
-success stories - async/await of course - it feels like holding fire in your
-hands. Last September I commented to a friend that I was worried I would never
-do any work as good as the work I had just done (in reference to the Pin API),
-and I really did feel that. But we rarely achieve something so great, because
-its extremely difficult and involves a fair amount of luck as well (many
-problems probably just don’t have a really great zero cost abstraction yet to
-be discovered, at least within the design constraints prior decisions have put
-around them).&lt;/p&gt;&lt;p&gt;To be clear about what I mean, I want to list a few of the really great zero
-cost abstractions in Rust:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Ownership and borrowing.&lt;/strong&gt; Of course this is the biggest one, guaranteed
-memory and thread safety without a garbage collector is Rust’s original, huge
-success story.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Iterator and closure APIs.&lt;/strong&gt; This is another classic. While there are some
-cases where internal iteration might be optimized better, the fact that you can
-write map, filter, iterative for loops, and so on over slices and be optimized
-to the equivalent of some handwritten C is absolutely astounding.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Async/await and Futures.&lt;/strong&gt; The Futures API is an important example, because
-the early versions of futures hit the “zero cost” part of zero cost abstraction
-really well, but was not actually providing a good enough UX to drive adoption.
-By adding pinning to support async/await, references across awaits, and so on,
-we’ve made a product that I really think will solve users’ problems and make
-Rust more viable for writing high performance network services.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Unsafe and the module boundary.&lt;/strong&gt; Underlying all of these, and every one of
-Rust’s success stories, is the notion of unsafe blocks and privacy that allow
-us to dip into raw pointer manipulation to build these zero cost abstractions.
-None of Rust’s brilliant features would be possible without this really
-fundamental ability to break the rules locally to extend the system beyond what
-the typechecker can handle. This is the zero cost abstraction that is the
-mother of all other zero cost abstractions in Rust.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;In other areas, we still haven’t succeeded so much at finding zero cost
-abstractions. One example of this is the trait object as a solution for
-dynamically dispatched polymorphism. (Note here that the dynamic dispatch is a
-part of the &lt;em dir="ltr"&gt;goal&lt;/em&gt; here, so the virtual call is not non-zero cost.) The problem
-is that the concept of object safety, as well as sized and unsized types, and
-probably just some bad ergonomics around the coercions, has made trait objects
-really unwieldly to work with; I’m usually pretty annoyed when I have to use
-them. For a good 18 months at least I’ve wanted to really dig into this problem
-space, but other things have always taken priority.&lt;/p&gt;</description><pubDate>Fri, 17 May 2019 04:02:48 -0500</pubDate></item><item><title>What have you learned from adopting Typescript into an existing JS codebase?</title><link>https://lobste.rs/s/3ucfhp</link><description>&lt;p&gt;I am thinking about having my engineering team adopt Typescript. We have multiple large JS codebases, the biggest of which is about 2/3 Coffeescript, Backbone, and Handlebars, and 1/3 ES6 with React.&lt;/p&gt;&lt;p&gt;We have quite a lot of bugs, we have to do a lot of hotfixes, and I believe that a number of these could be mitigated by using Typescript. We rarely refactor code, and I believe that it’s largely due to it being slow and difficult, and easy to break.&lt;/p&gt;&lt;p&gt;I don’t think anyone on the team has any previous experience with Typescript. I expect a number of them have not worked with a statically-typed language before.&lt;/p&gt;&lt;p&gt;What have you learned from adopting Typescript? I would love to hear tips, tricks, or ideas for how to make this change - whether it’s management-level (I am an engineer and manager) or code-level.&lt;/p&gt;</description><pubDate>Thu, 16 May 2019 16:08:19 -0500</pubDate></item><item><title>Vampire Ecology in the Jossverse</title><link>https://lobste.rs/s/yhnxp6</link><description>&lt;p&gt;And now, for your amusement and
+&lt;/tbody&gt;&lt;/table&gt;&lt;h4&gt;Related Articles&lt;/h4&gt;</description><pubDate>Thu, 16 May 2019 22:26:24 -0500</pubDate></item><item><title>What are you doing this weekend?</title><link>https://lobste.rs/s/uecxfl</link><description>&lt;p&gt;Feel free to tell what you plan on doing this weekend and even ask for help or feedback.&lt;/p&gt;&lt;p&gt;Please keep in mind it’s more than OK to do nothing at all too!&lt;/p&gt;</description><pubDate>Fri, 17 May 2019 10:39:46 -0500</pubDate></item><item><title>Vampire Ecology in the Jossverse</title><link>https://lobste.rs/s/yhnxp6</link><description>&lt;p&gt;And now, for your amusement and
 stimulation,&lt;/p&gt;&lt;p&gt;&lt;span&gt;Vampire Population Ecology&lt;/span&gt;&lt;/p&gt;&lt;p&gt;Introduction&lt;/p&gt;&lt;p align="center"&gt;&lt;b&gt;~or~&lt;/b&gt;&lt;/p&gt;&lt;p align="center"&gt;&lt;b&gt;A Little Math
 Never Hurt Anyone&lt;/b&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;We are gathered here today to
 ponder the ways in which the humans and vampires of Sunnydale interact.&lt;span dir="ltr"&gt;&amp;nbsp; &lt;/span&gt;Specifically, Betsy asked:&lt;/p&gt;&lt;p&gt;&lt;span&gt;Ooh, Brian, can you help us work out the vampire
@@ -340,7 +202,145 @@ Joan Roughgarden for teaching him the vast majority of what he knows about
 population dynamics, and he would be very interested in hearing your thoughts
 on this little treatise, because he is keen on spending a goodly portion of his
 career communicating science to intelligent but non-technical audiences (like
-you!).&lt;/p&gt;</description><pubDate>Fri, 17 May 2019 11:00:34 -0500</pubDate></item><item><title>ELK MusicOS</title><link>https://lobste.rs/s/ykmian</link><description>&lt;p&gt;Notice&lt;/p&gt;&lt;p dir="ltr"&gt;This website or its third-party tools use cookies, which are necessary to its functioning and required to achieve the purposes illustrated in the cookie policy. If you want to know more or withdraw your consent to all or some of the cookies, please refer to the &lt;a href="https://www.iubenda.com/privacy-policy/10766175/cookie-policy?an=no&amp;amp;s_ck=false" dir="ltr"&gt;cookie policy&lt;/a&gt;.&lt;br dir="ltr"&gt;By closing this banner, scrolling this page, clicking a link or continuing to browse otherwise, you agree to the use of cookies.&lt;/p&gt;</description><pubDate>Fri, 17 May 2019 02:57:49 -0500</pubDate></item><item><title>Android's Java 8 Support</title><link>https://lobste.rs/s/2nonax</link><description>&lt;p&gt;20 November 2018&lt;/p&gt;&lt;p&gt;I’ve worked from home for a few years, and during that time I’ve heard people around the office complaining about Android’s varying support for different versions of Java. Every year at Google I/O you could find me asking about it at the fireside chats or directly to the folks responsible. At conferences and other developer events it comes up in conversation or in talks with different degrees of accuracy. It’s a complicated topic because what exactly we mean when talking about Android’s Java support can be unclear. There’s a lot to a single version of Java: the language features, the bytecode, the tools, the APIs, the JVM, and more.&lt;/p&gt;&lt;p&gt;When someone talks about Android’s Java 8 support they usually are referring to the language features. So let’s start there with a look at how Android’s toolchain deals with the language features of Java 8.&lt;/p&gt;&lt;h3&gt;Lambdas&lt;/h3&gt;&lt;p&gt;The banner language feature of Java 8 was by far the addition of lambdas. This brought a more terse expression of code as data whereas previously more verbose constructs like anonymous classes would be used.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;class&lt;/span&gt; &lt;span dir="ltr"&gt;Java8&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+you!).&lt;/p&gt;</description><pubDate>Fri, 17 May 2019 11:00:34 -0500</pubDate></item><item><title>Linux loader for flat binary (DOS like .COM) files</title><link>https://lobste.rs/s/lsgtqk</link><description>&lt;div&gt;25.08.2016 18:09&lt;/div&gt;&lt;p dir="ltr"&gt;Back in the olden days of DOS, there was a thing called a &lt;a href="https://en.wikipedia.org/wiki/COM_file" dir="ltr"&gt;.com executable&lt;/a&gt;. They were obsolete even then, being basically inherited from CP/M and replaced by &lt;a href="http://wiki.osdev.org/MZ" dir="ltr"&gt;DOS MZ&lt;/a&gt; executables. Compared to modern binary formats like ELF, .com files were exceedingly simple. There was no file header, no metadata, no division between code and data sections. The operating system would load the entire file into a 16-bit memory segment at offset 0x100, set the stack and the program segment prefix and jump to the first instruction. It was more of a &lt;i dir="ltr"&gt;convention&lt;/i&gt; than a file format.&lt;/p&gt;&lt;p dir="ltr"&gt;While this simplicity created many limitations, it also gave rise to many fun little hacks. You could write a binary executable directly in &lt;a href="http://www.eicar.org/86-0-Intended-use.html" dir="ltr"&gt;a text editor&lt;/a&gt;. The absence of headers meant that you could make extremely &lt;a href="http://www.sizecoding.org/wiki/Main_Page" dir="ltr"&gt;small programs&lt;/a&gt;. A minimal executable in Linux these days is somewhere in the vicinity of 10 kB. With some clever hacking you might get it down to &lt;a href="http://timelessname.com/elfbin/" dir="ltr"&gt;a hundred bytes&lt;/a&gt; or so. A small .com executable can be on the order of bytes.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://news.ycombinator.com/item?id=12328902" dir="ltr"&gt;A comment&lt;/a&gt; on Hacker News recently caught my attention. &lt;i dir="ltr"&gt;One could write a .com loader for Linux pretty easily.&lt;/i&gt; How easily would that be? I had to try it out.&lt;/p&gt;&lt;PRE&gt;/* Map address space from 0x00000 to 0x10000. */
+
+&lt;b dir="ltr"&gt;void *p = mmap(	(void*)0x00000, 0x10000, 
+		PROT_EXEC|PROT_READ|PROT_WRITE,
+		MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS,
+		-1, 0);&lt;/b&gt;
+
+/* Load file at address 0x100. */
+
+(a boring loop here reading from a file to memory.)
+
+/* Set stack pointer to end of allocated area, jump to 0x100. */
+
+&lt;b dir="ltr"&gt;asm(
+	"mov    $0x10000, %rsp\n"
+	"jmp    0x100\n"
+);&lt;/b&gt;
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;This is the gist of it for Linux on x86_64. First we have to map 64 kB of memory at the bottom of our virtual address space. This is where &lt;i dir="ltr"&gt;NULL&lt;/i&gt; pointers and other such beasts roam, so it's unallocated by default on Linux. In fact, as &lt;a href="https://wiki.debian.org/mmap_min_addr" dir="ltr"&gt;a security feature&lt;/a&gt; the kernel will actively prevent such calls to &lt;i dir="ltr"&gt;mmap()&lt;/i&gt;. We have to disable this protection first with:&lt;/p&gt;&lt;PRE&gt;$ &lt;b dir="ltr"&gt;sysctl vm.mmap_min_addr=0&lt;/b&gt;
+&lt;/PRE&gt;&lt;p&gt;Memory mappings have to be aligned with page boundaries, so we can't simply map the file at address 0x100. To work around this we use an anonymous map starting at address 0 and then fill it in manually with the contents of the .com file at the correct offset. Since we have the whole 64 bit linear address space to play with, choosing 0x100 is a bit silly (code section usually lives somewhere around 0x400000 on Linux), but then again, so is this entire exercise.&lt;/p&gt;&lt;p dir="ltr"&gt;Once we have everything set up, we set the stack pointer to the top of our 64 kB and jump to the code using some in-line assembly. If we were being pedantic, we could set up &lt;a href="https://en.wikipedia.org/wiki/Program_Segment_Prefix" dir="ltr"&gt;the PSP&lt;/a&gt; as well. Most of it doesn't make much sense on Linux though (except for command-line parameters maybe). I didn't bother.&lt;/p&gt;&lt;p&gt;Now that we have the loader ready, how do we create a .com binary that will work with it? We have to turn to assembly:&lt;/p&gt;&lt;PRE&gt;&lt;b dir="ltr"&gt;    call   greet
+    mov    rax, 60
+    mov    rdi, 0
+    syscall
+&lt;/b&gt;
+# A function call, just to show off our working stack.
+&lt;b dir="ltr"&gt;greet:
+    mov     rax, 1
+    mov     rdi, 1
+    mov     rsi, msg
+    mov     rdx, 14
+    syscall
+    ret
+
+    msg db      "Hello, World!", 10&lt;/b&gt;
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;This will compile nicely into an x86_64 ELF object file with &lt;a href="http://www.nasm.us/" dir="ltr"&gt;NASM&lt;/a&gt;. We then have to link it into an ELF executable using a custom linker script that tells the linker that all sections will be placed in a chunk of memory starting at 0x100:&lt;/p&gt;&lt;PRE&gt;MEMORY
+{
+	RAM (rwx) : ORIGIN = 0x0100, LENGTH = 0xff00
+}
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;Linker will create an executable which contains our code with all the proper offsets, but still has all the ELF cruft around it (it will segfault nicely if you try to run it with kernel's default ELF loader). As the final step, we must dump its contents into a bare binary file using &lt;i dir="ltr"&gt;objcopy&lt;/i&gt;:&lt;/p&gt;&lt;PRE&gt;$ &lt;b dir="ltr"&gt;objcopy -S --output-target=binary hello.elf hello.com&lt;/b&gt;
+&lt;/PRE&gt;&lt;p&gt;Finally, we can run our .com file with our loader:&lt;/p&gt;&lt;PRE&gt;$ &lt;b dir="ltr"&gt;./loader hello.com&lt;/b&gt;
+Hello, World!
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;As an extra convenience, we can &lt;a href="https://en.wikipedia.org/wiki/Binfmt_misc" dir="ltr"&gt;register&lt;/a&gt; our new loader with the kernel, so that it will be invoked each time you try to execute a file with the .com extension (&lt;i dir="ltr"&gt;update-binfmts&lt;/i&gt; is part of the &lt;i dir="ltr"&gt;binfmt-support&lt;/i&gt; package on Debian):&lt;/p&gt;&lt;PRE&gt;$ &lt;b dir="ltr"&gt;update-binfmts --install com /path/to/loader --extension com&lt;/b&gt;
+$ &lt;b dir="ltr"&gt;./hello.com&lt;/b&gt;
+Hello, World!
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;And there you have it, a nice 59 byte "Hello, World" binary for Linux. If you want to play with it yourself, see the &lt;a href="https://github.com/avian2/linux-com-loader" dir="ltr"&gt;complete example&lt;/a&gt; on GitHub that has a Makefile for your convenience. If you make something small and fun with it, please drop me a note.&lt;/p&gt;&lt;p dir="ltr"&gt;One more thing. In case it's not clear at this point, this loader will &lt;i dir="ltr"&gt;not work&lt;/i&gt; with DOS executables (or CP/M in that case). Those expect to be run in 16-bit real mode and rely on DOS services. Needless to say, my loader makes no attempts to provide those. Code will run in the same environment as other Linux user space processes (albeit at a weird address) and must use the usual kernel syscalls. If you want to run old DOS stuff, use &lt;a href="https://www.dosbox.com/" dir="ltr"&gt;DOSBox&lt;/a&gt; or something similar.&lt;/p&gt;&lt;div dir="ltr"&gt;
+Posted by &lt;span dir="ltr"&gt;Tomaž&lt;/span&gt;
+
+| Categories:
+
+&lt;a href="https://www.tablix.org/~avian/blog/archives/code/" rel="category tag" dir="ltr"&gt;Code&lt;/a&gt;
+
+
+
+&lt;/div&gt;&lt;p dir="ltr"&gt;
+&lt;label dir="ltr"&gt;Your name&lt;br dir="ltr"&gt;
+
+&lt;/label&gt;
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+&lt;label dir="ltr"&gt;Your email (optional, will be published)&lt;br dir="ltr"&gt;
+&lt;/label&gt;
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+&lt;label dir="ltr"&gt;Your web site (optional)&lt;br dir="ltr"&gt;
+&lt;/label&gt;
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+&lt;label dir="ltr"&gt;Write the hexadecimal number 0x2A in decimal.&lt;br dir="ltr"&gt;
+&lt;/label&gt;
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+&lt;br dir="ltr"&gt;
+(No HTML tags allowed. Separate paragraphs with a blank line.)
+&lt;/p&gt;</description><pubDate>Fri, 17 May 2019 01:36:04 -0500</pubDate></item><item><title>Zero Cost Abstractions</title><link>https://lobste.rs/s/mgvcvu</link><description>&lt;p dir="ltr"&gt;The idea of a &lt;strong dir="ltr"&gt;zero cost abstraction&lt;/strong&gt; is very important to certain
+programming languages, like Rust and C++, which intend to enable users to write
+programs with excellent performance profiles with relatively little effort.
+Since this idea is fundamental to the design of Rust and my work, I want to
+investigate, for a moment, what exactly a zero cost abstraction even is.&lt;/p&gt;&lt;p&gt;The idea is summarized in its original by Bjarne Stroustrup, the original
+developer of C++:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;What you don’t use, you don’t pay for. And further: What you do use, you
+couldn’t hand code any better.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;In this definition, there are two factors that make something a proper zero
+cost abstraction:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;No global costs:&lt;/strong&gt; A zero cost abstraction ought not to negatively impact
+the performance of programs that don’t use it. For example, it can’t require
+every program carry a heavy language runtime to benefit the only programs that
+use the feature.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Optimal performance:&lt;/strong&gt; A zero cost abstractoin ought to compile to the
+best implementation of the solution that someone would have written with the
+lower level primitives. It can’t introduce additional costs that could be
+avoided without the abstraction.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;However, I think its important to keep in mind that there is a third
+requirement for something to be a zero cost abstraction. It’s often overlooked
+because its simply a requirement of all good abstractions, zero cost or not:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Improve users’ experience:&lt;/strong&gt; The point of abstraction is to provide a new
+tool, assembled from lower level components, which enable users to more easily
+write the programs they want ot write. A zero cost abstraction, like all
+abstractions, must actually offer a better experience than the alternative.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;All of these are of course ideals that can never be fully realized, and this
+third in particular, well - there’s no accounting for taste. But for zero cost
+abstractions, the third point is actually especially important, because zero
+cost abstractions are competing with &lt;em dir="ltr"&gt;two&lt;/em&gt; different alternatives. On the one
+hand, it must be better than handwriting code with the same performance profile
+yourself, that’s rather clear. But on the other, it must also be better than
+eating the performance cost and using an abstraction which isn’t zero cost.
+That doesn’t mean we need to be strictly better than the non-zero cost
+abstraction, because the performance cost is a factor, but we do have to be
+within spitting distance so that whatever additional programmer overhead you
+take on to be “zero cost” feels worthwhile.&lt;/p&gt;&lt;p dir="ltr"&gt;(I think to some extent Rust has tried to cheat this by making non-zero cost
+abstractions actively unpleasant to write, making it &lt;em dir="ltr"&gt;feel&lt;/em&gt; like the zero cost
+abstraction is better. I think this is a mistake that hurts the overall UX of
+the language and probably just keeps some people from using it at all, hurting
+our overall goals.)&lt;/p&gt;&lt;p&gt;I want to say, also, that actually creating a zero cost abstraction that
+achieves this trifecta is both incredibly difficult and incredibly awesome.
+Rust has only really done this excellently a few times (all extremely high
+impact), and having been involved in what I think is going to be one of those
+success stories - async/await of course - it feels like holding fire in your
+hands. Last September I commented to a friend that I was worried I would never
+do any work as good as the work I had just done (in reference to the Pin API),
+and I really did feel that. But we rarely achieve something so great, because
+its extremely difficult and involves a fair amount of luck as well (many
+problems probably just don’t have a really great zero cost abstraction yet to
+be discovered, at least within the design constraints prior decisions have put
+around them).&lt;/p&gt;&lt;p&gt;To be clear about what I mean, I want to list a few of the really great zero
+cost abstractions in Rust:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Ownership and borrowing.&lt;/strong&gt; Of course this is the biggest one, guaranteed
+memory and thread safety without a garbage collector is Rust’s original, huge
+success story.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Iterator and closure APIs.&lt;/strong&gt; This is another classic. While there are some
+cases where internal iteration might be optimized better, the fact that you can
+write map, filter, iterative for loops, and so on over slices and be optimized
+to the equivalent of some handwritten C is absolutely astounding.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Async/await and Futures.&lt;/strong&gt; The Futures API is an important example, because
+the early versions of futures hit the “zero cost” part of zero cost abstraction
+really well, but was not actually providing a good enough UX to drive adoption.
+By adding pinning to support async/await, references across awaits, and so on,
+we’ve made a product that I really think will solve users’ problems and make
+Rust more viable for writing high performance network services.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Unsafe and the module boundary.&lt;/strong&gt; Underlying all of these, and every one of
+Rust’s success stories, is the notion of unsafe blocks and privacy that allow
+us to dip into raw pointer manipulation to build these zero cost abstractions.
+None of Rust’s brilliant features would be possible without this really
+fundamental ability to break the rules locally to extend the system beyond what
+the typechecker can handle. This is the zero cost abstraction that is the
+mother of all other zero cost abstractions in Rust.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;In other areas, we still haven’t succeeded so much at finding zero cost
+abstractions. One example of this is the trait object as a solution for
+dynamically dispatched polymorphism. (Note here that the dynamic dispatch is a
+part of the &lt;em dir="ltr"&gt;goal&lt;/em&gt; here, so the virtual call is not non-zero cost.) The problem
+is that the concept of object safety, as well as sized and unsized types, and
+probably just some bad ergonomics around the coercions, has made trait objects
+really unwieldly to work with; I’m usually pretty annoyed when I have to use
+them. For a good 18 months at least I’ve wanted to really dig into this problem
+space, but other things have always taken priority.&lt;/p&gt;</description><pubDate>Fri, 17 May 2019 04:02:48 -0500</pubDate></item><item><title>What have you learned from adopting Typescript into an existing JS codebase?</title><link>https://lobste.rs/s/3ucfhp</link><description>&lt;p&gt;I am thinking about having my engineering team adopt Typescript. We have multiple large JS codebases, the biggest of which is about 2/3 Coffeescript, Backbone, and Handlebars, and 1/3 ES6 with React.&lt;/p&gt;&lt;p&gt;We have quite a lot of bugs, we have to do a lot of hotfixes, and I believe that a number of these could be mitigated by using Typescript. We rarely refactor code, and I believe that it’s largely due to it being slow and difficult, and easy to break.&lt;/p&gt;&lt;p&gt;I don’t think anyone on the team has any previous experience with Typescript. I expect a number of them have not worked with a statically-typed language before.&lt;/p&gt;&lt;p&gt;What have you learned from adopting Typescript? I would love to hear tips, tricks, or ideas for how to make this change - whether it’s management-level (I am an engineer and manager) or code-level.&lt;/p&gt;</description><pubDate>Thu, 16 May 2019 16:08:19 -0500</pubDate></item><item><title>ELK MusicOS</title><link>https://lobste.rs/s/ykmian</link><description>&lt;p&gt;Notice&lt;/p&gt;&lt;p dir="ltr"&gt;This website or its third-party tools use cookies, which are necessary to its functioning and required to achieve the purposes illustrated in the cookie policy. If you want to know more or withdraw your consent to all or some of the cookies, please refer to the &lt;a href="https://www.iubenda.com/privacy-policy/10766175/cookie-policy?an=no&amp;amp;s_ck=false" dir="ltr"&gt;cookie policy&lt;/a&gt;.&lt;br dir="ltr"&gt;By closing this banner, scrolling this page, clicking a link or continuing to browse otherwise, you agree to the use of cookies.&lt;/p&gt;</description><pubDate>Fri, 17 May 2019 02:57:49 -0500</pubDate></item><item><title>Android's Java 8 Support</title><link>https://lobste.rs/s/2nonax</link><description>&lt;p&gt;20 November 2018&lt;/p&gt;&lt;p&gt;I’ve worked from home for a few years, and during that time I’ve heard people around the office complaining about Android’s varying support for different versions of Java. Every year at Google I/O you could find me asking about it at the fireside chats or directly to the folks responsible. At conferences and other developer events it comes up in conversation or in talks with different degrees of accuracy. It’s a complicated topic because what exactly we mean when talking about Android’s Java support can be unclear. There’s a lot to a single version of Java: the language features, the bytecode, the tools, the APIs, the JVM, and more.&lt;/p&gt;&lt;p&gt;When someone talks about Android’s Java 8 support they usually are referring to the language features. So let’s start there with a look at how Android’s toolchain deals with the language features of Java 8.&lt;/p&gt;&lt;h3&gt;Lambdas&lt;/h3&gt;&lt;p&gt;The banner language feature of Java 8 was by far the addition of lambdas. This brought a more terse expression of code as data whereas previously more verbose constructs like anonymous classes would be used.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;class&lt;/span&gt; &lt;span dir="ltr"&gt;Java8&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
   &lt;span dir="ltr"&gt;interface&lt;/span&gt; &lt;span dir="ltr"&gt;Logger&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
     &lt;span dir="ltr"&gt;void&lt;/span&gt; &lt;span dir="ltr"&gt;log&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;String&lt;/span&gt; &lt;span dir="ltr"&gt;s&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
   &lt;span dir="ltr"&gt;}&lt;/span&gt;
