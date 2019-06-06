@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0"><channel><title>lobstre.rs rss with inlined content</title><link>http://n-gate.com</link><description>webshit condom</description><lastBuildDate>Thu, 06 Jun 2019 16:00:21 -0500</lastBuildDate><item><title>ejabberd &amp; Nintendo Switch NPNS</title><link>https://lobste.rs/s/vmqvzu</link><description>&lt;p&gt;Last week, Taiyo Watanabe from Nintendo shared some insights about Nintendo Switch Push Notification infrastructure (NPNS) implementation. Here are some details from his presentation at ElixirFest conference.&lt;/p&gt;&lt;p&gt;The Nintendo Switch NPNS is a large-scale realtime messaging service based on ejabberd. The game consoles are constantly connected to the infrastructure, listening for push notifications. So far, Nintendo shipped more than 34 million units, thus the infrastructure needs to handle millions of concurrent connections.&lt;/p&gt;&lt;img src="https://blog.process-one.net/wp-content/uploads/2019/06/arcade-buttons-design-371924-1.jpg" alt="" width="330" height="248"&gt;&lt;p&gt;The notifications include user-based (directed at active players) and system-based (automatic updates, parental controls). They also include the PubSub topic-based ones like the update notifications and important news, and are available when connected and after a successful login.&lt;/p&gt;&lt;p&gt;In terms of technology, XMPP was chosen due to the large feature set of that protocol. ejabberd was chosen because of its scalability and robustness. It is built in Erlang and inherits many of Erlang strengths: scalability, robustness, native clustering support, and more.&lt;/p&gt;&lt;p&gt;To ease maintenance, Nintendo ejabberd cluster is split into two areas: the inner ejabberd (cpu-bound) and outer ejabberd (memory-bound). All the nodes are connected by the distributed Erlang communication.&lt;/p&gt;&lt;p&gt;The job of the inner ejabberd is to retrieve messages from Amazon Simple Queue Service (SQS), while the outer ejabberd handles the distribution to the Switch game consoles. Business requirements include 1 million concurrent connections, and the recovery for bursting logins in max 30 minutes.&lt;/p&gt;&lt;p&gt;The first performance results of the load test with a simple stock ejabberd service was not sufficient for the production requirements, with capacity at 300k connections and 150 connections per second. Therefore, performance tuning and system redesign was conducted.&lt;/p&gt;&lt;p&gt;The first improvement to reduce memory footprint was to remove the XML parser except from the session memory when it was not active. The second change was to tune OpenSSL parameters to reduce the buffer size. Consequently, the maximum capacity increased to around 750k concurrent connections.&lt;/p&gt;&lt;p&gt;Another issue was the congestion on sockets during burst logins and slow item distribution for some topics, due to the process bottleneck. To solve this, a dedicated distribution worker process was created for each socket. As a result, login throughput increased from 150 per second to 300.&lt;/p&gt;&lt;p&gt;However, the mass delivery of contents created another congestion between the databases and Erlang cluster. To mitigate this, the action was to move content distribution processes from the inner to the outer cluster. Additionally, selective relaying from the inner to outer cluster was set up using a process dictionary to speed up access.&lt;/p&gt;&lt;p&gt;Another interesting problem appeared from the fact that XMPP accepts multiple logins of the same ID (for example, multiple devices). This resulted in too many session processes being created and to many controls being performed to apply standard XMPP business rules. As those rules were not needed in Nintendo use case, the quick solution was to just do nothing when a session is disconnected, and to make the session process die in 1 minute instead of 30.&lt;/p&gt;&lt;p dir="ltr"&gt;The above issue was found using Erlang tracing. However, log processing time became a pain and was increasing exponentially, because of reductions (&lt;code dir="ltr"&gt;erlang:bumpreductions/1&lt;/code&gt;). To be able to handle that, a “dam” process was created to perform rate limiting. Thanks to it, 500k log lines could be processed in 30 seconds instead of 2 hours!&lt;/p&gt;&lt;p&gt;After all the tuning, the infrastructure met business requirements and was ready for production deployment. But that wasn’t the end of tweaking.&lt;/p&gt;&lt;p&gt;Production service was up, but monitoring signalled Redis load was five times bigger than what was expected. A message loop was discovered under certain disconnection conditions. One possible cause might be unprocessed messages triggering an exchange loop. However, testing any hypothesis on the whole production system was too risky. Therefore, a manual hot code deployment was applied directly on only one of the nodes, handling just a small part of the traffic.&lt;/p&gt;&lt;p dir="ltr"&gt;Luckily, the patch on that node was behaving properly, and it was extended to all other nodes. Another higher load was detected in relation to small messages, caused by “busy waiting” BEAM scheduler. The solution: switch &lt;code dir="ltr"&gt;+sbwt&lt;/code&gt; from &lt;code dir="ltr"&gt;medium&lt;/code&gt; to &lt;code dir="ltr"&gt;very_short&lt;/code&gt; resulting in CPU use dropping from 30% to 21%.&lt;/p&gt;&lt;p&gt;The key lesson from this project is to always perform load-testing and profiling. Searching for bottlenecks should be continuous, keeping a lookout for C extensions (NIFs). A good approach is to keep increasing parallelism, reduce per-process load and set rate-limiting. Scaling a service is hard and directly depends on your use case. As you scale, you may discover new bottlenecks and parameters to tune and adjust. Scaling a service is an ongoing effort.&lt;/p&gt;&lt;p&gt;Today, the Nintendo Switch NPNS handles 10 000 000 (10 million!) simultaneous connections, 2 000 000 000 (2 billion!!) messages per day with 100-200k connections per node and 600 messages per second!&lt;/p&gt;&lt;p&gt;The greatest advantage of ejabberd is its incredible scalability and throughput. Erlang VM was also very useful, allowing troubleshooting a live system using Erlang remote shell. In the end, this project was implemented in just 6 months, with 1 month of prototyping. It’s been up and running ever since without major issues.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://speakerdeck.com/elixirfest/otp-to-ejabberd-wohuo-yong-sita-nintendo-switch-tm-xiang-ke-hutusiyutong-zhi-sisutemu-npns-false-kai-fa-shi-li" dir="ltr"&gt;Here is the link&lt;/a&gt; to the slides of the presentation (in Japanese).&lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 07:55:02 -0500</pubDate></item><item><title>Observability Doesn’t Work in Dev</title><link>https://lobste.rs/s/nensly</link><description>&lt;div class="caption"&gt;&lt;time datetime="2019-06-06T15:32:17.587Z"&gt;Jun 6&lt;/time&gt;&lt;/div&gt;&lt;p name="4d2e"&gt;A couple of years ago, diagnosing a problem in production would involve poring over log messages to produce an image in your head of what was happening. It felt like playing the world’s worst designed murder mystery game.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://cdn-images-1.medium.com/max/1600/1*xLhf5vNH6D77A7_ADPRx3g.png" width="320" height="171"&gt;&lt;figcaption dir="auto"&gt;Spot the&amp;nbsp;bug&lt;/figcaption&gt;&lt;/figure&gt;&lt;p name="4d02"&gt;Now we have a slew of complementary tools that, when used in conjunction, make debugging and understanding production systems way easier. Instead of looking at static graphs and hunting around for suspicious looking logs I can notice a systemic problem in Datadog then dive in to specific examples with Honeycomb. As a new hire I can look at traces in Lightstep for all of the requests I’m making and get a high-level overview of the system. It has never been easier to understand our production systems.&lt;/p&gt;&lt;p name="bb20"&gt;Yet, when I talk to engineers and ask them if they have those same tools available to them in dev the answer is often no. This is very frustrating: dev should be simpler than prod! I can sample problematic request traces from millions of requests in prod, but can’t get traces for the 100 or so requests I make in a given day in dev? Why do we not use these great tools in dev? I think there are two answers.&lt;/p&gt;&lt;h4 name="b11b"&gt;Dev is not necessarily a&amp;nbsp;cluster&lt;/h4&gt;&lt;p name="72f7"&gt;One reason we don’t use these production observability tools in dev is that dev does not resemble prod very closely. It could be that prod runs on ECS, and you start things manually on your laptop for dev. Or you might be using Kubernetes in prod but Docker Compose in dev. If everything runs on your laptop where does your tracing service live? Is that a shared service that all devs use? If so, how do they connect to it, who operates and maintains it? If instead it runs on your laptop then what starts it? Where do the traces get stored?&lt;/p&gt;&lt;p name="ae01"&gt;You might be tempted to solve some of these problems by treating developer machines like prod and provisioning them with something like Chef. But what if developers are using macOS, gentoo and Arch Linux? That’s going to make chef recipes a lot more complicated. We keep running into the problem that, whether it’s Zipkin or Chef, these tools are just not designed to be run on individual developer’s machines.&lt;/p&gt;&lt;p name="241a"&gt;Say you did manage to have all of your services running locally, replete with stuff like ELK, Chef and Docker. Now you’re running into another problem: resource exhaustion. ELK is not designed to be run on your laptop and your laptop isn’t designed to be running dozens of services. One local request to your dev environment can generate a ton of work, and more work means less battery life. When this happens to me I’m tempted to throw it all out and just work on one service with grep as my log analyzer. Now dev is even more different from prod.&lt;/p&gt;&lt;p name="8d08"&gt;So then the logical thing to do is give every developer their own cloud cluster. Then I can run all of our prod observability tools against it while saving my lap from overheating hardware. Right?&lt;/p&gt;&lt;h4 name="4109"&gt;Dev clusters have different requirements from prod, and one&amp;nbsp;another&lt;/h4&gt;&lt;p name="b625"&gt;Not so fast: now I have different problems! If I was using LightStep on-prem in prod, how should this work in dev? Should all the dev clusters point to a shared LightStep install? How will I differentiate my data from someone else’s, with the code constantly changing? If I use the prod installation then I have the same problem: how can I make sure that I don’t accidentally look at a dev trace when trying to diagnose a problem in prod?&lt;/p&gt;&lt;p name="ce32"&gt;Cost is another big issue. If I give every developer their own LightStep install then the cost could rise quickly if I’m billed per instance.&lt;/p&gt;&lt;p name="b06b"&gt;Plus there are the classic problems with remote development: jumping through networking hoops to use YourKit with a remote JVM, or connecting an IDE to a remote filesystem so you can edit files in the IDE and have them quickly appear in a remote server. These things are tricky to get set up, and can be flakey when things in your environment change.&lt;/p&gt;&lt;p name="b650"&gt;So where does that leave me? Can I have my observability cake and eat a simple, grokkable responsive local dev environment too?&lt;/p&gt;&lt;h3 name="bf83"&gt;The Fact is: Local Dev is a Different Thing&lt;/h3&gt;&lt;p name="6ff8"&gt;Local development is sufficiently different from prod to require different kinds of tools. Good local development tools adhere to three principles.&lt;/p&gt;&lt;h4 name="494a"&gt;One-stop shop&lt;/h4&gt;&lt;p name="0372"&gt;Production tools seemingly adhere to the first principle of the Unix Philosophy:&lt;/p&gt;&lt;p name="4db3"&gt;&lt;em&gt;Write programs that do one thing and do it well.&lt;/em&gt;&lt;/p&gt;&lt;p name="f346"&gt;For example, like I mentioned above: I use Datadog for graphs, Lightstep for traces, Honeycomb for digging in, etc.&lt;/p&gt;&lt;p name="2c91"&gt;Prod is operated by multiple teams with multiple concerns and workflows, so it’s natural there are multiple tools. In dev, I’m the only admin, and I’d rather not be doing it. I don’t want to manage dozens of services locally to get observability. I can’t afford to be slowed down by the siloing. I’d rather have one tool that makes it easy to do common tasks: I should be able to start my debugging in one window. Some problems may be so unique or special that I end up going to other tools to resolve them, but I can’t be having to tab through twelve windows just to check for one problem.&lt;/p&gt;&lt;p name="3d16"&gt;If there’s a problem in dev, I should switch to one window and know that I can start my debugging there.&lt;/p&gt;&lt;h4 name="26df"&gt;Record everything, retain&amp;nbsp;little&lt;/h4&gt;&lt;p name="dfc4" dir="ltr"&gt;In prod I have two competing priorities: I want to record everything and retain it for as long as possible, but I also want to control costs. Sometimes this means sacrificing how much I’m recording so that I can retain things longer and cheaper. My priorities are different in dev: I want to record everything, full stop. After all it’s just my laptop and I’m the only user so it’s not that much data. But I want to &lt;em dir="ltr"&gt;retain&lt;/em&gt; as little of it as possible. While hard drives are cheap, hard drive space can be limited on a laptop and it’s annoying to expand.&lt;/p&gt;&lt;p name="761b"&gt;Imagine this: you make a request and you get a 500 response code back. Today you might turn on your tracer, adding logging statements, reissue the request and hope that it reproduces reliably. Instead wouldn’t it be amazing if the last request you made locally is always traced and that trace is always persisted? Then whenever this happens you can pull up the last trace and immediately see where to look next.&lt;/p&gt;&lt;p name="b3ee" dir="ltr"&gt;Every time I do something in dev I should be able to see &lt;em dir="ltr"&gt;everything&lt;/em&gt; that happened with 100% fidelity.&lt;/p&gt;&lt;h4 name="1542"&gt;Shareable&lt;/h4&gt;&lt;p name="c9c6"&gt;Shareability is a concept local dev tools should steal from production. Many production tools allow you to create a link to a log search, dashboard or request trace and send them to people. It’s so useful for debugging, especially in a remote/distributed environment! If I’m connected to the network my local dev tools should let us do the same thing. I want to include a snapshot of my current state when I ask a teammate for help.&lt;/p&gt;&lt;p name="397a"&gt;Every time I do something in dev I should be able to quickly share the result with a colleague.&lt;/p&gt;&lt;h3 name="2b07"&gt;Let’s Take Local Development Seriously&lt;/h3&gt;&lt;p name="40aa"&gt;Why does observability suck in dev? We can’t lift and shift our production tools in to dev and expect it to work. These tools are great for finding the needle in a haystack. But in dev there’s just 4 needles, and you want to see them all. So what do we do?&lt;/p&gt;&lt;p name="925f"&gt;Let’s start treating local development as seriously as we do production debugging. Local development is a unique, challenging environment that requires specialized tooling. It’s an environment that we as engineers spend a lot of time working in.&lt;/p&gt;&lt;p name="7d7c"&gt;It’s time the state of the art advanced beyond `grep` and `ps`. It’s time for specialized local development tools.&lt;/p&gt;&lt;p name="4f01" dir="ltr"&gt;&lt;em dir="ltr"&gt;For our first take on a specialized local development tool, check out &lt;/em&gt;&lt;a href="https://tilt.dev/" data-href="https://tilt.dev/" rel="nofollow noopener" dir="ltr"&gt;&lt;em dir="ltr"&gt;Tilt&lt;/em&gt;&lt;/a&gt;&lt;em dir="ltr"&gt;! Tilt manages local development instances for teams that deploy to Kubernetes. Get started easily, get more done, and never play twenty questions with &lt;/em&gt;&lt;code dir="ltr"&gt;&lt;em dir="ltr"&gt;kubectl&lt;/em&gt;&lt;/code&gt;&lt;em dir="ltr"&gt; ever again.&lt;/em&gt;&lt;/p&gt;&lt;LI&gt;&lt;div&gt;&lt;button data-action="sign-up-prompt" data-sign-in-action="toggle-follow-collection" data-requires-token="true" data-redirect="https://medium.com/_/subscribe/collection/windmill-engineering" data-action-source="footer_card----de084b52f7c8----------------------follow_footer" data-collection-id="de084b52f7c8"&gt;&lt;span&gt;Follow&lt;/span&gt;&lt;/button&gt;&lt;/div&gt;&lt;img src="https://cdn-images-1.medium.com/fit/c/120/120/1*hkxugUte2rnlHM1RyfI8bA.png" alt="Windmill Engineering" width="60" height="60"&gt;&lt;/LI&gt;</description><pubDate>Thu, 06 Jun 2019 10:36:35 -0500</pubDate></item><item><title>Nim 0.20.0 has been released</title><link>https://lobste.rs/s/7h70w1</link><description>&lt;h3 dir="ltr"&gt;
+<rss version="2.0"><channel><title>lobstre.rs rss with inlined content</title><link>http://n-gate.com</link><description>webshit condom</description><lastBuildDate>Thu, 06 Jun 2019 16:13:26 -0500</lastBuildDate><item><title>ejabberd &amp; Nintendo Switch NPNS</title><link>https://lobste.rs/s/vmqvzu</link><description>&lt;p&gt;Last week, Taiyo Watanabe from Nintendo shared some insights about Nintendo Switch Push Notification infrastructure (NPNS) implementation. Here are some details from his presentation at ElixirFest conference.&lt;/p&gt;&lt;p&gt;The Nintendo Switch NPNS is a large-scale realtime messaging service based on ejabberd. The game consoles are constantly connected to the infrastructure, listening for push notifications. So far, Nintendo shipped more than 34 million units, thus the infrastructure needs to handle millions of concurrent connections.&lt;/p&gt;&lt;img src="https://blog.process-one.net/wp-content/uploads/2019/06/arcade-buttons-design-371924-1.jpg" alt="" width="330" height="248"&gt;&lt;p&gt;The notifications include user-based (directed at active players) and system-based (automatic updates, parental controls). They also include the PubSub topic-based ones like the update notifications and important news, and are available when connected and after a successful login.&lt;/p&gt;&lt;p&gt;In terms of technology, XMPP was chosen due to the large feature set of that protocol. ejabberd was chosen because of its scalability and robustness. It is built in Erlang and inherits many of Erlang strengths: scalability, robustness, native clustering support, and more.&lt;/p&gt;&lt;p&gt;To ease maintenance, Nintendo ejabberd cluster is split into two areas: the inner ejabberd (cpu-bound) and outer ejabberd (memory-bound). All the nodes are connected by the distributed Erlang communication.&lt;/p&gt;&lt;p&gt;The job of the inner ejabberd is to retrieve messages from Amazon Simple Queue Service (SQS), while the outer ejabberd handles the distribution to the Switch game consoles. Business requirements include 1 million concurrent connections, and the recovery for bursting logins in max 30 minutes.&lt;/p&gt;&lt;p&gt;The first performance results of the load test with a simple stock ejabberd service was not sufficient for the production requirements, with capacity at 300k connections and 150 connections per second. Therefore, performance tuning and system redesign was conducted.&lt;/p&gt;&lt;p&gt;The first improvement to reduce memory footprint was to remove the XML parser except from the session memory when it was not active. The second change was to tune OpenSSL parameters to reduce the buffer size. Consequently, the maximum capacity increased to around 750k concurrent connections.&lt;/p&gt;&lt;p&gt;Another issue was the congestion on sockets during burst logins and slow item distribution for some topics, due to the process bottleneck. To solve this, a dedicated distribution worker process was created for each socket. As a result, login throughput increased from 150 per second to 300.&lt;/p&gt;&lt;p&gt;However, the mass delivery of contents created another congestion between the databases and Erlang cluster. To mitigate this, the action was to move content distribution processes from the inner to the outer cluster. Additionally, selective relaying from the inner to outer cluster was set up using a process dictionary to speed up access.&lt;/p&gt;&lt;p&gt;Another interesting problem appeared from the fact that XMPP accepts multiple logins of the same ID (for example, multiple devices). This resulted in too many session processes being created and to many controls being performed to apply standard XMPP business rules. As those rules were not needed in Nintendo use case, the quick solution was to just do nothing when a session is disconnected, and to make the session process die in 1 minute instead of 30.&lt;/p&gt;&lt;p dir="ltr"&gt;The above issue was found using Erlang tracing. However, log processing time became a pain and was increasing exponentially, because of reductions (&lt;code dir="ltr"&gt;erlang:bumpreductions/1&lt;/code&gt;). To be able to handle that, a “dam” process was created to perform rate limiting. Thanks to it, 500k log lines could be processed in 30 seconds instead of 2 hours!&lt;/p&gt;&lt;p&gt;After all the tuning, the infrastructure met business requirements and was ready for production deployment. But that wasn’t the end of tweaking.&lt;/p&gt;&lt;p&gt;Production service was up, but monitoring signalled Redis load was five times bigger than what was expected. A message loop was discovered under certain disconnection conditions. One possible cause might be unprocessed messages triggering an exchange loop. However, testing any hypothesis on the whole production system was too risky. Therefore, a manual hot code deployment was applied directly on only one of the nodes, handling just a small part of the traffic.&lt;/p&gt;&lt;p dir="ltr"&gt;Luckily, the patch on that node was behaving properly, and it was extended to all other nodes. Another higher load was detected in relation to small messages, caused by “busy waiting” BEAM scheduler. The solution: switch &lt;code dir="ltr"&gt;+sbwt&lt;/code&gt; from &lt;code dir="ltr"&gt;medium&lt;/code&gt; to &lt;code dir="ltr"&gt;very_short&lt;/code&gt; resulting in CPU use dropping from 30% to 21%.&lt;/p&gt;&lt;p&gt;The key lesson from this project is to always perform load-testing and profiling. Searching for bottlenecks should be continuous, keeping a lookout for C extensions (NIFs). A good approach is to keep increasing parallelism, reduce per-process load and set rate-limiting. Scaling a service is hard and directly depends on your use case. As you scale, you may discover new bottlenecks and parameters to tune and adjust. Scaling a service is an ongoing effort.&lt;/p&gt;&lt;p&gt;Today, the Nintendo Switch NPNS handles 10 000 000 (10 million!) simultaneous connections, 2 000 000 000 (2 billion!!) messages per day with 100-200k connections per node and 600 messages per second!&lt;/p&gt;&lt;p&gt;The greatest advantage of ejabberd is its incredible scalability and throughput. Erlang VM was also very useful, allowing troubleshooting a live system using Erlang remote shell. In the end, this project was implemented in just 6 months, with 1 month of prototyping. It’s been up and running ever since without major issues.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://speakerdeck.com/elixirfest/otp-to-ejabberd-wohuo-yong-sita-nintendo-switch-tm-xiang-ke-hutusiyutong-zhi-sisutemu-npns-false-kai-fa-shi-li" dir="ltr"&gt;Here is the link&lt;/a&gt; to the slides of the presentation (in Japanese).&lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 07:55:02 -0500</pubDate></item><item><title>Observability Doesn’t Work in Dev</title><link>https://lobste.rs/s/nensly</link><description>&lt;div class="caption"&gt;&lt;time datetime="2019-06-06T15:32:17.587Z"&gt;Jun 6&lt;/time&gt;&lt;/div&gt;&lt;p name="4d2e"&gt;A couple of years ago, diagnosing a problem in production would involve poring over log messages to produce an image in your head of what was happening. It felt like playing the world’s worst designed murder mystery game.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://cdn-images-1.medium.com/max/1600/1*xLhf5vNH6D77A7_ADPRx3g.png" width="320" height="171"&gt;&lt;figcaption dir="auto"&gt;Spot the&amp;nbsp;bug&lt;/figcaption&gt;&lt;/figure&gt;&lt;p name="4d02"&gt;Now we have a slew of complementary tools that, when used in conjunction, make debugging and understanding production systems way easier. Instead of looking at static graphs and hunting around for suspicious looking logs I can notice a systemic problem in Datadog then dive in to specific examples with Honeycomb. As a new hire I can look at traces in Lightstep for all of the requests I’m making and get a high-level overview of the system. It has never been easier to understand our production systems.&lt;/p&gt;&lt;p name="bb20"&gt;Yet, when I talk to engineers and ask them if they have those same tools available to them in dev the answer is often no. This is very frustrating: dev should be simpler than prod! I can sample problematic request traces from millions of requests in prod, but can’t get traces for the 100 or so requests I make in a given day in dev? Why do we not use these great tools in dev? I think there are two answers.&lt;/p&gt;&lt;h4 name="b11b"&gt;Dev is not necessarily a&amp;nbsp;cluster&lt;/h4&gt;&lt;p name="72f7"&gt;One reason we don’t use these production observability tools in dev is that dev does not resemble prod very closely. It could be that prod runs on ECS, and you start things manually on your laptop for dev. Or you might be using Kubernetes in prod but Docker Compose in dev. If everything runs on your laptop where does your tracing service live? Is that a shared service that all devs use? If so, how do they connect to it, who operates and maintains it? If instead it runs on your laptop then what starts it? Where do the traces get stored?&lt;/p&gt;&lt;p name="ae01"&gt;You might be tempted to solve some of these problems by treating developer machines like prod and provisioning them with something like Chef. But what if developers are using macOS, gentoo and Arch Linux? That’s going to make chef recipes a lot more complicated. We keep running into the problem that, whether it’s Zipkin or Chef, these tools are just not designed to be run on individual developer’s machines.&lt;/p&gt;&lt;p name="241a"&gt;Say you did manage to have all of your services running locally, replete with stuff like ELK, Chef and Docker. Now you’re running into another problem: resource exhaustion. ELK is not designed to be run on your laptop and your laptop isn’t designed to be running dozens of services. One local request to your dev environment can generate a ton of work, and more work means less battery life. When this happens to me I’m tempted to throw it all out and just work on one service with grep as my log analyzer. Now dev is even more different from prod.&lt;/p&gt;&lt;p name="8d08"&gt;So then the logical thing to do is give every developer their own cloud cluster. Then I can run all of our prod observability tools against it while saving my lap from overheating hardware. Right?&lt;/p&gt;&lt;h4 name="4109"&gt;Dev clusters have different requirements from prod, and one&amp;nbsp;another&lt;/h4&gt;&lt;p name="b625"&gt;Not so fast: now I have different problems! If I was using LightStep on-prem in prod, how should this work in dev? Should all the dev clusters point to a shared LightStep install? How will I differentiate my data from someone else’s, with the code constantly changing? If I use the prod installation then I have the same problem: how can I make sure that I don’t accidentally look at a dev trace when trying to diagnose a problem in prod?&lt;/p&gt;&lt;p name="ce32"&gt;Cost is another big issue. If I give every developer their own LightStep install then the cost could rise quickly if I’m billed per instance.&lt;/p&gt;&lt;p name="b06b"&gt;Plus there are the classic problems with remote development: jumping through networking hoops to use YourKit with a remote JVM, or connecting an IDE to a remote filesystem so you can edit files in the IDE and have them quickly appear in a remote server. These things are tricky to get set up, and can be flakey when things in your environment change.&lt;/p&gt;&lt;p name="b650"&gt;So where does that leave me? Can I have my observability cake and eat a simple, grokkable responsive local dev environment too?&lt;/p&gt;&lt;h3 name="bf83"&gt;The Fact is: Local Dev is a Different Thing&lt;/h3&gt;&lt;p name="6ff8"&gt;Local development is sufficiently different from prod to require different kinds of tools. Good local development tools adhere to three principles.&lt;/p&gt;&lt;h4 name="494a"&gt;One-stop shop&lt;/h4&gt;&lt;p name="0372"&gt;Production tools seemingly adhere to the first principle of the Unix Philosophy:&lt;/p&gt;&lt;p name="4db3"&gt;&lt;em&gt;Write programs that do one thing and do it well.&lt;/em&gt;&lt;/p&gt;&lt;p name="f346"&gt;For example, like I mentioned above: I use Datadog for graphs, Lightstep for traces, Honeycomb for digging in, etc.&lt;/p&gt;&lt;p name="2c91"&gt;Prod is operated by multiple teams with multiple concerns and workflows, so it’s natural there are multiple tools. In dev, I’m the only admin, and I’d rather not be doing it. I don’t want to manage dozens of services locally to get observability. I can’t afford to be slowed down by the siloing. I’d rather have one tool that makes it easy to do common tasks: I should be able to start my debugging in one window. Some problems may be so unique or special that I end up going to other tools to resolve them, but I can’t be having to tab through twelve windows just to check for one problem.&lt;/p&gt;&lt;p name="3d16"&gt;If there’s a problem in dev, I should switch to one window and know that I can start my debugging there.&lt;/p&gt;&lt;h4 name="26df"&gt;Record everything, retain&amp;nbsp;little&lt;/h4&gt;&lt;p name="dfc4" dir="ltr"&gt;In prod I have two competing priorities: I want to record everything and retain it for as long as possible, but I also want to control costs. Sometimes this means sacrificing how much I’m recording so that I can retain things longer and cheaper. My priorities are different in dev: I want to record everything, full stop. After all it’s just my laptop and I’m the only user so it’s not that much data. But I want to &lt;em dir="ltr"&gt;retain&lt;/em&gt; as little of it as possible. While hard drives are cheap, hard drive space can be limited on a laptop and it’s annoying to expand.&lt;/p&gt;&lt;p name="761b"&gt;Imagine this: you make a request and you get a 500 response code back. Today you might turn on your tracer, adding logging statements, reissue the request and hope that it reproduces reliably. Instead wouldn’t it be amazing if the last request you made locally is always traced and that trace is always persisted? Then whenever this happens you can pull up the last trace and immediately see where to look next.&lt;/p&gt;&lt;p name="b3ee" dir="ltr"&gt;Every time I do something in dev I should be able to see &lt;em dir="ltr"&gt;everything&lt;/em&gt; that happened with 100% fidelity.&lt;/p&gt;&lt;h4 name="1542"&gt;Shareable&lt;/h4&gt;&lt;p name="c9c6"&gt;Shareability is a concept local dev tools should steal from production. Many production tools allow you to create a link to a log search, dashboard or request trace and send them to people. It’s so useful for debugging, especially in a remote/distributed environment! If I’m connected to the network my local dev tools should let us do the same thing. I want to include a snapshot of my current state when I ask a teammate for help.&lt;/p&gt;&lt;p name="397a"&gt;Every time I do something in dev I should be able to quickly share the result with a colleague.&lt;/p&gt;&lt;h3 name="2b07"&gt;Let’s Take Local Development Seriously&lt;/h3&gt;&lt;p name="40aa"&gt;Why does observability suck in dev? We can’t lift and shift our production tools in to dev and expect it to work. These tools are great for finding the needle in a haystack. But in dev there’s just 4 needles, and you want to see them all. So what do we do?&lt;/p&gt;&lt;p name="925f"&gt;Let’s start treating local development as seriously as we do production debugging. Local development is a unique, challenging environment that requires specialized tooling. It’s an environment that we as engineers spend a lot of time working in.&lt;/p&gt;&lt;p name="7d7c"&gt;It’s time the state of the art advanced beyond `grep` and `ps`. It’s time for specialized local development tools.&lt;/p&gt;&lt;p name="4f01" dir="ltr"&gt;&lt;em dir="ltr"&gt;For our first take on a specialized local development tool, check out &lt;/em&gt;&lt;a href="https://tilt.dev/" data-href="https://tilt.dev/" rel="nofollow noopener" dir="ltr"&gt;&lt;em dir="ltr"&gt;Tilt&lt;/em&gt;&lt;/a&gt;&lt;em dir="ltr"&gt;! Tilt manages local development instances for teams that deploy to Kubernetes. Get started easily, get more done, and never play twenty questions with &lt;/em&gt;&lt;code dir="ltr"&gt;&lt;em dir="ltr"&gt;kubectl&lt;/em&gt;&lt;/code&gt;&lt;em dir="ltr"&gt; ever again.&lt;/em&gt;&lt;/p&gt;&lt;LI&gt;&lt;div&gt;&lt;button data-action="sign-up-prompt" data-sign-in-action="toggle-follow-collection" data-requires-token="true" data-redirect="https://medium.com/_/subscribe/collection/windmill-engineering" data-action-source="footer_card----de084b52f7c8----------------------follow_footer" data-collection-id="de084b52f7c8"&gt;&lt;span&gt;Follow&lt;/span&gt;&lt;/button&gt;&lt;/div&gt;&lt;img src="https://cdn-images-1.medium.com/fit/c/120/120/1*hkxugUte2rnlHM1RyfI8bA.png" alt="Windmill Engineering" width="60" height="60"&gt;&lt;/LI&gt;</description><pubDate>Thu, 06 Jun 2019 10:36:35 -0500</pubDate></item><item><title>Nim 0.20.0 has been released</title><link>https://lobste.rs/s/7h70w1</link><description>&lt;h3 dir="ltr"&gt;
             &lt;span dir="ltr"&gt;
               
               06 June 2019
@@ -698,7 +698,199 @@ when the pipe closes, since there’s no input coming in from STDIN.
 To get around this, we use &lt;code dir="ltr"&gt;cat(1)&lt;/code&gt; which allows us to relay input via &lt;code dir="ltr"&gt;cat&lt;/code&gt;
 to the shell. Nifty trick.&lt;/p&gt;&lt;h3&gt;Conclusion&lt;/h3&gt;&lt;p&gt;This was a fairly basic challenge, with everything laid out conveniently.
 Actual ropchaining is a little more involved, with a lot more gadgets to be chained
-to acheive code execution.&lt;/p&gt;&lt;p&gt;Hopefully, I’ll get around to writing about heap exploitation on ARM too. That’s all for now.&lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 09:47:11 -0500</pubDate></item><item><title>The first 20 Project Euler problems in rust</title><link>https://lobste.rs/s/6lzuxh</link><description>&lt;h2&gt;
+to acheive code execution.&lt;/p&gt;&lt;p&gt;Hopefully, I’ll get around to writing about heap exploitation on ARM too. That’s all for now.&lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 09:47:11 -0500</pubDate></item><item><title>How to Dig into Firmware Code Size</title><link>https://lobste.rs/s/8q3btt</link><description>&lt;article&gt;&lt;time datetime="2019-06-06T00:00:00+00:00"&gt;06 Jun 2019&lt;/time&gt;&lt;/article&gt;&lt;p dir="ltr"&gt;Every firmware engineer has run out of code space at some point or another.
+Whether they are trying to cram in another feature, or to make enough space for
+&lt;a href="https://sbabic.github.io/swupdate/overview.html#double-copy-with-fall-back" dir="ltr"&gt;A/B firmware
+updates&lt;/a&gt;
+more code space is always better.&lt;/p&gt;&lt;p&gt;In this series of posts, we’ll explore ways to save code space and ways not to
+do it. We will cover compiler options, coding style, logging, as well as
+desperate hacks when all you need is another 24 bytes.&lt;/p&gt;&lt;p&gt;But first, let’s talk about measuring code size.&lt;/p&gt;&lt;h3&gt;Why measure?&lt;/h3&gt;&lt;p dir="ltr"&gt;Optimization is often counter intuitive. Don’t take my word for it: this is one
+of the topics &lt;a href="https://devblogs.microsoft.com/oldnewthing/20041216-00/?p=36973" dir="ltr"&gt;Microsoft’s Raymond
+Wong&lt;/a&gt; and &lt;a href="https://homepage.cs.uri.edu/~thenry/resources/unix_art/ch12s02.html" dir="ltr"&gt;Unix
+programmers&lt;/a&gt;
+agree on!&lt;/p&gt;&lt;p&gt;So before you do anything, measure where your code size is going. You may be
+surprised!&lt;/p&gt;&lt;h3&gt;Measuring overall code size&lt;/h3&gt;&lt;p dir="ltr"&gt;The simplest way to measure code size is to inspect the different sections of
+your elf file. The ARM GCC toolchain comes with a handy utility to do just that:
+&lt;code dir="ltr"&gt;arm-none-eabi-size&lt;/code&gt;.&lt;/p&gt;&lt;p&gt;Let’s try running it on one of our ELF files:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;francois-mba:with-libc francois$&lt;/span&gt; arm-none-eabi-size build/with-libc.elf
+&lt;span dir="ltr"&gt;   text    data     bss     dec     hex filename
+  10800     104    8272   19176    4ae8 build/with-libc.elf
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;So in this program we have:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;10800 bytes of &lt;code dir="ltr"&gt;text&lt;/code&gt;, which is code&lt;/LI&gt;&lt;LI&gt;104 bytes of &lt;code dir="ltr"&gt;data&lt;/code&gt;, which is statically initalized memory&lt;/LI&gt;&lt;LI&gt;8272 bytes of &lt;code dir="ltr"&gt;bss&lt;/code&gt;, which is zero-initialized memory&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Unfortunately, the output of this tool is a little misleading. You may think
+that your program will occupy &lt;code dir="ltr"&gt;10800&lt;/code&gt; bytes of flash, but this is not the case.&lt;/p&gt;&lt;p&gt;Indeed if we modify our linker script to specify that our flash size is 10800
+exactly:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;diff --git a/with-libc/samd21g18a_flash.ld b/with-libc/samd21g18a_flash.ld
+index a07cc82b..f49e73e2 100644
+&lt;/span&gt;&lt;span dir="ltr"&gt;--- a/with-libc/samd21g18a_flash.ld
+&lt;/span&gt;&lt;span dir="ltr"&gt;+++ b/with-libc/samd21g18a_flash.ld
+&lt;/span&gt;&lt;span dir="ltr"&gt;@@ -3,7 +3,7 @@ OUTPUT_ARCH(arm)
+&lt;/span&gt; 
+ MEMORY
+ {
+&lt;span dir="ltr"&gt;-  rom      (rx)  : ORIGIN = 0x00000000, LENGTH = 0x00040000
+&lt;/span&gt;&lt;span dir="ltr"&gt;+  rom      (rx)  : ORIGIN = 0x00000000, LENGTH = 10800
+&lt;/span&gt;   ram      (rwx) : ORIGIN = 0x20000000, LENGTH = 0x00008000
+ }
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;We end up overflowing our flash!&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;francois-mba:with-libc francois$&lt;/span&gt; make
+&lt;span dir="ltr"&gt;[...]
+/usr/local/Cellar/arm-none-eabi-gcc/8-2018-q4-major/gcc/bin/../lib/gcc/arm-none-eabi/8.2.1/../../../../arm-none-eabi/bin/ld:
+build/with-libc.elf section `.data' will not fit in region `rom'
+/usr/local/Cellar/arm-none-eabi-gcc/8-2018-q4-major/gcc/bin/../lib/gcc/arm-none-eabi/8.2.1/../../../../arm-none-eabi/bin/ld:
+region `rom' overflowed by 104 bytes
+collect2: error: ld returned 1 exit status
+make: *** [build/with-libc.elf] Error 1
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The 104 bytes overflow hints at the cause: we are overflowing our flash by
+the size of our &lt;code dir="ltr"&gt;data&lt;/code&gt; section. This is because initialization values for our
+initialized static variables are stored in flash as well.&lt;/p&gt;&lt;p&gt;To avoid confusion, I prefer to use a small script to compute the sizes:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/bin/bash&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;  &lt;span dir="ltr"&gt;$# &lt;/span&gt;&lt;span dir="ltr"&gt;-le&lt;/span&gt; 2 &lt;span dir="ltr"&gt;]&lt;/span&gt;
+&lt;span dir="ltr"&gt;then
+    &lt;/span&gt;&lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;"This script requires 3 arguments."&lt;/span&gt;
+    &lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;-e&lt;/span&gt; &lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;\n&lt;/span&gt;&lt;span dir="ltr"&gt;Usage:&lt;/span&gt;&lt;span dir="ltr"&gt;\n&lt;/span&gt;&lt;span dir="ltr"&gt;get-fw-size FILE MAX_FLASH_SIZE MAX_RAM_SIZE &lt;/span&gt;&lt;span dir="ltr"&gt;\n&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;
+    &lt;span dir="ltr"&gt;exit &lt;/span&gt;1
+&lt;span dir="ltr"&gt;fi
+
+&lt;/span&gt;&lt;span dir="ltr"&gt;file&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$1&lt;/span&gt;
+&lt;span dir="ltr"&gt;max_flash&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$2&lt;/span&gt;
+&lt;span dir="ltr"&gt;max_ram&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$3&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;function &lt;/span&gt;print_region&lt;span dir="ltr"&gt;()&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    &lt;span dir="ltr"&gt;size&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$1&lt;/span&gt;
+    &lt;span dir="ltr"&gt;max_size&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$2&lt;/span&gt;
+    &lt;span dir="ltr"&gt;name&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$3&lt;/span&gt;
+
+    &lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;[[&lt;/span&gt; &lt;span dir="ltr"&gt;$max_size&lt;/span&gt; &lt;span dir="ltr"&gt;==&lt;/span&gt; 0x&lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;]]&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;then
+        &lt;/span&gt;&lt;span dir="ltr"&gt;max_size&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;${&lt;/span&gt;&lt;span dir="ltr"&gt;max_size&lt;/span&gt;:2&lt;span dir="ltr"&gt;})&lt;/span&gt;
+        &lt;span dir="ltr"&gt;max_size&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$((&lt;/span&gt; &lt;span dir="ltr"&gt;16&lt;/span&gt;&lt;span dir="ltr"&gt;#$max_size ))&lt;/span&gt;
+    &lt;span dir="ltr"&gt;fi
+
+    &lt;/span&gt;&lt;span dir="ltr"&gt;pct&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$((&lt;/span&gt; &lt;span dir="ltr"&gt;100&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;$size&lt;/span&gt; &lt;span dir="ltr"&gt;/&lt;/span&gt; &lt;span dir="ltr"&gt;$max_size&lt;/span&gt; &lt;span dir="ltr"&gt;))&lt;/span&gt;
+    &lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;$name&lt;/span&gt;&lt;span dir="ltr"&gt; used: &lt;/span&gt;&lt;span dir="ltr"&gt;$size&lt;/span&gt;&lt;span dir="ltr"&gt; / &lt;/span&gt;&lt;span dir="ltr"&gt;$max_size&lt;/span&gt;&lt;span dir="ltr"&gt; (&lt;/span&gt;&lt;span dir="ltr"&gt;$pct&lt;/span&gt;&lt;span dir="ltr"&gt;%)"&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;raw&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;arm-none-eabi-size &lt;span dir="ltr"&gt;$file&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;text&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;$raw&lt;/span&gt; | &lt;span dir="ltr"&gt;cut&lt;/span&gt; &lt;span dir="ltr"&gt;-d&lt;/span&gt; &lt;span dir="ltr"&gt;' '&lt;/span&gt; &lt;span dir="ltr"&gt;-f&lt;/span&gt; 7&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;span dir="ltr"&gt;data&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;$raw&lt;/span&gt; | &lt;span dir="ltr"&gt;cut&lt;/span&gt; &lt;span dir="ltr"&gt;-d&lt;/span&gt; &lt;span dir="ltr"&gt;' '&lt;/span&gt; &lt;span dir="ltr"&gt;-f&lt;/span&gt; 8&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;span dir="ltr"&gt;bss&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;$raw&lt;/span&gt; | &lt;span dir="ltr"&gt;cut&lt;/span&gt; &lt;span dir="ltr"&gt;-d&lt;/span&gt; &lt;span dir="ltr"&gt;' '&lt;/span&gt; &lt;span dir="ltr"&gt;-f&lt;/span&gt; 9&lt;span dir="ltr"&gt;)&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;flash&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$((&lt;/span&gt;&lt;span dir="ltr"&gt;$text&lt;/span&gt; &lt;span dir="ltr"&gt;+&lt;/span&gt; &lt;span dir="ltr"&gt;$data&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;
+&lt;span dir="ltr"&gt;ram&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$((&lt;/span&gt;&lt;span dir="ltr"&gt;$data&lt;/span&gt; &lt;span dir="ltr"&gt;+&lt;/span&gt; &lt;span dir="ltr"&gt;$bss&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;
+
+print_region &lt;span dir="ltr"&gt;$flash&lt;/span&gt; &lt;span dir="ltr"&gt;$max_flash&lt;/span&gt; &lt;span dir="ltr"&gt;"Flash"&lt;/span&gt;
+print_region &lt;span dir="ltr"&gt;$ram&lt;/span&gt; &lt;span dir="ltr"&gt;$max_ram&lt;/span&gt; &lt;span dir="ltr"&gt;"RAM"&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;which gives us:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;francois-mba:with-libc francois$&lt;/span&gt; ./get-fw-size build/with-libc.elf 0x40000
+&lt;span dir="ltr"&gt;0x8000
+Flash used: 10904 / 262144 (4%)
+RAM used: 8376 / 32768 (25%)
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Stick that in your Makefiles, and you’ll have the size as you build
+your firmware.&lt;/p&gt;&lt;p dir="ltr"&gt;Note that an alternative to running &lt;code dir="ltr"&gt;size&lt;/code&gt; is to add the &lt;code dir="ltr"&gt;-Wl,--print-memory-usage&lt;/code&gt;
+link-time flag which will give you something that looks like this:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;&lt;span&gt;Memory region         Used Size  Region Size  %age Used
+             rom:       10800 B       256 KB      4.12%
+             ram:        8376 B        32 KB     25.56%
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This falls into the same pitfall as &lt;code dir="ltr"&gt;size&lt;/code&gt; in that it does not count &lt;code dir="ltr"&gt;data&lt;/code&gt;
+against ROM, and gives us less info since it does not break RAM out into &lt;code dir="ltr"&gt;data&lt;/code&gt;
+and &lt;code dir="ltr"&gt;bss&lt;/code&gt;.&lt;/p&gt;&lt;h3&gt;Digging into functions&lt;/h3&gt;&lt;p dir="ltr"&gt;The above tells us &lt;em dir="ltr"&gt;how much&lt;/em&gt; code space we are using, but not &lt;em dir="ltr"&gt;why&lt;/em&gt;. To answer
+the latter, we need to go deeper.&lt;/p&gt;&lt;p dir="ltr"&gt;This is where another tool bundled with the GNU ARM toolchain comes in handy:
+&lt;code dir="ltr"&gt;arm-none-eabi-nm&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;nm&lt;/code&gt; allows us to print out all of the symbols in an ELF file, and with the
+&lt;code dir="ltr"&gt;--size&lt;/code&gt; option it will also print the size of each symbol, and even sort them
+by size if you specify &lt;code dir="ltr"&gt;--size-sort&lt;/code&gt;.&lt;/p&gt;&lt;p&gt;So if we want to dig into what symbols consume the most code space, we simply
+do:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;francois-mba:with-libc francois$&lt;/span&gt; arm-none-eabi-nm &lt;span dir="ltr"&gt;--print-size&lt;/span&gt; &lt;span dir="ltr"&gt;--size-sort&lt;/span&gt; &lt;span dir="ltr"&gt;--radix&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;d build/with-libc.elf | &lt;span dir="ltr"&gt;tail&lt;/span&gt; &lt;span dir="ltr"&gt;-30&lt;/span&gt;
+&lt;span dir="ltr"&gt;00004420 00000100 T _write
+00006948 00000112 T __sinit
+00002096 00000118 T _sercom_get_sync_baud_val
+00002684 00000124 T sercom_set_gclk_generator
+00009864 00000128 T _fflush_r
+00010112 00000136 T __smakebuf_r
+00007060 00000144 T __sfp
+00005676 00000144 T system_gclk_chan_disable
+00010304 00000148 T _free_r
+00009104 00000172 T __swbuf_r
+00000000 00000180 T exception_table
+00005112 00000180 T system_clock_source_get_hz
+00007276 00000188 T _malloc_r
+00003894 00000190 t usart_get_config_defaults
+00005352 00000196 T system_gclk_gen_get_hz
+00003332 00000200 T Reset_Handler
+00001636 00000214 T usart_read_wait
+00008164 00000218 T _printf_common
+00001872 00000224 t long_division
+00009316 00000236 T __swsetup_r
+00006320 00000266 T __udivsi3
+00005984 00000272 t _system_pinmux_config
+00009588 00000276 T __sflush_r
+00001122 00000416 T usart_init
+00002808 00000444 T _sercom_get_default_pad
+00002216 00000468 T _sercom_get_async_baud_val
+00008384 00000532 T _printf_i
+00007544 00000620 T _vfiprintf_r
+00007544 00000620 T _vfprintf_r
+00000430 00000692 t _usart_set_config
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Note: you can also add &lt;code dir="ltr"&gt;-l&lt;/code&gt; to get filename &amp;amp; line # for each symbol.&lt;/p&gt;&lt;p dir="ltr"&gt;Here we see that our largest symbol is &lt;code dir="ltr"&gt;_usart_set_config&lt;/code&gt; which uses 692
+bytes of flash.&lt;/p&gt;&lt;h3&gt;Puncover&lt;/h3&gt;&lt;p dir="ltr"&gt;Although you can get quite far with the ARM GNU tools, my favorite tool for code
+size analysis by far is &lt;a href="https://github.com/memfault/puncover" dir="ltr"&gt;Puncover&lt;/a&gt;.
+Originally built by &lt;a href="https://heikobehrens.net/" dir="ltr"&gt;Heiko Behrens&lt;/a&gt;, my former
+coworker at Pebble.&lt;/p&gt;&lt;p&gt;Puncover will give you a full hierarchical view of both code size and static
+memory per module, file, and function. See the screenshot below:&lt;/p&gt;&lt;img src="https://interrupt.memfault.com/blog/img/code-size-1/puncover-1.png" alt="" width="312" height="75"&gt;&lt;p&gt;It also shows you details for each function, including callers, callees, and
+disassembly.&lt;/p&gt;&lt;img src="https://interrupt.memfault.com/blog/img/code-size-1/puncover-2.png" alt="" width="312" height="192"&gt;&lt;p&gt;Truly, it is a firmware analysis swiss army knife!&lt;/p&gt;&lt;p&gt;Using puncover is relatively straightforward. You’ll need to lightly prepare
+your codebase, setup the tool itself, and run it.&lt;/p&gt;&lt;h3&gt;Preparing our codebase&lt;/h3&gt;&lt;p&gt;In order to for puncover to work, our elf file needs to contain the requisite
+information. As such, you’ll need to make sure you’ve got the following CFLAGS
+set:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;-g&lt;/code&gt;: this generates debug information which puncover requires for analysis&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;-fdebug-prefix-map=/=&lt;/code&gt;: this flag forces gcc to collect full paths for
+filenames. This allows puncover to create the hierarchical view of the code.
+Even better would be to use your repository’s root (usually found by running
+&lt;code dir="ltr"&gt;git rev-parse --show-toplevel&lt;/code&gt;).&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;I typically add those two to my CFLAGS for every project directly in my
+Makefile.&lt;/p&gt;&lt;h3&gt;Setting up puncover&lt;/h3&gt;&lt;p&gt;Puncover is relatively straightforward to setup: you simply need to clone it,
+setup a virtualenv, and install the dependencies.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;/span&gt; Clone
+&lt;span dir="ltr"&gt;francois-mba:code francois$&lt;/span&gt; git clone git@github.com:memfault/puncover.git
+&lt;span dir="ltr"&gt;Cloning into 'puncover'...
+remote: Enumerating objects: 1, done.
+remote: Counting objects: 100% (1/1), done.
+remote: Total 609 (delta 0), reused 0 (delta 0), pack-reused 608
+Receiving objects: 100% (609/609), 1.22 MiB | 1.39 MiB/s, done.
+Resolving deltas: 100% (325/325), done.
+&lt;/span&gt;&lt;span dir="ltr"&gt;#&lt;/span&gt; Setup venv
+&lt;span dir="ltr"&gt;francois-mba:puncover francois$&lt;/span&gt; python2.7 &lt;span dir="ltr"&gt;-m&lt;/span&gt; virtualenv venv
+&lt;span dir="ltr"&gt;New python executable in /Users/francois/code/puncover/venv/bin/python2.7
+Also creating executable in /Users/francois/code/puncover/venv/bin/python
+Installing setuptools, pip, wheel...
+done.
+&lt;/span&gt;&lt;span dir="ltr"&gt;#&lt;/span&gt; Install dependencies
+&lt;span dir="ltr"&gt;francois-mba:puncover francois$&lt;/span&gt; &lt;span dir="ltr"&gt;source &lt;/span&gt;venv/bin/activate
+&lt;span dir="ltr"&gt;(venv) francois-mba:puncover francois$&lt;/span&gt; pip &lt;span dir="ltr"&gt;install&lt;/span&gt; &lt;span dir="ltr"&gt;-r&lt;/span&gt; requirements.txt
+&lt;span dir="ltr"&gt;[...]
+Successfully installed Flask-0.10.1 Jinja2-2.10.1 MarkupSafe-1.1.1
+Werkzeug-0.15.2 argparse-1.4.0 certifi-2019.3.9 chardet-3.0.4 codecov-2.0.5
+cov-core-1.15.0 coverage-4.5.3 funcsigs-1.0.2 idna-2.8 itsdangerous-1.1.0
+mock-1.3.0 nose-1.3.7 nose-cov-1.6 pbr-5.2.0 requests-2.21.0 six-1.12.0
+urllib3-1.24.3
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Running puncover&lt;/h3&gt;&lt;p dir="ltr"&gt;While you can install puncover as an executable, I typically just run the
+&lt;code dir="ltr"&gt;runner.py&lt;/code&gt; script directly. All it requires is the path to your GNU ARM
+toolchain:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;python runner.py --arm_tools_dir=&amp;lt;path-to-arm-tools-folder&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;--elf_file&lt;/span&gt; &amp;lt;path-to-elf-file&amp;gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Note that puncover needs the top level folder for your arm tools, not the &lt;code dir="ltr"&gt;bin&lt;/code&gt;
+file. For me that’s &lt;code dir="ltr"&gt;/usr/local/Cellar/arm-none-eabi-gcc/8-2018-q4-major/&lt;/code&gt;.&lt;/p&gt;&lt;p&gt;If all goes well, you should see that puncover has spun up a webserver:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;(venv) francois-mba:puncover francois$&lt;/span&gt; python runner.py
+&lt;span dir="ltr"&gt;--arm_tools_dir=/usr/local/Cellar/arm-none-eabi-gcc/8-2018-q4-major/ --e_file
+~/code/zero-to-main/with-libc/build/with-libc.elf
+DEPRECATED: argument --arm_tools_dir will be removed, use --gcc_tools_base
+instead.
+parsing ELF at /Users/francois/code/zero-to-main/with-libc/build/with-libc.elf
+enhancing function sizes
+deriving folders
+enhancing file elements
+enhancing assembly
+enhancing call tree
+enhancing siblings
+unmangling c++ symbols
+ * Running on http://127.0.0.1:5000/ (Press CTRL+C to quit
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Now open your favorite web browser at localhost:5000, and enjoy!&lt;/p&gt;&lt;p dir="ltr"&gt;Note: You may notice that some code size will be attributed to symbols under
+&lt;code dir="ltr"&gt;&amp;lt;Unknown&amp;gt;&lt;/code&gt;. If you dig into those, you will see that they are all symbols
+provided by the compiler or libc, such as &lt;code dir="ltr"&gt;__aeabi_idiv0&lt;/code&gt; or &lt;code dir="ltr"&gt;_printf_i&lt;/code&gt;. These
+symbols do not come with file information as newlib is not compiled with &lt;code dir="ltr"&gt;-g&lt;/code&gt; in
+most distributions. If you built your own newlib from source, you could fix
+that!&lt;/p&gt;&lt;h3&gt;Epilogue&lt;/h3&gt;&lt;p dir="ltr"&gt;Upon reviewing this blog post, a friend suggested I look at Bloaty by Google.
+You can check it out on &lt;a href="https://github.com/google/bloaty" dir="ltr"&gt;Github&lt;/a&gt; or just
+download it from brew.&lt;/p&gt;&lt;p&gt;Bloaty is a nifty tool that wraps all the objdump analysis into a nice CLI
+client, and can even tell you what sections, symbols, and files grew or shrunk
+between two ELFs which would be very useful for a CI system.&lt;/p&gt;&lt;p&gt;What tools and technique do you use to debug code size? Let us know in the
+comments!&lt;/p&gt;&lt;p&gt;Next in the series, we’ll talk about compiler settings you can use to optimize
+for code size.&lt;/p&gt;&lt;img src="https://interrupt.memfault.com/blog/img/author/francois.jpg" width="70" height="70"&gt;&lt;div&gt;&lt;span dir="ltr"&gt;&lt;a href="https://twitter.com/baldassarifr" dir="ltr"&gt;François Baldassari&lt;/a&gt; has worked on the embedded software teams at Sun, Pebble, and Oculus. He is currently the CEO of &lt;a href="https://memfault.com/" dir="ltr"&gt;Memfault&lt;/a&gt;.&lt;/span&gt;&lt;/div&gt;</description><pubDate>Thu, 06 Jun 2019 16:13:26 -0500</pubDate></item><item><title>The first 20 Project Euler problems in rust</title><link>https://lobste.rs/s/6lzuxh</link><description>&lt;h2&gt;
       
       Project Euler
     &lt;/h2&gt;&lt;h1&gt;The first 20 Project Euler problems&lt;/h1&gt;&lt;p dir="ltr"&gt;During my first week here at RC I decided to attend a session led by another
@@ -1028,7 +1220,18 @@ accumulation logic, although we could have done the same thing with a &lt;code d
 x.len()).sum()&lt;/code&gt;.&lt;/p&gt;&lt;h2&gt;More Project Euler?&lt;/h2&gt;&lt;p&gt;From here on I think I’m going to be a bit more sparing in my problem selection
 and not try to exhaustively do them all. Hopefully I’ll have some more blog
 posts about Project Euler problems as I run into particularly interesting ones
-or ones that teach me something new about rust.&lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 12:44:20 -0500</pubDate></item><item><title>Bloom: a free and open source Google</title><link>https://lobste.rs/s/k6kyph</link><description>&lt;h2 dir="ltr"&gt;TL;DR
+or ones that teach me something new about rust.&lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 12:44:20 -0500</pubDate></item><item><title>I'm .ok you're .ok: introducing folder profiles for bash and powershell</title><link>https://lobste.rs/s/shu8z9</link><description>&lt;img src="http://www.secretgeek.net/image/logo_64_43.png" alt="secretGeek logo" width="64" height="48"&gt;&lt;h1&gt;&lt;a href="http://www.secretgeek.net/"&gt;&amp;nbsp;secretGeek.net&lt;/a&gt;&lt;/h1&gt;&lt;h1&gt;I'm .ok you're .ok: introducing folder profiles for bash and powershell&lt;/h1&gt;&lt;article&gt;&lt;time datetime="2018-01-04T03:34:30-00:00" itemprop="datePublished"&gt;January 04, 2018&lt;/time&gt;&lt;/article&gt;&lt;p dir="ltr"&gt;Summary: a &lt;code dir="ltr"&gt;.ok&lt;/code&gt; file holds a bunch of handy one-liners, specific to the folder it is in. It can be viewed or executed with a simple command. It makes you smarter and more efficient.&lt;/p&gt;&lt;p&gt;I work on lots of little projects and each one has its own nuances and tricks. Context switching from one project to the next is hard on the brain. Some projects are brand new, some are ten years old. Some are in Windows, some are in Linux.&lt;/p&gt;&lt;p&gt;Every time I go to resume work on a project there is that moment of confusion as the brain tries to reload a dusty tape of facts from cold storage.&lt;/p&gt;&lt;p dir="ltr"&gt;To make it easier to recall all pertinent facts, I've started putting a little file called ".ok" in each project. This file holds any relevant shell commands I use with that project. (I have a &lt;a href="https://github.com/secretGeek/ok-ps" dir="ltr"&gt;powershell version&lt;/a&gt; and a &lt;a href="https://github.com/secretGeek/ok-bash" dir="ltr"&gt;bash version&lt;/a&gt;)&lt;/p&gt;&lt;p dir="ltr"&gt;For example here's the &lt;code dir="ltr"&gt;.ok&lt;/code&gt; file from my "&lt;a href="https://til.secretgeek.net/" dir="ltr"&gt;Today I Learned&lt;/a&gt;" project:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;PRE&gt;&lt;code&gt;.\quick.ps1; .\deploy.ps1; # quick-build, prepare to deploy
+.\build.ps1 # complete build, after which you can see preview
+_book\index.html # see preview
+.\wordcount.ps1 # custom word count script
+&lt;/code&gt;&lt;/PRE&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;If I type the command "&lt;code dir="ltr"&gt;ok&lt;/code&gt;" then I will see a listing of this file &lt;strong dir="ltr"&gt;with a number against each line&lt;/strong&gt;:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;PRE&gt;&lt;code&gt;&amp;gt; ok
+1. .\quick.ps1; .\deploy.ps1; # quick-build, prepare to deploy
+2. .\build.ps1 # complete build, after which you can see preview
+3. _book\index.html # see preview
+4. .\wordcount.ps1 # custom word count script
+&lt;/code&gt;&lt;/PRE&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;And if I type "&lt;code dir="ltr"&gt;ok 3&lt;/code&gt;" then it will run line number &lt;code dir="ltr"&gt;3&lt;/code&gt;, like this:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;PRE&gt;&lt;code&gt;&amp;gt; ok 3
+&amp;gt; _book\index.html # see preview
+&lt;/code&gt;&lt;/PRE&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;(And in this case I'll see a HTML preview of the current state of the book)&lt;/p&gt;&lt;p dir="ltr"&gt;To make "&lt;code dir="ltr"&gt;ok&lt;/code&gt;" extra useful, I've setup my system so that &lt;em dir="ltr"&gt;every&lt;/em&gt; time I navigate into any folder (via &lt;code dir="ltr"&gt;cd&lt;/code&gt;), the command "&lt;code dir="ltr"&gt;ok&lt;/code&gt;" is run immediately. So if there is a "&lt;code dir="ltr"&gt;.ok&lt;/code&gt;" file I'll immediately see the available commands. (I did this by removing the "&lt;code dir="ltr"&gt;cd&lt;/code&gt;" alias, and making a custom "&lt;code dir="ltr"&gt;cd&lt;/code&gt;" &lt;em dir="ltr"&gt;function&lt;/em&gt; that does a &lt;code dir="ltr"&gt;set-location&lt;/code&gt; followed by a call to "&lt;code dir="ltr"&gt;ok&lt;/code&gt;")&lt;/p&gt;&lt;p dir="ltr"&gt;If I want to add a command to the file, it is the work of a moment. I can do it immediately by editing the "&lt;code dir="ltr"&gt;.ok&lt;/code&gt;" file with "&lt;code dir="ltr"&gt;ed&lt;/code&gt;" or any &lt;a href="http://www.secretgeek.net/fuv_intro" dir="ltr"&gt;standard&lt;/a&gt; &lt;a href="http://www.secretgeek.net/zo_intro" dir="ltr"&gt;editor&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;Source code is here:&lt;/p&gt;&lt;p&gt;And here:&lt;/p&gt;&lt;p dir="ltr"&gt;Sometimes I write a thing and slowly stop using it. Other times I use it more and more, day after day, year after year, as happened with &lt;a href="http://nimbletext.com/" dir="ltr"&gt;NimbleText&lt;/a&gt;. So far, "ok" seems to be one of those "use it more and more" solutions. So I think you would do well to give it a try.&lt;/p&gt;&lt;p&gt;Any issues, lemme know.&lt;/p&gt;&lt;p dir="ltr"&gt;My book &lt;a href="http://www.secretgeek.net/" dir="ltr"&gt;"Choose Your First Product"&lt;/a&gt; is available now.&lt;/p&gt;&lt;p&gt;It gives you 4 easy steps to find and validate a humble product idea.&lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 14:24:29 -0500</pubDate></item><item><title>Bloom: a free and open source Google</title><link>https://lobste.rs/s/k6kyph</link><description>&lt;h2 dir="ltr"&gt;TL;DR
 &lt;/h2&gt;&lt;p&gt;To bring an answer to the universal and unprecedented challenges of our century, we have created a free and open source 'Google' (and without advertising or targeting): Bloom - currently a suite of productivity apps, and later the only ecosystem you will need
 to meet your daily needs. We think that open source is the only way to build a sustainable future.&lt;/p&gt;&lt;p dir="ltr"&gt;You can find the &lt;a href="https://bloom.sh/" rel="noopener" dir="ltr"&gt;online website here&lt;/a&gt;, the &lt;a href="https://play.google.com/store/apps/details?id=com.bloom42.bloomx" rel="noopener" dir="ltr"&gt;Android app here&lt;/a&gt;
 and go &lt;a href="https://kerkour.fr/blog/bloom-a-free-and-open-source-google/#contribute" dir="ltr"&gt;here to learn how to contribute&lt;/a&gt;. This is just the beginning of a great adventure 🚀&lt;/p&gt;&lt;h2 dir="ltr"&gt;Universal and unprecedented challenges (Why?)
@@ -1121,18 +1324,7 @@ No, because the GHC runtime is built for the STG memory model.
 In contrast, there’s no uniform memory representation in GRIN.&lt;/p&gt;&lt;footer dir="ltr"&gt;
         
         &lt;span dir="ltr"&gt;This page was generated by &lt;a href="https://pages.github.com/" dir="ltr"&gt;GitHub Pages&lt;/a&gt;.&lt;/span&gt;
-      &lt;/footer&gt;</description><pubDate>Thu, 06 Jun 2019 03:12:46 -0500</pubDate></item><item><title>I'm .ok you're .ok: introducing folder profiles for bash and powershell</title><link>https://lobste.rs/s/shu8z9</link><description>&lt;img src="http://www.secretgeek.net/image/logo_64_43.png" alt="secretGeek logo" width="64" height="48"&gt;&lt;h1&gt;&lt;a href="http://www.secretgeek.net/"&gt;&amp;nbsp;secretGeek.net&lt;/a&gt;&lt;/h1&gt;&lt;h1&gt;I'm .ok you're .ok: introducing folder profiles for bash and powershell&lt;/h1&gt;&lt;article&gt;&lt;time datetime="2018-01-04T03:34:30-00:00" itemprop="datePublished"&gt;January 04, 2018&lt;/time&gt;&lt;/article&gt;&lt;p dir="ltr"&gt;Summary: a &lt;code dir="ltr"&gt;.ok&lt;/code&gt; file holds a bunch of handy one-liners, specific to the folder it is in. It can be viewed or executed with a simple command. It makes you smarter and more efficient.&lt;/p&gt;&lt;p&gt;I work on lots of little projects and each one has its own nuances and tricks. Context switching from one project to the next is hard on the brain. Some projects are brand new, some are ten years old. Some are in Windows, some are in Linux.&lt;/p&gt;&lt;p&gt;Every time I go to resume work on a project there is that moment of confusion as the brain tries to reload a dusty tape of facts from cold storage.&lt;/p&gt;&lt;p dir="ltr"&gt;To make it easier to recall all pertinent facts, I've started putting a little file called ".ok" in each project. This file holds any relevant shell commands I use with that project. (I have a &lt;a href="https://github.com/secretGeek/ok-ps" dir="ltr"&gt;powershell version&lt;/a&gt; and a &lt;a href="https://github.com/secretGeek/ok-bash" dir="ltr"&gt;bash version&lt;/a&gt;)&lt;/p&gt;&lt;p dir="ltr"&gt;For example here's the &lt;code dir="ltr"&gt;.ok&lt;/code&gt; file from my "&lt;a href="https://til.secretgeek.net/" dir="ltr"&gt;Today I Learned&lt;/a&gt;" project:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;PRE&gt;&lt;code&gt;.\quick.ps1; .\deploy.ps1; # quick-build, prepare to deploy
-.\build.ps1 # complete build, after which you can see preview
-_book\index.html # see preview
-.\wordcount.ps1 # custom word count script
-&lt;/code&gt;&lt;/PRE&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;If I type the command "&lt;code dir="ltr"&gt;ok&lt;/code&gt;" then I will see a listing of this file &lt;strong dir="ltr"&gt;with a number against each line&lt;/strong&gt;:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;PRE&gt;&lt;code&gt;&amp;gt; ok
-1. .\quick.ps1; .\deploy.ps1; # quick-build, prepare to deploy
-2. .\build.ps1 # complete build, after which you can see preview
-3. _book\index.html # see preview
-4. .\wordcount.ps1 # custom word count script
-&lt;/code&gt;&lt;/PRE&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;And if I type "&lt;code dir="ltr"&gt;ok 3&lt;/code&gt;" then it will run line number &lt;code dir="ltr"&gt;3&lt;/code&gt;, like this:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;PRE&gt;&lt;code&gt;&amp;gt; ok 3
-&amp;gt; _book\index.html # see preview
-&lt;/code&gt;&lt;/PRE&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;(And in this case I'll see a HTML preview of the current state of the book)&lt;/p&gt;&lt;p dir="ltr"&gt;To make "&lt;code dir="ltr"&gt;ok&lt;/code&gt;" extra useful, I've setup my system so that &lt;em dir="ltr"&gt;every&lt;/em&gt; time I navigate into any folder (via &lt;code dir="ltr"&gt;cd&lt;/code&gt;), the command "&lt;code dir="ltr"&gt;ok&lt;/code&gt;" is run immediately. So if there is a "&lt;code dir="ltr"&gt;.ok&lt;/code&gt;" file I'll immediately see the available commands. (I did this by removing the "&lt;code dir="ltr"&gt;cd&lt;/code&gt;" alias, and making a custom "&lt;code dir="ltr"&gt;cd&lt;/code&gt;" &lt;em dir="ltr"&gt;function&lt;/em&gt; that does a &lt;code dir="ltr"&gt;set-location&lt;/code&gt; followed by a call to "&lt;code dir="ltr"&gt;ok&lt;/code&gt;")&lt;/p&gt;&lt;p dir="ltr"&gt;If I want to add a command to the file, it is the work of a moment. I can do it immediately by editing the "&lt;code dir="ltr"&gt;.ok&lt;/code&gt;" file with "&lt;code dir="ltr"&gt;ed&lt;/code&gt;" or any &lt;a href="http://www.secretgeek.net/fuv_intro" dir="ltr"&gt;standard&lt;/a&gt; &lt;a href="http://www.secretgeek.net/zo_intro" dir="ltr"&gt;editor&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;Source code is here:&lt;/p&gt;&lt;p&gt;And here:&lt;/p&gt;&lt;p dir="ltr"&gt;Sometimes I write a thing and slowly stop using it. Other times I use it more and more, day after day, year after year, as happened with &lt;a href="http://nimbletext.com/" dir="ltr"&gt;NimbleText&lt;/a&gt;. So far, "ok" seems to be one of those "use it more and more" solutions. So I think you would do well to give it a try.&lt;/p&gt;&lt;p&gt;Any issues, lemme know.&lt;/p&gt;&lt;p dir="ltr"&gt;My book &lt;a href="http://www.secretgeek.net/" dir="ltr"&gt;"Choose Your First Product"&lt;/a&gt; is available now.&lt;/p&gt;&lt;p&gt;It gives you 4 easy steps to find and validate a humble product idea.&lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 14:24:29 -0500</pubDate></item><item><title>CSS Grid Level 2 – subgrid is coming to Firefox</title><link>https://lobste.rs/s/o1lq2r</link><description>&lt;p dir="ltr"&gt;The subgrid feature which is part of Level 2 of the CSS Grid Specification is not yet shipping in any browser, but is now available for testing in Firefox Nightly. This is a feature that, if you have used &lt;a href="https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Grid_Layout" rel="noopener noreferrer" dir="ltr"&gt;CSS Grid&lt;/a&gt; for a layout of any complexity, you are likely to be pretty excited about. In this article I’m going to introduce the feature and some of the use cases it solves.&lt;/p&gt;&lt;p dir="ltr"&gt;So what is subgrid exactly? In terms of syntax, it is a new keyword value for the &lt;code dir="ltr"&gt;grid-template-columns&lt;/code&gt; and &lt;code dir="ltr"&gt;grid-template-rows&lt;/code&gt; properties. These properties normally accept a track listing, a listing of sizes of the tracks you want in your grid. For example, the following CSS would create a three column track grid with a 200px column, a column sized as &lt;code dir="ltr"&gt;max-content&lt;/code&gt;, and a final 1fr column.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;&lt;span&gt;grid-template-columns: 200px max-content 1fr;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;You can find out more about track sizing in general, and the basics of grid layout via the MDN Guide &lt;a href="https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Grid_Layout/Basic_Concepts_of_Grid_Layout" rel="noopener noreferrer" dir="ltr"&gt;Basic concepts of Grid Layout&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;If we define a track as a subgrid, however, we replace the track listing with the keyword subgrid.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;&lt;span&gt;grid-template-columns: subgrid;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This instructs the &lt;code dir="ltr"&gt;grid-template-columns&lt;/code&gt; property to use the tracks defined on the parent, as the track sizing and number used by this nested grid.&lt;/p&gt;&lt;p&gt;In the example below I have an element which is a grid container. It contains three child elements – two div elements and a ul.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;span dir="ltr"&gt;div&lt;/span&gt; &lt;span dir="ltr"&gt;class&lt;/span&gt;=&lt;span dir="ltr"&gt;"wrapper"&lt;/span&gt;&amp;gt;&lt;/span&gt;
+      &lt;/footer&gt;</description><pubDate>Thu, 06 Jun 2019 03:12:46 -0500</pubDate></item><item><title>CSS Grid Level 2 – subgrid is coming to Firefox</title><link>https://lobste.rs/s/o1lq2r</link><description>&lt;p dir="ltr"&gt;The subgrid feature which is part of Level 2 of the CSS Grid Specification is not yet shipping in any browser, but is now available for testing in Firefox Nightly. This is a feature that, if you have used &lt;a href="https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Grid_Layout" rel="noopener noreferrer" dir="ltr"&gt;CSS Grid&lt;/a&gt; for a layout of any complexity, you are likely to be pretty excited about. In this article I’m going to introduce the feature and some of the use cases it solves.&lt;/p&gt;&lt;p dir="ltr"&gt;So what is subgrid exactly? In terms of syntax, it is a new keyword value for the &lt;code dir="ltr"&gt;grid-template-columns&lt;/code&gt; and &lt;code dir="ltr"&gt;grid-template-rows&lt;/code&gt; properties. These properties normally accept a track listing, a listing of sizes of the tracks you want in your grid. For example, the following CSS would create a three column track grid with a 200px column, a column sized as &lt;code dir="ltr"&gt;max-content&lt;/code&gt;, and a final 1fr column.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;&lt;span&gt;grid-template-columns: 200px max-content 1fr;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;You can find out more about track sizing in general, and the basics of grid layout via the MDN Guide &lt;a href="https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Grid_Layout/Basic_Concepts_of_Grid_Layout" rel="noopener noreferrer" dir="ltr"&gt;Basic concepts of Grid Layout&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;If we define a track as a subgrid, however, we replace the track listing with the keyword subgrid.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;&lt;span&gt;grid-template-columns: subgrid;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This instructs the &lt;code dir="ltr"&gt;grid-template-columns&lt;/code&gt; property to use the tracks defined on the parent, as the track sizing and number used by this nested grid.&lt;/p&gt;&lt;p&gt;In the example below I have an element which is a grid container. It contains three child elements – two div elements and a ul.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;span dir="ltr"&gt;div&lt;/span&gt; &lt;span dir="ltr"&gt;class&lt;/span&gt;=&lt;span dir="ltr"&gt;"wrapper"&lt;/span&gt;&amp;gt;&lt;/span&gt;
   &lt;span dir="ltr"&gt;&amp;lt;&lt;span dir="ltr"&gt;div&lt;/span&gt; &lt;span dir="ltr"&gt;class&lt;/span&gt;=&lt;span dir="ltr"&gt;"box1"&lt;/span&gt;&amp;gt;&lt;/span&gt;A&lt;span dir="ltr"&gt;&amp;lt;/&lt;span dir="ltr"&gt;div&lt;/span&gt;&amp;gt;&lt;/span&gt;
   &lt;span dir="ltr"&gt;&amp;lt;&lt;span dir="ltr"&gt;div&lt;/span&gt; &lt;span dir="ltr"&gt;class&lt;/span&gt;=&lt;span dir="ltr"&gt;"box2"&lt;/span&gt;&amp;gt;&lt;/span&gt;B&lt;span dir="ltr"&gt;&amp;lt;/&lt;span dir="ltr"&gt;div&lt;/span&gt;&amp;gt;&lt;/span&gt;
   &lt;span dir="ltr"&gt;&amp;lt;&lt;span dir="ltr"&gt;ul&lt;/span&gt; &lt;span dir="ltr"&gt;class&lt;/span&gt;=&lt;span dir="ltr"&gt;"box3"&lt;/span&gt;&amp;gt;&lt;/span&gt;
@@ -1195,53 +1387,7 @@ You can get a copy of Jitk from our git repository:
 A modified version of Linux with changes necessary to invoke Jitk
 for Seccomp is here:
 &lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;PRE&gt;git clone git://g.csail.mit.edu/jitk-linux
-&lt;/PRE&gt;&lt;/BLOCKQUOTE&gt;</description><pubDate>Thu, 06 Jun 2019 01:30:47 -0500</pubDate></item><item><title>Actix-web 1.0 – A small, pragmatic, and fast web framework for Rust</title><link>https://lobste.rs/s/7mhhsb</link><description>&lt;h2&gt;&lt;a href="https://docs.rs/actix-web/1.0.0/actix_web/#features"&gt;Features&lt;/a&gt;&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;Supported &lt;em dir="ltr"&gt;HTTP/1.x&lt;/em&gt; and &lt;em dir="ltr"&gt;HTTP/2.0&lt;/em&gt; protocols&lt;/LI&gt;&lt;LI&gt;Streaming and pipelining&lt;/LI&gt;&lt;LI&gt;Keep-alive and slow requests handling&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;WebSockets&lt;/code&gt; server/client&lt;/LI&gt;&lt;LI&gt;Transparent content compression/decompression (br, gzip, deflate)&lt;/LI&gt;&lt;LI&gt;Configurable request routing&lt;/LI&gt;&lt;LI&gt;Multipart streams&lt;/LI&gt;&lt;LI&gt;SSL support with OpenSSL or &lt;code dir="ltr"&gt;native-tls&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Middlewares (&lt;code dir="ltr"&gt;Logger&lt;/code&gt;, &lt;code dir="ltr"&gt;Session&lt;/code&gt;, &lt;code dir="ltr"&gt;CORS&lt;/code&gt;, &lt;code dir="ltr"&gt;CSRF&lt;/code&gt;, &lt;code dir="ltr"&gt;DefaultHeaders&lt;/code&gt;)&lt;/LI&gt;&lt;LI&gt;Supported Rust version: 1.31 or later&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;&lt;a href="https://docs.rs/actix-web/1.0.0/actix_web/#package-feature"&gt;Package feature&lt;/a&gt;&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;client&lt;/code&gt; - enables http client&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;ssl&lt;/code&gt; - enables ssl support via &lt;code dir="ltr"&gt;openssl&lt;/code&gt; crate, supports &lt;code dir="ltr"&gt;http/2&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;rust-tls&lt;/code&gt; - enables ssl support via &lt;code dir="ltr"&gt;rustls&lt;/code&gt; crate, supports &lt;code dir="ltr"&gt;http/2&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;secure-cookies&lt;/code&gt; - enables secure cookies support, includes &lt;code dir="ltr"&gt;ring&lt;/code&gt; crate as
-dependency&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;brotli&lt;/code&gt; - enables &lt;code dir="ltr"&gt;brotli&lt;/code&gt; compression support, requires &lt;code dir="ltr"&gt;c&lt;/code&gt;
-compiler&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;flate2-zlib&lt;/code&gt; - enables &lt;code dir="ltr"&gt;gzip&lt;/code&gt;, &lt;code dir="ltr"&gt;deflate&lt;/code&gt; compression support, requires
-&lt;code dir="ltr"&gt;c&lt;/code&gt; compiler&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;flate2-rust&lt;/code&gt; - experimental rust based implementation for
-&lt;code dir="ltr"&gt;gzip&lt;/code&gt;, &lt;code dir="ltr"&gt;deflate&lt;/code&gt; compression.&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Wed, 05 Jun 2019 13:28:08 -0500</pubDate></item><item><title>The Vector Heat Method</title><link>https://lobste.rs/s/9khegw</link><description>&lt;td colspan="3"&gt;Carnegie Mellon University&lt;/td&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/teaser.png" alt="teaser" width="350" height="331"&gt;&lt;div dir="ltr"&gt;This paper describes a method for efficiently computing parallel transport of tangent vectors on curved surfaces, or more generally, any vector-valued data on a curved manifold.  More precisely, it extends a vector field defined over any region to the rest of the domain via parallel transport along shortest geodesics.  This basic operation enables fast, robust algorithms for extrapolating level set velocities, inverting the exponential map, computing geometric medians and Karcher/Fréchet means of arbitrary distributions, constructing centroidal Voronoi diagrams, and finding consistently ordered landmarks.  Rather than evaluate parallel transport by explicitly tracing geodesics, we show that it can be computed via a short-time heat flow involving the &lt;em dir="ltr"&gt;connection Laplacian&lt;/em&gt;.  As a result, transport can be achieved by solving three prefactored linear systems, each akin to a standard Poisson problem.  To implement the method we need only a discrete connection Laplacian, which we describe for a variety of geometric data structures (point clouds, polygon meshes, &lt;em dir="ltr"&gt;etc.&lt;/em&gt;).  We also study the numerical behavior of our method, showing empirically that it converges under refinement, and augment the construction of intrinsic Delaunay triangulations (iDT) so that they can be used in the context of tangent vector field processing.&lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/preview.jpg" alt="preview" width="128" height="166"&gt;&lt;div&gt;PDF, 23MB&lt;/div&gt;&lt;div dir="ltr"&gt;&lt;a href="http://www.cs.cmu.edu/~kmcrane/Projects/HeatMethod/" dir="ltr"&gt;The Heat Method for Distance Computation&lt;/a&gt; - the original heat method paper provides a nice introduction to the principle of computation from diffusion (as well as some useful implementation details).&lt;/div&gt;&lt;div&gt;Presentation&lt;/div&gt;&lt;div class="embed-placeholder" data-type="youtube" data-id="4IZ-ykGnIRc"&gt;&lt;/div&gt;&lt;div&gt;
-               Thanks to Jooyoung Hahn for early discussions about signed distance computation, and Jim McCann for project feedback.  This work was supported by a Packard Fellowship, NSF Award 1717320, an NSF Graduate Research Fellowship, and gifts from Autodesk, Adobe, and Facebook.
-            &lt;/div&gt;&lt;div&gt;Figures&lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure8.jpg" alt="figure" width="733" height="243"&gt;&lt;div class="caption"&gt;
-                     Parallel transport of vectors from points (left) and curves (right). 
-                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure16.jpg" alt="figure" width="733" height="316"&gt;&lt;div class="caption" dir="ltr"&gt;
-                     Left: one application of the heat method is to compute the &lt;em dir="ltr"&gt;logarithmic map&lt;/em&gt; (also sometimes referred to as the &lt;em dir="ltr"&gt;exponential map&lt;/em&gt;), which provides a coordinate system on the surface relative to a chosen origin &lt;em dir="ltr"&gt;x&lt;/em&gt;. Right: on the sphere we easily compute the correct log map; note that far from the source even the analytical log map can be highly skewed.
-                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure21.jpg" alt="figure" width="700" height="514"&gt;&lt;div class="caption"&gt;
-                     Our globally accurate logarithmic map can be used to compute centers of data on a curved surface. Left: given a collection of points, we iteratively compute the Karcher mean; on simple geometries we reproduce the expected solution in just 2-3 iterations, and the algorithm generalizes to more complex geometries while still needing less than 20 iterations. Right: We can also efficiently compute the centers of distributions; here we show both the Karcher mean (purple) and the geometric median (green). The Karcher mean is significantly influenced by outliers, while the geometric median is not.
-                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure24.jpg" alt="figure" width="483" height="471"&gt;&lt;div class="caption"&gt;
-                     Fast Karcher means allow us to compute centroidal geodesic Voronoi tessellations with large, possibly multiply-connected cells.
-                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure25.jpg" alt="figure" width="514" height="571"&gt;&lt;div class="caption"&gt;
-                     Our robust geometric median facilitates computation of consistently ordered landmarks, helping to avoid difficult matching problems.
-                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure15.jpg" alt="figure" width="720" height="600"&gt;&lt;div class="caption"&gt;
-                     Our method also enables fast velocity extension for level set methods. Here we show a sequence of frames from a simple curve-shortening flow, plus a constant tangential term. In each frame, our scalar interpolation scheme provides a closest-point interpolation of normal velocity (top left), resulting in excellent preservation of the signed distance function over long integration times (bottom left); note that we never apply explicit redistancing. Since the vector heat method provides accurate extrapolation of vector data over the entire domain (top right), we can track particles even very far from the interface (bottom right).
-                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure11.jpg" alt="figure" width="709" height="231"&gt;&lt;div class="caption"&gt;
-                     To implement the vector heat method on a given geometric data structure, we essentially just need a scalar Laplacian and a notion of tangent spaces at each point or vertex. Here we show the solution for three sources of di erent magnitudes on a triangle mesh, point cloud, polygon mesh, and voxelization.
-                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figureA.jpg" alt="figure" width="506" height="399"&gt;&lt;div class="caption"&gt;
-                     Other point cloud algorithms, such as computing a local parameterization (shown here, using the log map) can then be implemented on top of the vector heat method with little to no additional work.
-                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure3.jpg" alt="figure" width="742" height="470"&gt;&lt;div class="caption" dir="ltr"&gt;
-                     The field obtained by parallel transport along shortest geodesics plays a special role in several basic geometric algorithms—replacing it with a field that is merely &lt;em dir="ltr"&gt;smooth&lt;/em&gt; can cause these algorithms to fail.  Here for instance we use the field to locate the &lt;em dir="ltr"&gt;Karcher mean&lt;/em&gt; equidistant from the two green points (left).  Attempting to instead use the smoothest possible field causes this search to fail, wandering randomly over the surface (right).
-                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure2.jpg" alt="figure" width="387" height="360"&gt;&lt;div class="caption" dir="ltr"&gt;
-                     Even just &lt;em dir="ltr"&gt;tracing&lt;/em&gt; all the geodesics to a given source point (without accounting for the cost of distance computation) is already an order of magnitude more expensive than applying the vector heat method—here, 15x slower.
-                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure14.jpg" alt="figure" width="717" height="416"&gt;&lt;div class="caption"&gt;
-                     Our algorithm yields very similar results to the brute-force approach of explicitly unfolding triangles along exact polyhedral geodesics.  Away from the cut locus, the difference is typically just a few degrees (left, right).
-                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure10.jpg" alt="figure" width="736" height="677"&gt;&lt;div class="caption"&gt;
-                     We often obtain high-quality results even on non-Delaunay meshes (top).  Occasionally, however, transported fields can have improperly oriented vectors (inset), here causing errors in the log map (bottom center).  By keeping track of tangent spaces during intrinsic Delaunay flips, we obtain a high-quality solution (bottom right) without having to change the input geometry.
-                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure12.jpg" alt="figure" width="719" height="769"&gt;&lt;div class="caption"&gt;
-                     Results of the vector heat method on a variety of models; source is marked by a large arrow. For visualization, vectors are sampled à la Bridson [2007].
-                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure18.jpg" alt="figure" width="743" height="349"&gt;&lt;div class="caption" dir="ltr"&gt;
-                     To get a high-quality log map (here, from a source point &lt;em dir="ltr"&gt;x&lt;/em&gt;) one must carefully discretize the distance gradient. Left: simply taking the gradient of a given distance function yields numerical noise. Middle: naive parallel transport of vectors emanating from the source yields global anisotropy. Right: proper discretization of initial conditions yields a smooth and accurate map, where the only remaining noise is near the cut locus (dashed line).
-                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure19.jpg" alt="figure" width="726" height="401"&gt;&lt;div class="caption"&gt;
-                     Our log map is globally accurate—even on long skinny models where most points are reached by traveling in nearly identical directions (far right).  On a high-resolution mesh we nicely resolve the cut locus (dashed line).
-                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure20.jpg" alt="figure" width="592" height="628"&gt;&lt;div class="caption" dir="ltr"&gt;
-                     Since the vector heat method is based on a straightforward discretization of a smooth formulation, it leads to a close approximation of the true log map.  Previous approximations exhibit not only small local errors, but large global inaccuracies—especially in the angular coordinate &lt;em dir="ltr"&gt;φ&lt;/em&gt;.  (Reference solution is computed via the exact polyhedral scheme.)
-                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure23.jpg" alt="figure" width="700" height="621"&gt;&lt;div class="caption"&gt;
-                     Here we compute the Karcher mean of the four green points, which should appear at the center of the sternum.  Previous local approximations of the log map yield poor behavior, with iterates failing to converge (far left, center left) or wandering around randomly until line search pushes the solution toward a local minimum (center).  Other algorithms compute only approximate averages, which may not respect symmetries of the problem (center right).  The global accuracy of the log map provided by the heat method guides the algorithm to the correct solution in just a few iterations (far right).
-                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure27.jpg" alt="figure" width="742" height="419"&gt;&lt;div class="caption"&gt;
-                     Other local approximations of parallel transport, such as the method of Zhang et al [2006], do not provide a good global approximation over the larger domain.  Here the field produced by the vector heat method closely matches the reference (exact polyhedral surface) allowing us to compute a globally accurate log map; the local approximation of Zhang et al deviates significantly away from the source.
-                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure6.jpg" alt="figure" width="738" height="284"&gt;&lt;div class="caption" dir="ltr"&gt;
-                     A simple example of interpolation by diffusion: a Gaussian weighted combination of values at two points &lt;em dir="ltr"&gt;p&lt;sub dir="ltr"&gt;1&lt;/sub&gt;,p&lt;sub dir="ltr"&gt;2&lt;/sub&gt;&lt;/em&gt;, yields a closest point interpolation &lt;span dir="ltr"&gt;u&lt;/span&gt;&lt;sub dir="ltr"&gt;t&lt;/sub&gt; as the Gaussian width &lt;em dir="ltr"&gt;t&lt;/em&gt; goes to zero.  Here &lt;em dir="ltr"&gt;u&lt;sub dir="ltr"&gt;t&lt;/sub&gt;&lt;/em&gt; is the linear combination prior to normalization.
-                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure7.jpg" alt="figure" width="730" height="246"&gt;&lt;div class="caption"&gt;
-                     Interpolation of scalar values at points (left) and curves (right). 
-                  &lt;/div&gt;</description><pubDate>Thu, 06 Jun 2019 14:20:15 -0500</pubDate></item><item><title>Let’s play a game: what is the deadly bug here?</title><link>https://www.youtube.com/watch?v=MpeaSNERwQA</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/qryvoa/let_s_play_game_what_is_deadly_bug_here"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Wed, 05 Jun 2019 21:23:55 -0500</pubDate></item><item><title>Ozcor language tries to use records for everything</title><link>https://lobste.rs/s/tug01e</link><description>&lt;p&gt;Oczor uses records instead of all these entities&lt;/p&gt;&lt;h1&gt;Example of generated JavaScript code&lt;/h1&gt;&lt;table dir="ltr"&gt; 
+&lt;/PRE&gt;&lt;/BLOCKQUOTE&gt;</description><pubDate>Thu, 06 Jun 2019 01:30:47 -0500</pubDate></item><item><title>Programming Languages: Application and Interpretation</title><link>https://lobste.rs/s/x8i3f5</link><description>&lt;p dir="ltr"&gt;This is the Web site for &lt;em dir="ltr"&gt;Programming Languages: Application and Interpretation&lt;/em&gt;, often referred to by its initials as PLAI (pronounce it like “play”). Over the years well over fifty academic institutions (that I know of) have used PLAI.&lt;/p&gt;&lt;p&gt;PLAI is designed for upper-level courses that introduce the main ideas of programming languages. In the US, it is designed for students in their second- through fourth-years of college, as well as starting graduate students. However, PLAI has been used with students much younger, including in a few select high school classes.&lt;/p&gt;&lt;h1&gt;Previous Editions&lt;/h1&gt;&lt;p&gt;The book is about to start its third edition.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;The &lt;a href="http://cs.brown.edu/~sk/Publications/Books/ProgLangs/2007-04-26/" dir="ltr"&gt;first edition&lt;/a&gt; was written between 2000 and 2007.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;The &lt;a href="http://cs.brown.edu/courses/cs173/2012/book/" dir="ltr"&gt;second edition&lt;/a&gt; was written in 2012. It has much of the same content as the first edition. The major changes include:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;Switching to a statically typed (and type-inferred) language.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Over the years, teaching the material had taught me newer and better ways of presenting some of the content. These changes were reflected in the prose.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Low-level rewriting of the prose in several places.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Reducing a bit of the content, in part becuase it was not entirely compatible with the typed language.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;A phylogenetic branch, &lt;a href="https://papl.cs.brown.edu/" dir="ltr"&gt;&lt;em dir="ltr"&gt;Programming and Programming Languages&lt;/em&gt;&lt;/a&gt; (PAPL), has been under construction since 2013.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;The first half of PAPL is suited for an accelerated introduction to computer science.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;The second half of PAPL is a further revision of PLAI’s second edition.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;A major difference is that PAPL is completely written in &lt;a href="https://www.pyret.org/" dir="ltr"&gt;Pyret&lt;/a&gt;.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;PAPL is co-authored with &lt;a href="https://jpolitz.github.io/" dir="ltr"&gt;Joe Politz&lt;/a&gt; and &lt;a href="https://www.khoury.northeastern.edu/people/benjamin-lerner/" dir="ltr"&gt;Ben Lerner&lt;/a&gt;, two amazing co-authors.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h1&gt;The Third Edition&lt;/h1&gt;&lt;p dir="ltr"&gt;The third edition of PLAI is a significant reboot of the franchise. It is based on several bits of &lt;a href="https://cs.brown.edu/~sk/Publications/Papers/Published/" dir="ltr"&gt;research&lt;/a&gt; into how students program, what they learn and don’t learn, and what they know entering an upper-level programming languages class. This requires a significant rethinking of both the what and the how. While I expect a lot of the existing material of PLAI will persist but in reorganized form, I’m not allowing myself to be constrained by the old formats.&lt;/p&gt;&lt;h1&gt;Tip Jar&lt;/h1&gt;&lt;p dir="ltr"&gt;If you find PLAI of value, please feel free to tip me on &lt;a href="https://www.patreon.com/shriramk" dir="ltr"&gt;Patreon&lt;/a&gt; or &lt;a href="https://ko-fi.com/shriramk" dir="ltr"&gt;Ko-Fi&lt;/a&gt;.&lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 16:00:21 -0500</pubDate></item><item><title>Ozcor language tries to use records for everything</title><link>https://lobste.rs/s/tug01e</link><description>&lt;p&gt;Oczor uses records instead of all these entities&lt;/p&gt;&lt;h1&gt;Example of generated JavaScript code&lt;/h1&gt;&lt;table dir="ltr"&gt; 
 &lt;thead dir="ltr"&gt;&lt;tr dir="ltr"&gt;&lt;th dir="ltr"&gt;Oczor&lt;/th&gt;&lt;th dir="ltr"&gt;JavaScript&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;
 &lt;tbody dir="ltr"&gt; &lt;tr dir="ltr"&gt; &lt;td dir="ltr"&gt;
 &lt;div class="highlight highlight-source-haskell" dir="ltr"&gt;&lt;pre dir="ltr"&gt;x1 &lt;span class="pl-k" dir="ltr"&gt;=&lt;/span&gt; &lt;span class="pl-c1" dir="ltr"&gt;1&lt;/span&gt;
@@ -1343,7 +1489,53 @@ stack install
 print "hi"
 &lt;/code&gt;&lt;/PRE&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;run &lt;code dir="ltr"&gt;occ&lt;/code&gt; to compile &lt;code dir="ltr"&gt;hello.oc&lt;/code&gt;&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;occ hello.oc
 &lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;hello.js&lt;/code&gt; should be in &lt;code dir="ltr"&gt;output&lt;/code&gt; directory&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;hello.js&lt;/code&gt; can be run with node&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;node output/hello.js
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;should print &lt;code dir="ltr"&gt;hi&lt;/code&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Thu, 06 Jun 2019 05:20:27 -0500</pubDate></item><item><title>Firefox Monitor: see if you’ve been part of a data breach</title><link>https://lobste.rs/s/qvfcog</link><description>&lt;h2&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;should print &lt;code dir="ltr"&gt;hi&lt;/code&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Thu, 06 Jun 2019 05:20:27 -0500</pubDate></item><item><title>Actix-web 1.0 – A small, pragmatic, and fast web framework for Rust</title><link>https://lobste.rs/s/7mhhsb</link><description>&lt;h2&gt;&lt;a href="https://docs.rs/actix-web/1.0.0/actix_web/#features"&gt;Features&lt;/a&gt;&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;Supported &lt;em dir="ltr"&gt;HTTP/1.x&lt;/em&gt; and &lt;em dir="ltr"&gt;HTTP/2.0&lt;/em&gt; protocols&lt;/LI&gt;&lt;LI&gt;Streaming and pipelining&lt;/LI&gt;&lt;LI&gt;Keep-alive and slow requests handling&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;WebSockets&lt;/code&gt; server/client&lt;/LI&gt;&lt;LI&gt;Transparent content compression/decompression (br, gzip, deflate)&lt;/LI&gt;&lt;LI&gt;Configurable request routing&lt;/LI&gt;&lt;LI&gt;Multipart streams&lt;/LI&gt;&lt;LI&gt;SSL support with OpenSSL or &lt;code dir="ltr"&gt;native-tls&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Middlewares (&lt;code dir="ltr"&gt;Logger&lt;/code&gt;, &lt;code dir="ltr"&gt;Session&lt;/code&gt;, &lt;code dir="ltr"&gt;CORS&lt;/code&gt;, &lt;code dir="ltr"&gt;CSRF&lt;/code&gt;, &lt;code dir="ltr"&gt;DefaultHeaders&lt;/code&gt;)&lt;/LI&gt;&lt;LI&gt;Supported Rust version: 1.31 or later&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;&lt;a href="https://docs.rs/actix-web/1.0.0/actix_web/#package-feature"&gt;Package feature&lt;/a&gt;&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;client&lt;/code&gt; - enables http client&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;ssl&lt;/code&gt; - enables ssl support via &lt;code dir="ltr"&gt;openssl&lt;/code&gt; crate, supports &lt;code dir="ltr"&gt;http/2&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;rust-tls&lt;/code&gt; - enables ssl support via &lt;code dir="ltr"&gt;rustls&lt;/code&gt; crate, supports &lt;code dir="ltr"&gt;http/2&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;secure-cookies&lt;/code&gt; - enables secure cookies support, includes &lt;code dir="ltr"&gt;ring&lt;/code&gt; crate as
+dependency&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;brotli&lt;/code&gt; - enables &lt;code dir="ltr"&gt;brotli&lt;/code&gt; compression support, requires &lt;code dir="ltr"&gt;c&lt;/code&gt;
+compiler&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;flate2-zlib&lt;/code&gt; - enables &lt;code dir="ltr"&gt;gzip&lt;/code&gt;, &lt;code dir="ltr"&gt;deflate&lt;/code&gt; compression support, requires
+&lt;code dir="ltr"&gt;c&lt;/code&gt; compiler&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;flate2-rust&lt;/code&gt; - experimental rust based implementation for
+&lt;code dir="ltr"&gt;gzip&lt;/code&gt;, &lt;code dir="ltr"&gt;deflate&lt;/code&gt; compression.&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Wed, 05 Jun 2019 13:28:08 -0500</pubDate></item><item><title>The Vector Heat Method</title><link>https://lobste.rs/s/9khegw</link><description>&lt;td colspan="3"&gt;Carnegie Mellon University&lt;/td&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/teaser.png" alt="teaser" width="350" height="331"&gt;&lt;div dir="ltr"&gt;This paper describes a method for efficiently computing parallel transport of tangent vectors on curved surfaces, or more generally, any vector-valued data on a curved manifold.  More precisely, it extends a vector field defined over any region to the rest of the domain via parallel transport along shortest geodesics.  This basic operation enables fast, robust algorithms for extrapolating level set velocities, inverting the exponential map, computing geometric medians and Karcher/Fréchet means of arbitrary distributions, constructing centroidal Voronoi diagrams, and finding consistently ordered landmarks.  Rather than evaluate parallel transport by explicitly tracing geodesics, we show that it can be computed via a short-time heat flow involving the &lt;em dir="ltr"&gt;connection Laplacian&lt;/em&gt;.  As a result, transport can be achieved by solving three prefactored linear systems, each akin to a standard Poisson problem.  To implement the method we need only a discrete connection Laplacian, which we describe for a variety of geometric data structures (point clouds, polygon meshes, &lt;em dir="ltr"&gt;etc.&lt;/em&gt;).  We also study the numerical behavior of our method, showing empirically that it converges under refinement, and augment the construction of intrinsic Delaunay triangulations (iDT) so that they can be used in the context of tangent vector field processing.&lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/preview.jpg" alt="preview" width="128" height="166"&gt;&lt;div&gt;PDF, 23MB&lt;/div&gt;&lt;div dir="ltr"&gt;&lt;a href="http://www.cs.cmu.edu/~kmcrane/Projects/HeatMethod/" dir="ltr"&gt;The Heat Method for Distance Computation&lt;/a&gt; - the original heat method paper provides a nice introduction to the principle of computation from diffusion (as well as some useful implementation details).&lt;/div&gt;&lt;div&gt;Presentation&lt;/div&gt;&lt;div class="embed-placeholder" data-type="youtube" data-id="4IZ-ykGnIRc"&gt;&lt;/div&gt;&lt;div&gt;
+               Thanks to Jooyoung Hahn for early discussions about signed distance computation, and Jim McCann for project feedback.  This work was supported by a Packard Fellowship, NSF Award 1717320, an NSF Graduate Research Fellowship, and gifts from Autodesk, Adobe, and Facebook.
+            &lt;/div&gt;&lt;div&gt;Figures&lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure8.jpg" alt="figure" width="733" height="243"&gt;&lt;div class="caption"&gt;
+                     Parallel transport of vectors from points (left) and curves (right). 
+                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure16.jpg" alt="figure" width="733" height="316"&gt;&lt;div class="caption" dir="ltr"&gt;
+                     Left: one application of the heat method is to compute the &lt;em dir="ltr"&gt;logarithmic map&lt;/em&gt; (also sometimes referred to as the &lt;em dir="ltr"&gt;exponential map&lt;/em&gt;), which provides a coordinate system on the surface relative to a chosen origin &lt;em dir="ltr"&gt;x&lt;/em&gt;. Right: on the sphere we easily compute the correct log map; note that far from the source even the analytical log map can be highly skewed.
+                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure21.jpg" alt="figure" width="700" height="514"&gt;&lt;div class="caption"&gt;
+                     Our globally accurate logarithmic map can be used to compute centers of data on a curved surface. Left: given a collection of points, we iteratively compute the Karcher mean; on simple geometries we reproduce the expected solution in just 2-3 iterations, and the algorithm generalizes to more complex geometries while still needing less than 20 iterations. Right: We can also efficiently compute the centers of distributions; here we show both the Karcher mean (purple) and the geometric median (green). The Karcher mean is significantly influenced by outliers, while the geometric median is not.
+                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure24.jpg" alt="figure" width="483" height="471"&gt;&lt;div class="caption"&gt;
+                     Fast Karcher means allow us to compute centroidal geodesic Voronoi tessellations with large, possibly multiply-connected cells.
+                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure25.jpg" alt="figure" width="514" height="571"&gt;&lt;div class="caption"&gt;
+                     Our robust geometric median facilitates computation of consistently ordered landmarks, helping to avoid difficult matching problems.
+                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure15.jpg" alt="figure" width="720" height="600"&gt;&lt;div class="caption"&gt;
+                     Our method also enables fast velocity extension for level set methods. Here we show a sequence of frames from a simple curve-shortening flow, plus a constant tangential term. In each frame, our scalar interpolation scheme provides a closest-point interpolation of normal velocity (top left), resulting in excellent preservation of the signed distance function over long integration times (bottom left); note that we never apply explicit redistancing. Since the vector heat method provides accurate extrapolation of vector data over the entire domain (top right), we can track particles even very far from the interface (bottom right).
+                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure11.jpg" alt="figure" width="709" height="231"&gt;&lt;div class="caption"&gt;
+                     To implement the vector heat method on a given geometric data structure, we essentially just need a scalar Laplacian and a notion of tangent spaces at each point or vertex. Here we show the solution for three sources of di erent magnitudes on a triangle mesh, point cloud, polygon mesh, and voxelization.
+                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figureA.jpg" alt="figure" width="506" height="399"&gt;&lt;div class="caption"&gt;
+                     Other point cloud algorithms, such as computing a local parameterization (shown here, using the log map) can then be implemented on top of the vector heat method with little to no additional work.
+                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure3.jpg" alt="figure" width="742" height="470"&gt;&lt;div class="caption" dir="ltr"&gt;
+                     The field obtained by parallel transport along shortest geodesics plays a special role in several basic geometric algorithms—replacing it with a field that is merely &lt;em dir="ltr"&gt;smooth&lt;/em&gt; can cause these algorithms to fail.  Here for instance we use the field to locate the &lt;em dir="ltr"&gt;Karcher mean&lt;/em&gt; equidistant from the two green points (left).  Attempting to instead use the smoothest possible field causes this search to fail, wandering randomly over the surface (right).
+                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure2.jpg" alt="figure" width="387" height="360"&gt;&lt;div class="caption" dir="ltr"&gt;
+                     Even just &lt;em dir="ltr"&gt;tracing&lt;/em&gt; all the geodesics to a given source point (without accounting for the cost of distance computation) is already an order of magnitude more expensive than applying the vector heat method—here, 15x slower.
+                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure14.jpg" alt="figure" width="717" height="416"&gt;&lt;div class="caption"&gt;
+                     Our algorithm yields very similar results to the brute-force approach of explicitly unfolding triangles along exact polyhedral geodesics.  Away from the cut locus, the difference is typically just a few degrees (left, right).
+                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure10.jpg" alt="figure" width="736" height="677"&gt;&lt;div class="caption"&gt;
+                     We often obtain high-quality results even on non-Delaunay meshes (top).  Occasionally, however, transported fields can have improperly oriented vectors (inset), here causing errors in the log map (bottom center).  By keeping track of tangent spaces during intrinsic Delaunay flips, we obtain a high-quality solution (bottom right) without having to change the input geometry.
+                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure12.jpg" alt="figure" width="719" height="769"&gt;&lt;div class="caption"&gt;
+                     Results of the vector heat method on a variety of models; source is marked by a large arrow. For visualization, vectors are sampled à la Bridson [2007].
+                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure18.jpg" alt="figure" width="743" height="349"&gt;&lt;div class="caption" dir="ltr"&gt;
+                     To get a high-quality log map (here, from a source point &lt;em dir="ltr"&gt;x&lt;/em&gt;) one must carefully discretize the distance gradient. Left: simply taking the gradient of a given distance function yields numerical noise. Middle: naive parallel transport of vectors emanating from the source yields global anisotropy. Right: proper discretization of initial conditions yields a smooth and accurate map, where the only remaining noise is near the cut locus (dashed line).
+                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure19.jpg" alt="figure" width="726" height="401"&gt;&lt;div class="caption"&gt;
+                     Our log map is globally accurate—even on long skinny models where most points are reached by traveling in nearly identical directions (far right).  On a high-resolution mesh we nicely resolve the cut locus (dashed line).
+                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure20.jpg" alt="figure" width="592" height="628"&gt;&lt;div class="caption" dir="ltr"&gt;
+                     Since the vector heat method is based on a straightforward discretization of a smooth formulation, it leads to a close approximation of the true log map.  Previous approximations exhibit not only small local errors, but large global inaccuracies—especially in the angular coordinate &lt;em dir="ltr"&gt;φ&lt;/em&gt;.  (Reference solution is computed via the exact polyhedral scheme.)
+                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure23.jpg" alt="figure" width="700" height="621"&gt;&lt;div class="caption"&gt;
+                     Here we compute the Karcher mean of the four green points, which should appear at the center of the sternum.  Previous local approximations of the log map yield poor behavior, with iterates failing to converge (far left, center left) or wandering around randomly until line search pushes the solution toward a local minimum (center).  Other algorithms compute only approximate averages, which may not respect symmetries of the problem (center right).  The global accuracy of the log map provided by the heat method guides the algorithm to the correct solution in just a few iterations (far right).
+                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure27.jpg" alt="figure" width="742" height="419"&gt;&lt;div class="caption"&gt;
+                     Other local approximations of parallel transport, such as the method of Zhang et al [2006], do not provide a good global approximation over the larger domain.  Here the field produced by the vector heat method closely matches the reference (exact polyhedral surface) allowing us to compute a globally accurate log map; the local approximation of Zhang et al deviates significantly away from the source.
+                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure6.jpg" alt="figure" width="738" height="284"&gt;&lt;div class="caption" dir="ltr"&gt;
+                     A simple example of interpolation by diffusion: a Gaussian weighted combination of values at two points &lt;em dir="ltr"&gt;p&lt;sub dir="ltr"&gt;1&lt;/sub&gt;,p&lt;sub dir="ltr"&gt;2&lt;/sub&gt;&lt;/em&gt;, yields a closest point interpolation &lt;span dir="ltr"&gt;u&lt;/span&gt;&lt;sub dir="ltr"&gt;t&lt;/sub&gt; as the Gaussian width &lt;em dir="ltr"&gt;t&lt;/em&gt; goes to zero.  Here &lt;em dir="ltr"&gt;u&lt;sub dir="ltr"&gt;t&lt;/sub&gt;&lt;/em&gt; is the linear combination prior to normalization.
+                  &lt;/div&gt;&lt;img src="http://www.cs.cmu.edu/~kmcrane/Projects/VectorHeatMethod/figure7.jpg" alt="figure" width="730" height="246"&gt;&lt;div class="caption"&gt;
+                     Interpolation of scalar values at points (left) and curves (right). 
+                  &lt;/div&gt;</description><pubDate>Thu, 06 Jun 2019 14:20:15 -0500</pubDate></item><item><title>Let’s play a game: what is the deadly bug here?</title><link>https://www.youtube.com/watch?v=MpeaSNERwQA</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/qryvoa/let_s_play_game_what_is_deadly_bug_here"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Wed, 05 Jun 2019 21:23:55 -0500</pubDate></item><item><title>Firefox Monitor: see if you’ve been part of a data breach</title><link>https://lobste.rs/s/qvfcog</link><description>&lt;h2&gt;
                   Sign up for breach monitoring with a Firefox Account.
               &lt;/h2&gt;&lt;h3&gt;Stay alert to new breaches&lt;/h3&gt;&lt;h4&gt;If your information surfaces in a new data breach, we’ll send you an alert.&lt;/h4&gt;&lt;h3&gt;Monitor several emails&lt;/h3&gt;&lt;h4&gt;Get ongoing breach monitoring for multiple email addresses.&lt;/h4&gt;&lt;h3&gt;Protect your online privacy&lt;/h3&gt;&lt;h4&gt;Find out what you need to do to keep your data safe from cyber criminals.&lt;/h4&gt;&lt;div dir="ltr"&gt;
                     &lt;button data-event-category="Sign Up Button" data-entrypoint="fx-monitor-sign-up-for-alerts" data-flow-id="a8af9bd40cceaf0f025541af54f4a108788c73f0c22cc598a6ec65ab357de213" data-flow-begin-time="1559760831687" dir="ltr"&gt;
@@ -1354,7 +1546,7 @@ print "hi"
                             &lt;/span&gt;&lt;/div&gt;&lt;div dir="ltr"&gt;
                   &lt;p dir="ltr"&gt;Have an account?&lt;button data-entrypoint="fx-monitor-log-in-link" data-flow-id="75a426d83937b9690b0ee6a9ae9056cf52d1623c95b7b5c333fdcd42d89e820b" data-flow-begin-time="1559760831747" data-event-category="Log In Link" dir="ltr"&gt;Log in
                   &lt;/button&gt;&lt;/p&gt;
-                &lt;/div&gt;</description><pubDate>Wed, 05 Jun 2019 12:53:59 -0500</pubDate></item><item><title>Small World with High Risks: A Study of Security Threats in the npm Ecosystem</title><link>https://arxiv.org/pdf/1902.09217.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/u9wnvp/small_world_with_high_risks_study"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 12:17:16 -0500</pubDate></item><item><title>Programming Languages: Application and Interpretation</title><link>https://lobste.rs/s/x8i3f5</link><description>&lt;p dir="ltr"&gt;This is the Web site for &lt;em dir="ltr"&gt;Programming Languages: Application and Interpretation&lt;/em&gt;, often referred to by its initials as PLAI (pronounce it like “play”). Over the years well over fifty academic institutions (that I know of) have used PLAI.&lt;/p&gt;&lt;p&gt;PLAI is designed for upper-level courses that introduce the main ideas of programming languages. In the US, it is designed for students in their second- through fourth-years of college, as well as starting graduate students. However, PLAI has been used with students much younger, including in a few select high school classes.&lt;/p&gt;&lt;h1&gt;Previous Editions&lt;/h1&gt;&lt;p&gt;The book is about to start its third edition.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;The &lt;a href="http://cs.brown.edu/~sk/Publications/Books/ProgLangs/2007-04-26/" dir="ltr"&gt;first edition&lt;/a&gt; was written between 2000 and 2007.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;The &lt;a href="http://cs.brown.edu/courses/cs173/2012/book/" dir="ltr"&gt;second edition&lt;/a&gt; was written in 2012. It has much of the same content as the first edition. The major changes include:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;Switching to a statically typed (and type-inferred) language.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Over the years, teaching the material had taught me newer and better ways of presenting some of the content. These changes were reflected in the prose.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Low-level rewriting of the prose in several places.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Reducing a bit of the content, in part becuase it was not entirely compatible with the typed language.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;A phylogenetic branch, &lt;a href="https://papl.cs.brown.edu/" dir="ltr"&gt;&lt;em dir="ltr"&gt;Programming and Programming Languages&lt;/em&gt;&lt;/a&gt; (PAPL), has been under construction since 2013.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;The first half of PAPL is suited for an accelerated introduction to computer science.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;The second half of PAPL is a further revision of PLAI’s second edition.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;A major difference is that PAPL is completely written in &lt;a href="https://www.pyret.org/" dir="ltr"&gt;Pyret&lt;/a&gt;.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;PAPL is co-authored with &lt;a href="https://jpolitz.github.io/" dir="ltr"&gt;Joe Politz&lt;/a&gt; and &lt;a href="https://www.khoury.northeastern.edu/people/benjamin-lerner/" dir="ltr"&gt;Ben Lerner&lt;/a&gt;, two amazing co-authors.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h1&gt;The Third Edition&lt;/h1&gt;&lt;p dir="ltr"&gt;The third edition of PLAI is a significant reboot of the franchise. It is based on several bits of &lt;a href="https://cs.brown.edu/~sk/Publications/Papers/Published/" dir="ltr"&gt;research&lt;/a&gt; into how students program, what they learn and don’t learn, and what they know entering an upper-level programming languages class. This requires a significant rethinking of both the what and the how. While I expect a lot of the existing material of PLAI will persist but in reorganized form, I’m not allowing myself to be constrained by the old formats.&lt;/p&gt;&lt;h1&gt;Tip Jar&lt;/h1&gt;&lt;p dir="ltr"&gt;If you find PLAI of value, please feel free to tip me on &lt;a href="https://www.patreon.com/shriramk" dir="ltr"&gt;Patreon&lt;/a&gt; or &lt;a href="https://ko-fi.com/shriramk" dir="ltr"&gt;Ko-Fi&lt;/a&gt;.&lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 16:00:21 -0500</pubDate></item><item><title>Infrequently Asked Questions in comp.lang.c (Parody)</title><link>https://lobste.rs/s/en37pp</link><description>&lt;h4 dir="ltr"&gt;Meta: [&lt;a href="http://www.seebs.net/faqs/c-iaq-a.html#meta" dir="ltr"&gt;a&lt;/a&gt;]&lt;/h4&gt;&lt;p dir="ltr"&gt;The HTML version of this list is now considered the master version;
+                &lt;/div&gt;</description><pubDate>Wed, 05 Jun 2019 12:53:59 -0500</pubDate></item><item><title>Small World with High Risks: A Study of Security Threats in the npm Ecosystem</title><link>https://arxiv.org/pdf/1902.09217.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/u9wnvp/small_world_with_high_risks_study"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 12:17:16 -0500</pubDate></item><item><title>Infrequently Asked Questions in comp.lang.c (Parody)</title><link>https://lobste.rs/s/en37pp</link><description>&lt;h4 dir="ltr"&gt;Meta: [&lt;a href="http://www.seebs.net/faqs/c-iaq-a.html#meta" dir="ltr"&gt;a&lt;/a&gt;]&lt;/h4&gt;&lt;p dir="ltr"&gt;The HTML version of this list is now considered the master version;
 		the text version may be updated occasionally, but is now obsolete.
 		Additionally, there are now accompanying &lt;a href="http://www.seebs.net/faqs/c-iaq-a.html#meta" dir="ltr"&gt;annotations&lt;/a&gt; for some of the material. (Eventually, for all of the material.)
 		Annotations are denoted by a bracketed letter a, or occasionally
@@ -3005,529 +3197,4 @@ ed78fa1 HEAD@&lt;span dir="ltr"&gt;{&lt;/span&gt;2&lt;span dir="ltr"&gt;}&lt;/sp
 062ef13 HEAD@&lt;span dir="ltr"&gt;{&lt;/span&gt;5&lt;span dir="ltr"&gt;}&lt;/span&gt;: commit: Add Bob.txt
 9e06fca HEAD@&lt;span dir="ltr"&gt;{&lt;/span&gt;6&lt;span dir="ltr"&gt;}&lt;/span&gt;: commit: Add text to Alice
 df3ad1d &lt;span dir="ltr"&gt;(&lt;/span&gt;origin/master, origin/HEAD, master&lt;span dir="ltr"&gt;)&lt;/span&gt; HEAD@&lt;span dir="ltr"&gt;{&lt;/span&gt;7&lt;span dir="ltr"&gt;}&lt;/span&gt;: checkout: moving from master to interactiveRebase
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;There it is. Every single thing we’ve done, from switching to the branch to doing the &lt;code dir="ltr"&gt;rebase&lt;/code&gt;.&lt;/p&gt;&lt;p&gt;Quite cool to see the things we’ve done, but useless on it’s own if we messed up somewhere, if it wasn’t for the references at the start of each line.&lt;/p&gt;&lt;p dir="ltr"&gt;If you compare the &lt;code dir="ltr"&gt;reflog&lt;/code&gt; output to when we looked at the &lt;code dir="ltr"&gt;log&lt;/code&gt; the last time, you’ll see those points relate to commit references, and we can use them just like that.&lt;/p&gt;&lt;p&gt;Let’s say we actually didn’t want to do the rebase. How do we get rid of the changes it made?&lt;/p&gt;&lt;p dir="ltr"&gt;We move &lt;code dir="ltr"&gt;HEAD&lt;/code&gt; to the point before the &lt;code dir="ltr"&gt;rebase&lt;/code&gt; started with a &lt;code dir="ltr"&gt;git reset 0b22064&lt;/code&gt;.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;0b22064&lt;/code&gt; is the commit before the &lt;code dir="ltr"&gt;rebase&lt;/code&gt; in my case. More generally you can also reference it as &lt;em dir="ltr"&gt;HEAD four changes ago&lt;/em&gt; via &lt;code dir="ltr"&gt;HEAD@{4}&lt;/code&gt;. Note that should you have switched branches in between or done any other thing that creates a log entry, you might have a higher number there.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;If you take a look at the &lt;code dir="ltr"&gt;log&lt;/code&gt; now, you’ll see the original state with three individual commits restored.&lt;/p&gt;&lt;p dir="ltr"&gt;But let’s say we now realize that’s not what we wanted. The &lt;code dir="ltr"&gt;rebase&lt;/code&gt; is fine, we just don’t like how we changed the message of the Bob commit.&lt;/p&gt;&lt;p dir="ltr"&gt;We could just do another &lt;code dir="ltr"&gt;rebase -i&lt;/code&gt; in the current state, just like we did originally.&lt;/p&gt;&lt;p dir="ltr"&gt;Or we use the reflog and jump back to after the rebase and &lt;code dir="ltr"&gt;amend&lt;/code&gt; the commit from there.&lt;/p&gt;&lt;p dir="ltr"&gt;But by now you know how to do either of that, so I’ll let you try that on your own. And in addition you also know that there’s the &lt;code dir="ltr"&gt;reflog&lt;/code&gt; allowing you to undo most things you might end up doing by mistake.&lt;/p&gt;</description><pubDate>Wed, 05 Jun 2019 20:17:23 -0500</pubDate></item><item><title>Uncovering the Silicon: Demystifying How Chips are Built and How They Work</title><link>https://www.youtube.com/watch?v=VNzkhZBjo5k</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/zlguqi/uncovering_silicon_demystifying_how"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Wed, 05 Jun 2019 21:25:49 -0500</pubDate></item><item><title>RabbitMQ Cluster on FreeBSD Containers</title><link>https://lobste.rs/s/rkpmqy</link><description>&lt;p dir="ltr"&gt;I really like small and simple dedicated solutions that do one thing well and do it really good – maybe its because I like UNIX that much. Good example of such approach is Minio object storage which implements S3 protocol with distributed clustering, erasure code and builtin web interface along with many other features about which I wrote in the &lt;a href="https://vermaden.wordpress.com/2018/04/16/distributed-object-storage-with-minio-on-freebsd/" rel="noopener" dir="ltr"&gt;Distributed Object Storage with Minio&lt;/a&gt; on FreeBSD article.&lt;/p&gt;&lt;p&gt;The RabbitMQ is another such example – currently probably the most popular implementation of the AMQP protocol – it also comes with small and sleek web interface. The difference is power. Minio comes with very basic user oriented web interface while most administrative and configuration tasks needs to be done from the CLI. The Minio web interface allows one to create/delete buckets there and also to download/upload files. RabbitMQ have so sophisticated web interface that after you enable it you do not need command line anymore. Everything can be accomplished using just web interface.&lt;/p&gt;&lt;img src="https://vermaden.files.wordpress.com/2019/06/rabbitmq-logo-1.png?w=960" alt="rabbitmq-logo.png" srcset="https://vermaden.files.wordpress.com/2019/06/rabbitmq-logo-1.png 428w, https://vermaden.files.wordpress.com/2019/06/rabbitmq-logo-1.png?w=150 150w, https://vermaden.files.wordpress.com/2019/06/rabbitmq-logo-1.png?w=300 300w" width="312" height="136"&gt;&lt;p dir="ltr"&gt;Compared to other messaging solutions like &lt;em dir="ltr"&gt;ActiveMQ&lt;/em&gt; or &lt;em dir="ltr"&gt;Apache Kafka&lt;/em&gt; it is very popular when checked in the &lt;em dir="ltr"&gt;Google Trends&lt;/em&gt; query.&lt;/p&gt;&lt;img src="https://vermaden.files.wordpress.com/2019/06/rabbitmq-trends.jpg?w=960" alt="rabbitmq-trends.jpg" srcset="https://vermaden.files.wordpress.com/2019/06/rabbitmq-trends.jpg 474w, https://vermaden.files.wordpress.com/2019/06/rabbitmq-trends.jpg?w=150 150w, https://vermaden.files.wordpress.com/2019/06/rabbitmq-trends.jpg?w=300 300w" width="312" height="213"&gt;&lt;p&gt;Today I would like to show you RabbitMQ messaging with quite redundant clustered setup with mirrored queues.&lt;/p&gt;&lt;p dir="ltr"&gt;You will find &lt;i dir="ltr"&gt;Table of Contents&lt;/i&gt; below.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong&gt;Jails Setup&lt;/strong&gt;&lt;/LI&gt;&lt;LI&gt;&lt;strong&gt;RabbitMQ Installation&lt;/strong&gt;&lt;/LI&gt;&lt;LI&gt;&lt;strong&gt;RabbitMQ Setup&lt;/strong&gt;&lt;/LI&gt;&lt;LI&gt;RabbitMQ Plugins&lt;/LI&gt;&lt;LI&gt;RabbitMQ Administrative User&lt;/LI&gt;&lt;LI&gt;RabbitMQ Cluster Setup&lt;/LI&gt;&lt;LI&gt;RabbitMQ Highly Available Policy&lt;/LI&gt;&lt;LI&gt;&lt;strong&gt;Feed the Queue&lt;/strong&gt;&lt;/LI&gt;&lt;LI&gt;Go Language Installation&lt;/LI&gt;&lt;LI&gt;Simple Benchmark&lt;/LI&gt;&lt;LI&gt;&lt;strong&gt;High Availability&lt;/strong&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;From all possible virtualization possibilities available on FreeBSD (VirtualBox/Bhyve/QEMU/Jails/Docker) I have chosen the lightweight FreeBSD Containers – Jails &lt;/p&gt;&lt;img alt="🙂" src="https://s0.wp.com/wp-content/mu-plugins/wpcom-smileys/twemoji/2/svg/1f642.svg" width="14" height="14"&gt;&lt;p&gt;The legend is the same as usual.&lt;/p&gt;&lt;p dir="ltr"&gt;Command run on the &lt;strong dir="ltr"&gt;host&lt;/strong&gt; system as &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;root&lt;/b&gt;&lt;/tt&gt; user.&lt;/p&gt;&lt;PRE&gt;host # &lt;strong dir="ltr"&gt;command&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Command run on the &lt;strong dir="ltr"&gt;host&lt;/strong&gt; system as &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;regular&lt;/b&gt;&lt;/tt&gt; user.&lt;/p&gt;&lt;PRE&gt;host % &lt;strong dir="ltr"&gt;command&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Command run on the &lt;strong dir="ltr"&gt;&lt;tt dir="ltr"&gt;rabbitX&lt;/tt&gt;&lt;/strong&gt; Jail.&lt;/p&gt;&lt;PRE&gt;rabbitX # &lt;strong dir="ltr"&gt;command&lt;/strong&gt;&lt;/PRE&gt;&lt;h1&gt;Jails Setup&lt;/h1&gt;&lt;p dir="ltr"&gt;First we will create the base Jails for our setup. Both the host system and &lt;i dir="ltr"&gt;Jails Containers&lt;/i&gt; use FreeBSD 11.2-RELEASE system.&lt;/p&gt;&lt;PRE&gt;host # &lt;strong dir="ltr"&gt;mkdir -p /jail/BASE&lt;/strong&gt;
-host # &lt;strong dir="ltr"&gt;fetch -o /jail/BASE/11.2-RELEASE.base.txz http://ftp.freebsd.org/pub/FreeBSD/releases/amd64/12.1-RELEASE/base.txz&lt;/strong&gt;
-host # &lt;strong dir="ltr"&gt;for I in 1 2; do echo ${I}; mkdir -p /jail/rabbit${I}; tar --unlink -xpJf /jail/BASE/11.2-RELEASE.base.txz -C /jail/rabbit${I}; done&lt;/strong&gt;
-1
-2
-host #&lt;/PRE&gt;&lt;p&gt;We now have 2 empty clean Jails.&lt;/p&gt;&lt;p dir="ltr"&gt;We will now add Jails configuration to the &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;/etc/jail.conf&lt;/code&gt;&lt;/strong&gt; file.&lt;/p&gt;&lt;p dir="ltr"&gt;I have used my laptop for the Jail host thus Jails will configured to use the wireless &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;wlan0&lt;/code&gt;&lt;/strong&gt; interface and &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;192.168.43.10X&lt;/code&gt;&lt;/strong&gt; addresses. I also added &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;10.0.0.10X&lt;/code&gt;&lt;/strong&gt; network addresses as this will make it more convenient for me for the purposes of writing this article.&lt;/p&gt;&lt;PRE&gt;host # &lt;b dir="ltr"&gt;for I in 1 2
-do
-  cat &amp;gt;&amp;gt; /etc/jail.conf &amp;lt;&amp;lt; __EOF
-rabbit${I} {
-  host.hostname = rabbit${I}.local;
-  ip4.addr += 192.168.43.10${I};
-  ip4.addr += 10.0.0.10${I};
-  interface = wlan0;
-  path = /jail/rabbit${I};
-  exec.start = "/bin/sh /etc/rc";
-  exec.stop = "/bin/sh /etc/rc.shutdown";
-  exec.clean;
-  mount.devfs;
-  allow.raw_sockets;
-}
-
-__EOF
-done&lt;/b&gt;
-host #&lt;/PRE&gt;&lt;p dir="ltr"&gt;This is how the &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;/etc/jail.conf&lt;/code&gt;&lt;/strong&gt; file looks after its configured.&lt;/p&gt;&lt;PRE&gt;host # &lt;b dir="ltr"&gt;cat /etc/jail.conf&lt;/b&gt;
-rabbit1 {
-  host.hostname = rabbit1.local;
-  ip4.addr += 192.168.43.101;
-  ip4.addr += 10.0.0.101;
-  interface = wlan0;
-  path = /jail/rabbit1;
-  exec.start = "/bin/sh /etc/rc";
-  exec.stop = "/bin/sh /etc/rc.shutdown";
-  exec.clean;
-  mount.devfs;
-  allow.raw_sockets;
-}
-
-rabbit2 {
-  host.hostname = rabbit2.local;
-  ip4.addr += 192.168.43.102;
-  ip4.addr += 10.0.0.102;
-  interface = wlan0;
-  path = /jail/rabbit2;
-  exec.start = "/bin/sh /etc/rc";
-  exec.stop = "/bin/sh /etc/rc.shutdown";
-  exec.clean;
-  mount.devfs;
-  allow.raw_sockets;
-}
-&lt;/PRE&gt;&lt;p&gt;Now we can start our Jails.&lt;/p&gt;&lt;PRE&gt;host # &lt;b dir="ltr"&gt;for I in 1 2; do service jail onestart rabbit${I}; done&lt;/b&gt;
-Starting jails: rabbit1.
-Starting jails: rabbit2.
-&lt;/PRE&gt;&lt;p&gt;Jails are running properly.&lt;/p&gt;&lt;PRE&gt;# &lt;b dir="ltr"&gt;jls&lt;/b&gt;
-   JID  IP Address      Hostname                      Path
-     1  192.168.43.101  rabbit1.local                 /jail/rabbit1
-     2  192.168.43.102  rabbit2.local                 /jail/rabbit2
-&lt;/PRE&gt;&lt;p&gt;Time to add DNS server to the Jails so they will have Internet connectivity.&lt;/p&gt;&lt;PRE&gt;host # &lt;b dir="ltr"&gt;for I in 1 2; do sed -i '' s/quarterly/latest/g /etc/pkg/FreeBSD.conf; done&lt;/b&gt;
-
-host # &lt;b dir="ltr"&gt;for I in 1 2; do cat /jail/rabbit${I}/etc/resolv.conf; done&lt;/b&gt;
-nameserver 1.1.1.1
-nameserver 1.1.1.1
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;Now we will switch from &lt;b dir="ltr"&gt;&lt;tt dir="ltr"&gt;'quarterly'&lt;/tt&gt;&lt;/b&gt; to &lt;b dir="ltr"&gt;&lt;tt dir="ltr"&gt;'latest'&lt;/tt&gt;&lt;/b&gt; packages.&lt;/p&gt;&lt;PRE&gt;host # &lt;b dir="ltr"&gt;for I in 1 2; do sed -i '' s/quarterly/latest/g /jail/rabbit${I}/etc/pkg/FreeBSD.conf; done&lt;/b&gt;
-
-host # &lt;b dir="ltr"&gt;for I in 1 2; do grep latest /jail/rabbit${I}/etc/pkg/FreeBSD.conf; done&lt;/b&gt;
-  url: "pkg+http://pkg.FreeBSD.org/${ABI}/latest",
-  url: "pkg+http://pkg.FreeBSD.org/${ABI}/latest",
-&lt;/PRE&gt;&lt;h1&gt;RabbitMQ Installation&lt;/h1&gt;&lt;p&gt;We can now install RabbitMQ package.&lt;/p&gt;&lt;PRE&gt;host # &lt;b dir="ltr"&gt;for I in 1 2; do jexec rabbit${I} env ASSUME_ALWAYS_YES=yes pkg install -y rabbitmq; echo; done&lt;/b&gt;
-Bootstrapping pkg from pkg+http://pkg.FreeBSD.org/FreeBSD:11:amd64/latest, please wait...
-Verifying signature with trusted certificate pkg.freebsd.org.2013102301... done
-[rabbit1.local] Installing pkg-1.10.5_5...
-[rabbit1.local] Extracting pkg-1.10.5_5: 100%
-Updating FreeBSD repository catalogue...
-pkg: Repository FreeBSD load error: access repo file(/var/db/pkg/repo-FreeBSD.sqlite) failed: No such file or directory
-[rabbit1.local] Fetching meta.txz: 100%    944 B   0.9kB/s    00:01    
-[rabbit1.local] Fetching packagesite.txz: 100%    6 MiB 745.4kB/s    00:09    
-Processing entries: 100%
-FreeBSD repository update completed. 32114 packages processed.
-All repositories are up to date.
-Updating database digests format: 100%
-The following 2 package(s) will be affected (of 0 checked):
-
-New packages to be INSTALLED:
-        rabbitmq: 3.7.15
-        erlang-runtime19: 21.3.8.2
-
-Number of packages to be installed: 2
-
-The process will require 104 MiB more space.
-41 MiB to be downloaded.
-[rabbit1.local] [1/2] Fetching rabbitmq-3.7.15.txz: 100%    9 MiB 762.2kB/s    00:12    
-[rabbit1.local] [2/2] Fetching erlang-runtime19-21.3.8.2.txz: 100%   33 MiB 978.8kB/s    00:35    
-Checking integrity... done (0 conflicting)
-[rabbit1.local] [1/2] Installing erlang-runtime19-21.3.8.2...
-[rabbit1.local] [1/2] Extracting erlang-runtime19-21.3.8.2: 100%
-[rabbit1.local] [2/2] Installing rabbitmq-3.7.15...
-===&amp;gt; Creating groups.
-Creating group 'rabbitmq' with gid '135'.
-===&amp;gt; Creating users
-Creating user 'rabbitmq' with uid '135'.
-[rabbit1.local] [2/2] Extracting rabbitmq-3.7.15: 100%
-Message from erlang-runtime19-21.3.8.2:
-
-===========================================================================
-
-To use this runtime port for development or testing, just prepend
-its binary path ("/usr/local/lib/erlang19/bin") to your PATH variable.
-
-===========================================================================
-
-(...)
-
-&lt;b dir="ltr"&gt;// SAME MESSAGES FOR THE OTHER &lt;b dir="ltr"&gt;rabbit2&lt;/b&gt; JAIL //&lt;/b&gt;
-&lt;/PRE&gt;&lt;p&gt;Lets verify that RabbitMQ package has installed successfully.&lt;/p&gt;&lt;PRE&gt;host # &lt;b dir="ltr"&gt;for I in 1 2; do jexec rabbit${I} which rabbitmqctl; done&lt;/b&gt;
-/usr/local/sbin/rabbitmqctl
-/usr/local/sbin/rabbitmqctl&lt;/PRE&gt;&lt;h1&gt;RabbitMQ Setup&lt;/h1&gt;&lt;p dir="ltr"&gt;We will now configure &lt;b dir="ltr"&gt;&lt;tt dir="ltr"&gt;/etc/hosts&lt;/tt&gt;&lt;/b&gt; files on our Jails.&lt;/p&gt;&lt;PRE&gt;host # &lt;b dir="ltr"&gt;for I in 1 2; do cat &amp;gt;&amp;gt; /jail/rabbit${I}/etc/hosts &amp;lt;&amp;lt; __EOF
-192.168.43.101 rabbit1
-192.168.43.102 rabbit2&lt;/b&gt;
-
-__EOF
-done
-&lt;/PRE&gt;&lt;p&gt;… and fast verification.&lt;/p&gt;&lt;PRE&gt;host # &lt;b dir="ltr"&gt;cat /jail/rabbit?/etc/hosts | grep 192.168.43 | sort -n | uniq -c&lt;/b&gt;
-2 192.168.43.101 rabbit1
-2 192.168.43.102 rabbit2
-&lt;/PRE&gt;&lt;p&gt;As we have RabbitMQ package installed we need to enable it and start it.&lt;/p&gt;&lt;PRE&gt;host # &lt;b dir="ltr"&gt;jexec rabbit1 /usr/local/etc/rc.d/rabbitmq rcvar&lt;/b&gt;
-# rabbitmq
-#
-rabbitmq_enable="NO"
-#   (default: "")
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;As we see we need to set &lt;b dir="ltr"&gt;&lt;tt dir="ltr"&gt;rabbitmq_enable=YES&lt;/tt&gt;&lt;/b&gt; value in &lt;b dir="ltr"&gt;&lt;tt dir="ltr"&gt;/etc/rc.conf&lt;/tt&gt;&lt;/b&gt; file within each of our Jails.&lt;/p&gt;&lt;PRE&gt;host # &lt;b dir="ltr"&gt;for I in 1 2; do jexec rabbit${I} sysrc rabbitmq_enable=YES; done&lt;/b&gt;
-rabbitmq_enable:  -&amp;gt; YES
-rabbitmq_enable:  -&amp;gt; YES
-&lt;/PRE&gt;&lt;p&gt;Now we can start the RabbitMQ in the Jails.&lt;/p&gt;&lt;PRE&gt;host # &lt;b dir="ltr"&gt;for I in 1 2; do jexec rabbit${I} service rabbitmq start; done&lt;/b&gt;
-Starting rabbitmq.
-Starting rabbitmq.
-&lt;/PRE&gt;&lt;p&gt;Now we have four RabbitMQ instances up and running.&lt;/p&gt;&lt;p&gt;This is the list of plugins enabled by default. None.&lt;/p&gt;&lt;h2&gt;RabbitMQ Plugins&lt;/h2&gt;&lt;PRE&gt;rabbit1 # &lt;b dir="ltr"&gt;rabbitmq-plugins list&lt;/b&gt;
- Configured: E = explicitly enabled; e = implicitly enabled
- | Status: * = running on rabbit@rabbit1
- |/
-[  ] rabbitmq_amqp1_0                  3.7.15
-[  ] rabbitmq_auth_backend_cache       3.7.15
-[  ] rabbitmq_auth_backend_http        3.7.15
-[  ] rabbitmq_auth_backend_ldap        3.7.15
-[  ] rabbitmq_auth_mechanism_ssl       3.7.15
-[  ] rabbitmq_consistent_hash_exchange 3.7.15
-[  ] rabbitmq_event_exchange           3.7.15
-[  ] rabbitmq_federation               3.7.15
-[  ] rabbitmq_federation_management    3.7.15
-[  ] rabbitmq_jms_topic_exchange       3.7.15
-[  ] rabbitmq_management               3.7.15
-[  ] rabbitmq_management_agent         3.7.15
-[  ] rabbitmq_mqtt                     3.7.15
-[  ] rabbitmq_peer_discovery_aws       3.7.15
-[  ] rabbitmq_peer_discovery_common    3.7.15
-[  ] rabbitmq_peer_discovery_consul    3.7.15
-[  ] rabbitmq_peer_discovery_etcd      3.7.15
-[  ] rabbitmq_peer_discovery_k8s       3.7.15
-[  ] rabbitmq_random_exchange          3.7.15
-[  ] rabbitmq_recent_history_exchange  3.7.15
-[  ] rabbitmq_sharding                 3.7.15
-[  ] rabbitmq_shovel                   3.7.15
-[  ] rabbitmq_shovel_management        3.7.15
-[  ] rabbitmq_stomp                    3.7.15
-[  ] rabbitmq_top                      3.7.15
-[  ] rabbitmq_tracing                  3.7.15
-[  ] rabbitmq_trust_store              3.7.15
-[  ] rabbitmq_web_dispatch             3.7.15
-[  ] rabbitmq_web_mqtt                 3.7.15
-[  ] rabbitmq_web_mqtt_examples        3.7.15
-[  ] rabbitmq_web_stomp                3.7.15
-[  ] rabbitmq_web_stomp_examples       3.7.15
-&lt;/PRE&gt;&lt;p&gt;Time to enable web interface plugin.&lt;/p&gt;&lt;PRE&gt;host # &lt;b dir="ltr"&gt;for I in 1 2; do jexec rabbit${I} rabbitmq-plugins enable rabbitmq_management; done&lt;/b&gt;
-The following plugins have been configured:
-  rabbitmq_management
-  rabbitmq_management_agent
-  rabbitmq_web_dispatch
-Applying plugin configuration to rabbit@rabbit1...
-The following plugins have been enabled:
-  rabbitmq_management
-  rabbitmq_management_agent
-  rabbitmq_web_dispatch
-
-started 3 plugins.
-
-(...)
-
-&lt;b dir="ltr"&gt;// SAME MESSAGES FOR THE OTHER rabbit2 JAIL //&lt;/b&gt;
-&lt;/PRE&gt;&lt;p&gt;Now we have web interface plugin enabled in each RabbitMQ FreeBSD Jail.&lt;/p&gt;&lt;p dir="ltr"&gt;Big ‘&lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;E&lt;/b&gt;&lt;/tt&gt;‘ letter means that this is the plugin that we enabled and small ‘&lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;e&lt;/b&gt;&lt;/tt&gt;‘ letter means that this plugin is only enabled as ‘dependency’ for some other plugin we requested to be enabled.&lt;/p&gt;&lt;PRE&gt;rabbit1 # &lt;b dir="ltr"&gt;rabbitmq-plugins list&lt;/b&gt;
- Configured: E = explicitly enabled; e = implicitly enabled
- | Status: * = running on rabbit@rabbit1
- |/
-[  ] rabbitmq_amqp1_0                  3.7.15
-[  ] rabbitmq_auth_backend_cache       3.7.15
-[  ] rabbitmq_auth_backend_http        3.7.15
-[  ] rabbitmq_auth_backend_ldap        3.7.15
-[  ] rabbitmq_auth_mechanism_ssl       3.7.15
-[  ] rabbitmq_consistent_hash_exchange 3.7.15
-[  ] rabbitmq_event_exchange           3.7.15
-[  ] rabbitmq_federation               3.7.15
-[  ] rabbitmq_federation_management    3.7.15
-[  ] rabbitmq_jms_topic_exchange       3.7.15
-[E*] rabbitmq_management               3.7.15
-[e*] rabbitmq_management_agent         3.7.15
-[  ] rabbitmq_mqtt                     3.7.15
-[  ] rabbitmq_peer_discovery_aws       3.7.15
-[  ] rabbitmq_peer_discovery_common    3.7.15
-[  ] rabbitmq_peer_discovery_consul    3.7.15
-[  ] rabbitmq_peer_discovery_etcd      3.7.15
-[  ] rabbitmq_peer_discovery_k8s       3.7.15
-[  ] rabbitmq_random_exchange          3.7.15
-[  ] rabbitmq_recent_history_exchange  3.7.15
-[  ] rabbitmq_sharding                 3.7.15
-[  ] rabbitmq_shovel                   3.7.15
-[  ] rabbitmq_shovel_management        3.7.15
-[  ] rabbitmq_stomp                    3.7.15
-[  ] rabbitmq_top                      3.7.15
-[  ] rabbitmq_tracing                  3.7.15
-[  ] rabbitmq_trust_store              3.7.15
-[e*] rabbitmq_web_dispatch             3.7.15
-[  ] rabbitmq_web_mqtt                 3.7.15
-[  ] rabbitmq_web_mqtt_examples        3.7.15
-[  ] rabbitmq_web_stomp                3.7.15
-[  ] rabbitmq_web_stomp_examples       3.7.15
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;Now – in order to create a cluster – we need these RabbitMQ instances to share the same ERLANG cookie. The ERLANG cookie can be found at &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;/var/db/rabbitmq/.erlang.cookie&lt;/b&gt;&lt;/tt&gt; on FreeBSD system.&lt;/p&gt;&lt;PRE&gt;rabbot1 # &lt;b dir="ltr"&gt;cat /var/db/rabbitmq/.erlang.cookie; echo&lt;/b&gt;
-NOEVQNXJDNLAJOSVWNIW
-rabbot1 # 
-&lt;/PRE&gt;&lt;p&gt;We will need to stop RabbitMQ to change ERLANG cookie.&lt;/p&gt;&lt;PRE&gt;host # &lt;b dir="ltr"&gt;for I in 1 2; do jexec rabbit${I} service rabbitmq stop; done&lt;/b&gt;
-Stopping rabbitmq.
-Waiting for PIDS: 88684.
-Stopping rabbitmq.
-Waiting for PIDS: 20976.
-&lt;/PRE&gt;&lt;p&gt;Let’s set the same ERLANG cookie on each FreeBSD Jail then.&lt;/p&gt;&lt;PRE&gt;host # &lt;b dir="ltr"&gt;for I in 1 2; do cat &amp;gt; /jail/rabbit${I}/var/db/rabbitmq/.erlang.cookie &amp;lt;&amp;lt; __EOF
-RABBITMQFREEBSDJAILS
-__EOF
-done&lt;/b&gt;
-&lt;/PRE&gt;&lt;p&gt;… and now we need to start them again.&lt;/p&gt;&lt;PRE&gt;host # &lt;b dir="ltr"&gt;for I in 1 2; do jexec rabbit${I} service rabbitmq start; done&lt;/b&gt;
-Starting rabbitmq.
-Starting rabbitmq.
-&lt;/PRE&gt;&lt;p&gt;Fast verification.&lt;/p&gt;&lt;PRE&gt;host # &lt;strong dir="ltr"&gt;for I in 1 2; do jexec rabbit${I} cat /var/db/rabbitmq/.erlang.cookie; done&lt;/strong&gt;
-RABBITMQFREEBSDJAILS
-RABBITMQFREEBSDJAILS
-&lt;/PRE&gt;&lt;h2&gt;RabbitMQ Administrative User&lt;/h2&gt;&lt;p dir="ltr"&gt;Now we will create administrative user called &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;admin&lt;/b&gt;&lt;/tt&gt; for the RabbitMQ instances.&lt;/p&gt;&lt;PRE&gt;host # &lt;b dir="ltr"&gt;for I in 1 2; do jexec rabbit${I} rabbitmqctl add_user admin ADMINPASSWORD; done&lt;/b&gt;
-Adding user "admin" ...
-Adding user "admin" ...
-
-host # &lt;b dir="ltr"&gt;for I in 1 2; do jexec rabbit${I} rabbitmqctl set_user_tags admin administrator; done&lt;/b&gt;
-Setting tags for user "admin" to [administrator] ...
-Setting tags for user "admin" to [administrator] ...
-
-host # &lt;b dir="ltr"&gt;for I in 1 2; do jexec rabbit${I} rabbitmqctl set_permissions -p / admin ".*" ".*" ".*" ; done&lt;/b&gt;
-Setting permissions for user "admin" in vhost "/" ...
-Setting permissions for user "admin" in vhost "/" ...
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;We should now be able to login to the &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;&lt;a href="http://192.168.43.101:15672/" rel="nofollow" dir="ltr"&gt;http://192.168.43.101:15672/&lt;/a&gt;&lt;/b&gt;&lt;/tt&gt; (or &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;&lt;a href="http://10.0.0.101:15672/" rel="nofollow" dir="ltr"&gt;http://10.0.0.101:15672/&lt;/a&gt;&lt;/b&gt;&lt;/tt&gt; also) RabbitMQ management page.&lt;/p&gt;&lt;img src="https://vermaden.files.wordpress.com/2019/06/01-rabbitmq-login.png?w=960" alt="01-rabbitmq-login.png" srcset="https://vermaden.files.wordpress.com/2019/06/01-rabbitmq-login.png?w=960 960w, https://vermaden.files.wordpress.com/2019/06/01-rabbitmq-login.png?w=150 150w, https://vermaden.files.wordpress.com/2019/06/01-rabbitmq-login.png?w=300 300w, https://vermaden.files.wordpress.com/2019/06/01-rabbitmq-login.png?w=768 768w, https://vermaden.files.wordpress.com/2019/06/01-rabbitmq-login.png?w=1024 1024w, https://vermaden.files.wordpress.com/2019/06/01-rabbitmq-login.png 1074w" width="312" height="196"&gt;&lt;p&gt;After login a useful RabbitMQ dashboard will welcome you.&lt;/p&gt;&lt;img src="https://vermaden.files.wordpress.com/2019/06/02-rabbitmq-dashboard.png?w=960" alt="02-rabbitmq-dashboard.png" srcset="https://vermaden.files.wordpress.com/2019/06/02-rabbitmq-dashboard.png?w=960 960w, https://vermaden.files.wordpress.com/2019/06/02-rabbitmq-dashboard.png?w=150 150w, https://vermaden.files.wordpress.com/2019/06/02-rabbitmq-dashboard.png?w=300 300w, https://vermaden.files.wordpress.com/2019/06/02-rabbitmq-dashboard.png?w=768 768w, https://vermaden.files.wordpress.com/2019/06/02-rabbitmq-dashboard.png?w=1024 1024w, https://vermaden.files.wordpress.com/2019/06/02-rabbitmq-dashboard.png 1074w" width="312" height="196"&gt;&lt;h2&gt;RabbitMQ Cluster Setup&lt;/h2&gt;&lt;p&gt;We will now create RabbitMQ cluster.&lt;/p&gt;&lt;PRE&gt;rabbit1 # &lt;b dir="ltr"&gt;rabbitmqctl cluster_status&lt;/b&gt;
-Cluster status of node rabbit@rabbit1 ...
-[{nodes,[{disc,[rabbit@rabbit1]}]},
- {running_nodes,[rabbit@rabbit1]},
- {cluster_name,},
- {partitions,[]},
- {alarms,[{rabbit@rabbit1,[]}]}]
-
-rabbit2 # &lt;b dir="ltr"&gt;hostname&lt;/b&gt;
-rabbit2.local
-
-rabbit2 # &lt;b dir="ltr"&gt;rabbitmqctl join_cluster rabbit@rabbit1&lt;/b&gt;
-Error: this command requires the 'rabbit' app to be stopped on the target node. Stop it with 'rabbitmqctl stop_app'.
-Arguments given:
-        join_cluster rabbit@rabbit1
-
-Usage
-
-rabbitmqctl [--node ] [--longnames] [--quiet] join_cluster [--disc|--ram] 
-&lt;/PRE&gt;&lt;p&gt;We first need to stop the RabbitMQ ‘application’ to join the cluster.&lt;/p&gt;&lt;PRE&gt;rabbit2 # &lt;b dir="ltr"&gt;rabbitmqctl stop_app&lt;/b&gt;
-Stopping rabbit application on node rabbit@rabbit2 ...
-
-rabbit2 # &lt;b dir="ltr"&gt;rabbitmqctl join_cluster rabbit@rabbit1&lt;/b&gt;
-Clustering node rabbit@rabbit2 with rabbit@rabbit1
-
-rabbit2 # &lt;b dir="ltr"&gt;rabbitmqctl start_app&lt;/b&gt;
-Starting node rabbit@rabbit2 ...
- completed with 5 plugins.
-
-rabbit2 # &lt;b dir="ltr"&gt;rabbitmqctl cluster_status&lt;/b&gt;
-Cluster status of node rabbit@rabbit2 ...
-[{nodes,[{disc,[rabbit@rabbit1,rabbit@rabbit2]}]},
- {running_nodes,[rabbit@rabbit1,rabbit@rabbit2]},
- {cluster_name,},
- {partitions,[]},
- {alarms,[{rabbit@rabbit1,[]},{rabbit@rabbit2,[]}]}]
-
-rabbit1 # &lt;b dir="ltr"&gt;rabbitmqctl cluster_status&lt;/b&gt;
-Cluster status of node rabbit@rabbit1 ...
-[{nodes,[{disc,[rabbit@rabbit1,rabbit@rabbit2]}]},
- {running_nodes,[rabbit@rabbit2,rabbit@rabbit1]},
- {cluster_name,},
- {partitions,[]},
- {alarms,[{rabbit@rabbit2,[]},{rabbit@rabbit1,[]}]}]
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;Now we have formed two node RabbitMQ cluster. We will rename it to &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;cluster&lt;/b&gt;&lt;/tt&gt; then.&lt;/p&gt;&lt;PRE&gt;rabbit1 # &lt;b dir="ltr"&gt;rabbitmqctl set_cluster_name rabbit@cluster&lt;/b&gt;
-Setting cluster name to rabbit@cluster ...
-
-rabbit1 # &lt;b dir="ltr"&gt;rabbitmqctl cluster_status&lt;/b&gt;
-Cluster status of node rabbit@rabbit1 ...
-[{nodes,[{disc,[rabbit@rabbit1,rabbit@rabbit2]}]},
- {running_nodes,[rabbit@rabbit2,rabbit@rabbit1]},
- {cluster_name,},
- {partitions,[]},
- {alarms,[{rabbit@rabbit2,[]},{rabbit@rabbit1,[]}]}]
-&lt;/PRE&gt;&lt;p&gt;Here is how our cluster looks in the web interface.&lt;/p&gt;&lt;img src="https://vermaden.files.wordpress.com/2019/06/08-rabbitmq-cluster-1.png?w=960" alt="08-rabbitmq-cluster.png" srcset="https://vermaden.files.wordpress.com/2019/06/08-rabbitmq-cluster-1.png?w=960 960w, https://vermaden.files.wordpress.com/2019/06/08-rabbitmq-cluster-1.png?w=150 150w, https://vermaden.files.wordpress.com/2019/06/08-rabbitmq-cluster-1.png?w=300 300w, https://vermaden.files.wordpress.com/2019/06/08-rabbitmq-cluster-1.png?w=768 768w, https://vermaden.files.wordpress.com/2019/06/08-rabbitmq-cluster-1.png?w=1024 1024w, https://vermaden.files.wordpress.com/2019/06/08-rabbitmq-cluster-1.png 1074w" width="312" height="196"&gt;&lt;h2&gt;RabbitMQ Highly Available Policy&lt;/h2&gt;&lt;p dir="ltr"&gt;To have &lt;a href="https://www.rabbitmq.com/ha.html" rel="noopener" dir="ltr"&gt;Highly Available (Mirrored) Queues&lt;/a&gt; in RabbitMQ you need to create &lt;i dir="ltr"&gt;Policy&lt;/i&gt;. We will declare &lt;i dir="ltr"&gt;Policy&lt;/i&gt; named &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;ha&lt;/b&gt;&lt;/tt&gt; which will match queues whose names begin with ‘&lt;strong dir="ltr"&gt;&lt;tt dir="ltr"&gt;ha-&lt;/tt&gt;&lt;/strong&gt;‘ prefix so they will be configured with mirroring to all two nodes in the cluster.&lt;/p&gt;&lt;p dir="ltr"&gt;This is the command you need to execute to create such &lt;i dir="ltr"&gt;Policy&lt;/i&gt;.&lt;/p&gt;&lt;PRE&gt;rabbit1 # &lt;b dir="ltr"&gt;rabbitmqctl set_policy ha "^ha-\.*" '{"ha-mode":"all","ha-sync-mode":"automatic"}'&lt;/b&gt;
-Setting policy "ha-mirror" for pattern "^ha-\." to "{"ha-mode":"all","ha-sync-mode":"automatic"}" with priority "0" for vhost "/" ...
-&lt;/PRE&gt;&lt;p&gt;… or alternatively you can use the web interface to create it.&lt;/p&gt;&lt;p dir="ltr"&gt;No matter which method you have chosen you will end up with needed &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;ha&lt;/b&gt;&lt;/tt&gt; &lt;i dir="ltr"&gt;Policy&lt;/i&gt; as shown below.&lt;/p&gt;&lt;img src="https://vermaden.files.wordpress.com/2019/06/03-rabbitmq-policy-1.png?w=960" alt="03-rabbitmq-policy.png" srcset="https://vermaden.files.wordpress.com/2019/06/03-rabbitmq-policy-1.png?w=960 960w, https://vermaden.files.wordpress.com/2019/06/03-rabbitmq-policy-1.png?w=150 150w, https://vermaden.files.wordpress.com/2019/06/03-rabbitmq-policy-1.png?w=300 300w, https://vermaden.files.wordpress.com/2019/06/03-rabbitmq-policy-1.png?w=768 768w, https://vermaden.files.wordpress.com/2019/06/03-rabbitmq-policy-1.png?w=1024 1024w, https://vermaden.files.wordpress.com/2019/06/03-rabbitmq-policy-1.png 1074w" width="312" height="196"&gt;&lt;h1&gt;Feed the Queue&lt;/h1&gt;&lt;p dir="ltr"&gt;We now have two node RabbitMQ cluster with HA for queues that name starts with &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;ha-&lt;/b&gt;&lt;/tt&gt; prefix. We will now test our RabbitMQ setup and will create and feed the queue with &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;send.go&lt;/b&gt;&lt;/tt&gt; script – as you probably guessed – written in Go. We will need to add Go language to our &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;host&lt;/b&gt;&lt;/tt&gt; system.&lt;/p&gt;&lt;h2&gt;Go Language Installation&lt;/h2&gt;&lt;PRE&gt;host # &lt;b dir="ltr"&gt;pkg install go&lt;/b&gt;
-Updating FreeBSD repository catalogue...
-FreeBSD repository is up to date.
-All repositories are up to date.
-The following 1 package(s) will be affected (of 0 checked):
-
-New packages to be INSTALLED:
-        go: 1.12.5,1
-
-Number of packages to be installed: 1
-
-The process will require 262 MiB more space.
-75 MiB to be downloaded.
-
-Proceed with this action? [y/N]: &lt;b dir="ltr"&gt;y&lt;/b&gt;
-(...)
-
-host % &lt;b dir="ltr"&gt;go version&lt;/b&gt;
-go version go1.12.5 freebsd/amd64
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;This is the &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;send.go&lt;/b&gt;&lt;/tt&gt; script – we will use it to send 10 messages to the &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;ha-default&lt;/b&gt;&lt;/tt&gt; queue. Its based on the &lt;a href="https://www.rabbitmq.com/tutorials/tutorial-one-go.html" rel="noopener" dir="ltr"&gt;RabbitMQ Hello World&lt;/a&gt; tutorial.&lt;/p&gt;&lt;PRE&gt;host % &lt;strong dir="ltr"&gt;cat send.go&lt;/strong&gt;
-package main
-
-import (
-  "log"
-  "amqp"
-)
-
-func FAIL_ON_ERROR(err error, msg string) {
-  if err != nil {
-    log.Fatalf("%s: %s", msg, err)
-  }
-}
-
-func main() {
-  conn, err := amqp.Dial("amqp://admin:ADMINPASSWORD@10.0.0.101:5672/")
-  FAIL_ON_ERROR(err, "ER: failed to connect to RabbitMQ")
-  defer conn.Close()
-
-  ch, err := conn.Channel()
-  FAIL_ON_ERROR(err, "ER: failed to open channel")
-  defer ch.Close()
-
-  q, err := ch.QueueDeclare(
-    "ha-default", // name
-    false,        // durable
-    false,        // delete when unused
-    false,        // exclusive
-    false,        // no-wait
-    nil,          // arguments
-  )
-  FAIL_ON_ERROR(err, "ER: failed to declare queue")
-
-  body := "Hello World!"
-
-  for i := 1; i &amp;lt;= 10; i++ {
-    err = ch.Publish(
-      "",     // exchange
-      q.Name, // routing key
-      false,  // mandatory
-      false,  // immediate
-      amqp.Publishing{
-        ContentType: "text/plain",
-        Body:        []byte(body),
-      })
-    log.Printf("IN: sent message '%s' (%d)", body, i)
-    FAIL_ON_ERROR(err, "ER: failed to publish message")
-  }
-
-}
-
-
-&lt;/PRE&gt;&lt;p&gt;We will now run it.&lt;/p&gt;&lt;PRE&gt;host % &lt;b dir="ltr"&gt;go run send.go&lt;/b&gt;
-send.go:5:3: cannot find package "amqp" in any of:
-        /usr/local/go/src/amqp (from $GOROOT)
-        /home/vermaden/.gopkg/src/amqp (from $GOPATH)
-
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;We lack the &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;amqp&lt;/b&gt;&lt;/tt&gt; package for the Go language.&lt;/p&gt;&lt;p dir="ltr"&gt;We will need to download it from its &lt;a href="https://github.com/streadway/amqp" dir="ltr"&gt;https://github.com/streadway/amqp&lt;/a&gt; page. We will get it by downloading everything in a ZIP package.&lt;/p&gt;&lt;PRE&gt;host % &lt;b dir="ltr"&gt;mkdir -p ~/.gopkg/src&lt;/b&gt;
-host % &lt;b dir="ltr"&gt;cd !$&lt;/b&gt;
-host % &lt;b dir="ltr"&gt;pwd&lt;/b&gt;
-/home/vermaden/.gopkg/src
-host % &lt;b dir="ltr"&gt;fetch https://github.com/streadway/amqp/archive/master.zip&lt;/b&gt;
-host % &lt;b dir="ltr"&gt;unzip master.zip &lt;/b&gt;
-Archive:  /home/vermaden/.gopkg/src/master.zip
-   creating: amqp-master/
- extracting: amqp-master/.gitignore
- extracting: amqp-master/.travis.yml
- (...)
- extracting: amqp-master/uri.go
- extracting: amqp-master/uri_test.go
- extracting: amqp-master/write.go
-host % &lt;b dir="ltr"&gt;rm master.zip&lt;/b&gt;
-host % &lt;b dir="ltr"&gt;mv amqp-master amqp&lt;/b&gt;
-host % &lt;b dir="ltr"&gt;cd amqp&lt;/b&gt;
-host % &lt;b dir="ltr"&gt;pwd&lt;/b&gt;
-/home/vermaden/.gopkg/src/amqp
-host % &lt;b dir="ltr"&gt;exa&lt;/b&gt;
-_examples          confirms.go         delivery_test.go        LICENSE            spec091.go
-spec               confirms_test.go    doc.go                  pre-commit         tls_test.go
-allocator.go       connection.go       example_client_test.go  read.go            types.go
-allocator_test.go  connection_test.go  examples_test.go        read_test.go       uri.go
-auth.go            consumers.go        fuzz.go                 README.md          uri_test.go
-certs.sh           consumers_test.go   gen.sh                  reconnect_test.go  write.go
-channel.go         CONTRIBUTING.md     go.mod                  return.go          
-client_test.go     delivery.go         integration_test.go     shared_test.go     
-
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;We also need to make sure that &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;PATH&lt;/b&gt;&lt;/tt&gt; and &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;GOPATH&lt;/b&gt;&lt;/tt&gt; are properly configured. To do so you need to put these in your interactive shell config.&lt;/p&gt;&lt;PRE&gt;&lt;strong dir="ltr"&gt;# GO SHELL SETUP&lt;/strong&gt;
-mkdir -p ~/.gopkg
-export GOPATH=~/.gopkg
-export PATH="${PATH} ~/.gopkg"
-&lt;/PRE&gt;&lt;p&gt;Now we can get back to feeding our queue.&lt;/p&gt;&lt;PRE&gt;host % &lt;b dir="ltr"&gt;go run send.go&lt;/b&gt;
-2019/06/05 13:53:59 IN: sent message 'Hello World!' (1)
-2019/06/05 13:53:59 IN: sent message 'Hello World!' (2)
-2019/06/05 13:53:59 IN: sent message 'Hello World!' (3)
-2019/06/05 13:53:59 IN: sent message 'Hello World!' (4)
-2019/06/05 13:53:59 IN: sent message 'Hello World!' (5)
-2019/06/05 13:53:59 IN: sent message 'Hello World!' (6)
-2019/06/05 13:53:59 IN: sent message 'Hello World!' (7)
-2019/06/05 13:53:59 IN: sent message 'Hello World!' (8)
-2019/06/05 13:53:59 IN: sent message 'Hello World!' (9)
-2019/06/05 13:53:59 IN: sent message 'Hello World!' (10)
-% 
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;The &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;ha-default&lt;/b&gt;&lt;/tt&gt; queue has been created and feeded with 10 messages.&lt;/p&gt;&lt;img src="https://vermaden.files.wordpress.com/2019/06/04-rabbitmq-queue-1.png?w=960" alt="04-rabbitmq-queue" srcset="https://vermaden.files.wordpress.com/2019/06/04-rabbitmq-queue-1.png?w=960 960w, https://vermaden.files.wordpress.com/2019/06/04-rabbitmq-queue-1.png?w=150 150w, https://vermaden.files.wordpress.com/2019/06/04-rabbitmq-queue-1.png?w=300 300w, https://vermaden.files.wordpress.com/2019/06/04-rabbitmq-queue-1.png?w=768 768w, https://vermaden.files.wordpress.com/2019/06/04-rabbitmq-queue-1.png?w=1024 1024w, https://vermaden.files.wordpress.com/2019/06/04-rabbitmq-queue-1.png 1074w" width="312" height="196"&gt;&lt;p dir="ltr"&gt;Now we need to ‘receive’ these messages from the queue. This is where &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;receive.go&lt;/b&gt;&lt;/tt&gt; script comes with help. It is also based on the &lt;a href="https://www.rabbitmq.com/tutorials/tutorial-one-go.html" dir="ltr"&gt;RabbitMQ Hello World&lt;/a&gt; tutorial.&lt;/p&gt;&lt;PRE&gt;host % &lt;strong dir="ltr"&gt;cat receive.go&lt;/strong&gt;
-package main
-
-import (
-  "log"
-  "amqp"
-)
-
-func FAIL_ON_ERROR(err error, msg string) {
-  if err != nil {
-    log.Fatalf("%s: %s", msg, err)
-  }
-}
-
-func main() {
-  conn, err := amqp.Dial("amqp://admin:ADMINPASSWORD@10.0.0.102:5672/")
-  FAIL_ON_ERROR(err, "ER: failed to connect to RabbitMQ")
-  defer conn.Close()
-
-  ch, err := conn.Channel()
-  FAIL_ON_ERROR(err, "ER: failed to open channel")
-  defer ch.Close()
-
-  q, err := ch.QueueDeclare(
-    "ha-default", // name
-    false,        // durable
-    false,        // delete when unused
-    false,        // exclusive
-    false,        // no-wait
-    nil,          // arguments
-  )
-  FAIL_ON_ERROR(err, "ER: failed to declare queue")
-
-  msgs, err := ch.Consume(
-    q.Name, // queue
-    "",     // consumer
-    true,   // auto-ack
-    false,  // exclusive
-    false,  // no-local
-    false,  // no-wait
-    nil,    // args
-  )
-  FAIL_ON_ERROR(err, "ER: failed to register consumer")
-
-  forever := make(chan bool)
-
-  go func() {
-    for d := range msgs {
-      log.Printf("IN: received message: %s", d.Body)
-    }
-  }()
-
-  log.Printf("IN: waiting for messages")
-  log.Printf("IN: to exit press CTRL+C")
-  &amp;lt;-forever
-}
-
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;Here is its output after running. It will not stop running until you end it with &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;CTRL-C&lt;/b&gt;&lt;/tt&gt; sequence.&lt;/p&gt;&lt;PRE&gt;host % &lt;b dir="ltr"&gt;go run receive.go&lt;/b&gt;
-2019/06/05 13:54:34 IN: waiting for messages
-2019/06/05 13:54:34 IN: to exit press CTRL+C
-2019/06/05 13:54:34 IN: received message: Hello World!
-2019/06/05 13:54:34 IN: received message: Hello World!
-2019/06/05 13:54:34 IN: received message: Hello World!
-2019/06/05 13:54:34 IN: received message: Hello World!
-2019/06/05 13:54:34 IN: received message: Hello World!
-2019/06/05 13:54:34 IN: received message: Hello World!
-2019/06/05 13:54:34 IN: received message: Hello World!
-2019/06/05 13:54:34 IN: received message: Hello World!
-2019/06/05 13:54:34 IN: received message: Hello World!
-2019/06/05 13:54:34 IN: received message: Hello World!
-^C
-%
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;If you checked the source code carefully then you probably noticed that I ‘sent’ messages to the &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;rabbit1&lt;/b&gt;&lt;/tt&gt; node (&lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;10.0.0.101&lt;/b&gt;&lt;/tt&gt;) while I ‘received’ the messages at the &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;rabbit2&lt;/b&gt;&lt;/tt&gt; node (&lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;10.0.0.102&lt;/b&gt;&lt;/tt&gt;).&lt;/p&gt;&lt;h2&gt;Simple Benchmark&lt;/h2&gt;&lt;p dir="ltr"&gt;We will now make simple benchmark with &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;receive.go&lt;/b&gt;&lt;/tt&gt; script left running and modified &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;send.go&lt;/b&gt;&lt;/tt&gt; script with the &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;for&lt;/b&gt;&lt;/tt&gt; loop with &lt;strong dir="ltr"&gt;100000&lt;/strong&gt; messages.&lt;/p&gt;&lt;PRE&gt;host % &lt;b dir="ltr"&gt;go run receive.go&lt;/b&gt;
-2019/06/05 13:52:34 IN: waiting for messages
-2019/06/05 13:52:34 IN: to exit press CTRL+C
-
-&lt;/PRE&gt;&lt;p&gt;… and now the messages.&lt;/p&gt;&lt;PRE&gt;host % &lt;b dir="ltr"&gt;go run send.go&lt;/b&gt;
-2019/06/05 13:53:59 IN: sent message 'Hello World!' (1)
-2019/06/05 13:53:59 IN: sent message 'Hello World!' (2)
-2019/06/05 13:53:59 IN: sent message 'Hello World!' (3)
-(...)
-2019/06/05 13:56:26 IN: sent message 'Hello World!' (99998)
-2019/06/05 13:56:26 IN: sent message 'Hello World!' (99999)
-2019/06/05 13:56:26 IN: sent message 'Hello World!' (100000)
-% 
-&lt;/PRE&gt;&lt;p&gt;The results of this simple benchmark are below.&lt;/p&gt;&lt;img src="https://vermaden.files.wordpress.com/2019/06/05-rabbitmq-benchmark-1.png?w=960" alt="05-rabbitmq-benchmark.png" srcset="https://vermaden.files.wordpress.com/2019/06/05-rabbitmq-benchmark-1.png?w=960 960w, https://vermaden.files.wordpress.com/2019/06/05-rabbitmq-benchmark-1.png?w=150 150w, https://vermaden.files.wordpress.com/2019/06/05-rabbitmq-benchmark-1.png?w=300 300w, https://vermaden.files.wordpress.com/2019/06/05-rabbitmq-benchmark-1.png?w=768 768w, https://vermaden.files.wordpress.com/2019/06/05-rabbitmq-benchmark-1.png?w=1024 1024w, https://vermaden.files.wordpress.com/2019/06/05-rabbitmq-benchmark-1.png 1074w" width="312" height="196"&gt;&lt;p&gt;About 4000-5000 messages per second are handled by this RabbitMQ clustered instance within two FreeBSD Jails.&lt;/p&gt;&lt;h1&gt;High Availability&lt;/h1&gt;&lt;p&gt;Now we will test the high availability of our RabbitMQ cluster.&lt;/p&gt;&lt;p dir="ltr"&gt;Currently the &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;ha-default&lt;/b&gt;&lt;/tt&gt; qeue is at &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;rabbit1&lt;/b&gt;&lt;/tt&gt; node. We will now kill the &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;rabbit1&lt;/b&gt;&lt;/tt&gt; Jail and see how RabbitMQ web interface reacts.&lt;/p&gt;&lt;PRE&gt;host # &lt;b dir="ltr"&gt;jls&lt;/b&gt;
-   JID  IP Address      Hostname                      Path
-     1  192.168.43.101  rabbit1.local                 /jail/rabbit1
-     2  192.168.43.102  rabbit2.local                 /jail/rabbit2
-
-host # &lt;b dir="ltr"&gt;killall -9 -j 1&lt;/b&gt;
-
-host # &lt;b dir="ltr"&gt;umount /jail/rabbit1/dev&lt;/b&gt;
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;Our &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;ha-default&lt;/b&gt;&lt;/tt&gt; queue in a matter of seconds switched to the &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;rabbit2&lt;/b&gt;&lt;/tt&gt; node – HA works as desired.&lt;/p&gt;&lt;img src="https://vermaden.files.wordpress.com/2019/06/06-rabbitmq-ha-node-fail-1.png?w=960" alt="06-rabbitmq-ha-node-fail.png" srcset="https://vermaden.files.wordpress.com/2019/06/06-rabbitmq-ha-node-fail-1.png?w=960 960w, https://vermaden.files.wordpress.com/2019/06/06-rabbitmq-ha-node-fail-1.png?w=150 150w, https://vermaden.files.wordpress.com/2019/06/06-rabbitmq-ha-node-fail-1.png?w=300 300w, https://vermaden.files.wordpress.com/2019/06/06-rabbitmq-ha-node-fail-1.png?w=768 768w, https://vermaden.files.wordpress.com/2019/06/06-rabbitmq-ha-node-fail-1.png?w=1024 1024w, https://vermaden.files.wordpress.com/2019/06/06-rabbitmq-ha-node-fail-1.png 1074w" width="312" height="196"&gt;&lt;p dir="ltr"&gt;Let’s start &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;rabbit1&lt;/b&gt;&lt;/tt&gt; Jail to get redundancy back.&lt;/p&gt;&lt;PRE&gt;host # &lt;b dir="ltr"&gt;service jail onestart rabbit1&lt;/b&gt;
-Starting jails: rabbit1.
-host # 
-
-&lt;/PRE&gt;&lt;img src="https://vermaden.files.wordpress.com/2019/06/07-rabbitmq-ha-node-back-1.png?w=960" alt="07-rabbitmq-ha-node-back.png" srcset="https://vermaden.files.wordpress.com/2019/06/07-rabbitmq-ha-node-back-1.png?w=960 960w, https://vermaden.files.wordpress.com/2019/06/07-rabbitmq-ha-node-back-1.png?w=150 150w, https://vermaden.files.wordpress.com/2019/06/07-rabbitmq-ha-node-back-1.png?w=300 300w, https://vermaden.files.wordpress.com/2019/06/07-rabbitmq-ha-node-back-1.png?w=768 768w, https://vermaden.files.wordpress.com/2019/06/07-rabbitmq-ha-node-back-1.png?w=1024 1024w, https://vermaden.files.wordpress.com/2019/06/07-rabbitmq-ha-node-back-1.png 1074w" width="312" height="196"&gt;&lt;p dir="ltr"&gt;The &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;ha-default&lt;/b&gt;&lt;/tt&gt; queue got redundancy back with &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;+1&lt;/b&gt;&lt;/tt&gt; mark but it remained on the &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;rabbit2&lt;/b&gt;&lt;/tt&gt; node.&lt;/p&gt;&lt;p dir="ltr"&gt;… and last but not least – little anniversary at the end – this is the 50th article (not counting &lt;b dir="ltr"&gt;Valuable News&lt;/b&gt; series) on my blog &lt;/p&gt;&lt;img alt="🙂" src="https://s0.wp.com/wp-content/mu-plugins/wpcom-smileys/twemoji/2/svg/1f642.svg" width="14" height="14"&gt;&lt;div&gt;EOF&lt;/div&gt;&lt;div&gt;&lt;span&gt;Advertisements&lt;/span&gt;&lt;/div&gt;</description><pubDate>Wed, 05 Jun 2019 14:49:41 -0500</pubDate></item></channel></rss>
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;There it is. Every single thing we’ve done, from switching to the branch to doing the &lt;code dir="ltr"&gt;rebase&lt;/code&gt;.&lt;/p&gt;&lt;p&gt;Quite cool to see the things we’ve done, but useless on it’s own if we messed up somewhere, if it wasn’t for the references at the start of each line.&lt;/p&gt;&lt;p dir="ltr"&gt;If you compare the &lt;code dir="ltr"&gt;reflog&lt;/code&gt; output to when we looked at the &lt;code dir="ltr"&gt;log&lt;/code&gt; the last time, you’ll see those points relate to commit references, and we can use them just like that.&lt;/p&gt;&lt;p&gt;Let’s say we actually didn’t want to do the rebase. How do we get rid of the changes it made?&lt;/p&gt;&lt;p dir="ltr"&gt;We move &lt;code dir="ltr"&gt;HEAD&lt;/code&gt; to the point before the &lt;code dir="ltr"&gt;rebase&lt;/code&gt; started with a &lt;code dir="ltr"&gt;git reset 0b22064&lt;/code&gt;.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;0b22064&lt;/code&gt; is the commit before the &lt;code dir="ltr"&gt;rebase&lt;/code&gt; in my case. More generally you can also reference it as &lt;em dir="ltr"&gt;HEAD four changes ago&lt;/em&gt; via &lt;code dir="ltr"&gt;HEAD@{4}&lt;/code&gt;. Note that should you have switched branches in between or done any other thing that creates a log entry, you might have a higher number there.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;If you take a look at the &lt;code dir="ltr"&gt;log&lt;/code&gt; now, you’ll see the original state with three individual commits restored.&lt;/p&gt;&lt;p dir="ltr"&gt;But let’s say we now realize that’s not what we wanted. The &lt;code dir="ltr"&gt;rebase&lt;/code&gt; is fine, we just don’t like how we changed the message of the Bob commit.&lt;/p&gt;&lt;p dir="ltr"&gt;We could just do another &lt;code dir="ltr"&gt;rebase -i&lt;/code&gt; in the current state, just like we did originally.&lt;/p&gt;&lt;p dir="ltr"&gt;Or we use the reflog and jump back to after the rebase and &lt;code dir="ltr"&gt;amend&lt;/code&gt; the commit from there.&lt;/p&gt;&lt;p dir="ltr"&gt;But by now you know how to do either of that, so I’ll let you try that on your own. And in addition you also know that there’s the &lt;code dir="ltr"&gt;reflog&lt;/code&gt; allowing you to undo most things you might end up doing by mistake.&lt;/p&gt;</description><pubDate>Wed, 05 Jun 2019 20:17:23 -0500</pubDate></item><item><title>Uncovering the Silicon: Demystifying How Chips are Built and How They Work</title><link>https://www.youtube.com/watch?v=VNzkhZBjo5k</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/zlguqi/uncovering_silicon_demystifying_how"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Wed, 05 Jun 2019 21:25:49 -0500</pubDate></item></channel></rss>
