@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0"><channel><title>lobstre.rs rss with inlined content</title><link>http://n-gate.com</link><description>webshit condom</description><lastBuildDate>Thu, 06 Jun 2019 19:38:11 -0500</lastBuildDate><item><title>ejabberd &amp; Nintendo Switch NPNS</title><link>https://lobste.rs/s/vmqvzu</link><description>&lt;p&gt;Last week, Taiyo Watanabe from Nintendo shared some insights about Nintendo Switch Push Notification infrastructure (NPNS) implementation. Here are some details from his presentation at ElixirFest conference.&lt;/p&gt;&lt;p&gt;The Nintendo Switch NPNS is a large-scale realtime messaging service based on ejabberd. The game consoles are constantly connected to the infrastructure, listening for push notifications. So far, Nintendo shipped more than 34 million units, thus the infrastructure needs to handle millions of concurrent connections.&lt;/p&gt;&lt;img src="https://blog.process-one.net/wp-content/uploads/2019/06/arcade-buttons-design-371924-1.jpg" alt="" width="330" height="248"&gt;&lt;p&gt;The notifications include user-based (directed at active players) and system-based (automatic updates, parental controls). They also include the PubSub topic-based ones like the update notifications and important news, and are available when connected and after a successful login.&lt;/p&gt;&lt;p&gt;In terms of technology, XMPP was chosen due to the large feature set of that protocol. ejabberd was chosen because of its scalability and robustness. It is built in Erlang and inherits many of Erlang strengths: scalability, robustness, native clustering support, and more.&lt;/p&gt;&lt;p&gt;To ease maintenance, Nintendo ejabberd cluster is split into two areas: the inner ejabberd (cpu-bound) and outer ejabberd (memory-bound). All the nodes are connected by the distributed Erlang communication.&lt;/p&gt;&lt;p&gt;The job of the inner ejabberd is to retrieve messages from Amazon Simple Queue Service (SQS), while the outer ejabberd handles the distribution to the Switch game consoles. Business requirements include 1 million concurrent connections, and the recovery for bursting logins in max 30 minutes.&lt;/p&gt;&lt;p&gt;The first performance results of the load test with a simple stock ejabberd service was not sufficient for the production requirements, with capacity at 300k connections and 150 connections per second. Therefore, performance tuning and system redesign was conducted.&lt;/p&gt;&lt;p&gt;The first improvement to reduce memory footprint was to remove the XML parser except from the session memory when it was not active. The second change was to tune OpenSSL parameters to reduce the buffer size. Consequently, the maximum capacity increased to around 750k concurrent connections.&lt;/p&gt;&lt;p&gt;Another issue was the congestion on sockets during burst logins and slow item distribution for some topics, due to the process bottleneck. To solve this, a dedicated distribution worker process was created for each socket. As a result, login throughput increased from 150 per second to 300.&lt;/p&gt;&lt;p&gt;However, the mass delivery of contents created another congestion between the databases and Erlang cluster. To mitigate this, the action was to move content distribution processes from the inner to the outer cluster. Additionally, selective relaying from the inner to outer cluster was set up using a process dictionary to speed up access.&lt;/p&gt;&lt;p&gt;Another interesting problem appeared from the fact that XMPP accepts multiple logins of the same ID (for example, multiple devices). This resulted in too many session processes being created and to many controls being performed to apply standard XMPP business rules. As those rules were not needed in Nintendo use case, the quick solution was to just do nothing when a session is disconnected, and to make the session process die in 1 minute instead of 30.&lt;/p&gt;&lt;p dir="ltr"&gt;The above issue was found using Erlang tracing. However, log processing time became a pain and was increasing exponentially, because of reductions (&lt;code dir="ltr"&gt;erlang:bumpreductions/1&lt;/code&gt;). To be able to handle that, a “dam” process was created to perform rate limiting. Thanks to it, 500k log lines could be processed in 30 seconds instead of 2 hours!&lt;/p&gt;&lt;p&gt;After all the tuning, the infrastructure met business requirements and was ready for production deployment. But that wasn’t the end of tweaking.&lt;/p&gt;&lt;p&gt;Production service was up, but monitoring signalled Redis load was five times bigger than what was expected. A message loop was discovered under certain disconnection conditions. One possible cause might be unprocessed messages triggering an exchange loop. However, testing any hypothesis on the whole production system was too risky. Therefore, a manual hot code deployment was applied directly on only one of the nodes, handling just a small part of the traffic.&lt;/p&gt;&lt;p dir="ltr"&gt;Luckily, the patch on that node was behaving properly, and it was extended to all other nodes. Another higher load was detected in relation to small messages, caused by “busy waiting” BEAM scheduler. The solution: switch &lt;code dir="ltr"&gt;+sbwt&lt;/code&gt; from &lt;code dir="ltr"&gt;medium&lt;/code&gt; to &lt;code dir="ltr"&gt;very_short&lt;/code&gt; resulting in CPU use dropping from 30% to 21%.&lt;/p&gt;&lt;p&gt;The key lesson from this project is to always perform load-testing and profiling. Searching for bottlenecks should be continuous, keeping a lookout for C extensions (NIFs). A good approach is to keep increasing parallelism, reduce per-process load and set rate-limiting. Scaling a service is hard and directly depends on your use case. As you scale, you may discover new bottlenecks and parameters to tune and adjust. Scaling a service is an ongoing effort.&lt;/p&gt;&lt;p&gt;Today, the Nintendo Switch NPNS handles 10 000 000 (10 million!) simultaneous connections, 2 000 000 000 (2 billion!!) messages per day with 100-200k connections per node and 600 messages per second!&lt;/p&gt;&lt;p&gt;The greatest advantage of ejabberd is its incredible scalability and throughput. Erlang VM was also very useful, allowing troubleshooting a live system using Erlang remote shell. In the end, this project was implemented in just 6 months, with 1 month of prototyping. It’s been up and running ever since without major issues.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://speakerdeck.com/elixirfest/otp-to-ejabberd-wohuo-yong-sita-nintendo-switch-tm-xiang-ke-hutusiyutong-zhi-sisutemu-npns-false-kai-fa-shi-li" dir="ltr"&gt;Here is the link&lt;/a&gt; to the slides of the presentation (in Japanese).&lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 07:55:02 -0500</pubDate></item><item><title>Observability Doesn’t Work in Dev</title><link>https://lobste.rs/s/nensly</link><description>&lt;div class="caption"&gt;&lt;time datetime="2019-06-06T15:32:17.587Z"&gt;Jun 6&lt;/time&gt;&lt;/div&gt;&lt;p name="4d2e"&gt;A couple of years ago, diagnosing a problem in production would involve poring over log messages to produce an image in your head of what was happening. It felt like playing the world’s worst designed murder mystery game.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://cdn-images-1.medium.com/max/1600/1*xLhf5vNH6D77A7_ADPRx3g.png" width="320" height="171"&gt;&lt;figcaption dir="auto"&gt;Spot the&amp;nbsp;bug&lt;/figcaption&gt;&lt;/figure&gt;&lt;p name="4d02"&gt;Now we have a slew of complementary tools that, when used in conjunction, make debugging and understanding production systems way easier. Instead of looking at static graphs and hunting around for suspicious looking logs I can notice a systemic problem in Datadog then dive in to specific examples with Honeycomb. As a new hire I can look at traces in Lightstep for all of the requests I’m making and get a high-level overview of the system. It has never been easier to understand our production systems.&lt;/p&gt;&lt;p name="bb20"&gt;Yet, when I talk to engineers and ask them if they have those same tools available to them in dev the answer is often no. This is very frustrating: dev should be simpler than prod! I can sample problematic request traces from millions of requests in prod, but can’t get traces for the 100 or so requests I make in a given day in dev? Why do we not use these great tools in dev? I think there are two answers.&lt;/p&gt;&lt;h4 name="b11b"&gt;Dev is not necessarily a&amp;nbsp;cluster&lt;/h4&gt;&lt;p name="72f7"&gt;One reason we don’t use these production observability tools in dev is that dev does not resemble prod very closely. It could be that prod runs on ECS, and you start things manually on your laptop for dev. Or you might be using Kubernetes in prod but Docker Compose in dev. If everything runs on your laptop where does your tracing service live? Is that a shared service that all devs use? If so, how do they connect to it, who operates and maintains it? If instead it runs on your laptop then what starts it? Where do the traces get stored?&lt;/p&gt;&lt;p name="ae01"&gt;You might be tempted to solve some of these problems by treating developer machines like prod and provisioning them with something like Chef. But what if developers are using macOS, gentoo and Arch Linux? That’s going to make chef recipes a lot more complicated. We keep running into the problem that, whether it’s Zipkin or Chef, these tools are just not designed to be run on individual developer’s machines.&lt;/p&gt;&lt;p name="241a"&gt;Say you did manage to have all of your services running locally, replete with stuff like ELK, Chef and Docker. Now you’re running into another problem: resource exhaustion. ELK is not designed to be run on your laptop and your laptop isn’t designed to be running dozens of services. One local request to your dev environment can generate a ton of work, and more work means less battery life. When this happens to me I’m tempted to throw it all out and just work on one service with grep as my log analyzer. Now dev is even more different from prod.&lt;/p&gt;&lt;p name="8d08"&gt;So then the logical thing to do is give every developer their own cloud cluster. Then I can run all of our prod observability tools against it while saving my lap from overheating hardware. Right?&lt;/p&gt;&lt;h4 name="4109"&gt;Dev clusters have different requirements from prod, and one&amp;nbsp;another&lt;/h4&gt;&lt;p name="b625"&gt;Not so fast: now I have different problems! If I was using LightStep on-prem in prod, how should this work in dev? Should all the dev clusters point to a shared LightStep install? How will I differentiate my data from someone else’s, with the code constantly changing? If I use the prod installation then I have the same problem: how can I make sure that I don’t accidentally look at a dev trace when trying to diagnose a problem in prod?&lt;/p&gt;&lt;p name="ce32"&gt;Cost is another big issue. If I give every developer their own LightStep install then the cost could rise quickly if I’m billed per instance.&lt;/p&gt;&lt;p name="b06b"&gt;Plus there are the classic problems with remote development: jumping through networking hoops to use YourKit with a remote JVM, or connecting an IDE to a remote filesystem so you can edit files in the IDE and have them quickly appear in a remote server. These things are tricky to get set up, and can be flakey when things in your environment change.&lt;/p&gt;&lt;p name="b650"&gt;So where does that leave me? Can I have my observability cake and eat a simple, grokkable responsive local dev environment too?&lt;/p&gt;&lt;h3 name="bf83"&gt;The Fact is: Local Dev is a Different Thing&lt;/h3&gt;&lt;p name="6ff8"&gt;Local development is sufficiently different from prod to require different kinds of tools. Good local development tools adhere to three principles.&lt;/p&gt;&lt;h4 name="494a"&gt;One-stop shop&lt;/h4&gt;&lt;p name="0372"&gt;Production tools seemingly adhere to the first principle of the Unix Philosophy:&lt;/p&gt;&lt;p name="4db3"&gt;&lt;em&gt;Write programs that do one thing and do it well.&lt;/em&gt;&lt;/p&gt;&lt;p name="f346"&gt;For example, like I mentioned above: I use Datadog for graphs, Lightstep for traces, Honeycomb for digging in, etc.&lt;/p&gt;&lt;p name="2c91"&gt;Prod is operated by multiple teams with multiple concerns and workflows, so it’s natural there are multiple tools. In dev, I’m the only admin, and I’d rather not be doing it. I don’t want to manage dozens of services locally to get observability. I can’t afford to be slowed down by the siloing. I’d rather have one tool that makes it easy to do common tasks: I should be able to start my debugging in one window. Some problems may be so unique or special that I end up going to other tools to resolve them, but I can’t be having to tab through twelve windows just to check for one problem.&lt;/p&gt;&lt;p name="3d16"&gt;If there’s a problem in dev, I should switch to one window and know that I can start my debugging there.&lt;/p&gt;&lt;h4 name="26df"&gt;Record everything, retain&amp;nbsp;little&lt;/h4&gt;&lt;p name="dfc4" dir="ltr"&gt;In prod I have two competing priorities: I want to record everything and retain it for as long as possible, but I also want to control costs. Sometimes this means sacrificing how much I’m recording so that I can retain things longer and cheaper. My priorities are different in dev: I want to record everything, full stop. After all it’s just my laptop and I’m the only user so it’s not that much data. But I want to &lt;em dir="ltr"&gt;retain&lt;/em&gt; as little of it as possible. While hard drives are cheap, hard drive space can be limited on a laptop and it’s annoying to expand.&lt;/p&gt;&lt;p name="761b"&gt;Imagine this: you make a request and you get a 500 response code back. Today you might turn on your tracer, adding logging statements, reissue the request and hope that it reproduces reliably. Instead wouldn’t it be amazing if the last request you made locally is always traced and that trace is always persisted? Then whenever this happens you can pull up the last trace and immediately see where to look next.&lt;/p&gt;&lt;p name="b3ee" dir="ltr"&gt;Every time I do something in dev I should be able to see &lt;em dir="ltr"&gt;everything&lt;/em&gt; that happened with 100% fidelity.&lt;/p&gt;&lt;h4 name="1542"&gt;Shareable&lt;/h4&gt;&lt;p name="c9c6"&gt;Shareability is a concept local dev tools should steal from production. Many production tools allow you to create a link to a log search, dashboard or request trace and send them to people. It’s so useful for debugging, especially in a remote/distributed environment! If I’m connected to the network my local dev tools should let us do the same thing. I want to include a snapshot of my current state when I ask a teammate for help.&lt;/p&gt;&lt;p name="397a"&gt;Every time I do something in dev I should be able to quickly share the result with a colleague.&lt;/p&gt;&lt;h3 name="2b07"&gt;Let’s Take Local Development Seriously&lt;/h3&gt;&lt;p name="40aa"&gt;Why does observability suck in dev? We can’t lift and shift our production tools in to dev and expect it to work. These tools are great for finding the needle in a haystack. But in dev there’s just 4 needles, and you want to see them all. So what do we do?&lt;/p&gt;&lt;p name="925f"&gt;Let’s start treating local development as seriously as we do production debugging. Local development is a unique, challenging environment that requires specialized tooling. It’s an environment that we as engineers spend a lot of time working in.&lt;/p&gt;&lt;p name="7d7c"&gt;It’s time the state of the art advanced beyond `grep` and `ps`. It’s time for specialized local development tools.&lt;/p&gt;&lt;p name="4f01" dir="ltr"&gt;&lt;em dir="ltr"&gt;For our first take on a specialized local development tool, check out &lt;/em&gt;&lt;a href="https://tilt.dev/" data-href="https://tilt.dev/" rel="nofollow noopener" dir="ltr"&gt;&lt;em dir="ltr"&gt;Tilt&lt;/em&gt;&lt;/a&gt;&lt;em dir="ltr"&gt;! Tilt manages local development instances for teams that deploy to Kubernetes. Get started easily, get more done, and never play twenty questions with &lt;/em&gt;&lt;code dir="ltr"&gt;&lt;em dir="ltr"&gt;kubectl&lt;/em&gt;&lt;/code&gt;&lt;em dir="ltr"&gt; ever again.&lt;/em&gt;&lt;/p&gt;&lt;LI&gt;&lt;div&gt;&lt;button data-action="sign-up-prompt" data-sign-in-action="toggle-follow-collection" data-requires-token="true" data-redirect="https://medium.com/_/subscribe/collection/windmill-engineering" data-action-source="footer_card----de084b52f7c8----------------------follow_footer" data-collection-id="de084b52f7c8"&gt;&lt;span&gt;Follow&lt;/span&gt;&lt;/button&gt;&lt;/div&gt;&lt;img src="https://cdn-images-1.medium.com/fit/c/120/120/1*hkxugUte2rnlHM1RyfI8bA.png" alt="Windmill Engineering" width="60" height="60"&gt;&lt;/LI&gt;</description><pubDate>Thu, 06 Jun 2019 10:36:35 -0500</pubDate></item><item><title>Nim 0.20.0 has been released</title><link>https://lobste.rs/s/7h70w1</link><description>&lt;h3 dir="ltr"&gt;
+<rss version="2.0"><channel><title>lobstre.rs rss with inlined content</title><link>http://n-gate.com</link><description>webshit condom</description><lastBuildDate>Thu, 06 Jun 2019 20:31:22 -0500</lastBuildDate><item><title>ejabberd &amp; Nintendo Switch NPNS</title><link>https://lobste.rs/s/vmqvzu</link><description>&lt;p&gt;Last week, Taiyo Watanabe from Nintendo shared some insights about Nintendo Switch Push Notification infrastructure (NPNS) implementation. Here are some details from his presentation at ElixirFest conference.&lt;/p&gt;&lt;p&gt;The Nintendo Switch NPNS is a large-scale realtime messaging service based on ejabberd. The game consoles are constantly connected to the infrastructure, listening for push notifications. So far, Nintendo shipped more than 34 million units, thus the infrastructure needs to handle millions of concurrent connections.&lt;/p&gt;&lt;img src="https://blog.process-one.net/wp-content/uploads/2019/06/arcade-buttons-design-371924-1.jpg" alt="" width="330" height="248"&gt;&lt;p&gt;The notifications include user-based (directed at active players) and system-based (automatic updates, parental controls). They also include the PubSub topic-based ones like the update notifications and important news, and are available when connected and after a successful login.&lt;/p&gt;&lt;p&gt;In terms of technology, XMPP was chosen due to the large feature set of that protocol. ejabberd was chosen because of its scalability and robustness. It is built in Erlang and inherits many of Erlang strengths: scalability, robustness, native clustering support, and more.&lt;/p&gt;&lt;p&gt;To ease maintenance, Nintendo ejabberd cluster is split into two areas: the inner ejabberd (cpu-bound) and outer ejabberd (memory-bound). All the nodes are connected by the distributed Erlang communication.&lt;/p&gt;&lt;p&gt;The job of the inner ejabberd is to retrieve messages from Amazon Simple Queue Service (SQS), while the outer ejabberd handles the distribution to the Switch game consoles. Business requirements include 1 million concurrent connections, and the recovery for bursting logins in max 30 minutes.&lt;/p&gt;&lt;p&gt;The first performance results of the load test with a simple stock ejabberd service was not sufficient for the production requirements, with capacity at 300k connections and 150 connections per second. Therefore, performance tuning and system redesign was conducted.&lt;/p&gt;&lt;p&gt;The first improvement to reduce memory footprint was to remove the XML parser except from the session memory when it was not active. The second change was to tune OpenSSL parameters to reduce the buffer size. Consequently, the maximum capacity increased to around 750k concurrent connections.&lt;/p&gt;&lt;p&gt;Another issue was the congestion on sockets during burst logins and slow item distribution for some topics, due to the process bottleneck. To solve this, a dedicated distribution worker process was created for each socket. As a result, login throughput increased from 150 per second to 300.&lt;/p&gt;&lt;p&gt;However, the mass delivery of contents created another congestion between the databases and Erlang cluster. To mitigate this, the action was to move content distribution processes from the inner to the outer cluster. Additionally, selective relaying from the inner to outer cluster was set up using a process dictionary to speed up access.&lt;/p&gt;&lt;p&gt;Another interesting problem appeared from the fact that XMPP accepts multiple logins of the same ID (for example, multiple devices). This resulted in too many session processes being created and to many controls being performed to apply standard XMPP business rules. As those rules were not needed in Nintendo use case, the quick solution was to just do nothing when a session is disconnected, and to make the session process die in 1 minute instead of 30.&lt;/p&gt;&lt;p dir="ltr"&gt;The above issue was found using Erlang tracing. However, log processing time became a pain and was increasing exponentially, because of reductions (&lt;code dir="ltr"&gt;erlang:bumpreductions/1&lt;/code&gt;). To be able to handle that, a “dam” process was created to perform rate limiting. Thanks to it, 500k log lines could be processed in 30 seconds instead of 2 hours!&lt;/p&gt;&lt;p&gt;After all the tuning, the infrastructure met business requirements and was ready for production deployment. But that wasn’t the end of tweaking.&lt;/p&gt;&lt;p&gt;Production service was up, but monitoring signalled Redis load was five times bigger than what was expected. A message loop was discovered under certain disconnection conditions. One possible cause might be unprocessed messages triggering an exchange loop. However, testing any hypothesis on the whole production system was too risky. Therefore, a manual hot code deployment was applied directly on only one of the nodes, handling just a small part of the traffic.&lt;/p&gt;&lt;p dir="ltr"&gt;Luckily, the patch on that node was behaving properly, and it was extended to all other nodes. Another higher load was detected in relation to small messages, caused by “busy waiting” BEAM scheduler. The solution: switch &lt;code dir="ltr"&gt;+sbwt&lt;/code&gt; from &lt;code dir="ltr"&gt;medium&lt;/code&gt; to &lt;code dir="ltr"&gt;very_short&lt;/code&gt; resulting in CPU use dropping from 30% to 21%.&lt;/p&gt;&lt;p&gt;The key lesson from this project is to always perform load-testing and profiling. Searching for bottlenecks should be continuous, keeping a lookout for C extensions (NIFs). A good approach is to keep increasing parallelism, reduce per-process load and set rate-limiting. Scaling a service is hard and directly depends on your use case. As you scale, you may discover new bottlenecks and parameters to tune and adjust. Scaling a service is an ongoing effort.&lt;/p&gt;&lt;p&gt;Today, the Nintendo Switch NPNS handles 10 000 000 (10 million!) simultaneous connections, 2 000 000 000 (2 billion!!) messages per day with 100-200k connections per node and 600 messages per second!&lt;/p&gt;&lt;p&gt;The greatest advantage of ejabberd is its incredible scalability and throughput. Erlang VM was also very useful, allowing troubleshooting a live system using Erlang remote shell. In the end, this project was implemented in just 6 months, with 1 month of prototyping. It’s been up and running ever since without major issues.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://speakerdeck.com/elixirfest/otp-to-ejabberd-wohuo-yong-sita-nintendo-switch-tm-xiang-ke-hutusiyutong-zhi-sisutemu-npns-false-kai-fa-shi-li" dir="ltr"&gt;Here is the link&lt;/a&gt; to the slides of the presentation (in Japanese).&lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 07:55:02 -0500</pubDate></item><item><title>Observability Doesn’t Work in Dev</title><link>https://lobste.rs/s/nensly</link><description>&lt;div class="caption"&gt;&lt;time datetime="2019-06-06T15:32:17.587Z"&gt;Jun 6&lt;/time&gt;&lt;/div&gt;&lt;p name="4d2e"&gt;A couple of years ago, diagnosing a problem in production would involve poring over log messages to produce an image in your head of what was happening. It felt like playing the world’s worst designed murder mystery game.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://cdn-images-1.medium.com/max/1600/1*xLhf5vNH6D77A7_ADPRx3g.png" width="320" height="171"&gt;&lt;figcaption dir="auto"&gt;Spot the&amp;nbsp;bug&lt;/figcaption&gt;&lt;/figure&gt;&lt;p name="4d02"&gt;Now we have a slew of complementary tools that, when used in conjunction, make debugging and understanding production systems way easier. Instead of looking at static graphs and hunting around for suspicious looking logs I can notice a systemic problem in Datadog then dive in to specific examples with Honeycomb. As a new hire I can look at traces in Lightstep for all of the requests I’m making and get a high-level overview of the system. It has never been easier to understand our production systems.&lt;/p&gt;&lt;p name="bb20"&gt;Yet, when I talk to engineers and ask them if they have those same tools available to them in dev the answer is often no. This is very frustrating: dev should be simpler than prod! I can sample problematic request traces from millions of requests in prod, but can’t get traces for the 100 or so requests I make in a given day in dev? Why do we not use these great tools in dev? I think there are two answers.&lt;/p&gt;&lt;h4 name="b11b"&gt;Dev is not necessarily a&amp;nbsp;cluster&lt;/h4&gt;&lt;p name="72f7"&gt;One reason we don’t use these production observability tools in dev is that dev does not resemble prod very closely. It could be that prod runs on ECS, and you start things manually on your laptop for dev. Or you might be using Kubernetes in prod but Docker Compose in dev. If everything runs on your laptop where does your tracing service live? Is that a shared service that all devs use? If so, how do they connect to it, who operates and maintains it? If instead it runs on your laptop then what starts it? Where do the traces get stored?&lt;/p&gt;&lt;p name="ae01"&gt;You might be tempted to solve some of these problems by treating developer machines like prod and provisioning them with something like Chef. But what if developers are using macOS, gentoo and Arch Linux? That’s going to make chef recipes a lot more complicated. We keep running into the problem that, whether it’s Zipkin or Chef, these tools are just not designed to be run on individual developer’s machines.&lt;/p&gt;&lt;p name="241a"&gt;Say you did manage to have all of your services running locally, replete with stuff like ELK, Chef and Docker. Now you’re running into another problem: resource exhaustion. ELK is not designed to be run on your laptop and your laptop isn’t designed to be running dozens of services. One local request to your dev environment can generate a ton of work, and more work means less battery life. When this happens to me I’m tempted to throw it all out and just work on one service with grep as my log analyzer. Now dev is even more different from prod.&lt;/p&gt;&lt;p name="8d08"&gt;So then the logical thing to do is give every developer their own cloud cluster. Then I can run all of our prod observability tools against it while saving my lap from overheating hardware. Right?&lt;/p&gt;&lt;h4 name="4109"&gt;Dev clusters have different requirements from prod, and one&amp;nbsp;another&lt;/h4&gt;&lt;p name="b625"&gt;Not so fast: now I have different problems! If I was using LightStep on-prem in prod, how should this work in dev? Should all the dev clusters point to a shared LightStep install? How will I differentiate my data from someone else’s, with the code constantly changing? If I use the prod installation then I have the same problem: how can I make sure that I don’t accidentally look at a dev trace when trying to diagnose a problem in prod?&lt;/p&gt;&lt;p name="ce32"&gt;Cost is another big issue. If I give every developer their own LightStep install then the cost could rise quickly if I’m billed per instance.&lt;/p&gt;&lt;p name="b06b"&gt;Plus there are the classic problems with remote development: jumping through networking hoops to use YourKit with a remote JVM, or connecting an IDE to a remote filesystem so you can edit files in the IDE and have them quickly appear in a remote server. These things are tricky to get set up, and can be flakey when things in your environment change.&lt;/p&gt;&lt;p name="b650"&gt;So where does that leave me? Can I have my observability cake and eat a simple, grokkable responsive local dev environment too?&lt;/p&gt;&lt;h3 name="bf83"&gt;The Fact is: Local Dev is a Different Thing&lt;/h3&gt;&lt;p name="6ff8"&gt;Local development is sufficiently different from prod to require different kinds of tools. Good local development tools adhere to three principles.&lt;/p&gt;&lt;h4 name="494a"&gt;One-stop shop&lt;/h4&gt;&lt;p name="0372"&gt;Production tools seemingly adhere to the first principle of the Unix Philosophy:&lt;/p&gt;&lt;p name="4db3"&gt;&lt;em&gt;Write programs that do one thing and do it well.&lt;/em&gt;&lt;/p&gt;&lt;p name="f346"&gt;For example, like I mentioned above: I use Datadog for graphs, Lightstep for traces, Honeycomb for digging in, etc.&lt;/p&gt;&lt;p name="2c91"&gt;Prod is operated by multiple teams with multiple concerns and workflows, so it’s natural there are multiple tools. In dev, I’m the only admin, and I’d rather not be doing it. I don’t want to manage dozens of services locally to get observability. I can’t afford to be slowed down by the siloing. I’d rather have one tool that makes it easy to do common tasks: I should be able to start my debugging in one window. Some problems may be so unique or special that I end up going to other tools to resolve them, but I can’t be having to tab through twelve windows just to check for one problem.&lt;/p&gt;&lt;p name="3d16"&gt;If there’s a problem in dev, I should switch to one window and know that I can start my debugging there.&lt;/p&gt;&lt;h4 name="26df"&gt;Record everything, retain&amp;nbsp;little&lt;/h4&gt;&lt;p name="dfc4" dir="ltr"&gt;In prod I have two competing priorities: I want to record everything and retain it for as long as possible, but I also want to control costs. Sometimes this means sacrificing how much I’m recording so that I can retain things longer and cheaper. My priorities are different in dev: I want to record everything, full stop. After all it’s just my laptop and I’m the only user so it’s not that much data. But I want to &lt;em dir="ltr"&gt;retain&lt;/em&gt; as little of it as possible. While hard drives are cheap, hard drive space can be limited on a laptop and it’s annoying to expand.&lt;/p&gt;&lt;p name="761b"&gt;Imagine this: you make a request and you get a 500 response code back. Today you might turn on your tracer, adding logging statements, reissue the request and hope that it reproduces reliably. Instead wouldn’t it be amazing if the last request you made locally is always traced and that trace is always persisted? Then whenever this happens you can pull up the last trace and immediately see where to look next.&lt;/p&gt;&lt;p name="b3ee" dir="ltr"&gt;Every time I do something in dev I should be able to see &lt;em dir="ltr"&gt;everything&lt;/em&gt; that happened with 100% fidelity.&lt;/p&gt;&lt;h4 name="1542"&gt;Shareable&lt;/h4&gt;&lt;p name="c9c6"&gt;Shareability is a concept local dev tools should steal from production. Many production tools allow you to create a link to a log search, dashboard or request trace and send them to people. It’s so useful for debugging, especially in a remote/distributed environment! If I’m connected to the network my local dev tools should let us do the same thing. I want to include a snapshot of my current state when I ask a teammate for help.&lt;/p&gt;&lt;p name="397a"&gt;Every time I do something in dev I should be able to quickly share the result with a colleague.&lt;/p&gt;&lt;h3 name="2b07"&gt;Let’s Take Local Development Seriously&lt;/h3&gt;&lt;p name="40aa"&gt;Why does observability suck in dev? We can’t lift and shift our production tools in to dev and expect it to work. These tools are great for finding the needle in a haystack. But in dev there’s just 4 needles, and you want to see them all. So what do we do?&lt;/p&gt;&lt;p name="925f"&gt;Let’s start treating local development as seriously as we do production debugging. Local development is a unique, challenging environment that requires specialized tooling. It’s an environment that we as engineers spend a lot of time working in.&lt;/p&gt;&lt;p name="7d7c"&gt;It’s time the state of the art advanced beyond `grep` and `ps`. It’s time for specialized local development tools.&lt;/p&gt;&lt;p name="4f01" dir="ltr"&gt;&lt;em dir="ltr"&gt;For our first take on a specialized local development tool, check out &lt;/em&gt;&lt;a href="https://tilt.dev/" data-href="https://tilt.dev/" rel="nofollow noopener" dir="ltr"&gt;&lt;em dir="ltr"&gt;Tilt&lt;/em&gt;&lt;/a&gt;&lt;em dir="ltr"&gt;! Tilt manages local development instances for teams that deploy to Kubernetes. Get started easily, get more done, and never play twenty questions with &lt;/em&gt;&lt;code dir="ltr"&gt;&lt;em dir="ltr"&gt;kubectl&lt;/em&gt;&lt;/code&gt;&lt;em dir="ltr"&gt; ever again.&lt;/em&gt;&lt;/p&gt;&lt;LI&gt;&lt;div&gt;&lt;button data-action="sign-up-prompt" data-sign-in-action="toggle-follow-collection" data-requires-token="true" data-redirect="https://medium.com/_/subscribe/collection/windmill-engineering" data-action-source="footer_card----de084b52f7c8----------------------follow_footer" data-collection-id="de084b52f7c8"&gt;&lt;span&gt;Follow&lt;/span&gt;&lt;/button&gt;&lt;/div&gt;&lt;img src="https://cdn-images-1.medium.com/fit/c/120/120/1*hkxugUte2rnlHM1RyfI8bA.png" alt="Windmill Engineering" width="60" height="60"&gt;&lt;/LI&gt;</description><pubDate>Thu, 06 Jun 2019 10:36:35 -0500</pubDate></item><item><title>Nim 0.20.0 has been released</title><link>https://lobste.rs/s/7h70w1</link><description>&lt;h3 dir="ltr"&gt;
             &lt;span dir="ltr"&gt;
               
               06 June 2019
@@ -1429,7 +1429,476 @@ You can get a copy of Jitk from our git repository:
 A modified version of Linux with changes necessary to invoke Jitk
 for Seccomp is here:
 &lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;PRE&gt;git clone git://g.csail.mit.edu/jitk-linux
-&lt;/PRE&gt;&lt;/BLOCKQUOTE&gt;</description><pubDate>Thu, 06 Jun 2019 01:30:47 -0500</pubDate></item><item><title>Ozcor language tries to use records for everything</title><link>https://lobste.rs/s/tug01e</link><description>&lt;p&gt;Oczor uses records instead of all these entities&lt;/p&gt;&lt;h1&gt;Example of generated JavaScript code&lt;/h1&gt;&lt;table dir="ltr"&gt; 
+&lt;/PRE&gt;&lt;/BLOCKQUOTE&gt;</description><pubDate>Thu, 06 Jun 2019 01:30:47 -0500</pubDate></item><item><title>Thought Experiment: Flutter in Go ·</title><link>https://lobste.rs/s/3f43ma</link><description>&lt;h1&gt;Thought Experiment: Flutter in Go&lt;/h1&gt;&lt;div dir="ltr"&gt;
+        Posted on
+        &lt;time datetime="2019-01-12T14:55:00+02:00" dir="ltr"&gt;
+          Jan 12, 2019
+        &lt;/time&gt;
+      &lt;/div&gt;&lt;p dir="ltr"&gt;I’ve recently discovered &lt;a href="https://flutter.io/" dir="ltr"&gt;Flutter&lt;/a&gt; – a new Google’s framework for mobile development – for myself and even had an experience of teaching Flutter basics to the person who has never been doing programming at all. Flutter is written in Dart – programming language born in a Chrome browser and then escaped to the console land – and that made me think “hey, Flutter could have been easily implemented in Go as well”!&lt;/p&gt;&lt;p&gt;Why not? Both Go and Dart were born inside Google (and share some approaches that make them great), both strongly-typed, compiled languages – in a slightly different turn of events, Go could definitely have been a choice for such an ambitious project as Flutter. And Go is much easier to explain to the person who has never been programming before.&lt;/p&gt;&lt;p&gt;So let’s pretend Flutter is written in Go already. How would the code look like?&lt;/p&gt;&lt;img src="https://divan.dev/images/go_flutter_vscode.png" alt="Go Flutter in VSCode" width="330" height="138"&gt;&lt;h3&gt;The problem with Dart&lt;/h3&gt;&lt;p dir="ltr"&gt;I’ve been following Dart development since the very beginning of its existence in Chrome, and my assumption has always been that Dart will replace JS eventually in every browser. It was extremely disappointing to read the &lt;a href="https://news.dartlang.org/2015/03/dart-for-entire-web.html" dir="ltr"&gt;news about Google ditching Dart support in Chrome&lt;/a&gt; back then in 2015.&lt;/p&gt;&lt;p&gt;Dart is fantastic! Well, everything is fantastic when you upgrade from JS, but if you downgrade from, say, Go, it’s not that exciting, but… it’s ok. Dart has every feature possible – classes/generics/exceptions/Futures/async-await/event-loop/JIT/AOT/GC/overloads - you name it. It has special syntax for getters/setters, special syntax for auto-initialization in constructors, special syntax for special syntax and many more.&lt;/p&gt;&lt;p&gt;While it makes Dart more familiar to people with a background in pretty much any other language – which is great and lowers entry barrier – I found it hard to explain to the newcomer with no background.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Everything “special” was confusing&lt;/strong&gt; – &lt;em dir="ltr"&gt;“special method named constructor”&lt;/em&gt;, &lt;em dir="ltr"&gt;“special syntax for initialization”&lt;/em&gt;, &lt;em dir="ltr"&gt;“special syntax for overriding methods”&lt;/em&gt; etc.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Everything “hidden” was confusing&lt;/strong&gt; – &lt;em dir="ltr"&gt;“from which import this class comes from? it’s hidden, and you can’t see it by reading a code”&lt;/em&gt;, &lt;em dir="ltr"&gt;“why we write a constructor in this class but don’t write in another? it’s there, but it’s hidden”&lt;/em&gt; and so on&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Everything “ambiguous” was confusing&lt;/strong&gt; – &lt;em dir="ltr"&gt;“so should I use named or position parameter here?”&lt;/em&gt;, &lt;em dir="ltr"&gt;“should it be final or const variable?”&lt;/em&gt;, &lt;em dir="ltr"&gt;“should I use normal function syntax or ‘this short syntax’?”&lt;/em&gt; etc.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;This triplet - “special”, “hidden” and “ambiguous” - probably captures the essence of what people call “magic” in programming languages. Those are features designed to help us write simpler and cleaner code, but, in fact, they add more confusion and more cognitive load to reading programs.&lt;/p&gt;&lt;p&gt;And that’s exactly where Go took a vastly different stance and guards its positions fiercely. Go is virtually non-magical language – it minimizes amount of special/hidden/ambiguous constructs to the lowest possible amount. It comes with its own list of shortages, however.&lt;/p&gt;&lt;h3&gt;The problem with Go&lt;/h3&gt;&lt;p dir="ltr"&gt;As we’re talking about Flutter, which is a UI framework, we have to look at Go as a tool for describing/specifying UI. UI framework is a massively complicated subject to deal with – it literally requires creating a specialized language to handle the amount of essential complexity. One of the most popular ways to do so is to create &lt;a href="https://en.wikipedia.org/wiki/Domain-specific_language" dir="ltr"&gt;DSL&lt;/a&gt; - Domain-specific Language – and the common knowledge is that Go is really bad at it.&lt;/p&gt;&lt;p&gt;Creating DSL means creating custom terms and verbs developer can use. The resulting code should capture the essence of UI layout and interactions, and be flexible enough to allow designers’ fantasy flow, but rigid enough to conform UI framework limitations. For example, you should be able to put buttons inside a container, then put icons and text widget inside buttons, and yet compiler should give you an error if you try to put the button into text.&lt;/p&gt;&lt;p&gt;UI specific language is also often declarative – which, in fact, means that you should be able to use code constructs (including things like space indentation!) to visually capture the structure of the UI widgets tree and then let UI framework figure out the code to run. Uff.&lt;/p&gt;&lt;p&gt;Some languages are more suitable for such a feat and Go never been designed to accomplish this kind of tasks. So, writing Flutter code in Go should be quite a challenge!&lt;/p&gt;&lt;h2&gt;Ode to Flutter&lt;/h2&gt;&lt;p dir="ltr"&gt;If you are unfamiliar with Flutter, I highly recommend you to spend a weekend or two watching tutorials or reading docs, because it’s undoubtedly a game changer in a mobile development world. And, hopefully, not only mobile – there are renderers (embedders, in Flutter terms) for &lt;a href="https://github.com/google/flutter-desktop-embedding" dir="ltr"&gt;native desktop apps&lt;/a&gt;, and &lt;a href="https://medium.com/flutter-io/hummingbird-building-flutter-for-the-web-e687c2a023a8" dir="ltr"&gt;web apps&lt;/a&gt;. It’s easy to learn, it’s logical, has a massive collection of &lt;a href="https://material.io/" dir="ltr"&gt;Material Design&lt;/a&gt; powered widgets, has great community and great tooling (if you like &lt;code dir="ltr"&gt;go build/test/run&lt;/code&gt; out of the box, you get the same experience with &lt;code dir="ltr"&gt;flutter build/test/run&lt;/code&gt;) and a bunch of decent practices out of the box.&lt;/p&gt;&lt;p&gt;A year ago I needed a relatively simple mobile app (for iOS and Android, obviously), but I realized that the complexity of becoming proficient in both platforms development is above any possible limits (the app was kinda side-project), so I had to outsource development to another team and pay money for that. Developing the mobile app was virtually unaffordable for someone like me – a developer with almost two decades of programming experience.&lt;/p&gt;&lt;p&gt;With Flutter, I wrote the same app in 3 nights, while learning this framework from scratch! It’s an order of magnitude improvement and a game changer.&lt;/p&gt;&lt;p&gt;Last time I remember seeing such a revolution in development productivity was 5 years ago when I discovered Go. And it changed my life.&lt;/p&gt;&lt;p dir="ltr"&gt;I recommend you to start with this &lt;a href="https://www.youtube.com/watch?v=GLSG_Wh_YWc" dir="ltr"&gt;great video tutorial&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;Flutter’s Hello, world&lt;/h2&gt;&lt;p dir="ltr"&gt;When you create a fresh Flutter project with &lt;code dir="ltr"&gt;flutter create&lt;/code&gt;, you’ll get this “Hello, world” app with text, counter and a button that increases the counter on click.&lt;/p&gt;&lt;img src="https://divan.dev/images/flutter_hello.gif" alt="flutter hello world" width="330" height="196"&gt;&lt;p&gt;I think it’s a good example to rewrite in our imaginary Flutter in Go. It has everything relevant to our subject. Take a look at the code (it’s one file):&lt;/p&gt;&lt;p&gt;lib/main.dart:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="dart" dir="ltr"&gt;&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;'package:flutter/material.dart'&lt;/span&gt;;
+
+&lt;span dir="ltr"&gt;void&lt;/span&gt; main() &lt;span dir="ltr"&gt;=&amp;gt;&lt;/span&gt; runApp(MyApp());
+
+&lt;span dir="ltr"&gt;class&lt;/span&gt; &lt;span dir="ltr"&gt;MyApp&lt;/span&gt; &lt;span dir="ltr"&gt;extends&lt;/span&gt; StatelessWidget {
+  &lt;span dir="ltr"&gt;@&lt;/span&gt;override
+  Widget build(BuildContext context) {
+    &lt;span dir="ltr"&gt;return&lt;/span&gt; MaterialApp(
+      title: &lt;span dir="ltr"&gt;'Flutter Demo'&lt;/span&gt;,
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+      ),
+      home: MyHomePage(title: &lt;span dir="ltr"&gt;'Flutter Demo Home Page'&lt;/span&gt;),
+    );
+  }
+}
+
+&lt;span dir="ltr"&gt;class&lt;/span&gt; &lt;span dir="ltr"&gt;MyHomePage&lt;/span&gt; &lt;span dir="ltr"&gt;extends&lt;/span&gt; StatefulWidget {
+  MyHomePage({Key key, &lt;span dir="ltr"&gt;this&lt;/span&gt;.title}) &lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;super&lt;/span&gt;(key: key);
+  &lt;span dir="ltr"&gt;final&lt;/span&gt; &lt;span dir="ltr"&gt;String&lt;/span&gt; title;
+
+  &lt;span dir="ltr"&gt;@&lt;/span&gt;override
+  _MyHomePageState createState() &lt;span dir="ltr"&gt;=&amp;gt;&lt;/span&gt; _MyHomePageState();
+}
+
+&lt;span dir="ltr"&gt;class&lt;/span&gt; &lt;span dir="ltr"&gt;_MyHomePageState&lt;/span&gt; &lt;span dir="ltr"&gt;extends&lt;/span&gt; State&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;MyHomePage&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; {
+  &lt;span dir="ltr"&gt;int&lt;/span&gt; _counter &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;;
+
+  &lt;span dir="ltr"&gt;void&lt;/span&gt; _incrementCounter() {
+    setState(() {
+      _counter&lt;span dir="ltr"&gt;++&lt;/span&gt;;
+    });
+  }
+
+  &lt;span dir="ltr"&gt;@&lt;/span&gt;override
+  Widget build(BuildContext context) {
+    &lt;span dir="ltr"&gt;return&lt;/span&gt; Scaffold(
+      appBar: AppBar(
+        title: Text(widget.title),
+      ),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: &lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;Widget&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;[
+            Text(
+              &lt;span dir="ltr"&gt;'You have pushed the button this many times:'&lt;/span&gt;,
+            ),
+            Text(
+              &lt;span dir="ltr"&gt;'&lt;/span&gt;&lt;span dir="ltr"&gt;$&lt;/span&gt;_counter&lt;span dir="ltr"&gt;'&lt;/span&gt;,
+              style: Theme.of(context).textTheme.display1,
+            ),
+          ],
+        ),
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _incrementCounter,
+        tooltip: &lt;span dir="ltr"&gt;'Increment'&lt;/span&gt;,
+        child: Icon(Icons.add),
+      ),
+    );
+  }
+}&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Let’s break down it to pieces, analyze what does and does not map well into Go, and explore the options we have.&lt;/p&gt;&lt;h3&gt;Mapping to Go&lt;/h3&gt;&lt;p dir="ltr"&gt;The start is relatively straightforward – importing the dependency and starting &lt;code dir="ltr"&gt;main()&lt;/code&gt; function. Nothing challenging or interesting here, purely syntactical change:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;package&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;hello&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;import&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"github.com/flutter/flutter"&lt;/span&gt;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;func&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;() {
+    &lt;span dir="ltr"&gt;app&lt;/span&gt; &lt;span dir="ltr"&gt;:=&lt;/span&gt; &lt;span dir="ltr"&gt;NewApp&lt;/span&gt;()
+    &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;Run&lt;/span&gt;(&lt;span dir="ltr"&gt;app&lt;/span&gt;)
+}&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The only change to note is that instead of using magical &lt;code dir="ltr"&gt;MyApp()&lt;/code&gt; function, which is constructor, which is a special function, which is hidden inside class called &lt;code dir="ltr"&gt;MyApp&lt;/code&gt;, we just call an explicitly defined function &lt;code dir="ltr"&gt;NewApp()&lt;/code&gt; – it does the same, but it’s so much easier to read, understand and make sense of.&lt;/p&gt;&lt;h3&gt;Widget classes&lt;/h3&gt;&lt;p&gt;In Flutter, everything is a widget. In Dart-version of a Flutter, every widget is represented with a class extending Flutter’s special Widget classes.&lt;/p&gt;&lt;p&gt;Go doesn’t have classes and thus classes hierarchy, because the world is not object-oriented, let alone hierarchical. It may come as a hard truth to people familiar only with class-based OOP, but it’s really not. The world is a huge interconnected graph of things and relationships. It’s not chaotic, but neither perfectly structured and trying to fit everything into class hierarchies is a guaranteed way to make code unmaintainable, which is a most of world’s codebases as of today.&lt;/p&gt;&lt;img src="https://divan.dev/images/oop_truth.png" alt="OOP Truth" width="330" height="145"&gt;&lt;p dir="ltr"&gt;I love that Go designers put an effort to rethink this omnipresent concept of class-based OOP and came up with different OOP concept, which is, not accidentally, more closer to what OOP inventor, Alan Kay, &lt;a href="https://www.quora.com/What-did-Alan-Kay-mean-by-I-made-up-the-term-object-oriented-and-I-can-tell-you-I-did-not-have-C++-in-mind" dir="ltr"&gt;actually meant&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;In Go, we represent any abstraction with a concrete type – a structure:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;MyApp&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt;&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// ...&lt;/span&gt;
+&lt;/span&gt;}&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;In Dart-version of a Flutter, &lt;code dir="ltr"&gt;MyApp&lt;/code&gt; has to extend &lt;code dir="ltr"&gt;StatelessWidget&lt;/code&gt; class and override its &lt;code dir="ltr"&gt;build&lt;/code&gt; method, which serves two purposes:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;give our &lt;code dir="ltr"&gt;MyApp&lt;/code&gt; some widget properties/methods automagically&lt;/LI&gt;&lt;LI&gt;allow Flutter to use our widget in its build/render pipeline by calling &lt;code dir="ltr"&gt;build&lt;/code&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;I don’t know Flutter internals, so let’s not question if we really need 1) and implement it in Go. For that, we have only one option – &lt;a href="https://golang.org/doc/effective_go.html#embedding" dir="ltr"&gt;embedding&lt;/a&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;MyApp&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt;&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;Core&lt;/span&gt;
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// ...&lt;/span&gt;
+&lt;/span&gt;}&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This will add all the &lt;code dir="ltr"&gt;flutter.Core&lt;/code&gt;’s exported properties and methods to our type &lt;code dir="ltr"&gt;MyApp&lt;/code&gt;. I named it &lt;code dir="ltr"&gt;Core&lt;/code&gt; instead of &lt;code dir="ltr"&gt;Widget&lt;/code&gt;, because embedding this type doesn’t make our &lt;code dir="ltr"&gt;MyApp&lt;/code&gt; a widget yet, and, plus, that’s the choice of name I’ve seen in a &lt;a href="https://github.com/gopherjs/vecty" dir="ltr"&gt;Vecty&lt;/a&gt; GopherJS framework for the similar concept. I will briefly discuss similarities between Flutter and Vecty later.&lt;/p&gt;&lt;p dir="ltr"&gt;The second part – &lt;code dir="ltr"&gt;build&lt;/code&gt; method for Flutter’s engine use – surely should be implemented  simply by adding method, satisfying some interface defined somewhere in Go-version of a Flutter:&lt;/p&gt;&lt;p&gt;flutter.go:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;Widget&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;interface&lt;/span&gt;&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;Build&lt;/span&gt;(&lt;span dir="ltr"&gt;ctx&lt;/span&gt; &lt;span dir="ltr"&gt;BuildContext&lt;/span&gt;) &lt;span dir="ltr"&gt;Widget&lt;/span&gt;
+}&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Our main.go:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;MyApp&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt;&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;Core&lt;/span&gt;
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// ...&lt;/span&gt;
+&lt;/span&gt;}
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// Build renders the MyApp widget. Implements Widget interface.&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;func&lt;/span&gt;&lt;/span&gt; (&lt;span dir="ltr"&gt;m&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;MyApp&lt;/span&gt;) &lt;span dir="ltr"&gt;Build&lt;/span&gt;(&lt;span dir="ltr"&gt;ctx&lt;/span&gt; &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;BuildContext&lt;/span&gt;) &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;Widget&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;return&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;MaterialApp&lt;/span&gt;()
+}&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;We might notice a few differences with Dart’s Flutter here:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;code is more verbose – &lt;code dir="ltr"&gt;BuildContext&lt;/code&gt;, &lt;code dir="ltr"&gt;Widget&lt;/code&gt; and &lt;code dir="ltr"&gt;MaterialApp&lt;/code&gt; all have &lt;code dir="ltr"&gt;flutter&lt;/code&gt; explicitly mentioned in front of them.&lt;/LI&gt;&lt;LI&gt;code is less verbose – no &lt;code dir="ltr"&gt;extends Widget&lt;/code&gt; or &lt;code dir="ltr"&gt;@override&lt;/code&gt; clauses&lt;/LI&gt;&lt;LI&gt;Build method is uppercased because in Go it means “public” visibility. In Dart, any case will do, but to make property or method “private” you start the name with an underscore (_).&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;In order to make a Go’s Flutter  &lt;code dir="ltr"&gt;Widget&lt;/code&gt; now we should embed &lt;code dir="ltr"&gt;flutter.Core&lt;/code&gt; and implement &lt;code dir="ltr"&gt;flutter.Widget&lt;/code&gt; interface. Okay, that’s clear, let’s go further.&lt;/p&gt;&lt;h2&gt;The State&lt;/h2&gt;&lt;p dir="ltr"&gt;That was the first thing I found baffling with Dart’s Flutter. There are two kinds of widgets in Flutter – &lt;code dir="ltr"&gt;StatelessWidget&lt;/code&gt; and &lt;code dir="ltr"&gt;StatefulWidget&lt;/code&gt;. Uhm, to me, the stateful widget is just a widget without a state, so why invent a new class here? Well, okay, I can live with it. But you can’t just extend &lt;code dir="ltr"&gt;StatefulWidget&lt;/code&gt; in the same way, you should do the following magic (IDEs with Flutter plugin do it for you, but that’s not the point):&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="dart" dir="ltr"&gt;&lt;span dir="ltr"&gt;class&lt;/span&gt; &lt;span dir="ltr"&gt;MyHomePage&lt;/span&gt; &lt;span dir="ltr"&gt;extends&lt;/span&gt; StatefulWidget {
+  &lt;span dir="ltr"&gt;@&lt;/span&gt;override
+  _MyHomePageState createState() &lt;span dir="ltr"&gt;=&amp;gt;&lt;/span&gt; _MyHomePageState();
+}
+
+&lt;span dir="ltr"&gt;class&lt;/span&gt; &lt;span dir="ltr"&gt;_MyHomePageState&lt;/span&gt; &lt;span dir="ltr"&gt;extends&lt;/span&gt; State&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;MyHomePage&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; {
+  &lt;span dir="ltr"&gt;int&lt;/span&gt; _counter &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;;
+
+  &lt;span dir="ltr"&gt;void&lt;/span&gt; _incrementCounter() {
+    setState(() {
+      _counter&lt;span dir="ltr"&gt;++&lt;/span&gt;;
+    });
+  }
+
+  &lt;span dir="ltr"&gt;@&lt;/span&gt;override
+  Widget build(BuildContext context) {
+      &lt;span dir="ltr"&gt;return&lt;/span&gt; Scaffold()
+  }
+}&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Uff, let’s try to understand not only what is written here, but why?&lt;/p&gt;&lt;p dir="ltr"&gt;The task to solve here is to add state (&lt;code dir="ltr"&gt;counter&lt;/code&gt;) to the widget and allow Flutter to redraw widget when the state has changed. That’s the essential complexity part.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://www.quora.com/What-is-accidental-complexity" dir="ltr"&gt;Accidental complexity&lt;/a&gt; is all the rest. Dart’s Flutter approach is to introduce a new class &lt;code dir="ltr"&gt;State&lt;/code&gt; which uses generics and takes a Widget as its parameter. So &lt;code dir="ltr"&gt;_MyAppState&lt;/code&gt; is a class that extends &lt;code dir="ltr"&gt;State of a widget MyApp&lt;/code&gt;. Okay, kinda makes sense… But why &lt;code dir="ltr"&gt;build()&lt;/code&gt; method is defined on a State instead of a Widget? This question &lt;a href="https://flutter.io/docs/resources/faq#why-is-the-build-method-on-state-not-statefulwidget" dir="ltr"&gt;is answered&lt;/a&gt; in the Flutter’s FAQ and discussed in detailed &lt;a href="https://docs.flutter.io/flutter/widgets/State/build.html" dir="ltr"&gt;here&lt;/a&gt; and the short answer is: to avoid category of bugs when subclassing &lt;code dir="ltr"&gt;StatefulWidget&lt;/code&gt;. In other words, it’s a workaround of the class-based OOP design.&lt;/p&gt;&lt;p&gt;How would we design it in Go?&lt;/p&gt;&lt;p dir="ltr"&gt;First of all, I personally would try to avoid creating a new concept for &lt;code dir="ltr"&gt;State&lt;/code&gt; – we already implicitly have “state” in any concrete type – it’s just the properties (fields) of the struct. Language already possesses this concept of a state, so to speak. So creating a new one will just puzzle developers – why can’t we use a “normal state” of a type here.&lt;/p&gt;&lt;p&gt;The challenge, of course, is to make Flutter engine track state changes and react on it (that’s the gist of reactive programming, after all). And instead of creating “special” methods and wrappers around state changes, we can just ask the developer to manually tell Flutter when we want to update the widget. Not all state changes require immediate redrawing – there are plenty of valid cases to that. Let’s see:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;MyHomePage&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt;&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;Core&lt;/span&gt;
+    &lt;span dir="ltr"&gt;counter&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt;&lt;/span&gt;
+}
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// Build renders the MyHomePage widget. Implements Widget interface.&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;func&lt;/span&gt;&lt;/span&gt; (&lt;span dir="ltr"&gt;m&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;MyHomePage&lt;/span&gt;) &lt;span dir="ltr"&gt;Build&lt;/span&gt;(&lt;span dir="ltr"&gt;ctx&lt;/span&gt; &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;BuildContext&lt;/span&gt;) &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;Widget&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;return&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;Scaffold&lt;/span&gt;()
+}
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// incrementCounter increments widgets's counter by one.&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;func&lt;/span&gt;&lt;/span&gt; (&lt;span dir="ltr"&gt;m&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;MyHomePage&lt;/span&gt;) &lt;span dir="ltr"&gt;incrementCounter&lt;/span&gt;() {
+    &lt;span dir="ltr"&gt;m&lt;/span&gt;.&lt;span dir="ltr"&gt;counter&lt;/span&gt;&lt;span dir="ltr"&gt;++&lt;/span&gt;
+    &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;Rerender&lt;/span&gt;(&lt;span dir="ltr"&gt;m&lt;/span&gt;)
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// or m.Rerender()&lt;/span&gt;
+&lt;/span&gt;    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// or m.NeedsUpdate()&lt;/span&gt;
+&lt;/span&gt;}&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;There is a number of options with naming and design here – I like &lt;code dir="ltr"&gt;NeedsUpdate()&lt;/code&gt; for explicitness and being a method of &lt;code dir="ltr"&gt;flutter.Core&lt;/code&gt; (so each widget has it), but &lt;code dir="ltr"&gt;flutter.Rerender()&lt;/code&gt; also works fine. It gives a false sense of immediate redraw, though – which is not always a case – it will be redrawn on the next frame redraw, and the frequency of state update might be much higher than frame redraw frequency.&lt;/p&gt;&lt;p&gt;But the point is we just implemented the same task of adding a reactive state to the widget, without adding:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;new type&lt;/LI&gt;&lt;LI&gt;generics&lt;/LI&gt;&lt;LI&gt;special rules for reading/writing state&lt;/LI&gt;&lt;LI&gt;new special overridden methods&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Plus, API is cleaner and more explicit – just increase the counter and ask flutter to re-render – something not really obvious when you asked to call special function &lt;code dir="ltr"&gt;setState&lt;/code&gt; that return another function with the actual state change. Again, hidden magic hurts readability, and we managed to avoid just that. As a result, the code is simpler and twice as short.&lt;/p&gt;&lt;h3&gt;Stateful widgets as a children&lt;/h3&gt;&lt;p&gt;As a logical continuation, let’s take a closer look at how “stateful widget” is used within another widget in Flutter:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="dart" dir="ltr"&gt;&lt;span dir="ltr"&gt;@&lt;/span&gt;override
+Widget build(BuildContext context) {
+    &lt;span dir="ltr"&gt;return&lt;/span&gt; MaterialApp(
+        title: &lt;span dir="ltr"&gt;'Flutter Demo'&lt;/span&gt;,
+        home: MyHomePage(title: &lt;span dir="ltr"&gt;'Flutter Demo Home Page'&lt;/span&gt;),
+    );
+}&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;MyHomePage&lt;/code&gt; here is a “stateful widget” (it has a counter), and we’re creating it by calling constructor &lt;code dir="ltr"&gt;MyHomePage(title:"...")&lt;/code&gt; during the build… Wait, what?&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;build()&lt;/code&gt; is called to redraw the widget, perhaps many times per second. Why would we create a widget, let alone stateful, during each render cycle?&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://flutter.io/docs/resources/technical-overview#handling-user-interaction" dir="ltr"&gt;It turns out&lt;/a&gt;, Flutter uses this separation between Widget and State to hide this initialization/state-bookkeeping flow from the developer. It does create a new &lt;code dir="ltr"&gt;MyHomePage&lt;/code&gt; widget every time, but it preserves the original state (in a singleton way) and automatically find “orphaned” state to attach to the newly created &lt;code dir="ltr"&gt;MyHomePage&lt;/code&gt; widget.&lt;/p&gt;&lt;p&gt;To me it doesn’t make much sense – more hidden stuff, more magic and more ambiguity (we still can add Widgets as class properties and instantiate them once upon widget creation). I understand why it feels nice (no need to keep track of widget’s children) and it has the nice effect of simplifying refactoring (you have to delete constructor call in one place only to delete the child), but any developer attempting to really understand how does the whole thing works will be puzzled here.&lt;/p&gt;&lt;p&gt;For Go version, I definitely would prefer explicit and clear initialization of widgets with the state, even if it means more verbose code. Dart’s Flutter approach probably could be done as well, but I like Go for being non-magical, and that philosophy applies to Go frameworks as well. So, my code for stateful children widgets would look like this:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// MyApp is our top application widget.&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;MyApp&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt;&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;Core&lt;/span&gt;
+    &lt;span dir="ltr"&gt;homePage&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;MyHomePage&lt;/span&gt;
+}
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// NewMyApp instantiates a new MyApp widget&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;func&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;NewMyApp&lt;/span&gt;() &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;MyApp&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;app&lt;/span&gt; &lt;span dir="ltr"&gt;:=&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;MyApp&lt;/span&gt;{}
+    &lt;span dir="ltr"&gt;app&lt;/span&gt;.&lt;span dir="ltr"&gt;homePage&lt;/span&gt; = &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;MyHomePage&lt;/span&gt;{}
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;return&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;app&lt;/span&gt;
+}
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// Build renders the MyApp widget. Implements Widget interface.&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;func&lt;/span&gt;&lt;/span&gt; (&lt;span dir="ltr"&gt;m&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;MyApp&lt;/span&gt;) &lt;span dir="ltr"&gt;Build&lt;/span&gt;(&lt;span dir="ltr"&gt;ctx&lt;/span&gt; &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;BuildContext&lt;/span&gt;) &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;Widget&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;return&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;m&lt;/span&gt;.&lt;span dir="ltr"&gt;homePage&lt;/span&gt;
+}
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// MyHomePage is a home page widget.&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;MyHomePage&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt;&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;Core&lt;/span&gt;
+    &lt;span dir="ltr"&gt;counter&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt;&lt;/span&gt;
+}
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// Build renders the MyHomePage widget. Implements Widget interface.&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;func&lt;/span&gt;&lt;/span&gt; (&lt;span dir="ltr"&gt;m&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;MyHomePage&lt;/span&gt;) &lt;span dir="ltr"&gt;Build&lt;/span&gt;(&lt;span dir="ltr"&gt;ctx&lt;/span&gt; &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;BuildContext&lt;/span&gt;) &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;Widget&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;return&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;Scaffold&lt;/span&gt;()
+}
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// incrementCounter increments app's counter by one.&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;func&lt;/span&gt;&lt;/span&gt; (&lt;span dir="ltr"&gt;m&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;MyHomePage&lt;/span&gt;) &lt;span dir="ltr"&gt;incrementCounter&lt;/span&gt;() {
+    &lt;span dir="ltr"&gt;m&lt;/span&gt;.&lt;span dir="ltr"&gt;counter&lt;/span&gt;&lt;span dir="ltr"&gt;++&lt;/span&gt;
+    &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;Rerender&lt;/span&gt;(&lt;span dir="ltr"&gt;m&lt;/span&gt;)
+}&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The code is more verbose, and if we had to change/replace MyHomeWidget in MyApp, we would have to touch code in 3 places, but a side effect is that we have a full and clear picture of what going on at each stage of the code execution. There is no hidden stuff happening behind the scene, we can reason about the code, about performance and dependencies of each of our types and functions with 100% confidence. And, for some, that’s the ultimate goal of writing reliable and maintainable code.&lt;/p&gt;&lt;p dir="ltr"&gt;By the way, Flutter has a special widget called &lt;a href="https://medium.com/flutter-community/stateful-widgets-be-gone-stateful-builder-a67f139725a0" dir="ltr"&gt;StatefulBuilder&lt;/a&gt;, which adds even more magic for hiding state management.&lt;/p&gt;&lt;h2&gt;DSL&lt;/h2&gt;&lt;p&gt;Now, the fun part. How do we build a Flutter’s widget tree in Go? We want to have our widgets tree concise, readable, easy to refactor and update, describe spatial relationship between widgets and add enough flexibility to plug in custom code like button press handlers and so on.&lt;/p&gt;&lt;p&gt;I think Dart’s Flutter version is quite beautiful and self-explanatory:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="dart" dir="ltr"&gt;&lt;span dir="ltr"&gt;return&lt;/span&gt; Scaffold(
+      appBar: AppBar(
+        title: Text(widget.title),
+      ),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: &lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;Widget&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;[
+            Text(&lt;span dir="ltr"&gt;'You have pushed the button this many times:'&lt;/span&gt;),
+            Text(
+              &lt;span dir="ltr"&gt;'&lt;/span&gt;&lt;span dir="ltr"&gt;$&lt;/span&gt;_counter&lt;span dir="ltr"&gt;'&lt;/span&gt;,
+              style: Theme.of(context).textTheme.display1,
+            ),
+          ],
+        ),
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _incrementCounter,
+        tooltip: &lt;span dir="ltr"&gt;'Increment'&lt;/span&gt;,
+        child: Icon(Icons.add),
+      ),
+    );&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Every widget has a constructor function, which accepts optional parameters, and the real trick that makes this declarative way really nice is &lt;a href="https://en.wikipedia.org/wiki/Named_parameter" dir="ltr"&gt;named function parameters&lt;/a&gt;.&lt;/p&gt;&lt;h3&gt;Named parameters&lt;/h3&gt;&lt;p&gt;Just in case you’re unfamiliar, in most languages parameters are called “positional parameters” because it’s their position in the function call matters:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;Foo&lt;/span&gt;(&lt;span dir="ltr"&gt;arg1&lt;/span&gt;, &lt;span dir="ltr"&gt;arg2&lt;/span&gt;, &lt;span dir="ltr"&gt;arg3&lt;/span&gt;)&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;while with named parameters, you also write their name in the function call:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;Foo&lt;/span&gt;(&lt;span dir="ltr"&gt;name&lt;/span&gt;: &lt;span dir="ltr"&gt;arg1&lt;/span&gt;, &lt;span dir="ltr"&gt;description&lt;/span&gt;: &lt;span dir="ltr"&gt;arg2&lt;/span&gt;, &lt;span dir="ltr"&gt;size&lt;/span&gt;: &lt;span dir="ltr"&gt;arg3&lt;/span&gt;)&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;It adds verbosity, but it saves you clicks and jumps over the code to understand what are those parameters all about.&lt;/p&gt;&lt;p&gt;In the case of UI widget tree, they play a crucial role in the readability. Consider the same code as above, without named parameters:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="dart" dir="ltr"&gt;&lt;span dir="ltr"&gt;return&lt;/span&gt; Scaffold(
+      AppBar(
+          Text(widget.title),
+      ),
+      Center(
+        Column(
+          MainAxisAlignment.center,
+          &lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;Widget&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;[
+            Text(&lt;span dir="ltr"&gt;'You have pushed the button this many times:'&lt;/span&gt;),
+            Text(
+              &lt;span dir="ltr"&gt;'&lt;/span&gt;&lt;span dir="ltr"&gt;$&lt;/span&gt;_counter&lt;span dir="ltr"&gt;'&lt;/span&gt;,
+              Theme.of(context).textTheme.display1,
+            ),
+          ],
+        ),
+      ),
+      FloatingActionButton(
+        _incrementCounter,
+        &lt;span dir="ltr"&gt;'Increment'&lt;/span&gt;,
+        Icon(Icons.add),
+      ),
+    );&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Meh, right? It’s not only harder to read and understand (you need to keep in your memory what each parameter mean, what’s its type and it’s a huge cognitive burden), but also leaves us with no flexibility in what parameters we really want to pass. For example, you may not want to have &lt;code dir="ltr"&gt;FloatingButton&lt;/code&gt; for you Material App, so you simply don’t pass the &lt;code dir="ltr"&gt;floatingActionButton&lt;/code&gt;. Without named parameters, you’re forced to pass it (as &lt;code dir="ltr"&gt;null&lt;/code&gt;/&lt;code dir="ltr"&gt;nil&lt;/code&gt;, perhaps), or resort to some dirty magic with reflection to figure out what parameters user passed via the constructor.&lt;/p&gt;&lt;p&gt;As Go doesn’t have function overloading or named parameters, that’s going to be a tough task.&lt;/p&gt;&lt;h2&gt;Widgets Tree in Go&lt;/h2&gt;&lt;h3&gt;Version 1&lt;/h3&gt;&lt;p&gt;The temptation here might be just to replicate Dart’s way of expressing widgets tree, but what we really need is to step back and answer the question – which is the best way to represent this type of data within the constraints of the language?&lt;/p&gt;&lt;p dir="ltr"&gt;Let’s take a closer look at the &lt;a href="https://docs.flutter.io/flutter/material/Scaffold-class.html" dir="ltr"&gt;Scaffold&lt;/a&gt; object, which is a nice helper for building a decently looking modern UI. It has &lt;em dir="ltr"&gt;properties&lt;/em&gt; – appBar, drawer, home, bottomNavigationBar, floatingActionButton – all Widgets, by the way. And we’re creating the object of the type &lt;code dir="ltr"&gt;Scaffold&lt;/code&gt; initializing some of those properties along the way. Well, it’s not that different from any normal object instantiation, is it?&lt;/p&gt;&lt;p&gt;Let’s try the naïve approach:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;return&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;NewScaffold&lt;/span&gt;(
+    &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;NewAppBar&lt;/span&gt;(
+        &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Flutter Go app"&lt;/span&gt;&lt;/span&gt;, &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;/span&gt;),
+    ),
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;/span&gt;,
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;/span&gt;,
+    &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;NewCenter&lt;/span&gt;(
+        &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;NewColumn&lt;/span&gt;(
+            &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;MainAxisCenterAlignment&lt;/span&gt;,
+            &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;/span&gt;,
+            []&lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;Widget&lt;/span&gt;{
+                &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"You have pushed the button this many times:"&lt;/span&gt;&lt;/span&gt;, &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;/span&gt;),
+                &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;fmt&lt;/span&gt;.&lt;span dir="ltr"&gt;Sprintf&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"%d"&lt;/span&gt;&lt;/span&gt;, &lt;span dir="ltr"&gt;m&lt;/span&gt;.&lt;span dir="ltr"&gt;counter&lt;/span&gt;), &lt;span dir="ltr"&gt;ctx&lt;/span&gt;.&lt;span dir="ltr"&gt;Theme&lt;/span&gt;.&lt;span dir="ltr"&gt;textTheme&lt;/span&gt;.&lt;span dir="ltr"&gt;display1&lt;/span&gt;),
+            },
+        ),
+    ),
+    &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;FloatingActionButton&lt;/span&gt;(
+        &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;NewIcon&lt;/span&gt;(&lt;span dir="ltr"&gt;icons&lt;/span&gt;.&lt;span dir="ltr"&gt;Add&lt;/span&gt;),
+        &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Increment"&lt;/span&gt;&lt;/span&gt;,
+        &lt;span dir="ltr"&gt;m&lt;/span&gt;.&lt;span dir="ltr"&gt;onPressed&lt;/span&gt;,
+        &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;/span&gt;,
+        &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;/span&gt;,
+    ),
+)&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Well, not the prettiest UI code, for sure. The word &lt;code dir="ltr"&gt;flutter&lt;/code&gt; is so abundant that it begs for hiding (actually, I should have named it &lt;code dir="ltr"&gt;material&lt;/code&gt;, not &lt;code dir="ltr"&gt;flutter&lt;/code&gt;), those nameless parameters are not clear, especially &lt;code dir="ltr"&gt;nil&lt;/code&gt;s.&lt;/p&gt;&lt;h3&gt;Version 2&lt;/h3&gt;&lt;p dir="ltr"&gt;As most of the code will use &lt;code dir="ltr"&gt;flutter&lt;/code&gt; import anyway, it’s fine to import &lt;code dir="ltr"&gt;flutter&lt;/code&gt; into our namespace using the import dot notation:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;import&lt;/span&gt;&lt;/span&gt; . &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"github.com/flutter/flutter"&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Now, instead of writing &lt;code dir="ltr"&gt;flutter.Text&lt;/code&gt; it’ll be just &lt;code dir="ltr"&gt;Text&lt;/code&gt;. It’s usually a bad practice, but we’re working with a framework, and use this import literally on every single line, so that’s a perfect case where it’s a good practice. Another valid use case is a Go tests with &lt;a href="http://goconvey.co/" dir="ltr"&gt;GoConvey&lt;/a&gt; framework, for example. To me, frameworks are the languages on top of other languages, so it’s ok to use dot import with frameworks.&lt;/p&gt;&lt;p&gt;Let’s rewrite our code:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;return&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;NewScaffold&lt;/span&gt;(
+    &lt;span dir="ltr"&gt;NewAppBar&lt;/span&gt;(
+        &lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Flutter Go app"&lt;/span&gt;&lt;/span&gt;, &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;/span&gt;),
+    ),
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;/span&gt;,
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;/span&gt;,
+    &lt;span dir="ltr"&gt;NewCenter&lt;/span&gt;(
+        &lt;span dir="ltr"&gt;NewColumn&lt;/span&gt;(
+            &lt;span dir="ltr"&gt;MainAxisCenterAlignment&lt;/span&gt;,
+            &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;/span&gt;,
+            []&lt;span dir="ltr"&gt;Widget&lt;/span&gt;{
+                &lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"You have pushed the button this many times:"&lt;/span&gt;&lt;/span&gt;, &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;/span&gt;),
+                &lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;fmt&lt;/span&gt;.&lt;span dir="ltr"&gt;Sprintf&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"%d"&lt;/span&gt;&lt;/span&gt;, &lt;span dir="ltr"&gt;m&lt;/span&gt;.&lt;span dir="ltr"&gt;counter&lt;/span&gt;), &lt;span dir="ltr"&gt;ctx&lt;/span&gt;.&lt;span dir="ltr"&gt;Theme&lt;/span&gt;.&lt;span dir="ltr"&gt;textTheme&lt;/span&gt;.&lt;span dir="ltr"&gt;display1&lt;/span&gt;),
+            },
+        ),
+    ),
+    &lt;span dir="ltr"&gt;FloatingActionButton&lt;/span&gt;(
+        &lt;span dir="ltr"&gt;NewIcon&lt;/span&gt;(&lt;span dir="ltr"&gt;icons&lt;/span&gt;.&lt;span dir="ltr"&gt;Add&lt;/span&gt;),
+        &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Increment"&lt;/span&gt;&lt;/span&gt;,
+        &lt;span dir="ltr"&gt;m&lt;/span&gt;.&lt;span dir="ltr"&gt;onPressed&lt;/span&gt;,
+        &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;/span&gt;,
+        &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;/span&gt;,
+    ),
+)&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;A bit cleaner, but those nils… How can we avoid requiring concrete parameters?&lt;/p&gt;&lt;h3&gt;Version 3&lt;/h3&gt;&lt;p dir="ltr"&gt;Maybe reflection? Some early Go HTTP frameworks used this approach (&lt;a href="https://github.com/go-martini/martini" dir="ltr"&gt;martini&lt;/a&gt; for example) – you pass whatever you want via parameters, and runtime will figure out if this a known type/parameter. It’s a bad practice from many points of view - it’s unsafe, relatively slow, adds magic – but for the sake of exploration let’s try it:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;return&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;NewScaffold&lt;/span&gt;(
+    &lt;span dir="ltr"&gt;NewAppBar&lt;/span&gt;(
+        &lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Flutter Go app"&lt;/span&gt;&lt;/span&gt;),
+    ),
+    &lt;span dir="ltr"&gt;NewCenter&lt;/span&gt;(
+        &lt;span dir="ltr"&gt;NewColumn&lt;/span&gt;(
+            &lt;span dir="ltr"&gt;MainAxisCenterAlignment&lt;/span&gt;,
+            []&lt;span dir="ltr"&gt;Widget&lt;/span&gt;{
+                &lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"You have pushed the button this many times:"&lt;/span&gt;&lt;/span&gt;),
+                &lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;fmt&lt;/span&gt;.&lt;span dir="ltr"&gt;Sprintf&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"%d"&lt;/span&gt;&lt;/span&gt;, &lt;span dir="ltr"&gt;m&lt;/span&gt;.&lt;span dir="ltr"&gt;counter&lt;/span&gt;), &lt;span dir="ltr"&gt;ctx&lt;/span&gt;.&lt;span dir="ltr"&gt;Theme&lt;/span&gt;.&lt;span dir="ltr"&gt;textTheme&lt;/span&gt;.&lt;span dir="ltr"&gt;display1&lt;/span&gt;),
+            },
+        ),
+    ),
+    &lt;span dir="ltr"&gt;FloatingActionButton&lt;/span&gt;(
+        &lt;span dir="ltr"&gt;NewIcon&lt;/span&gt;(&lt;span dir="ltr"&gt;icons&lt;/span&gt;.&lt;span dir="ltr"&gt;Add&lt;/span&gt;),
+        &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Increment"&lt;/span&gt;&lt;/span&gt;,
+        &lt;span dir="ltr"&gt;m&lt;/span&gt;.&lt;span dir="ltr"&gt;onPressed&lt;/span&gt;,
+    ),
+)&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Okay, a bit cleaner and similar to Dart’s original version, but lack of named parameters really hinder readability in such a case with “optional” parameters. Plus, it’s the code that really smells with bad approaches.&lt;/p&gt;&lt;h3&gt;Version 4&lt;/h3&gt;&lt;p&gt;Let’s rethink what’s exactly we’re doing when creating new objects and optionally defining their properties? It’s just a normal variable instantiation, so what if we try it in a different way:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;scaffold&lt;/span&gt; &lt;span dir="ltr"&gt;:=&lt;/span&gt; &lt;span dir="ltr"&gt;NewScaffold&lt;/span&gt;()
+&lt;span dir="ltr"&gt;scaffold&lt;/span&gt;.&lt;span dir="ltr"&gt;AppBar&lt;/span&gt; = &lt;span dir="ltr"&gt;NewAppBar&lt;/span&gt;(&lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Flutter Go app"&lt;/span&gt;&lt;/span&gt;))
+
+&lt;span dir="ltr"&gt;column&lt;/span&gt; &lt;span dir="ltr"&gt;:=&lt;/span&gt; &lt;span dir="ltr"&gt;NewColumn&lt;/span&gt;()
+&lt;span dir="ltr"&gt;column&lt;/span&gt;.&lt;span dir="ltr"&gt;MainAxisAlignment&lt;/span&gt; = &lt;span dir="ltr"&gt;MainAxisCenterAlignment&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;counterText&lt;/span&gt; &lt;span dir="ltr"&gt;:=&lt;/span&gt; &lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;fmt&lt;/span&gt;.&lt;span dir="ltr"&gt;Sprintf&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"%d"&lt;/span&gt;&lt;/span&gt;, &lt;span dir="ltr"&gt;m&lt;/span&gt;.&lt;span dir="ltr"&gt;counter&lt;/span&gt;))
+&lt;span dir="ltr"&gt;counterText&lt;/span&gt;.&lt;span dir="ltr"&gt;Style&lt;/span&gt; = &lt;span dir="ltr"&gt;ctx&lt;/span&gt;.&lt;span dir="ltr"&gt;Theme&lt;/span&gt;.&lt;span dir="ltr"&gt;textTheme&lt;/span&gt;.&lt;span dir="ltr"&gt;display1&lt;/span&gt;
+&lt;span dir="ltr"&gt;column&lt;/span&gt;.&lt;span dir="ltr"&gt;Children&lt;/span&gt; = []&lt;span dir="ltr"&gt;Widget&lt;/span&gt;{
+  &lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"You have pushed the button this many times:"&lt;/span&gt;&lt;/span&gt;),
+  &lt;span dir="ltr"&gt;counterText&lt;/span&gt;,
+}
+
+&lt;span dir="ltr"&gt;center&lt;/span&gt; &lt;span dir="ltr"&gt;:=&lt;/span&gt; &lt;span dir="ltr"&gt;NewCenter&lt;/span&gt;()
+&lt;span dir="ltr"&gt;center&lt;/span&gt;.&lt;span dir="ltr"&gt;Child&lt;/span&gt; = &lt;span dir="ltr"&gt;column&lt;/span&gt;
+&lt;span dir="ltr"&gt;scaffold&lt;/span&gt;.&lt;span dir="ltr"&gt;Home&lt;/span&gt; = &lt;span dir="ltr"&gt;center&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;icon&lt;/span&gt; &lt;span dir="ltr"&gt;:=&lt;/span&gt; &lt;span dir="ltr"&gt;NewIcon&lt;/span&gt;(&lt;span dir="ltr"&gt;icons&lt;/span&gt;.&lt;span dir="ltr"&gt;Add&lt;/span&gt;),
+&lt;span dir="ltr"&gt;fab&lt;/span&gt; &lt;span dir="ltr"&gt;:=&lt;/span&gt; &lt;span dir="ltr"&gt;NewFloatingActionButton&lt;/span&gt;()
+&lt;span dir="ltr"&gt;fab&lt;/span&gt;.&lt;span dir="ltr"&gt;Icon&lt;/span&gt; = &lt;span dir="ltr"&gt;icon&lt;/span&gt;
+&lt;span dir="ltr"&gt;fab&lt;/span&gt;.&lt;span dir="ltr"&gt;Text&lt;/span&gt; = &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Increment"&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;fab&lt;/span&gt;.&lt;span dir="ltr"&gt;Handler&lt;/span&gt; = &lt;span dir="ltr"&gt;m&lt;/span&gt;.&lt;span dir="ltr"&gt;onPressed&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;scaffold&lt;/span&gt;.&lt;span dir="ltr"&gt;FloatingActionButton&lt;/span&gt; = &lt;span dir="ltr"&gt;fab&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;return&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;scaffold&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This approach will work, and while it solves the “named parameters issue”, it really messes up the understanding of widgets tree. First of all, it reversed the order of creating widgets – the deeper the widget, the earlier it should be defined. Second, we lost our indentation-based spatial layout of code, which is a great helper of quickly building a high-level overview of the widgets tree.&lt;/p&gt;&lt;p dir="ltr"&gt;By the way, this approach has been used for ages with UI frameworks such as &lt;a href="https://www.gtk.org/" dir="ltr"&gt;GTK&lt;/a&gt; and &lt;a href="https://www.qt.io/" dir="ltr"&gt;Qt&lt;/a&gt;.  Take a look at the &lt;a href="http://doc.qt.io/qt-5/qtwidgets-mainwindows-mainwindow-mainwindow-cpp.html" dir="ltr"&gt;code example from the documentation&lt;/a&gt; to the latest Qt 5 framework.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="c++" dir="ltr"&gt;    QGridLayout &lt;span dir="ltr"&gt;*&lt;/span&gt;layout &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;new&lt;/span&gt;&lt;/span&gt; QGridLayout(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;this&lt;/span&gt;&lt;/span&gt;);
+
+    layout&lt;span dir="ltr"&gt;-&amp;gt;&lt;/span&gt;addWidget(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;new&lt;/span&gt;&lt;/span&gt; QLabel(tr(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Object name:"&lt;/span&gt;&lt;/span&gt;)), &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;/span&gt;, &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;/span&gt;);
+    layout&lt;span dir="ltr"&gt;-&amp;gt;&lt;/span&gt;addWidget(m_objectName, &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;/span&gt;, &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;/span&gt;);
+
+    layout&lt;span dir="ltr"&gt;-&amp;gt;&lt;/span&gt;addWidget(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;new&lt;/span&gt;&lt;/span&gt; QLabel(tr(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Location:"&lt;/span&gt;&lt;/span&gt;)), &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;/span&gt;, &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;/span&gt;);
+    m_location&lt;span dir="ltr"&gt;-&amp;gt;&lt;/span&gt;setEditable(&lt;span dir="ltr"&gt;false&lt;/span&gt;);
+    m_location&lt;span dir="ltr"&gt;-&amp;gt;&lt;/span&gt;addItem(tr(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Top"&lt;/span&gt;&lt;/span&gt;));
+    m_location&lt;span dir="ltr"&gt;-&amp;gt;&lt;/span&gt;addItem(tr(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Left"&lt;/span&gt;&lt;/span&gt;));
+    m_location&lt;span dir="ltr"&gt;-&amp;gt;&lt;/span&gt;addItem(tr(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Right"&lt;/span&gt;&lt;/span&gt;));
+    m_location&lt;span dir="ltr"&gt;-&amp;gt;&lt;/span&gt;addItem(tr(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Bottom"&lt;/span&gt;&lt;/span&gt;));
+    m_location&lt;span dir="ltr"&gt;-&amp;gt;&lt;/span&gt;addItem(tr(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Restore"&lt;/span&gt;&lt;/span&gt;));
+    layout&lt;span dir="ltr"&gt;-&amp;gt;&lt;/span&gt;addWidget(m_location, &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;/span&gt;, &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;/span&gt;);
+
+    QDialogButtonBox &lt;span dir="ltr"&gt;*&lt;/span&gt;buttonBox &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;new&lt;/span&gt;&lt;/span&gt; QDialogButtonBox(QDialogButtonBox&lt;span dir="ltr"&gt;::&lt;/span&gt;Ok &lt;span dir="ltr"&gt;|&lt;/span&gt; QDialogButtonBox&lt;span dir="ltr"&gt;::&lt;/span&gt;Cancel, &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;this&lt;/span&gt;&lt;/span&gt;);
+    connect(buttonBox, &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;QDialogButtonBox&lt;span dir="ltr"&gt;::&lt;/span&gt;rejected, &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;this&lt;/span&gt;&lt;/span&gt;, &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;QDialog&lt;span dir="ltr"&gt;::&lt;/span&gt;reject);
+    connect(buttonBox, &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;QDialogButtonBox&lt;span dir="ltr"&gt;::&lt;/span&gt;accepted, &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;this&lt;/span&gt;&lt;/span&gt;, &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;QDialog&lt;span dir="ltr"&gt;::&lt;/span&gt;accept);
+    layout&lt;span dir="ltr"&gt;-&amp;gt;&lt;/span&gt;addWidget(buttonBox, &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;/span&gt;, &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;/span&gt;, &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;/span&gt;, &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;/span&gt;);
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;So for some people, it might be a more natural way to describe UI as a code. But it’s hard to deny that it’s definitely not the best option.&lt;/p&gt;&lt;h3&gt;Version 5&lt;/h3&gt;&lt;p&gt;One more option I considered is creating a separate type for constructor parameters. For example:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;func&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;Build&lt;/span&gt;() &lt;span dir="ltr"&gt;Widget&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;return&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;NewScaffold&lt;/span&gt;(&lt;span dir="ltr"&gt;ScaffoldParams&lt;/span&gt;{
+        &lt;span dir="ltr"&gt;AppBar&lt;/span&gt;: &lt;span dir="ltr"&gt;NewAppBar&lt;/span&gt;(&lt;span dir="ltr"&gt;AppBarParams&lt;/span&gt;{
+            &lt;span dir="ltr"&gt;Title&lt;/span&gt;: &lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;TextParams&lt;/span&gt;{
+                &lt;span dir="ltr"&gt;Text&lt;/span&gt;: &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"My Home Page"&lt;/span&gt;&lt;/span&gt;,
+            }),
+        }),
+        &lt;span dir="ltr"&gt;Body&lt;/span&gt;: &lt;span dir="ltr"&gt;NewCenter&lt;/span&gt;(&lt;span dir="ltr"&gt;CenterParams&lt;/span&gt;{
+            &lt;span dir="ltr"&gt;Child&lt;/span&gt;: &lt;span dir="ltr"&gt;NewColumn&lt;/span&gt;(&lt;span dir="ltr"&gt;ColumnParams&lt;/span&gt;{
+                &lt;span dir="ltr"&gt;MainAxisAlignment&lt;/span&gt;: &lt;span dir="ltr"&gt;MainAxisAlignment&lt;/span&gt;.&lt;span dir="ltr"&gt;center&lt;/span&gt;,
+                &lt;span dir="ltr"&gt;Children&lt;/span&gt;: []&lt;span dir="ltr"&gt;Widget&lt;/span&gt;{
+                    &lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;TextParams&lt;/span&gt;{
+                        &lt;span dir="ltr"&gt;Text&lt;/span&gt;: &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"You have pushed the button this many times:"&lt;/span&gt;&lt;/span&gt;,
+                    }),
+                    &lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;TextParams&lt;/span&gt;{
+                        &lt;span dir="ltr"&gt;Text&lt;/span&gt;:  &lt;span dir="ltr"&gt;fmt&lt;/span&gt;.&lt;span dir="ltr"&gt;Sprintf&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"%d"&lt;/span&gt;&lt;/span&gt;, &lt;span dir="ltr"&gt;m&lt;/span&gt;.&lt;span dir="ltr"&gt;counter&lt;/span&gt;),
+                        &lt;span dir="ltr"&gt;Style&lt;/span&gt;: &lt;span dir="ltr"&gt;ctx&lt;/span&gt;.&lt;span dir="ltr"&gt;textTheme&lt;/span&gt;.&lt;span dir="ltr"&gt;display1&lt;/span&gt;,
+                    }),
+                },
+            }),
+        }),
+        &lt;span dir="ltr"&gt;FloatingActionButton&lt;/span&gt;: &lt;span dir="ltr"&gt;NewFloatingActionButton&lt;/span&gt;(
+            &lt;span dir="ltr"&gt;FloatingActionButtonParams&lt;/span&gt;{
+                &lt;span dir="ltr"&gt;OnPressed&lt;/span&gt;: &lt;span dir="ltr"&gt;m&lt;/span&gt;.&lt;span dir="ltr"&gt;incrementCounter&lt;/span&gt;,
+                &lt;span dir="ltr"&gt;Tooltip&lt;/span&gt;:   &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Increment"&lt;/span&gt;&lt;/span&gt;,
+                &lt;span dir="ltr"&gt;Child&lt;/span&gt;: &lt;span dir="ltr"&gt;NewIcon&lt;/span&gt;(&lt;span dir="ltr"&gt;IconParams&lt;/span&gt;{
+                    &lt;span dir="ltr"&gt;Icon&lt;/span&gt;: &lt;span dir="ltr"&gt;Icons&lt;/span&gt;.&lt;span dir="ltr"&gt;add&lt;/span&gt;,
+                }),
+            },
+        ),
+    })
+}&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Not bad, actually! Those &lt;code dir="ltr"&gt;..Params&lt;/code&gt; are verbose, but it’s not a deal breaker. In fact, this approach I encounter quite often in Go libs. It works especially fine when you have just a couple of objects need to be instantiated this way.&lt;/p&gt;&lt;p dir="ltr"&gt;There is a way to remove &lt;code dir="ltr"&gt;...Params&lt;/code&gt; verbosity, but it’ll require language change. There  a Go proposal exists that aims to achieve exactly that - &lt;a href="https://github.com/golang/go/issues/12854" dir="ltr"&gt;untyped composite literals&lt;/a&gt;. Basically, it means we should be able to shorten &lt;code dir="ltr"&gt;FloattingActionButtonParameters{...}&lt;/code&gt; to just &lt;code dir="ltr"&gt;{...}&lt;/code&gt;, so our code could look like that:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;func&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;Build&lt;/span&gt;() &lt;span dir="ltr"&gt;Widget&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;return&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;NewScaffold&lt;/span&gt;({
+        &lt;span dir="ltr"&gt;AppBar&lt;/span&gt;: &lt;span dir="ltr"&gt;NewAppBar&lt;/span&gt;({
+            &lt;span dir="ltr"&gt;Title&lt;/span&gt;: &lt;span dir="ltr"&gt;Text&lt;/span&gt;({
+                &lt;span dir="ltr"&gt;Text&lt;/span&gt;: &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"My Home Page"&lt;/span&gt;&lt;/span&gt;,
+            }),
+        }),
+        &lt;span dir="ltr"&gt;Body&lt;/span&gt;: &lt;span dir="ltr"&gt;NewCenter&lt;/span&gt;({
+            &lt;span dir="ltr"&gt;Child&lt;/span&gt;: &lt;span dir="ltr"&gt;NewColumn&lt;/span&gt;({
+                &lt;span dir="ltr"&gt;MainAxisAlignment&lt;/span&gt;: &lt;span dir="ltr"&gt;MainAxisAlignment&lt;/span&gt;.&lt;span dir="ltr"&gt;center&lt;/span&gt;,
+                &lt;span dir="ltr"&gt;Children&lt;/span&gt;: []&lt;span dir="ltr"&gt;Widget&lt;/span&gt;{
+                    &lt;span dir="ltr"&gt;Text&lt;/span&gt;({
+                        &lt;span dir="ltr"&gt;Text&lt;/span&gt;: &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"You have pushed the button this many times:"&lt;/span&gt;&lt;/span&gt;,
+                    }),
+                    &lt;span dir="ltr"&gt;Text&lt;/span&gt;({
+                        &lt;span dir="ltr"&gt;Text&lt;/span&gt;:  &lt;span dir="ltr"&gt;fmt&lt;/span&gt;.&lt;span dir="ltr"&gt;Sprintf&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"%d"&lt;/span&gt;&lt;/span&gt;, &lt;span dir="ltr"&gt;m&lt;/span&gt;.&lt;span dir="ltr"&gt;counter&lt;/span&gt;),
+                        &lt;span dir="ltr"&gt;Style&lt;/span&gt;: &lt;span dir="ltr"&gt;ctx&lt;/span&gt;.&lt;span dir="ltr"&gt;textTheme&lt;/span&gt;.&lt;span dir="ltr"&gt;display1&lt;/span&gt;,
+                    }),
+                },
+            }),
+        }),
+        &lt;span dir="ltr"&gt;FloatingActionButton&lt;/span&gt;: &lt;span dir="ltr"&gt;NewFloatingActionButton&lt;/span&gt;({
+                &lt;span dir="ltr"&gt;OnPressed&lt;/span&gt;: &lt;span dir="ltr"&gt;m&lt;/span&gt;.&lt;span dir="ltr"&gt;incrementCounter&lt;/span&gt;,
+                &lt;span dir="ltr"&gt;Tooltip&lt;/span&gt;:   &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Increment"&lt;/span&gt;&lt;/span&gt;,
+                &lt;span dir="ltr"&gt;Child&lt;/span&gt;: &lt;span dir="ltr"&gt;NewIcon&lt;/span&gt;({
+                    &lt;span dir="ltr"&gt;Icon&lt;/span&gt;: &lt;span dir="ltr"&gt;Icons&lt;/span&gt;.&lt;span dir="ltr"&gt;add&lt;/span&gt;,
+                }),
+            },
+        ),
+    })
+}&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;That’s an almost perfect similarity with Dart’s version! It will, however, require creating those parameters types for each widget.&lt;/p&gt;&lt;h3&gt;Version 6&lt;/h3&gt;&lt;p&gt;Another option to explore is to use chaining of widget’s methods. I forgot the name of this pattern, but it’s not important because patterns should emerge from code, not the opposite way.&lt;/p&gt;&lt;p dir="ltr"&gt;The basic idea is that upon creating a widget – say &lt;code dir="ltr"&gt;NewButton()&lt;/code&gt; – we immediately call a method like &lt;code dir="ltr"&gt;WithStyle(...)&lt;/code&gt;, which returns the same object so that we can call more and more methods, in a row (or a column):&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;button&lt;/span&gt; &lt;span dir="ltr"&gt;:=&lt;/span&gt; &lt;span dir="ltr"&gt;NewButton&lt;/span&gt;().
+    &lt;span dir="ltr"&gt;WithText&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Click me"&lt;/span&gt;&lt;/span&gt;).
+    &lt;span dir="ltr"&gt;WithStyle&lt;/span&gt;(&lt;span dir="ltr"&gt;MyButtonStyle1&lt;/span&gt;)&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;or&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;button&lt;/span&gt; &lt;span dir="ltr"&gt;:=&lt;/span&gt; &lt;span dir="ltr"&gt;NewButton&lt;/span&gt;().
+    &lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Click me"&lt;/span&gt;&lt;/span&gt;).
+    &lt;span dir="ltr"&gt;Style&lt;/span&gt;(&lt;span dir="ltr"&gt;MyButtonStyle1&lt;/span&gt;)&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Let’s try to rewrite our Scaffold-based widget that way:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// Build renders the MyHomePage widget. Implements Widget interface.&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;func&lt;/span&gt;&lt;/span&gt; (&lt;span dir="ltr"&gt;m&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;MyHomePage&lt;/span&gt;) &lt;span dir="ltr"&gt;Build&lt;/span&gt;(&lt;span dir="ltr"&gt;ctx&lt;/span&gt; &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;BuildContext&lt;/span&gt;) &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;Widget&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;return&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;NewScaffold&lt;/span&gt;().
+        &lt;span dir="ltr"&gt;AppBar&lt;/span&gt;(&lt;span dir="ltr"&gt;NewAppBar&lt;/span&gt;().
+            &lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Flutter Go app"&lt;/span&gt;&lt;/span&gt;)).
+        &lt;span dir="ltr"&gt;Child&lt;/span&gt;(&lt;span dir="ltr"&gt;NewCenter&lt;/span&gt;().
+            &lt;span dir="ltr"&gt;Child&lt;/span&gt;(&lt;span dir="ltr"&gt;NewColumn&lt;/span&gt;().
+                &lt;span dir="ltr"&gt;MainAxisAlignment&lt;/span&gt;(&lt;span dir="ltr"&gt;MainAxisCenterAlignment&lt;/span&gt;).
+                &lt;span dir="ltr"&gt;Children&lt;/span&gt;([]&lt;span dir="ltr"&gt;Widget&lt;/span&gt;{
+                    &lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"You have pushed the button this many times:"&lt;/span&gt;&lt;/span&gt;),
+                    &lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;fmt&lt;/span&gt;.&lt;span dir="ltr"&gt;Sprintf&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"%d"&lt;/span&gt;&lt;/span&gt;, &lt;span dir="ltr"&gt;m&lt;/span&gt;.&lt;span dir="ltr"&gt;counter&lt;/span&gt;)).
+                        &lt;span dir="ltr"&gt;Style&lt;/span&gt;(&lt;span dir="ltr"&gt;ctx&lt;/span&gt;.&lt;span dir="ltr"&gt;Theme&lt;/span&gt;.&lt;span dir="ltr"&gt;textTheme&lt;/span&gt;.&lt;span dir="ltr"&gt;display1&lt;/span&gt;),
+                }))).
+        &lt;span dir="ltr"&gt;FloatingActionButton&lt;/span&gt;(&lt;span dir="ltr"&gt;NewFloatingActionButton&lt;/span&gt;().
+            &lt;span dir="ltr"&gt;Icon&lt;/span&gt;(&lt;span dir="ltr"&gt;NewIcon&lt;/span&gt;(&lt;span dir="ltr"&gt;icons&lt;/span&gt;.&lt;span dir="ltr"&gt;Add&lt;/span&gt;)).
+            &lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Increment"&lt;/span&gt;&lt;/span&gt;).
+            &lt;span dir="ltr"&gt;Handler&lt;/span&gt;(&lt;span dir="ltr"&gt;m&lt;/span&gt;.&lt;span dir="ltr"&gt;onPressed&lt;/span&gt;))
+}&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;It’s not an alien concept – many Go libraries use a similar approach for the configuration options, for example. It’s a little bit different from original Dart’s one, but holds most of the desired properties:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;explicit building of widget tree&lt;/LI&gt;&lt;LI&gt;named “parameters.”&lt;/LI&gt;&lt;LI&gt;indentation showing “depth” of a widget in a tree&lt;/LI&gt;&lt;LI&gt;ability to specify handlers&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;I also like conventional Go’s &lt;code dir="ltr"&gt;New...()&lt;/code&gt; naming pattern. It clearly communicates that it’s a function and it creates a new object. So much easier to explain to newcomers than explaining constructors: &lt;em dir="ltr"&gt;“it’s a function with the same name as a class, but you won’t find this function, because it’s special, and you have no way to easily tell constructor from a normal function just by looking at it”&lt;/em&gt;.&lt;/p&gt;&lt;p&gt;Anyway, from all the options I explored, the last two options are probably the most appropriate ones.&lt;/p&gt;&lt;h3&gt;Final version&lt;/h3&gt;&lt;p&gt;Now, assembling all pieces together, that’s how I would say Flutter’s “hello, world” app  looks like:&lt;/p&gt;&lt;p&gt;main.go&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;package&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;hello&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;import&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"github.com/flutter/flutter"&lt;/span&gt;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;func&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;() {
+    &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;Run&lt;/span&gt;(&lt;span dir="ltr"&gt;NewMyApp&lt;/span&gt;())
+}&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;app.go:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;package&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;hello&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;import&lt;/span&gt;&lt;/span&gt; . &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"github.com/flutter/flutter"&lt;/span&gt;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// MyApp is our top application widget.&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;MyApp&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt;&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;Core&lt;/span&gt;
+    &lt;span dir="ltr"&gt;homePage&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;MyHomePage&lt;/span&gt;
+}
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// NewMyApp instantiates a new MyApp widget&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;func&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;NewMyApp&lt;/span&gt;() &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;MyApp&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;app&lt;/span&gt; &lt;span dir="ltr"&gt;:=&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;MyApp&lt;/span&gt;{}
+    &lt;span dir="ltr"&gt;app&lt;/span&gt;.&lt;span dir="ltr"&gt;homePage&lt;/span&gt; = &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;MyHomePage&lt;/span&gt;{}
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;return&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;app&lt;/span&gt;
+}
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// Build renders the MyApp widget. Implements Widget interface.&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;func&lt;/span&gt;&lt;/span&gt; (&lt;span dir="ltr"&gt;m&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;MyApp&lt;/span&gt;) &lt;span dir="ltr"&gt;Build&lt;/span&gt;(&lt;span dir="ltr"&gt;ctx&lt;/span&gt; &lt;span dir="ltr"&gt;BuildContext&lt;/span&gt;) &lt;span dir="ltr"&gt;Widget&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;return&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;m&lt;/span&gt;.&lt;span dir="ltr"&gt;homePage&lt;/span&gt;
+}&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;home_page.go:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="go" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;package&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;hello&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;import&lt;/span&gt;&lt;/span&gt; (
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"fmt"&lt;/span&gt;&lt;/span&gt;
+    . &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"github.com/flutter/flutter"&lt;/span&gt;&lt;/span&gt;
+)
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// MyHomePage is a home page widget.&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;MyHomePage&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt;&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;Core&lt;/span&gt;
+    &lt;span dir="ltr"&gt;counter&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt;&lt;/span&gt;
+}
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// Build renders the MyHomePage widget. Implements Widget interface.&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;func&lt;/span&gt;&lt;/span&gt; (&lt;span dir="ltr"&gt;m&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;MyHomePage&lt;/span&gt;) &lt;span dir="ltr"&gt;Build&lt;/span&gt;(&lt;span dir="ltr"&gt;ctx&lt;/span&gt; &lt;span dir="ltr"&gt;BuildContext&lt;/span&gt;) &lt;span dir="ltr"&gt;Widget&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;return&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;NewScaffold&lt;/span&gt;(&lt;span dir="ltr"&gt;ScaffoldParams&lt;/span&gt;{
+        &lt;span dir="ltr"&gt;AppBar&lt;/span&gt;: &lt;span dir="ltr"&gt;NewAppBar&lt;/span&gt;(&lt;span dir="ltr"&gt;AppBarParams&lt;/span&gt;{
+            &lt;span dir="ltr"&gt;Title&lt;/span&gt;: &lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;TextParams&lt;/span&gt;{
+                &lt;span dir="ltr"&gt;Text&lt;/span&gt;: &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"My Home Page"&lt;/span&gt;&lt;/span&gt;,
+            }),
+        }),
+        &lt;span dir="ltr"&gt;Body&lt;/span&gt;: &lt;span dir="ltr"&gt;NewCenter&lt;/span&gt;(&lt;span dir="ltr"&gt;CenterParams&lt;/span&gt;{
+            &lt;span dir="ltr"&gt;Child&lt;/span&gt;: &lt;span dir="ltr"&gt;NewColumn&lt;/span&gt;(&lt;span dir="ltr"&gt;ColumnParams&lt;/span&gt;{
+                &lt;span dir="ltr"&gt;MainAxisAlignment&lt;/span&gt;: &lt;span dir="ltr"&gt;MainAxisAlignment&lt;/span&gt;.&lt;span dir="ltr"&gt;center&lt;/span&gt;,
+                &lt;span dir="ltr"&gt;Children&lt;/span&gt;: []&lt;span dir="ltr"&gt;Widget&lt;/span&gt;{
+                    &lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;TextParams&lt;/span&gt;{
+                        &lt;span dir="ltr"&gt;Text&lt;/span&gt;: &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"You have pushed the button this many times:"&lt;/span&gt;&lt;/span&gt;,
+                    }),
+                    &lt;span dir="ltr"&gt;Text&lt;/span&gt;(&lt;span dir="ltr"&gt;TextParams&lt;/span&gt;{
+                        &lt;span dir="ltr"&gt;Text&lt;/span&gt;:  &lt;span dir="ltr"&gt;fmt&lt;/span&gt;.&lt;span dir="ltr"&gt;Sprintf&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"%d"&lt;/span&gt;&lt;/span&gt;, &lt;span dir="ltr"&gt;m&lt;/span&gt;.&lt;span dir="ltr"&gt;counter&lt;/span&gt;),
+                        &lt;span dir="ltr"&gt;Style&lt;/span&gt;: &lt;span dir="ltr"&gt;ctx&lt;/span&gt;.&lt;span dir="ltr"&gt;textTheme&lt;/span&gt;.&lt;span dir="ltr"&gt;display1&lt;/span&gt;,
+                    }),
+                },
+            }),
+        }),
+        &lt;span dir="ltr"&gt;FloatingActionButton&lt;/span&gt;: &lt;span dir="ltr"&gt;NewFloatingActionButton&lt;/span&gt;(
+            &lt;span dir="ltr"&gt;FloatingActionButtonParameters&lt;/span&gt;{
+                &lt;span dir="ltr"&gt;OnPressed&lt;/span&gt;: &lt;span dir="ltr"&gt;m&lt;/span&gt;.&lt;span dir="ltr"&gt;incrementCounter&lt;/span&gt;,
+                &lt;span dir="ltr"&gt;Tooltip&lt;/span&gt;:   &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"Increment"&lt;/span&gt;&lt;/span&gt;,
+                &lt;span dir="ltr"&gt;Child&lt;/span&gt;: &lt;span dir="ltr"&gt;NewIcon&lt;/span&gt;(&lt;span dir="ltr"&gt;IconParams&lt;/span&gt;{
+                    &lt;span dir="ltr"&gt;Icon&lt;/span&gt;: &lt;span dir="ltr"&gt;Icons&lt;/span&gt;.&lt;span dir="ltr"&gt;add&lt;/span&gt;,
+                }),
+            },
+        ),
+    })
+}
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// incrementCounter increments app's counter by one.&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;func&lt;/span&gt;&lt;/span&gt; (&lt;span dir="ltr"&gt;m&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;MyHomePage&lt;/span&gt;) &lt;span dir="ltr"&gt;incrementCounter&lt;/span&gt;() {
+    &lt;span dir="ltr"&gt;m&lt;/span&gt;.&lt;span dir="ltr"&gt;counter&lt;/span&gt;&lt;span dir="ltr"&gt;++&lt;/span&gt;
+    &lt;span dir="ltr"&gt;flutter&lt;/span&gt;.&lt;span dir="ltr"&gt;Rerender&lt;/span&gt;(&lt;span dir="ltr"&gt;m&lt;/span&gt;)
+}&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;I actually quite like it.&lt;/p&gt;&lt;h1&gt;Conclusions&lt;/h1&gt;&lt;h4&gt;Similarity with Vecty&lt;/h4&gt;&lt;p dir="ltr"&gt;I could not help but notice how similar my final result to what &lt;a href="https://github.com/gopherjs/vecty" dir="ltr"&gt;Vecty&lt;/a&gt; framework provides. Basically, the general design is almost the same, it’s just Vecty outputs into DOM/CSS, while Flutter goes deeper into fully-fledged native rendering layers for providing crazy smooth 120fps experience with beautiful widgets (and solves a bunch of other problems). I think Vecty design is exemplary here, and no wonder my result ended up being a “Vecty adaptation for Flutter” :)&lt;/p&gt;&lt;h4&gt;Understanding Flutter’s design better&lt;/h4&gt;&lt;p&gt;This thought experiment has been interesting by itself – not every day you have to write (and explore!) code for the library/framework that has never been written. But it also helped me to dissect Flutter’s design a little bit deeper, read some technical docs, and uncover layers of hidden magic behind Flutter.&lt;/p&gt;&lt;h4&gt;Go’s shortcomings&lt;/h4&gt;&lt;p dir="ltr"&gt;My verdict to the question “&lt;strong dir="ltr"&gt;Can Flutter be written in Go?”&lt;/strong&gt; is definitely &lt;strong dir="ltr"&gt;yes&lt;/strong&gt;, but I’m biased, not aware of many design constraints and this question has no right answer anyway. What I was more interested in is to explore where Go do or doesn’t fail to provide the same experience as a Dart in Flutter.&lt;/p&gt;&lt;p dir="ltr"&gt;This thought experiment demonstrated that the &lt;strong dir="ltr"&gt;major issue Go has is purely syntactical&lt;/strong&gt;. Inability to call a function and pass either named parameters or untyped literals made it a bit harder and verbose to achieve clean and well-structured DSL-like widget tree creation. There are actually &lt;a href="https://github.com/golang/go/issues/12296" dir="ltr"&gt;Go proposals to add named parameters&lt;/a&gt; in a future Go versions, and it’s probably a backwards-compatible change. Having named parameters would definitely help for UI frameworks in Go, but it also introduces yet another thing to learn, yet another choice to make on each function definition or invocation, so the cumulative benefit is unclear.&lt;/p&gt;&lt;p&gt;There obviously were no issues with the absence of user-defined generics in Go or lack of exceptions. I would be happy to hear about another way to achieve cleaner and more readable Go implementation of Flutter with generics – I’m genuinely curious how it would help here. Feel free to post your thoughts and code in comments.&lt;/p&gt;&lt;h4&gt;Thoughts about Flutter future&lt;/h4&gt;&lt;p dir="ltr"&gt;My final thoughts are that Flutter is unspeakably awesome despite all shortcomings I ranted in this post today. The “awesomeness/meh” ratio is surprisingly high in Flutter and Dart is actually quite easy to learn (if you know other programming languages). Taking into account web pedigree of Dart, I dream about a day, when every browser ships with a fast and optimized Dart VM inside and Flutter can natively serve as a framework for web apps as well (keeping an eye on &lt;a href="https://medium.com/flutter-io/hummingbird-building-flutter-for-the-web-e687c2a023a8" dir="ltr"&gt;HummingBird&lt;/a&gt; project, but native browser support would be better anyway).&lt;/p&gt;&lt;p&gt;Amount of incredible work done to make Flutter reality is just insane. It’s the project of a quality you dream of and seems to have a great and growing community. At least, the number of extremely well-prepared tutorials is staggering, and I hope to contribute to this awesome project one day.&lt;/p&gt;&lt;p&gt;To me, it’s definitely a game changer, and I’m committed to learn it to its full extent and  be able to make great mobile apps every now and then. I encourage you to try Flutter even if you never thought you might be developing a mobile app – it’s really a breath of fresh air.&lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 20:31:22 -0500</pubDate></item><item><title>Robust-first computing: Demon Horde Sort</title><link>https://www.youtube.com/watch?v=lbgzXndaNKk</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/fadwit/robust_first_computing_demon_horde_sort"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 20:31:16 -0500</pubDate></item><item><title>Ozcor language tries to use records for everything</title><link>https://lobste.rs/s/tug01e</link><description>&lt;p&gt;Oczor uses records instead of all these entities&lt;/p&gt;&lt;h1&gt;Example of generated JavaScript code&lt;/h1&gt;&lt;table dir="ltr"&gt; 
 &lt;thead dir="ltr"&gt;&lt;tr dir="ltr"&gt;&lt;th dir="ltr"&gt;Oczor&lt;/th&gt;&lt;th dir="ltr"&gt;JavaScript&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;
 &lt;tbody dir="ltr"&gt; &lt;tr dir="ltr"&gt; &lt;td dir="ltr"&gt;
 &lt;div class="highlight highlight-source-haskell" dir="ltr"&gt;&lt;pre dir="ltr"&gt;x1 &lt;span class="pl-k" dir="ltr"&gt;=&lt;/span&gt; &lt;span class="pl-c1" dir="ltr"&gt;1&lt;/span&gt;
@@ -1539,18 +2008,7 @@ compiler&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;flate2-zlib&lt;/code&gt; - en
 &lt;/p&gt;&lt;p&gt;There will be a nominal charge of £5 per person.&lt;/p&gt;&lt;p&gt;Participants should bring:&lt;/p&gt;&lt;h4&gt;Heterogeneous embedded hardware example walk through&lt;/h4&gt;&lt;p&gt;A walk through a practical heterogeneous application and its development, based around the combination of a microcontroller and an FPGA along with mixed tooling.&lt;/p&gt;&lt;p dir="ltr"&gt;Run by: &lt;a href="http://oshug.org/event/oshcamp2019#AlanWood" dir="ltr"&gt;AlanWood&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;NOTE:&lt;/strong&gt;
  
   &lt;/p&gt;&lt;LI&gt;There are &lt;u dir="ltr"&gt;separate&lt;/u&gt; tickets for Saturday and Sunday.&lt;/LI&gt;&lt;LI&gt;A light lunch and refreshments will be provided each day.&lt;/LI&gt;&lt;LI&gt;Delegates will receive an RC2014 Micro upon registration on the Saturday!&lt;/LI&gt;&lt;LI&gt;Please aim to arrive between 09:00 and 09:15 on the Saturday as the event will start at 09:20 prompt.&lt;/LI&gt;&lt;p&gt;&lt;strong&gt;&lt;i&gt;With thanks to sponsors:&lt;/i&gt;&lt;/strong&gt;&lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 18:53:28 -0500</pubDate></item><item><title>Dear User</title><link>https://lobste.rs/s/mzrccf</link><description>&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt; ... I guess this is goodbye.&lt;/b&gt; You've threatened to leave so many times now that I am personally amazed that I am the one who have to take this last step, but someone have to at this point. I can't count the number of times you've said you'd stop using the thing I make on my free time, for free, for you to use, unless I catered directly to your needs.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;You've told me that I am not pulling my weight.&lt;/b&gt; That the things I make, on my free time, for free, for you to use, are not up to snuff - they don't meet the requirements you have set. The standards you dictate are not level with my results. When I look behind me, all I see in term of dead weight is you.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;Over and over, you tell me I should manage my time and effort better&lt;/b&gt; - that me "reinventing the wheel" or "doing another useless feature" is pointless compared to the critical needs you have. The time and effort it takes for me to dig through your frivolous, made up bug reports, emails, posts on social media etc, is time that very realistically is taken from the thing I make on my free time, for free, for you to use. I keep wondering why you think this saves me time somehow?&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;On the other hand I am amazed by your passion&lt;/b&gt; - you're still here. Even though you keep telling me or talking to others about me, that I am incompetent, unskilled and idiotic, you still use the thing I make on my free time, for free, for you to use. I'd be pleased if it weren't for the fact that my competence also hinges on my belief in it to realize those projects - and let's be frank, you are not helping in that regard.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;That is a thing I envy in you, your confidence in your own skills.&lt;/b&gt; Especially since you've never shown them. You can happily use the thing I make, on my free time, for free, for you to use, then angrily tell me how bad it is - but when I ask you to help, even in such a small way as explain exactly whats wrong with it so I can fix it, you refuse. You don't have time to contribute, to take part and it makes me think why I don't emulate that confidence in regards to my own time, I guess that is what this is in a way.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;If there is something I will miss from this,&lt;/b&gt; what we had, it is that. Your sense of self-worth. What else can you call it when you angrily tell me that your contribution to this thing I make, on my own free time, for free, for you to use, is your mere presence? Your usage of that thing. That you sauntered in and consumed the thing I make, is somehow payment enough yet I can never quite remember when I agreed to be your servant, sales clerk or support channel?&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;We know each other though, don't we?&lt;/b&gt; For example I know that you at this point is writing some scathing reply about my skin and how its too thin. That a prerequisite for me spending my own free time, for free, doing something you use, was some sort of rhino like hide that could take the abuse. Had I know that my own interests came with a volley of buckshot at random intervals I may have reconsidered them, taken up macramé instead. I wonder if rhino's have these same issues? Hunters telling their felled carcass to not be so damn thin skinned as if that, and not the bullets, was the core reason why the rhino just laid down and quit.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;I also know that you may claim that you where JUST on the cusp of becoming a contributor&lt;/b&gt; after all this time and me driving you away is what made you change your mind. I wish I could believe that. I also wish I could believe that even if, against all evidence, you would become part of the community of the thing I make on my free time, for free, for you to use, you would somehow be better at that than you where a consumer of the creation but I fear I can't be that naive. You've taken any childlike naivete I may have had a long time ago.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;Please... please don't though.&lt;/b&gt; Please don't look up "ableism" on wikipedia and try to fling it in my face. That the interest I have, that I have done my entire life and therefor cultivated into a skill somehow behooves me to invest it into your needs. Fancy words except creative ways telling me I am shit have never been your thing.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;"... then you'll lose me!"&lt;/b&gt; You've said over and over as an emotional extortion when I don't spring to action at any whim and fancy you may have -
-I guess this letter is me answering that question, after all these years:&lt;/p&gt;&lt;p&gt;"Would you leaving be a loss?"&lt;/p&gt;&lt;p&gt;"No"&lt;/p&gt;&lt;p&gt;&lt;i&gt;Part 1 of several posts of the difference between Users and Community Members in Free and Libre Software &lt;/i&gt;&lt;/p&gt;&lt;p&gt;&lt;i&gt;This post was inspired by Drew DeVaults Drive to Blog on Fosstodon &amp;lt;3 Drew &lt;/i&gt;&lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 17:08:41 -0500</pubDate></item><item><title>Firefox Monitor: see if you’ve been part of a data breach</title><link>https://lobste.rs/s/qvfcog</link><description>&lt;h2&gt;
-                  Sign up for breach monitoring with a Firefox Account.
-              &lt;/h2&gt;&lt;h3&gt;Stay alert to new breaches&lt;/h3&gt;&lt;h4&gt;If your information surfaces in a new data breach, we’ll send you an alert.&lt;/h4&gt;&lt;h3&gt;Monitor several emails&lt;/h3&gt;&lt;h4&gt;Get ongoing breach monitoring for multiple email addresses.&lt;/h4&gt;&lt;h3&gt;Protect your online privacy&lt;/h3&gt;&lt;h4&gt;Find out what you need to do to keep your data safe from cyber criminals.&lt;/h4&gt;&lt;div dir="ltr"&gt;
-                    &lt;button data-event-category="Sign Up Button" data-entrypoint="fx-monitor-sign-up-for-alerts" data-flow-id="a8af9bd40cceaf0f025541af54f4a108788c73f0c22cc598a6ec65ab357de213" data-flow-begin-time="1559760831687" dir="ltr"&gt;
-                      Sign up for Alerts
-                    &lt;/button&gt;
-                            &lt;/div&gt;&lt;div&gt;&lt;span&gt;
-                              Firefox browser not required for a Firefox Account. You may receive info about Mozilla services.
-                            &lt;/span&gt;&lt;/div&gt;&lt;div dir="ltr"&gt;
-                  &lt;p dir="ltr"&gt;Have an account?&lt;button data-entrypoint="fx-monitor-log-in-link" data-flow-id="75a426d83937b9690b0ee6a9ae9056cf52d1623c95b7b5c333fdcd42d89e820b" data-flow-begin-time="1559760831747" data-event-category="Log In Link" dir="ltr"&gt;Log in
-                  &lt;/button&gt;&lt;/p&gt;
-                &lt;/div&gt;</description><pubDate>Wed, 05 Jun 2019 12:53:59 -0500</pubDate></item><item><title>Small World with High Risks: A Study of Security Threats in the npm Ecosystem</title><link>https://arxiv.org/pdf/1902.09217.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/u9wnvp/small_world_with_high_risks_study"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 12:17:16 -0500</pubDate></item><item><title>Infrequently Asked Questions in comp.lang.c (Parody)</title><link>https://lobste.rs/s/en37pp</link><description>&lt;h4 dir="ltr"&gt;Meta: [&lt;a href="http://www.seebs.net/faqs/c-iaq-a.html#meta" dir="ltr"&gt;a&lt;/a&gt;]&lt;/h4&gt;&lt;p dir="ltr"&gt;The HTML version of this list is now considered the master version;
+I guess this letter is me answering that question, after all these years:&lt;/p&gt;&lt;p&gt;"Would you leaving be a loss?"&lt;/p&gt;&lt;p&gt;"No"&lt;/p&gt;&lt;p&gt;&lt;i&gt;Part 1 of several posts of the difference between Users and Community Members in Free and Libre Software &lt;/i&gt;&lt;/p&gt;&lt;p&gt;&lt;i&gt;This post was inspired by Drew DeVaults Drive to Blog on Fosstodon &amp;lt;3 Drew &lt;/i&gt;&lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 17:08:41 -0500</pubDate></item><item><title>Infrequently Asked Questions in comp.lang.c (Parody)</title><link>https://lobste.rs/s/en37pp</link><description>&lt;h4 dir="ltr"&gt;Meta: [&lt;a href="http://www.seebs.net/faqs/c-iaq-a.html#meta" dir="ltr"&gt;a&lt;/a&gt;]&lt;/h4&gt;&lt;p dir="ltr"&gt;The HTML version of this list is now considered the master version;
 		the text version may be updated occasionally, but is now obsolete.
 		Additionally, there are now accompanying &lt;a href="http://www.seebs.net/faqs/c-iaq-a.html#meta" dir="ltr"&gt;annotations&lt;/a&gt; for some of the material. (Eventually, for all of the material.)
 		Annotations are denoted by a bracketed letter a, or occasionally
@@ -2219,787 +2677,15 @@ sub pascal;			pascal();
 		an excellent game. Some of the mistakes may look similar to things
 		warned against in &lt;cite dir="ltr"&gt;C Traps and Pitfalls&lt;/cite&gt;. And, of course, if Dennis Ritchie hadn't written C, these jokes
 		would be much harder to understand. &lt;/p&gt;&lt;p&gt;Several people have contributed answers or questions, but I have
-		lost the names in the mists of time. &lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 13:54:56 -0500</pubDate></item><item><title>Xz format inadequate for long-term archiving</title><link>https://lobste.rs/s/l5nsle</link><description>&lt;h2&gt;Abstract&lt;/h2&gt;&lt;p dir="ltr"&gt;
-One of the challenges of digital preservation is the evaluation of data
-formats. It is important to choose well-designed data formats for
-long-term archiving.
-
-This article describes the reasons why the xz compressed data format is
-inadequate for long-term archiving and
-&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#fragmented" dir="ltr"&gt;inadvisable&lt;/a&gt; for data sharing and for free
-software distribution.
-
-The relevant weaknesses and design errors in the xz format are analyzed
-and, where applicable, compared with the corresponding behavior of the
-bzip2, gzip and lzip formats.
-
-Key findings include: (1) safe interoperability among xz implementations
-is not guaranteed; (2) xz's extensibility is unreasonable and
-problematic; (3) xz is vulnerable to unprotected flags and length
-fields; (4) LZMA2 is &lt;a href="http://lzip.nongnu.org/xz_inadequate.html#glossary" dir="ltr"&gt;unsafe&lt;/a&gt; and less efficient
-than the original LZMA; (5) xz includes useless features that increase
-the number of false positives for corruption; (6) xz shows inconsistent
-behavior with respect to trailing data; (7) error detection in xz is
-several times less accurate than in bzip2, gzip and lzip.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-&lt;b dir="ltr"&gt;Disclosure statement&lt;/b&gt;: The author is also author of the lzip format.
-&lt;/p&gt;&lt;h2&gt;1 Introduction&lt;/h2&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
-There are two ways of constructing a software design: One way is to make
-it so simple that there are obviously no deficiencies and the other way
-is to make it so complicated that there are no obvious deficiencies. The
-first method is far more difficult.&lt;br dir="ltr"&gt;
--- C.A.R. Hoare
-&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
-Perfection is reached, not when there is no longer anything to add, but
-when there is no longer anything to take away.&lt;br dir="ltr"&gt;
--- Antoine de Saint-Exupery
-&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
-Both the xz compressed data format and its predecessor lzma-alone have
-serious design flaws. But while lzma-alone is a toy format lacking
-fundamental features, xz is a complex container format full of
-contradictions. For example, xz tries to appear as a very safe format by
-offering &lt;a href="http://lzip.nongnu.org/xz_inadequate.html#glossary" dir="ltr"&gt;overkill&lt;/a&gt; check sequences like SHA-256
-but, at the same time it &lt;a href="http://lzip.nongnu.org/xz_inadequate.html#unprot_len" dir="ltr"&gt;fails to protect&lt;/a&gt; the
-length fields needed to decompress the data in the first place. These
-defects make xz inadequate for long-term archiving and reduce its value
-as a general-purpose compressed data format.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-This article analyzes the &lt;a href="http://lzip.nongnu.org/xz_inadequate.html#refXz_format" dir="ltr"&gt;xz compressed data
-format&lt;/a&gt;, what is to mean the way bits are arranged in xz compressed
-files and the consequences of such arrangement. This article is about
-formats, not programs. In particular this article is not about bugs in
-any compression tool. The fact that the xz reference tool (xz-utils) has
-had more bugs than bzip2 and lzip combined is mainly a consequence of
-the complexity and bad design of the xz format. Also the uninformative
-error messages provided by the xz tool reflect the extreme difficulty of
-finding out what failed in case of corruption in a xz file.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-This article started with a series of posts to the debian-devel mailing
-list &lt;a href="http://lzip.nongnu.org/xz_inadequate.html#refDebian" dir="ltr"&gt;[Debian]&lt;/a&gt;, where it became clear that
-nobody had analyzed xz in any depth before adopting it in the Debian
-package format. The same unthinking adoption of xz seems to have
-happened in major free software projects, like GNU Coreutils and Linux.
-In my opinion, it is a mistake for any widely used project to become an
-early adopter of a new data format; it may cause a lot of trouble if any
-serious defect is later discovered in the format.
-&lt;/p&gt;&lt;h2&gt;2 The reasons why the xz format is inadequate for long-term archiving&lt;/h2&gt;&lt;h3 dir="ltr"&gt;&lt;a name="container" href="http://lzip.nongnu.org/xz_inadequate.html#container" dir="ltr"&gt;2.1&lt;/a&gt; Xz is a container format&lt;/h3&gt;&lt;p&gt;
-On Unix-like systems, where a tool is supposed to do one thing and do it
-well, compressed file formats are usually formed by the compressed data,
-preceded by a header containing the parameters needed for decompression,
-and followed by a trailer containing integrity information. Bzip2, gzip
-and lzip formats are designed this way, minimizing both overhead and
-false positives.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-On the contrary, xz is a container format which currently contains
-another container format (LZMA2), which in turn contains a mix of LZMA
-data and uncompressed data. In spite of implementing just one
-compression algorithm, xz already manages 3 levels of headers, which
-increases its &lt;a href="http://lzip.nongnu.org/xz_inadequate.html#glossary" dir="ltr"&gt;fragility&lt;/a&gt;. The xz format is not
-even fully documented. Section 3.2 of the xz format specification states
-that "the format of the filter-specific encoded data is out of scope of
-this document". The details about the &lt;a href="http://lzip.nongnu.org/xz_inadequate.html#refLZMA2_format" dir="ltr"&gt;[LZMA2
-format]&lt;/a&gt; described in the Wikipedia were deduced from the source code
-of the xz-embedded decompressor included in the Linux kernel.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-The xz format has more overhead than bzip2, gzip or lzip, most of it
-either not properly designed (e.g., unprotected headers) or plain
-useless (padding). In fact, a xz stream can contain such a large amount
-of overhead that the format designers deemed necessary to compress the
-overhead using &lt;a href="http://lzip.nongnu.org/xz_inadequate.html#vli" dir="ltr"&gt;unsafe methods&lt;/a&gt;.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-There is no reason to use a container format for a general-purpose
-compressor. The right way of implementing a new compression algorithm is
-to provide a &lt;a href="http://lzip.nongnu.org/xz_inadequate.html#extensibility" dir="ltr"&gt;version number&lt;/a&gt; in the header,
-and the right way of implementing binary filters is to write a
-preprocessor that applies the filter to the data before feeding them to
-the compressor. (See for example
-&lt;a href="http://www.cs.cmu.edu/~ckingsf/software/mince/" dir="ltr"&gt;mince&lt;/a&gt;).
-&lt;/p&gt;&lt;h3 dir="ltr"&gt;&lt;a name="fragmented" href="http://lzip.nongnu.org/xz_inadequate.html#fragmented" dir="ltr"&gt;2.2&lt;/a&gt; Xz is fragmented by
-design&lt;/h3&gt;&lt;p dir="ltr"&gt;
-Xz was designed as a fragmented format. Xz implementations may choose
-what subset of the format they support. In particular, integrity
-checking in xz offers multiple choices of check types, all of them
-optional except CRC32 which is recommended. (See
-&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#refXz_format" dir="ltr"&gt;[Xz format]&lt;/a&gt;, section 2.1.1.2 'Stream Flags'.
-See also &lt;a href="http://lzip.nongnu.org/xz_inadequate.html#refRFC2119" dir="ltr"&gt;[RFC 2119]&lt;/a&gt; for the definitions of
-'optional' and 'recommended'). Safe interoperability among xz
-implementations is not guaranteed. For example the xz-embedded
-decompressor does not support the optional check types. Other xz
-implementations may choose to not support integrity checking at all.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-The xz reference tool (xz-utils) ignores the recommendation of the xz
-format specification and uses by default an optional check type (CRC64)
-in the files it produces. This prevents decompressors that do not
-support the optional check types from verifying the integrity of the
-data. Using --check=crc32 when creating the file makes integrity
-checking work on the xz-embedded decompressor, but as CRC32 is just
-recommended, it does not guarantee that integrity checking will work on
-all xz compliant decompressors. Distributing software in xz format can
-only be guaranteed to be safe if the distributor controls the
-decompressor run by the user (or can force the use of external means of
-integrity checking). Error detection in the xz format is broken;
-depending on how the file was created and on what decompressor is
-available, the integrity check in xz is sometimes performed and
-sometimes not. The latter is usually the case for the tarballs released
-in xz format by GNU and Linux when they are decompressed with the
-xz-embedded decompressor (see the third xz test in
-&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#refBenchmark" dir="ltr"&gt;[benchmark]&lt;/a&gt;).
-&lt;/p&gt;&lt;p&gt;
-Fragmentation (subformat proliferation) hinders interoperability and
-complicates the management of large archives. The lack of guaranteed
-integrity checking increases the probability of undetected corruption.
-Bzip2, gzip and lzip are free from these defects; any decompressor can
-decompress and verify the integrity of any file in the corresponding
-format.
-&lt;/p&gt;&lt;h3 dir="ltr"&gt;&lt;a name="unreasonable" href="http://lzip.nongnu.org/xz_inadequate.html#unreasonable" dir="ltr"&gt;2.3&lt;/a&gt; Xz is
-unreasonably extensible&lt;/h3&gt;&lt;p&gt;
-The design of the xz format is based on two false ideas; that better
-compression algorithms can be mass-produced like cars in a factory, and
-that it is practical to embed all these algorithms in one format. Note,
-for example, that some xz implementations already do not even fully
-support integrity checking.
-&lt;/p&gt;&lt;p&gt;
-Xz has room for 2^63 filters, which can then be combined to make an even
-larger number of algorithms. Xz reserves less than 0.8% of filter IDs
-for custom filters, but even this small range provides about 8 million
-custom filter IDs for each human inhabitant on earth. There is not the
-slightest justification for such egregious level of extensibility. Every
-useless choice allowed by a format takes space and makes corruption both
-more probable and more difficult to recover from.
-&lt;/p&gt;&lt;p&gt;
-The basic ideas of compression algorithms were discovered early in the
-history of computer science. LZMA is based on ideas discovered in the
-1970s. Don't expect an algorithm much better than LZMA to appear anytime
-soon, much less several of them in a row.
-&lt;/p&gt;&lt;p&gt;
-In 2008 one of the designers of xz (Lasse Collin) warned me that lzip
-would become stuck with LZMA while others moved to LZMA2, LZMA3, LZMH,
-and other algorithms. Now xz-utils is usually unable to match the
-compression ratio of lzip because LZMA2 has more overhead than LZMA and,
-as expected, no new algorithms have been added to xz-utils.
-&lt;/p&gt;&lt;h3 dir="ltr"&gt;&lt;a name="extensibility" href="http://lzip.nongnu.org/xz_inadequate.html#extensibility" dir="ltr"&gt;2.4&lt;/a&gt; Xz's
-extensibility is poorly designed&lt;/h3&gt;&lt;p&gt;
-The xz format lacks a version number field. The only reliable way of
-knowing if a given version of a xz decompressor can decompress a given
-file is by trial and error. The 'file' utility does not provide any
-help (note that no version information is shown for xz):
-&lt;/p&gt;&lt;PRE&gt;$ file COPYING.*
-COPYING.lz: lzip compressed data, version: 1
-COPYING.xz: XZ compressed data
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-Xz-utils can report the minimum version of xz-utils required to
-decompress a given file, but it must decode each block header in the
-file to find it out, and only can report older versions of xz-utils. If
-a newer version of xz-utils is required, it can't be known which one.
-The report is also useless to know what version of other decompressors
-(for example 7-zip) could decompress the file. Note that the version
-reported may be unable to decompress the file if xz-utils was built
-&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#fragmented" dir="ltr"&gt;without support&lt;/a&gt; for some feature present in
-the file.
-&lt;/p&gt;&lt;p&gt;
-The extensibility of bzip2 and lzip is better. Both formats provide a
-version field. Therefore it is trivial for them to seamlessly and
-reliably incorporate a new compression algorithm while making clear what
-version of the tool is required to decompress a given file;
-tool_version&amp;nbsp;&amp;gt;=&amp;nbsp;file_version. If an algorithm much better than
-LZMA is found, a version 2 lzip format (perfectly fit to the new
-algorithm) can be designed, along with a version 2 lzip tool able to
-decompress the old and new formats transparently. Bzip2 is already a
-"version 2" format. The reason why bzip2 does not decompress bzip files
-is that the original bzip format was abandoned because of problems with
-software patents.
-&lt;/p&gt;&lt;p&gt;
-The extensibility of gzip is obsolete mainly because of the 32-bit
-uncompressed size (ISIZE) field.
-&lt;/p&gt;&lt;h3 dir="ltr"&gt;&lt;a name="unprot_len" href="http://lzip.nongnu.org/xz_inadequate.html#unprot_len" dir="ltr"&gt;2.5&lt;/a&gt; Xz fails to protect
-the length of variable size fields&lt;/h3&gt;&lt;p dir="ltr"&gt;
-According to &lt;a href="http://lzip.nongnu.org/xz_inadequate.html#refKoopman" dir="ltr"&gt;[Koopman]&lt;/a&gt; (p. 50), one of the
-"Seven Deadly Sins" (i.e., bad ideas) of CRC and checksum use is failing
-to protect a message length field. This causes vulnerabilities due to
-framing errors. Note that the effects of a framing error in a data
-stream are more serious than what Figure 1 suggests. Not only data at a
-random position are interpreted as the CRC. Whatever data that follow
-the bogus CRC will be interpreted as the beginning of the following
-field, preventing the successful decoding of any remaining data in the
-stream.
-&lt;/p&gt;&lt;img src="http://lzip.nongnu.org/corrupted_len.png" alt="Corruption of message length field" width="537" height="137"&gt;&lt;p align="center" dir="ltr"&gt;&lt;br&gt;
-Figure 1. Corruption of message length field.
-Source: &lt;a href="http://lzip.nongnu.org/xz_inadequate.html#refKoopman" dir="ltr"&gt;[Koopman]&lt;/a&gt;, p. 30.
-&lt;/p&gt;&lt;p&gt;
-Except the 'Backward Size' field in the stream footer, none of the many
-length fields in the xz format is protected by a check sequence of any
-kind. Not even a parity bit. All of them suffer from the framing
-vulnerability illustrated in the picture above. In particular every
-LZMA2 header contains one 16-bit unprotected length field. Some length
-fields in the xz format are of variable size themselves, adding a new
-failure mode to xz not found in the other three formats; double framing
-error.
-&lt;/p&gt;&lt;p&gt;
-Bzip2 is affected by this defect to a lesser extent; it contains two
-unprotected length fields in each block header. Gzip may be considered
-free from this defect because its only top-level unprotected length
-field (XLEN) can be validated using the LEN fields in the extra
-subfields. Lzip is free from this defect.
-&lt;/p&gt;&lt;p&gt;
-Optional fields are just as unsafe as unprotected length fields if the
-flag that indicates the presence of the optional field is itself
-unprotected. The result is the same; framing errors. Again, except the
-'Stream Flags' field, none of those flags in the xz format is protected
-by a check sequence. In particular the critically important 'Block
-Flags' field in block headers and bit 6 in the control byte of the
-numerous LZMA2 headers are not protected.
-&lt;/p&gt;&lt;p&gt;
-Bzip2 contains 16 unprotected flags for optional huffman bitmaps in each
-block header. Gzip just contains one byte with four unprotected flags
-for optional fields in its header. Lzip is free from optional fields.
-&lt;/p&gt;&lt;h3 dir="ltr"&gt;&lt;a name="vli" href="http://lzip.nongnu.org/xz_inadequate.html#vli" dir="ltr"&gt;2.6&lt;/a&gt; Xz uses variable-length integers
-unsafely&lt;/h3&gt;&lt;p dir="ltr"&gt;
-Xz stores many (potentially large) numbers using a variable-length
-representation terminated by a byte with the most significant bit (msb)
-cleared. In case of corruption, not only the value of the field may
-become incorrect, the size of the field may also change, causing a
-framing error in the following fields. Xz uses such variable-length
-integers to store the size of other fields. In case of corruption in the
-size field, both the position and the size of the target field may
-become incorrect, causing a double framing error. See for example
-&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#refXz_format" dir="ltr"&gt;[Xz format]&lt;/a&gt;, section 3.1.5 'Size of
-Properties' in 'List of Filter Flags'. Bzip2, gzip and lzip store all
-fields representing numbers in a safe fixed-length representation.
-&lt;/p&gt;&lt;p&gt;
-Xz features a monolithic index that is specially vulnerable to cascading
-framing errors. Some design errors of the xz index are:
-&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;
-The number of records is coded as an unprotected variable-length integer
-vulnerable to double framing error.
-&lt;/LI&gt;&lt;LI&gt;
-The size of the index is not stored anywhere. It must be calculated by
-decoding the whole index and can't be verified. ('Backward Size' stores
-the size of the index rounded up to the next multiple of four bytes, not
-the real size).
-&lt;/LI&gt;&lt;LI&gt;
-When reading from unseekable sources, it delays the verification of the
-block sizes until the end of the stream and requires a potentially huge
-amount of RAM (up to 16&amp;nbsp;GiB), unless such verification is made by
-hashing, in which case it can't be known what blocks failed the test.
-The safe and efficient way is to verify the sizes of each block as soon
-as it is processed, as gzip and lzip do.
-&lt;/LI&gt;&lt;LI&gt;
-The list of records is made of variable-length integers concatenated
-together. Regarding corruption it acts as one potentially very long
-unprotected variable-length integer. Just one bit flip in the msb of any
-byte causes the remaining records to be read incorrectly. It also causes
-the size of the index to be calculated incorrectly, losing the position
-of the CRC32 and the stream footer.
-&lt;/LI&gt;&lt;LI&gt;
-Each record stores the size (not the position) of the corresponding
-block, but xz's block headers do not provide an identification string
-that could validate the block size. Therefore, just one bit flip in any
-'Unpadded Size' field causes the positions of the remaining blocks to be
-calculated incorrectly. By contrast, lzip provides a distributed index
-where each member size is validated by the presence of the ID string in
-the corresponding member header. Neither the bzip2 format nor the gzip
-format do provide an index.
-&lt;/LI&gt;&lt;/OL&gt;&lt;h3 dir="ltr"&gt;&lt;a name="LZMA2" href="http://lzip.nongnu.org/xz_inadequate.html#LZMA2" dir="ltr"&gt;2.7&lt;/a&gt; LZMA2 is unsafe and less
-efficient than the original LZMA&lt;/h3&gt;&lt;p&gt;
-The xz-utils manual says that LZMA2 is an updated version of LZMA to fix
-some practical issues of LZMA. This wording suggests that LZMA2 is some
-sort of improved LZMA algorithm. (After all, the 'A' in LZMA stands for
-'algorithm'). But LZMA2 is a container format that divides LZMA data
-into chunks in an unsafe way. In practice, for compressible data, LZMA2
-is just LZMA with 0.015%-3% more overhead. The maximum compression ratio
-of LZMA is about 7089:1, but LZMA2 is limited to 6875:1 approximately
-(measured with 1 TB of data).
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-The &lt;a href="http://lzip.nongnu.org/xz_inadequate.html#refLZMA2_format" dir="ltr"&gt;[LZMA2 format]&lt;/a&gt; contains an
-unrestricted mix of LZMA packets and uncompressed data packets. Each
-packet starts with a header that is not protected by any check sequence
-in spite of containing the type and size of the following data.
-Therefore, every bit flip in a LZMA2 header causes either a
-&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#unprot_len" dir="ltr"&gt;framing error&lt;/a&gt; or a desynchronization of the
-decoder. In any case it is usually not possible to decode the remaining
-data in the block or even to know what failed. Compare this with
-&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#refDeflate" dir="ltr"&gt;[Deflate]&lt;/a&gt; which at least does protect the
-length field of its non-compressed blocks. (Deflate's compressed blocks
-do not have a length field).
-&lt;/p&gt;&lt;p&gt;
-Note that of the 3 levels of headers in a xz file (stream, block,
-LZMA2), the most numerous LZMA2 headers are the ones not protected by a
-check sequence. There is usually one stream header and one block header
-in a xz file, but there is at least one LZMA2 header for every
-64&amp;nbsp;KiB of LZMA2 data in the file. In extreme cases the LZMA2
-headers can make up to a 3% of the size of the file:
-&lt;/p&gt;&lt;PRE&gt;-rw-r--r-- 1 14208 Oct 21 17:26 100MBzeros.lz
--rw-r--r-- 1 14195 Oct 21 17:26 100MBzeros.lzma
--rw-r--r-- 1 14676 Oct 21 17:26 100MBzeros.xz
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-The files above were produced by lzip (.lz) and xz-utils (.lzma, .xz).
-The LZMA stream is identical in the .lz and .lzma files above; they just
-differ in the header and trailer. The .xz file is larger than the other
-two mainly because of the 50 LZMA2 headers it contains. LZMA2 headers
-make xz both more fragile and less efficient (see the xz tests in
-&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#refBenchmark" dir="ltr"&gt;[benchmark]&lt;/a&gt;). Additionally, corruption in the
-uncompressed packets of a LZMA2 stream can't be detected by the decoder,
-leaving the check sequence as the only way of detecting errors there.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-On the other hand, the original LZMA data stream provides
-&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#lzma_adc" dir="ltr"&gt;embedded error detection&lt;/a&gt;. Any distance larger
-than the dictionary size acts as a forbidden symbol, allowing the
-decoder to detect the approximate position of errors, and leaving very
-little work for the check sequence in the detection of errors.
-&lt;/p&gt;&lt;p&gt;
-LZMA2 could have been safer and more efficient if only its designers had
-copied the structure of Deflate; terminate compressed blocks with a
-marker, and protect the length of uncompressed blocks. This would have
-reduced the overhead, and therefore the number of false positives, in
-the files above by a factor of 25. For compressible files, that only
-need a header and a marker, the improvement is usually of 8 times less
-overhead per mebibyte of compressed size (about 500 times less overhead
-for a file of 64&amp;nbsp;MiB).
-&lt;/p&gt;&lt;p&gt;
-Section 5.3.1 of the xz format specification states that LZMA2 "improves
-support for multithreading", but in practice LZMA2 is not suitable for
-parallel decompression mainly for two reasons:
-&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;
-Only LZMA2 streams containing dictionary resets can be decompressed in
-parallel. But the positions of dictionary resets are not stored anywhere
-nor marked with any recognizable identification string. Therefore the
-LZMA2 headers must be decoded sequentially to find the dictionary resets
-(if any exists).
-&lt;/LI&gt;&lt;LI&gt;
-All the packets in a LZMA2 stream share a common check sequence. This
-means that the partial check sequences calculated for each substream
-must be combined to obtain the check sequence of the whole stream. But
-one of the currently supported check sequences (SHA256) can't be
-calculated by parts and must be calculated sequentially for the whole
-stream.
-&lt;/LI&gt;&lt;/OL&gt;&lt;h3 dir="ltr"&gt;&lt;a name="alignment" href="http://lzip.nongnu.org/xz_inadequate.html#alignment" dir="ltr"&gt;2.8&lt;/a&gt; The 4 byte alignment
-is unjustified&lt;/h3&gt;&lt;p dir="ltr"&gt;
-Xz is the only format of the four considered here whose parts are
-(arbitrarily) aligned to a multiple of four bytes. The size of a xz file
-must also be a multiple of four bytes for no reason. To achieve this, xz
-includes padding everywhere; after headers, blocks, the index, and the
-whole stream. The bad news is that if the (useless) padding is altered
-in any way, "the decoder &lt;a href="http://lzip.nongnu.org/xz_inadequate.html#misguided" dir="ltr"&gt;MUST indicate an
-error&lt;/a&gt;" according to the xz format specification.
-&lt;/p&gt;&lt;p&gt;
-Neither gzip nor lzip include any padding. Bzip2 includes a minimal
-amount of padding (at most 7 bits) at the end of the whole stream, but
-it ignores any corruption in the padding.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Xz justifies alignment as being perhaps able to increase speed and
-compression ratio (see &lt;a href="http://lzip.nongnu.org/xz_inadequate.html#refXz_format" dir="ltr"&gt;[Xz format]&lt;/a&gt;, section
-5.1 'Alignment'), but such increases can't happen because:
-&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;
-The only last filter in xz is LZMA2, whose output does not need any
-alignment.
-&lt;/LI&gt;&lt;LI&gt;
-The output of the non-last filters in the chain is not stored in the
-file. Therefore it can't be "later compressed with an external
-compression tool" as stated in the xz format specification.
-&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;
-One additional problem of the xz alignment is that four bytes are not
-enough; the IA64 filter has an alignment of 16 bytes. Alignment is a
-property of each filter that can only be managed by the archiver, not a
-property of the whole compressed stream. Even the xz format
-specification acknowledges that alignment of input data is the job of
-the archiver, not of the compressor.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-The conclusion is that the 4 byte alignment is a misfeature that wastes
-space, increases the number of false positives for corruption, and
-&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#burst" dir="ltr"&gt;worsens the burst error detection in the stream
-footer&lt;/a&gt; without producing any benefit at all.
-&lt;/p&gt;&lt;h3&gt;2.9 Trailing data&lt;/h3&gt;&lt;p dir="ltr"&gt;
-If you want to create a compressed file and then &lt;a href="http://www.nongnu.org/lzip/manual/lzip_manual.html#Trailing-data" dir="ltr"&gt;append
-some data&lt;/a&gt; to it, for example a cryptographically secure hash, xz
-won't allow you to do so. The xz format specification forbids the
-appending of data to a file, except what it defines as 'stream padding'.
-In addition to telling you what you can't do with your files, defining
-stream padding makes xz show inconsistent behavior with respect to
-trailing data. Xz accepts the addition of any multiple of 4 null bytes
-to a file. But if the number of null bytes appended is not a multiple of
-4, or if any of the bytes is non-null, then the decoder
-&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#misguided" dir="ltr"&gt;must indicate an error&lt;/a&gt;.
-&lt;/p&gt;&lt;p&gt;
-A format that reports as corrupt the only surviving copy of an important
-file just because cp had a glitch and appended some garbage at the end
-of the file is not well suited for long-term archiving. The worst thing
-is that the xz format specification does not offer any compliant way of
-ignoring such trailing data. Once a xz file gets any trailing data
-appended, it must be manually removed to make the file compliant again.
-&lt;/p&gt;&lt;p&gt;
-In a vain attempt to avoid such inconsistent behavior, xz-utils provides
-the option '--single-stream', which is just plain wrong for multi-stream
-files because it makes the decompressor ignore everything beyond the
-first stream, discarding any remaining valid streams and silently
-truncating the decompressed data:
-&lt;/p&gt;&lt;PRE&gt;cat file1.xz file2.xz file3.sig &amp;gt; file.xz
-xz -d file.xz                         # indicates an error
-xz -d --single-stream file.xz         # causes silent data loss
-xz -kd --single-stream file.xz        # causes silent truncation
-&lt;/PRE&gt;&lt;p&gt;
-The '--single-stream' option violates the xz format specification which
-requires the decoder to indicate an error if the stream padding does not
-meet its requirements. The xz format should provide a compliant way to
-ignore any trailing data after the last stream, just like bzip2, gzip
-and lzip do by default.
-&lt;/p&gt;&lt;h3&gt;2.10 Xz's error detection has low accuracy&lt;/h3&gt;&lt;p dir="ltr"&gt;
-"There can be safety tradeoffs with the addition of an error-detection
-scheme. As with almost all fault tolerance mechanisms, there is a
-tradeoff between availability and integrity. That is, techniques that
-increase integrity tend to reduce availability and vice versa. Employing
-error detection by adding a check sequence to a
-&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#glossary" dir="ltr"&gt;dataword&lt;/a&gt; increases integrity, but decreases
-availability. The decrease in availability happens through
-false-positive detections. These failures preclude the use of some data
-that otherwise would not have been rejected had it not been for the
-addition of error-detection coding".
-(&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#refKoopman" dir="ltr"&gt;[Koopman]&lt;/a&gt;, p. 33).
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-But the tradeoff between availability and integrity is different for
-data transmission than for data archiving. When transmitting data,
-usually the most important consideration is to avoid undetected errors
-(false negatives for corruption), because a retransmission can be
-requested if an error is detected. Archiving, on the other hand, usually
-implies that if a file is reported as corrupt, "retransmission" is not
-possible. Obtaining another copy of the file may be difficult or
-impossible. Therefore &lt;a href="http://lzip.nongnu.org/xz_inadequate.html#glossary" dir="ltr"&gt;accuracy&lt;/a&gt; (freedom from
-mistakes) in the detection of errors becomes the most important
-consideration.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Two error models have been used to measure the accuracy in the detection
-of errors. The first model consists of one or more random bit flips
-affecting just one byte in the compressed file. The second model
-consists of zeroed 512-byte blocks aligned to a 512-byte boundary,
-simulating a whole sector I/O error. Just one zeroed block per trial.
-The first model is considered the most important because bit flips
-happen even in the most expensive hardware &lt;a href="http://lzip.nongnu.org/xz_inadequate.html#refMSL" dir="ltr"&gt;[MSL]&lt;/a&gt;.
-&lt;/p&gt;&lt;p&gt;
-Verification of data integrity in compressed files is different from
-other cases (like Ethernet packets) because the data that can become
-corrupted are the compressed data, but the data that are verified (the
-dataword) are the decompressed data. Decompression can cause error
-multiplication; even a single-bit error in the compressed data may
-produce any random number of errors in the decompressed data, or even
-modify the size of the decompressed data.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Because of the error multiplication caused by decompression, the error
-model seen by the check sequence is one of unconstrained random data
-corruption. (Remember that the check sequence verifies the integrity of
-the decompressed data). This means that the choice of error-detection
-code (CRC or hash) is largely irrelevant, and that the probability of an
-error being undetected by the check sequence (Pudc) is
-1&amp;nbsp;/&amp;nbsp;(2^n) for a check sequence of n bits. (See
-&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#refKoopman" dir="ltr"&gt;[Koopman]&lt;/a&gt;, p. 5). Note that if some errors do
-not produce error multiplication, a CRC is then preferable to a hash of
-the same size because of the burst error detection capabilities of the
-CRC.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Decompression algorithms are usually able to detect some errors in the
-compressed data (for example a backreference to a point before the
-beginning of the data). Therefore, the total probability of an
-undetected error (Pud = false negative) is the product of the
-probability of the error being undetected by the decoder (Pudd) and the
-probability of the error being undetected by the check sequence (Pudc):
-&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#glossary" dir="ltr"&gt;Pud&lt;/a&gt;&amp;nbsp;=&amp;nbsp;Pudd&amp;nbsp;*&amp;nbsp;Pudc.
-&lt;/p&gt;&lt;p&gt;
-It is also possible that a small error in the compressed data does not
-alter at all the decompressed data. Therefore, for maximum availability,
-only the decompressed data should be tested for errors. Testing the
-compressed data beyond what is needed to perform the decompression
-increases the number of false positives much more than it can reduce the
-number of undetected errors.
-&lt;/p&gt;&lt;p&gt;
-Of course, error multiplication was not applied in the analysis of
-fields that are not compressed, for example 'Block Header'. Burst error
-detection was also considered for the 'Stream Flags' and 'Stream Footer'
-fields.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Trial decompressions were performed using the 'unzcrash' tool included
-in the
-&lt;a href="http://www.nongnu.org/lzip/lziprecover.html" dir="ltr"&gt;lziprecover&lt;/a&gt;
-package.
-&lt;/p&gt;&lt;p&gt;
-The following sections describe the places in the xz format where error
-detection suffers from low accuracy and explain the cause of the
-inaccuracy in each case.
-&lt;/p&gt;&lt;h4&gt;2.10.1 The 'Stream Flags' field&lt;/h4&gt;&lt;p&gt;
-A well-known property of CRCs is their ability to detect burst errors up
-to the size of the CRC itself. Using a CRC larger than the dataword is
-an error because a CRC just as large as the dataword equally detects all
-errors while it produces a lower number of false positives.
-&lt;/p&gt;&lt;p&gt;
-In spite of the mathematical property described above, the 16-bit
-'Stream Flags' field in the xz stream header is protected by a CRC32
-twice as large as the field itself, providing an unreliable error
-detection where 2 of every 3 reported errors is a false positive. The
-inaccuracy reaches 67%. CRC16 is a better choice from any point of view.
-It can still detect all errors in 'Stream Flags', but produces half the
-false positives as CRC32.
-&lt;/p&gt;&lt;p&gt;
-Note that a copy of the 'Stream Flags', also protected by a CRC32, is
-stored in the stream footer. With such amount of redundancy xz should be
-able to repair a fully corrupted 'Stream Flags'. Instead of this the
-format specifies that if one of the copies, or one of the CRCs, or the
-backward size in the stream footer gets any damage, the decoder must
-indicate an error. The result is that getting a false positive for
-corruption related to the 'Stream Flags' is 7 times more probable than
-getting real corruption in the 'Stream Flags' themselves.
-&lt;/p&gt;&lt;h4&gt;2.10.2 The 'Stream Footer' field&lt;/h4&gt;&lt;p&gt;
-The 'Stream Footer' field contains the rounded up size of the index
-field and a copy of the 'Stream Flags' field from the stream header,
-both protected by a CRC32. The inaccuracy of the error detection for
-this field reaches a 40%; 2 of every 5 reported errors is a false
-positive.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-The CRC32 in 'Stream Footer' provides a reduced burst error detection
-because it is stored at front instead of back of codeword. (See
-&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#refKoopman" dir="ltr"&gt;[Koopman]&lt;/a&gt;, p. C-20). Testing has found several
-undetected burst errors of 31 bits in this field, while a CRC32
-correctly placed would have detected all burst errors up to 32 bits. The
-reason adduced by the xz format specification for this misplacement is
-to keep the four-byte fields aligned to a multiple of four bytes, but
-&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#alignment" dir="ltr"&gt;the 4 byte alignment is unjustified&lt;/a&gt;.
-&lt;/p&gt;&lt;h4&gt;2.10.3 The 'Block Header' field&lt;/h4&gt;&lt;p dir="ltr"&gt;
-The 'Block Header' is of variable size. Therefore the inaccuracy of the
-error detection varies between 0.4% and 58%, being usually of a 58% (7
-of every 12 reported errors are false positives). As shown in the graph
-below, CRC16 would have been a more accurate choice for any size of
-'Block Header'. But inaccuracy is a minor problem compared with the
-&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#unprot_len" dir="ltr"&gt;lack of protection&lt;/a&gt; of the 'Block Header Size'
-and 'Block Flags' fields.
-&lt;/p&gt;&lt;img width="640" height="480" src="http://lzip.nongnu.org/header_crc_inaccuracy.png" alt="Block header CRC inaccuracy"&gt;&lt;p align="center" dir="ltr"&gt;&lt;br&gt;
-Figure 2. Inaccuracy of block header CRC for all possible header sizes.
-&lt;/p&gt;&lt;h4&gt;2.10.4 The 'Block Check' field&lt;/h4&gt;&lt;p&gt;
-Xz supports several types of check sequences (CS) for the decompressed
-data; none, CRC32, CRC64 and SHA-256. Each check sequence provides
-better accuracy than the next larger one up to a certain compressed
-size. For the single-byte error model, the inaccuracy for each
-compressed size and CS size is calculated by the following formula (all
-sizes in bytes):
-&lt;/p&gt;&lt;p&gt;
-Inaccuracy = ( compressed_size * Pudc + CS_size ) / ( compressed_size + CS_size )
-&lt;/p&gt;&lt;p&gt;
-Applying the formula above it results that CRC32 provides more accurate
-error detection than CRC64 up to a compressed size of about 16&amp;nbsp;GiB,
-and more accurate than SHA-256 up to 112&amp;nbsp;GiB. It should be noted
-that SHA-256 provides worse accuracy than CRC64 for all possible block
-sizes.
-&lt;/p&gt;&lt;img width="640" height="480" src="http://lzip.nongnu.org/data_crc_inaccuracy.png" alt="Block check inaccuracy"&gt;&lt;p align="center" dir="ltr"&gt;&lt;br&gt;
-Figure 3. Inaccuracy of block check up to 1&amp;nbsp;GB of compressed size.
-&lt;/p&gt;&lt;p&gt;
-For the zeroed-block error model, the inaccuracy curves are similar to
-the ones in figure 3, except that they have discontinuities because a
-false positive can be produced only if the last block is suitably
-aligned.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-The results above assume that the decoder does not detect any errors,
-but testing shows that, on large enough files, the
-&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#glossary" dir="ltr"&gt;Pudd&lt;/a&gt; of a pure LZMA decoder like the one in lzip
-is of about 2.52e-7 for the single-byte error model. More precisely,
-277.24 million trial decompressions on files ranging from 1&amp;nbsp;kB to
-217&amp;nbsp;MB of compressed size resulted in 70 errors undetected by the
-decoder (all of them detected by the CRC). This additional detection
-capability reduces the Pud by the same factor. (In fact the reduction of
-Pud is larger because 9 of the 70 errors didn't cause error
-multiplication; they produced just one wrong byte in the decompressed
-data, which is guaranteed to be detected by the CRC). The estimated Pud
-for lzip, based on these data, is of about
-2.52e-7&amp;nbsp;*&amp;nbsp;2.33e-10&amp;nbsp;=&amp;nbsp;5.88e-17.
-&lt;/p&gt;&lt;p&gt;
-For the zeroed-block error model, the additional detection capability of
-a pure LZMA decoder is probably much larger. A LZMA stream is a check
-sequence in itself, and large errors seem less probable to escape
-detection than small ones. In fact, the lzip decoder detected the error
-in all the 2 million trial decompressions run with a zeroed-block. The
-xz decoder can't achieve such performance because LZMA2 includes
-uncompressed packets, where the decoder can't detect any errors.
-&lt;/p&gt;&lt;p&gt;
-There is a good reason why bzip2, gzip, lzip and most other compressed
-formats use a 32-bit check sequence; it provides for an optimal
-detection of errors. Larger check sequences may (or may not) reduce the
-number of false negatives at the cost of always increasing the number of
-false positives. But significantly reducing the number of false
-negatives may be impossible if the number of false negatives is already
-insignificant, as is the case in bzip2, gzip and lzip files. On the
-other hand, the number of false positives increases linearly with the
-size of the check sequence. CRC64 doubles the number of false positives
-of CRC32, and SHA-256 produces 8 times more false positives than CRC32,
-decreasing the accuracy of the error detection instead of increasing it.
-&lt;/p&gt;&lt;p&gt;
-Increasing the probability of a false positive for corruption in the
-long-term storage of valuable data is a bad idea. This is why the lzip
-format, designed for long-term archiving, provides 3 factor integrity
-checking and the decompressor reports mismatches in each factor
-separately. This way if just one byte in one factor fails but the other
-two factors match the data, it probably means that the data are intact
-and the corruption just affects the mismatching check sequence. GNU gzip
-also reports mismatches in its 2 factors separately, but does not report
-the exact values, making it more difficult to tell real corruption from
-a false positive. Bzip2 reports separately its 2 levels of CRCs,
-allowing the detection of some false positives.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Being able to produce files without a check sequence for the
-decompressed data may help xz to rank higher on decompression
-benchmarks, but is a very bad idea for long-term archiving. The whole
-idea of supporting several check types is wrong. It
-&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#fragmented" dir="ltr"&gt;fragments the format&lt;/a&gt; and introduces a point of
-failure in the xz stream; if the corruption affects the stream flags, xz
-won't be able to verify the integrity of the data because the type and
-size of the check sequence are lost.
-&lt;/p&gt;&lt;h3 dir="ltr"&gt;&lt;a name="misguided" href="http://lzip.nongnu.org/xz_inadequate.html#misguided" dir="ltr"&gt;2.11&lt;/a&gt; Xz's error detection
-is misguided&lt;/h3&gt;&lt;p dir="ltr"&gt;
-Xz tries to detect errors in parts of the compressed file that do not
-affect decompression (for example in padding bytes), obviating the fact
-that nobody is interested in the integrity of the compressed file; it is
-the integrity of the decompressed data what matters. Note that the xz
-format specification sets more strict requirements for the integrity of
-the padding than for the integrity of the payload. The specification
-&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#fragmented" dir="ltr"&gt;does not guarantee&lt;/a&gt; that the integrity of the
-decompressed data will be verified, but it mandates that the
-decompression must be aborted as soon as a damaged padding byte is
-found. (See sections 2.2, 3.1.6, 3.3 and 4.4 of
-&lt;a href="http://lzip.nongnu.org/xz_inadequate.html#refXz_format" dir="ltr"&gt;[Xz format]&lt;/a&gt;). Xz goes so far as to "protect"
-padding bytes with a CRC32. This behavior of xz just causes unnecessary
-data loss.
-&lt;/p&gt;&lt;p&gt;
-Checking the integrity of the decompressed data is important because it
-not only guards against corruption in the compressed file, but also
-against memory errors, undetected bugs in the decompressor, etc.
-&lt;/p&gt;&lt;p&gt;
-The only reason to be concerned about the integrity of the compressed
-file itself is to be sure that it has not been modified or replaced with
-other file. But no amount of strictness in the decompressor can
-guarantee that a file has not been modified or replaced. Some other
-means must be used for this purpose, for example an external
-cryptographically secure hash of the file.
-&lt;/p&gt;&lt;h3&gt;2.12 Xz does not provide any data recovery means&lt;/h3&gt;&lt;p&gt;
-File corruption is an unlikely event. Being unable to restore a file
-because the backup copy is also damaged is even less likely. But
-unlikely events happen constantly to somebody somewhere. This is why
-tools like ddrescue, bzip2recover and lziprecover exist in the first
-place. Lziprecover defines itself as "a last line of defense for the
-case where the backups are also damaged".
-&lt;/p&gt;&lt;p&gt;
-The safer a format is, the easier it is to develop a capable recovery
-tool for it. Neither xz nor gzip do provide any recovery tool. Bzip2
-provides bzip2recover, which can help to manually assemble a correct
-file from the undamaged blocks of two or more copies. Lzip provides
-lziprecover, which can produce a correct file by merging the good parts
-of two or more damaged copies and can additionally repair slightly
-damaged files without the need of a backup copy.
-&lt;/p&gt;&lt;h2 dir="ltr"&gt;&lt;a name="why" href="http://lzip.nongnu.org/xz_inadequate.html#why" dir="ltr"&gt;3&lt;/a&gt; Then, why some free software
-projects use xz?&lt;/h2&gt;&lt;p dir="ltr"&gt;
-Because evaluating formats is difficult and most free software projects
-are not concerned about long-term archiving, or even about format
-quality. Therefore they tend to use the most advertised formats. Both
-lzma-alone and xz have gained some popularity in spite of their defects
-mainly because they are associated to popular projects like GNU
-Coreutils or the 7-zip archiver.
-(As far as I know, the main cause of the popularity of xz among
-GNU/Linux distributions was the very early adoption of &lt;a href="http://lists.gnu.org/archive/html/bug-coreutils/2007-10/msg00066.html" dir="ltr"&gt;lzma-alone&lt;/a&gt;
-and &lt;a href="http://lists.gnu.org/archive/html/bug-coreutils/2008-12/msg00215.html" dir="ltr"&gt;xz&lt;/a&gt;
-by GNU Coreutils when xz was still in alpha status).
-&lt;/p&gt;&lt;p&gt;
-This of course is sad because we software developers are among the few
-people who are able to understand the strengths and weaknesses of
-formats. We have a moral duty to choose wisely the formats we use
-because everybody else will blindly use whatever formats we choose.
-&lt;/p&gt;&lt;h2&gt;4 Conclusions&lt;/h2&gt;&lt;p&gt;
-There are several reasons why the xz compressed data format should not
-be used for long-term archiving, specially of valuable data. To begin
-with, xz is a complex container format that is not even fully
-documented. Using a complex format for long-term archiving would be a
-bad idea even if the format were well-designed, which xz is not. In
-general, the more complex the format, the less probable that it can be
-decoded in the future by a digital archaeologist. For long-term
-archiving, simple is robust.
-&lt;/p&gt;&lt;p&gt;
-Xz is fragmented by design. Xz implementations may choose what subset of
-the format they support. They may even choose to not support integrity
-checking at all. Safe interoperability among xz implementations is not
-guaranteed, which makes the use of xz inadvisable not only for long-term
-archiving, but also for data sharing and for free software distribution.
-Xz is also unreasonably extensible; it has room for trillions of
-compression algorithms, but currently only supports one, LZMA2, which in
-spite of its name is not an improved version of LZMA, but an unsafe
-container for LZMA data. Such egregious level of extensibility makes
-corruption both more probable and more difficult to recover from.
-Additionally, the xz format lacks a version number field, which makes
-xz's extensibility problematic.
-&lt;/p&gt;&lt;p&gt;
-Xz fails to protect critical fields like length fields and flags
-signalling the presence of optional fields. Xz uses variable-length
-integers unsafely, specially when they are used to store the size of
-other fields or when they are concatenated together. These defects make
-xz fragile, meaning that most of the times when it reports a false
-positive, the decoder state is so mangled that it is unable to recover
-the decompressed data.
-&lt;/p&gt;&lt;p&gt;
-Error detection in the xz format is less accurate than in bzip2, gzip
-and lzip formats mainly because of false positives, and specially if an
-overkill check sequence like SHA-256 is used in xz. Another cause of
-false positives is that xz tries to detect errors in parts of the
-compressed file that do not affect decompression, like the padding added
-to keep the useless 4 byte alignment. In total xz reports several times
-more false positives than bzip2, gzip or lzip, and every false positive
-may result in unnecessary loss of data.
-&lt;/p&gt;&lt;p&gt;
-All these defects and design errors reduce the value of xz as a
-general-purpose format because anybody wanting to archive a file already
-compressed in xz format will have to either leave it as-is and face a
-larger risk of losing the data, or waste time recompressing the data
-into a format more suitable for long-term archiving.
-&lt;/p&gt;&lt;p&gt;
-The weird combination of unprotected critical fields, overkill check
-sequences, and padding bytes "protected" by a CRC32 can only be
-explained by the inexperience of the designers of xz. It is said that
-given enough eyeballs, all bugs are shallow. But the adoption of xz by
-several GNU/Linux distributions shows that if those eyeballs lack the
-required experience, it may take too long for them to find the bugs. It
-would be an improvement for data safety if compressed data formats
-intended for broad use were designed by experts and peer reviewed before
-publication. This would help to avoid design errors like those of xz,
-which are very difficult to fix once a format is in use.
-&lt;/p&gt;&lt;h2 dir="ltr"&gt;&lt;a name="glossary" href="http://lzip.nongnu.org/xz_inadequate.html#glossary" dir="ltr"&gt;6&lt;/a&gt; Glossary&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;^: Exponentiation symbol.
-&lt;/LI&gt;&lt;LI&gt;Accuracy: Freedom from mistakes. Is defined as 1&amp;nbsp;-&amp;nbsp;inaccuracy.
-&lt;/LI&gt;&lt;LI&gt;Bit flip: Error that inverts a single bit value.
-&lt;/LI&gt;&lt;LI&gt;Burst Error: A set of bit errors contained within a span shorter
-than the length of the codeword. The burst length is the distance
-between the first and last bit errors. Zero or more of the intervening
-bits may be erroneous.
-&lt;/LI&gt;&lt;LI&gt;Check sequence: An error-detecting code value stored with associated
-data. A dataword plus a check sequence makes up a codeword.
-&lt;/LI&gt;&lt;LI&gt;Codeword: A dataword combined with a check sequence.
-&lt;/LI&gt;&lt;LI&gt;Cyclic Redundancy Check (CRC): A type of check sequence.
-&lt;/LI&gt;&lt;LI&gt;Dataword: The data being protected by a check sequence. A dataword
-can be any number of bits and is independent of the machine word size
-(e.g., a dataword could be 64 Megabytes).
-&lt;/LI&gt;&lt;LI&gt;False negative: Undetected error producing incorrect decompressed
-data.
-&lt;/LI&gt;&lt;LI&gt;False positive: Inability or refusal to decompress the data in a
-damaged compressed file even if the compressed data proper remain
-decompressible. (i.e., either the compressed data have not suffered any
-damage or the damage does not hinder decompression).
-&lt;/LI&gt;&lt;LI&gt;Fragility: Inability to recover the decompressed data (for example
-decompressing to standard output) in case of a false positive.
-&lt;/LI&gt;&lt;LI&gt;Inaccuracy: Ratio of error detection mistakes. Is defined as
-(&amp;nbsp;false_negatives&amp;nbsp;+&amp;nbsp;false_positives&amp;nbsp;)&amp;nbsp;/&amp;nbsp;total_cases.
-&lt;/LI&gt;&lt;LI&gt;Overhead: Everything in the file except the compressed data proper.
-(Headers, check sequences, padding, etc).
-&lt;/LI&gt;&lt;LI&gt;Overkill: An unnecessary excess of whatever is needed to achieve a goal.
-&lt;/LI&gt;&lt;LI&gt;Pud: Probability of an undetected error (false negative). Pud is
-equal to Pudd&amp;nbsp;*&amp;nbsp;Pudc.
-&lt;/LI&gt;&lt;LI&gt;Pudc: Probability of an error undetected by the check sequence.
-&lt;/LI&gt;&lt;LI&gt;Pudd: Probability of an error undetected by the decoder.
-&lt;/LI&gt;&lt;LI&gt;Unsafe: 1 Likely to cause severe data loss even in case of the
-smallest corruption (a single bit flip). 2 Likely to produce false
-negatives.
-&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
-Copyright © 2016-2019 Antonio Diaz Diaz.
-&lt;/p&gt;&lt;p&gt;
-You are free to copy and distribute this article without limitation, but
-you are not allowed to modify it.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-First published: 2016-06-11&lt;br dir="ltr"&gt;
-Updated: 2019-05-17
-&lt;/p&gt;</description><pubDate>Wed, 05 Jun 2019 06:14:26 -0500</pubDate></item></channel></rss>
+		lost the names in the mists of time. &lt;/p&gt;</description><pubDate>Thu, 06 Jun 2019 13:54:56 -0500</pubDate></item><item><title>Firefox Monitor: see if you’ve been part of a data breach</title><link>https://lobste.rs/s/qvfcog</link><description>&lt;h2&gt;
+                  Sign up for breach monitoring with a Firefox Account.
+              &lt;/h2&gt;&lt;h3&gt;Stay alert to new breaches&lt;/h3&gt;&lt;h4&gt;If your information surfaces in a new data breach, we’ll send you an alert.&lt;/h4&gt;&lt;h3&gt;Monitor several emails&lt;/h3&gt;&lt;h4&gt;Get ongoing breach monitoring for multiple email addresses.&lt;/h4&gt;&lt;h3&gt;Protect your online privacy&lt;/h3&gt;&lt;h4&gt;Find out what you need to do to keep your data safe from cyber criminals.&lt;/h4&gt;&lt;div dir="ltr"&gt;
+                    &lt;button data-event-category="Sign Up Button" data-entrypoint="fx-monitor-sign-up-for-alerts" data-flow-id="a8af9bd40cceaf0f025541af54f4a108788c73f0c22cc598a6ec65ab357de213" data-flow-begin-time="1559760831687" dir="ltr"&gt;
+                      Sign up for Alerts
+                    &lt;/button&gt;
+                            &lt;/div&gt;&lt;div&gt;&lt;span&gt;
+                              Firefox browser not required for a Firefox Account. You may receive info about Mozilla services.
+                            &lt;/span&gt;&lt;/div&gt;&lt;div dir="ltr"&gt;
+                  &lt;p dir="ltr"&gt;Have an account?&lt;button data-entrypoint="fx-monitor-log-in-link" data-flow-id="75a426d83937b9690b0ee6a9ae9056cf52d1623c95b7b5c333fdcd42d89e820b" data-flow-begin-time="1559760831747" data-event-category="Log In Link" dir="ltr"&gt;Log in
+                  &lt;/button&gt;&lt;/p&gt;
+                &lt;/div&gt;</description><pubDate>Wed, 05 Jun 2019 12:53:59 -0500</pubDate></item></channel></rss>
