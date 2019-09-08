@@ -1,220 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0"><channel><title>lobstre.rs rss with inlined content</title><link>http://n-gate.com</link><description>webshit condom</description><lastBuildDate>Sun, 08 Sep 2019 11:42:46 -0500</lastBuildDate><item><title>The Cult of Kubernetes</title><link>https://lobste.rs/s/zl1d0i</link><description>&lt;p&gt;or: How I got my blog onto it with autodeployment via GitHub Actions.&lt;/p&gt;&lt;p&gt;The world was once a simple place. Things used to make sense, or at least there
-weren’t so many layers that it became difficult to tell what the hell is going
-on.&lt;/p&gt;&lt;p&gt;Then complexity happened. This is a tale of how I literally recreated this meme:&lt;/p&gt;&lt;div class="embed-placeholder" data-type="twitter" data-id="856639005462417409"&gt;&lt;/div&gt;&lt;p&gt;This is how I deployed my blog (the one you are reading right now) to Kubernetes.&lt;/p&gt;&lt;h2&gt;The Old State of the World&lt;/h2&gt;&lt;p dir="ltr"&gt;Before I deployed my blog to Kubernetes, I used &lt;a href="http://dokku.viewdocs.io/dokku/" dir="ltr"&gt;Dokku&lt;/a&gt;, as I had been
-for years. Dokku is great. It emulates most of the Heroku “git push; don’t care”
-workflow, but on your own server that you can self-manage.&lt;/p&gt;&lt;p&gt;This is a blessing and a curse.&lt;/p&gt;&lt;p dir="ltr"&gt;The real advantage of managed services like Heroku is that you literally just
-&lt;em dir="ltr"&gt;HAND OFF&lt;/em&gt; operations to Heroku’s team. This is not the case with Dokku. Unless
-you pay someone a lot of money, you are going to have to manage the server
-yourself. My dokku server was unmanaged, and I run &lt;em dir="ltr"&gt;many&lt;/em&gt; apps on it (this
-listing was taken after I started to move apps over):&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;=====&amp;gt; My Apps
-bsnk
-cinemaquestria
-fordaplot-backup
-graphviz.christine.website
-identicond
-ilo-kesi
-johaus
-maison
-olin
-printerfacts
-since
-tulpaforce.tk
-tulpanomicon
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This is enough apps (plus 5 more that I’ve already migrated) that it really
-doesn’t make sense paying for something like Heroku; nor does it really make
-sense to use the free tier either.&lt;/p&gt;&lt;p dir="ltr"&gt;So, I decided that it was time for me to properly learn how to Kubernetes, and I
-set off to create a cluster via &lt;a href="https://www.digitalocean.com/products/kubernetes/" dir="ltr"&gt;DigitalOcean managed Kubernetes&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;The Cluster&lt;/h2&gt;&lt;p dir="ltr"&gt;I decided it would be a good idea to create my cluster using
-&lt;a href="https://www.terraform.io/" dir="ltr"&gt;Terraform&lt;/a&gt;, mostly because I wanted to learn how to use it better.
-I use Terraform at work, so I figured this would also be a way to level up my
-skills in a mostly sane environment.&lt;/p&gt;&lt;div class="embed-placeholder" data-type="twitter" data-id="1165390942679048192"&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;I have been creating and playing with a small Terraform wrapper tool called
-&lt;a href="https://github.com/Xe/within-terraform/tree/master/dyson" dir="ltr"&gt;dyson&lt;/a&gt;. This tool is probably overly simplistic and is written in Nim.
-With the config in &lt;code dir="ltr"&gt;~/.config/dyson/dyson.ini&lt;/code&gt;, I can simplify my Terraform
-usage by moving my secrets &lt;em dir="ltr"&gt;out of&lt;/em&gt; the Terraform code directly. I also avoid
-having my API tokens exposed in my shell to avoid accidental exposure of the
-secrets.&lt;/p&gt;&lt;p&gt;Dyson is very simple to use:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ dyson
-Usage:
-  dyson {SUBCMD}  [sub-command options &amp;amp; parameters]
-where {SUBCMD} is one of:
-  help         print comprehensive or per-cmd help
-  apply        apply Terraform code to production
-  destroy      destroy resources managed by Terraform
-  env          dump envvars
-  init         init Terraform
-  manifest     generate a somewhat sane manifest for a kubernetes app based on the arguments.
-  plan         plan a future Terraform run
-  slug2docker  converts a heroku/dokku slug to a docker image
-
-dyson {-h|--help} or with no args at all prints this message.
-dyson --help-syntax gives general cligen syntax help.
-Run "dyson {help SUBCMD|SUBCMD --help}" to see help for just SUBCMD.
-Run "dyson help" to get *comprehensive* help.
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;So I wrote up my config:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;# main.tf
-provider "digitalocean" {}
-
-resource "digitalocean_kubernetes_cluster" "main" {
-  name    = "kubermemes"
-  region  = "${var.region}"
-  version = "${var.kubernetes_version}"
-
-  node_pool {
-    name       = "worker-pool"
-    size       = "${var.node_size}"
-    node_count = 2
-  }
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;PRE&gt;&lt;code&gt;# variables.tf
-variable "region" {
-  type    = "string"
-  default = "nyc3"
-}
-
-variable "kubernetes_version" {
-  type    = "string"
-  default = "1.15.3-do.1"
-}
-
-variable "node_size" {
-  type    = "string"
-  default = "s-1vcpu-2gb"
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;and ran it:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ dyson plan
-&amp;lt;... many lines of plan output ...&amp;gt;
-$ dyson apply
-&amp;lt;... many lines of apply output ...&amp;gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Then I had a working but mostly unconfigured Kubernetes cluster.&lt;/p&gt;&lt;h2&gt;Configuration&lt;/h2&gt;&lt;p&gt;This is where things started to go downhill. I wanted to do a few things with
-this cluster so I could consider it “ready” for me to use for deploying applications
-to.&lt;/p&gt;&lt;p&gt;I wanted to do the following:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;setup &lt;a href="https://helm.sh/" dir="ltr"&gt;helm&lt;/a&gt; to install packages for things like DNS management and HTTP/HTTPS ingress&lt;/LI&gt;&lt;LI&gt;setup HTTP/HTTPS request ingress with &lt;a href="https://kubernetes.github.io/ingress-nginx/" dir="ltr"&gt;nginx-ingress&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;setup &lt;a href="https://github.com/kubernetes-incubator/external-dns" dir="ltr"&gt;automatic DNS management&lt;/a&gt; because the external IP addresses of Kubernetes nodes can and will change&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;After a lot of trial, error, pain, suffering and the like, I created
-&lt;a href="https://github.com/Xe/within-terraform/blob/master/do/setup.sh" dir="ltr"&gt;this script&lt;/a&gt; which I am not pasting here. Look at it if you want to
-get a streamlined overview of how to set these things up.&lt;/p&gt;&lt;p dir="ltr"&gt;Now that all of this is set up, I can deploy an &lt;a href="https://exanple.within.website/" dir="ltr"&gt;example app&lt;/a&gt; with a
-manifest that looks something like &lt;a href="https://github.com/Xe/within-terraform/blob/master/do/ingress_test.yaml" dir="ltr"&gt;this&lt;/a&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;apiVersion: v1
-kind: Service
-metadata:
-  name: hello-kubernetes-first
-  annotations:
-    external-dns.alpha.kubernetes.io/hostname: exanple.within.website
-    external-dns.alpha.kubernetes.io/ttl: "120" #optional
-    external-dns.alpha.kubernetes.io/cloudflare-proxied: "false"
-spec:
-  type: ClusterIP
-  ports:
-  - port: 80
-    targetPort: 8080
-  selector:
-    app: hello-kubernetes-first
-    
----
-
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: hello-kubernetes-first
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: hello-kubernetes-first
-  template:
-    metadata:
-      labels:
-        app: hello-kubernetes-first
-    spec:
-      containers:
-      - name: hello-kubernetes
-        image: paulbouwer/hello-kubernetes:1.5
-        ports:
-        - containerPort: 8080
-        env:
-        - name: MESSAGE
-          value: Henlo this are an exanple deployment
-          
----
-
-apiVersion: extensions/v1beta1
-kind: Ingress
-metadata:
-  name: hello-kubernetes-ingress
-  annotations:
-    kubernetes.io/ingress.class: nginx
-    certmanager.k8s.io/cluster-issuer: "letsencrypt-prod"
-spec:
-  tls:
-  - hosts:
-    - exanple.within.website
-    secretName: prod-certs
-  rules:
-  - host: exanple.within.website
-    http:
-      paths:
-      - backend:
-          serviceName: hello-kubernetes-first
-          servicePort: 80
-&lt;/code&gt;&lt;/PRE&gt;&lt;div class="embed-placeholder" data-type="twitter" data-id="1169997202971930624"&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;It was about this time when I wondered if I was making a mistake moving off of
-Dokku. Dokku really does a lot to abstract almost everything involved with nginx
-away from you, and it &lt;em dir="ltr"&gt;really shows&lt;/em&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;However, as a side effect of everything being so declarative and Kubernetes really
-not assuming anything, you have &lt;em dir="ltr"&gt;a lot&lt;/em&gt; more freedom to do basically anything
-you want. You don’t have to have specially magic names for tasks like &lt;code dir="ltr"&gt;web&lt;/code&gt; or
-&lt;code dir="ltr"&gt;worker&lt;/code&gt; like you do in Heroku/Dokku. You just have a deployment that belongs to
-an “app” that just so happens to expose a TCP port that just so happens to have
-a correlating ingress associated with it.&lt;/p&gt;&lt;p&gt;Lucky for me, most of the apps I write fit into that general format, and the ones
-that don’t can mostly use the same format without the ingress.&lt;/p&gt;&lt;p dir="ltr"&gt;So I &lt;a href="https://github.com/Xe/within-terraform/blob/master/dyson/src/dysonPkg/deployment_with_ingress.yaml" dir="ltr"&gt;templated&lt;/a&gt; that sucker as a subcommand in dyson.
-This lets me do commands like &lt;a href="https://github.com/Xe/within-terraform/blob/master/kube_manifests/h.sh" dir="ltr"&gt;this&lt;/a&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ dyson manifest \
-      --name=hlang \
-      --domain=h.christine.website \
-      --dockerImage=docker.pkg.github.com/xe/x/h:v1.1.8 \
-      --containerPort=5000 \
-      --replicas=1 \
-      --useProdLE=true | kubectl apply -f-
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;And the service gets shunted into the cloud without any extra effort on my part.
-This also automatically sets up Let’s Encrypt, DNS and other things that were
-manual in my Dokku setup. This saves me time for when I want to go add services
-in the future. All I have to do is create a docker image somehow, identify what
-port should be exposed, give it a domain name and number of replicas and just
-send it on its merry way.&lt;/p&gt;&lt;h2&gt;GitHub Actions&lt;/h2&gt;&lt;p dir="ltr"&gt;This does however mean that deployment is no longer as simple as
-“git push; don’t care”. This is where &lt;a href="https://github.com/features/actions" dir="ltr"&gt;GitHub Actions&lt;/a&gt; come into play.
-They claimed to have the ability to run full end-to-end CI/CD on my applications.&lt;/p&gt;&lt;p dir="ltr"&gt;I have been using them for a while for &lt;a href="https://github.com/Xe/site/blob/master/.github/workflows/go.yml" dir="ltr"&gt;CI on my website&lt;/a&gt; and have
-been pleased with them, so I decided to give it a try and set up continuous
-deployment with them.&lt;/p&gt;&lt;p dir="ltr"&gt;As &lt;a href="https://github.com/Xe/site/commits/master/.github/workflows/kubernetes-cd.yml" dir="ltr"&gt;the commit log for the deployment manifest can tell&lt;/a&gt;,
-this took a lot of trial and error. One of the main sources of problems here
-was that GitHub Actions had recently had &lt;em dir="ltr"&gt;a lot&lt;/em&gt; of changes made to
-configuration and usage as compared to when it was in private beta. This
-included changing the configuration schema from &lt;a href="https://github.com/hashicorp/hcl" dir="ltr"&gt;HCL&lt;/a&gt; to &lt;a href="https://yaml.org/" dir="ltr"&gt;YAML&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Of course, all of the documentation (outside of GitHub’s
-&lt;a href="https://help.github.com/en/articles/about-github-actions" dir="ltr"&gt;quite excellent documentation&lt;/a&gt;) was out of date and wrong.
-I tried following a tutorial by &lt;a href="https://blog.digitalocean.com/how-to-deploy-to-digitalocean-kubernetes-with-github-actions/" dir="ltr"&gt;DigitalOcean themselves&lt;/a&gt; on
-how to do this exact thing I wanted to do, but it referenced the old HCL syntax
-for GitHub Actions and did not work. To make things worse, examples
-&lt;a href="https://github.com/marketplace/actions/github-action-for-digitalocean-doctl" dir="ltr"&gt;in the marketplace READMEs&lt;/a&gt; simply DID NOT WORK because
-they were written for the old GitHub Actions syntax.&lt;/p&gt;&lt;p&gt;This was frustrating to say the least.&lt;/p&gt;&lt;p dir="ltr"&gt;After trying to make them work anyways with a combination of the “Use Latest
-Version” button in the marketplace, prayer and gratuitous use of the &lt;code dir="ltr"&gt;with.args&lt;/code&gt;
-field in steps I gave up and decided to manually download the tools I needed
-from their upstream providers and execute them by hand.&lt;/p&gt;&lt;p dir="ltr"&gt;This is how I ended up with &lt;a href="https://github.com/Xe/site/blob/master/.github/workflows/kubernetes-cd.yml#L53-L65" dir="ltr"&gt;this monstrosity&lt;/a&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;- name: Configure/Deploy/Verify Kubernetes
-  run: |
-    curl -L https://github.com/digitalocean/doctl/releases/download/v1.30.0/doctl-1.30.0-linux-amd64.tar.gz | tar xz
-    ./doctl auth init -t $DIGITALOCEAN_ACCESS_TOKEN
-    ./doctl kubernetes cluster kubeconfig show kubermemes &amp;gt; .kubeconfig
-
-    curl -LO https://storage.googleapis.com/kubernetes-release/release/`curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt`/bin/linux/amd64/kubectl
-    chmod +x kubectl
-    ./kubectl --kubeconfig .kubeconfig apply -n apps -f deploy.yml
-    sleep 2
-    ./kubectl --kubeconfig .kubeconfig rollout -n apps status deployment/christinewebsite
-  env:
-    DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;I am almost &lt;em dir="ltr"&gt;certain&lt;/em&gt; that I am doing it wrong here, I don’t know how robust this
-is and I’m very sure that this can and should be done another way; but this is
-the only thing I could get working (for some definition of “working”).&lt;/p&gt;&lt;p&gt;Now when I git push things to the master branch of my blog repo, it will
-automatically get deployed to my Kubernetes cluster.&lt;/p&gt;&lt;p dir="ltr"&gt;If you work at DigitalOcean and are reading this post. Please get someone to
-update &lt;a href="https://blog.digitalocean.com/how-to-deploy-to-digitalocean-kubernetes-with-github-actions/" dir="ltr"&gt;this tutorial&lt;/a&gt; and the README of &lt;a href="https://github.com/marketplace/actions/github-action-for-digitalocean-doctl" dir="ltr"&gt;this repo&lt;/a&gt;.
-The examples listed &lt;em dir="ltr"&gt;DO NOT WORK&lt;/em&gt; for me because I was not in the private beta
-of GitHub Actions. It would also be nice if you had better documentation on how
-to use [your premade action][doctlgithubaction] for usecases like mine. I just
-wanted to download the kubernetes configuration file and run apply against a yaml
-file.&lt;/p&gt;&lt;p&gt;Thanks for reading, I hope this was entertaining. Be well.&lt;/p&gt;&lt;div class="embed-placeholder" data-type="twitter" data-id="1169999209438859264"&gt;&lt;/div&gt;&lt;div dir="ltr"&gt;
-
-
-&lt;button onclick="share_on_mastodon()" dir="ltr"&gt;Share on Mastodon&lt;/button&gt;
-
-&lt;/div&gt;&lt;p dir="ltr"&gt;This article was posted on 2019-09-07. Facts and circumstances may have changed since publication. Please &lt;a href="https://christine.website/contact" dir="ltr"&gt;contact me&lt;/a&gt; before jumping to conclusions if something seems wrong or unclear.&lt;/p&gt;&lt;BLOCKQUOTE&gt;Copyright 2019 Christine Dodrill. Any and all opinions listed here are my own and not representative of my employers; future, past and present.&lt;/BLOCKQUOTE&gt;</description><pubDate>Sat, 07 Sep 2019 16:33:01 -0500</pubDate></item><item><title>It’s not wrong that "&lt;emoji&gt;".length == 7</title><link>https://lobste.rs/s/xaohb4</link><description>&lt;h2 dir="ltr"&gt;But It’s Better that &lt;code dir="ltr"&gt;"🤦🏼‍♂️".len() == 17&lt;/code&gt; and Rather Useless that &lt;code dir="ltr"&gt;len("🤦🏼‍♂️") == 5&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;From time to time, someone shows that in JavaScript the &lt;code dir="ltr"&gt;.length&lt;/code&gt; of a string containing an emoji resulting in a number greater than 1 (typically 2) and then proceeds to the conclusion that haha JavaScript is so broken—and is rewarded with many likes. In this post, I will try to convince you that ridiculing JavaScript for this is less insightful than it first appears and that Swift’s approach to string length isn’t unambiguously the best one. Python 3’s approach is unambiguously the worst one, though.&lt;/p&gt;&lt;h2&gt;What’s Going on with the Title?&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;"🤦🏼‍♂️".length == 7&lt;/code&gt; evaluates to &lt;code dir="ltr"&gt;true&lt;/code&gt; as JavaScript (or Java). Let’s try JavaScript console in Firefox:&lt;/p&gt;&lt;PRE&gt;"🤦🏼‍♂️".length == 7
+<rss version="2.0"><channel><title>lobstre.rs rss with inlined content</title><link>http://n-gate.com</link><description>webshit condom</description><lastBuildDate>Sun, 08 Sep 2019 13:31:12 -0500</lastBuildDate><item><title>It’s not wrong that "&lt;emoji&gt;".length == 7</title><link>https://lobste.rs/s/xaohb4</link><description>&lt;h2 dir="ltr"&gt;But It’s Better that &lt;code dir="ltr"&gt;"🤦🏼‍♂️".len() == 17&lt;/code&gt; and Rather Useless that &lt;code dir="ltr"&gt;len("🤦🏼‍♂️") == 5&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;From time to time, someone shows that in JavaScript the &lt;code dir="ltr"&gt;.length&lt;/code&gt; of a string containing an emoji resulting in a number greater than 1 (typically 2) and then proceeds to the conclusion that haha JavaScript is so broken—and is rewarded with many likes. In this post, I will try to convince you that ridiculing JavaScript for this is less insightful than it first appears and that Swift’s approach to string length isn’t unambiguously the best one. Python 3’s approach is unambiguously the worst one, though.&lt;/p&gt;&lt;h2&gt;What’s Going on with the Title?&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;"🤦🏼‍♂️".length == 7&lt;/code&gt; evaluates to &lt;code dir="ltr"&gt;true&lt;/code&gt; as JavaScript (or Java). Let’s try JavaScript console in Firefox:&lt;/p&gt;&lt;PRE&gt;"🤦🏼‍♂️".length == 7
 true&lt;/PRE&gt;&lt;p&gt;Haha, right? Well, you’ve been told that the Python community suffered the Python 2 vs. Python 3 split, among other things, to Get Unicode Right. Let’s try Python 3:&lt;/p&gt;&lt;PRE&gt;$ python3
 Python 3.6.8 (default, Jan 14 2019, 11:02:34) 
 [GCC 8.0.1 20180414 (experimental) [trunk revision 259383]] on linux
@@ -4396,7 +4181,222 @@ fn main() {
 &lt;tr dir="ltr"&gt;&lt;th rowspan="1" colspan="1" dir="ltr"&gt;Max (ignoring outlier)&lt;/th&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;35846&lt;/td&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;264.8&lt;/td&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;17336&lt;/td&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;97.1&lt;/td&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;17336&lt;/td&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;97.3&lt;/td&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;17336&lt;/td&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;100.1&lt;/td&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;17336&lt;/td&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;99.5&lt;/td&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;&lt;/td&gt;&lt;/tr&gt;
 &lt;tr dir="ltr"&gt;&lt;th rowspan="1" colspan="1" dir="ltr"&gt;Max&lt;/th&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;36130&lt;/td&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;267.7&lt;/td&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;22163&lt;/td&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;152.0&lt;/td&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;22163&lt;/td&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;152.2&lt;/td&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;22163&lt;/td&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;155.8&lt;/td&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;22163&lt;/td&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;155.1&lt;/td&gt;&lt;td rowspan="1" colspan="1" dir="ltr"&gt;&lt;/td&gt;&lt;/tr&gt;
 &lt;/tfoot&gt;
-&lt;/table&gt;&lt;div role="status" aria-live="polite"&gt;Showing 1 to 452 of 452 entries&lt;/div&gt;</description><pubDate>Sun, 08 Sep 2019 10:38:08 -0500</pubDate></item><item><title>Efficiency hacks for programmers</title><link>https://lobste.rs/s/lfl2en</link><description>&lt;p dir="ltr"&gt;Over the years, I've found a number of &lt;em dir="ltr"&gt;efficiency hacks&lt;/em&gt; which make using the computer as a software developer much more smooth and elegant. This involves how I use the OS, the IDE, and other tools. I've found it pays to sharpen the saw and make the flow of work as hurdle-free as possible, especially for the tasks that are repeated many times. The cost of setting things up and learning to use any particular hack non-trivial but fixed, and the benefit is ongoing. In this post, I describe the hacks that made the most impact for me.&lt;/p&gt;&lt;p dir="ltr"&gt;My observation is that efficiency of using a computer &lt;em dir="ltr"&gt;is&lt;/em&gt; important when it comes to software development. Even if the process of programming involves a lot (or even the majority) of thinking instead of typing, the ability to move these thoughts into computer as quickly as possible is of great benefit. How quickly would we build software if we could make the code appear, move around, refactor, delete instantly, all with the power of our thoughts? We cannot do that (at least not in in 2019), but we can definitely make improvements in how we use the currently available interface - the keyboard.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Warning: Certain tips only apply to *nix system, and some only to the Gnome window manager.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h2&gt;1. Vim everywhere&lt;/h2&gt;&lt;h3&gt;Programming&lt;/h3&gt;&lt;p dir="ltr"&gt;I use Vim-mode everywhere I need to type text. This includes programming, of course, but other interfaces as well. Most modern IDEs have some variant of a "Vim mode" or a "Vim plugin" (at least do the JetBrains IDEs, Visual Studio, Eclipse, VS Code, Sublime, Atom). While these are only simulations of the original Vim and do not behave &lt;em dir="ltr"&gt;exactly&lt;/em&gt; the same in all cases, the commands that I actually use are available and mostly identical. Some tinkering is required to resolve any keyboard shortcuts conflicts between the IDE and Vim. But once this is done, programming is faster, and in my experience, more enjoyable.&lt;/p&gt;&lt;video width="600" src="https://rokpovsic.com/videos/efficiency-hacks/vim.webm" controls="" preload="metadata"&gt;&lt;/video&gt;&lt;h3&gt;Browser&lt;/h3&gt;&lt;p dir="ltr"&gt;I also use a Vim extension in the browsers I use, both in &lt;a href="https://addons.mozilla.org/en-US/firefox/addon/vimium-ff/" dir="ltr"&gt;Firefox&lt;/a&gt; and &lt;a href="https://chrome.google.com/webstore/detail/vimium/dbepggeogbaibhgnhhndojpepiihcmeb" dir="ltr"&gt;Chrome&lt;/a&gt;. It makes it possible to browse without leaving the home row position, using K/J to move up/down (I use U/D do move up/down with greater speed), and using F + some-key-combination to visit links. I've also added shortcuts ALT+H and ALT+L to move to back/forward, as I have the same shortcuts for Back and Forward in my IDEs as well.&lt;/p&gt;&lt;video width="600" src="https://rokpovsic.com/videos/efficiency-hacks/browser.webm" controls="" preload="metadata"&gt;&lt;/video&gt;&lt;h3&gt;Terminal&lt;/h3&gt;&lt;p dir="ltr"&gt;I've also have enabled &lt;a href="http://vim.wikia.com/wiki/Use_vi_shortcuts_in_terminal" dir="ltr"&gt;vi-mode&lt;/a&gt; in my Bash terminal. By default, you're in the insert mode, so the command line behaves as it would on some other machine. But you can, of course, switch to the command mode pressing ESC. This comes in handy when there's a long command I'm working on, and can quickly move between the words (with W and B), delete words (DW etc.), insert and beginning/end of the line with I and A, etc.&lt;/p&gt;&lt;video width="600" src="https://rokpovsic.com/videos/efficiency-hacks/terminal.webm" controls="" preload="metadata"&gt;&lt;/video&gt;&lt;h2&gt;2. Terminal usage&lt;/h2&gt;&lt;h3&gt;Better command history with CTRL+R&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/junegunn/fzf" dir="ltr"&gt;fzf&lt;/a&gt; is an excellent tool providing fuzzy (i.e. non-exact) search. This comes in handy when searching for a command which has been executed in the past. The default CTRL+R shell already gives the functionality to scroll through the last commands, and fzf is an improved replacement of that, providing fuzzy search of past commands, and giving a better overview of the history last few commands.&lt;/p&gt;&lt;video width="600" src="https://rokpovsic.com/videos/efficiency-hacks/fzf.webm" controls="" preload="metadata"&gt;&lt;/video&gt;&lt;h3&gt;Git command line shortcuts&lt;/h3&gt;&lt;p dir="ltr"&gt;One of the terminal commands I use the most is &lt;code dir="ltr"&gt;git&lt;/code&gt;. But typing out the &lt;code dir="ltr"&gt;git &amp;lt;something&amp;gt;&lt;/code&gt; commands many times each day became repetitive, so I've set up a number of Git aliases (I got the idea from &lt;a href="https://jonsuh.com/blog/git-command-line-shortcuts/" dir="ltr"&gt;this blog post&lt;/a&gt;).&lt;/p&gt;&lt;p&gt;The shortcuts I mostly use are:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gaa&lt;/code&gt; (&lt;code dir="ltr"&gt;git add .&lt;/code&gt;), &lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gcm&lt;/code&gt; (&lt;code dir="ltr"&gt;git commit --message&lt;/code&gt;), &lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gco&lt;/code&gt; (&lt;code dir="ltr"&gt;git checkout&lt;/code&gt;),&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gcob&lt;/code&gt; (&lt;code dir="ltr"&gt;git checkout --branch&lt;/code&gt;),&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gd&lt;/code&gt; (&lt;code dir="ltr"&gt;git diff&lt;/code&gt;), &lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gds&lt;/code&gt; (&lt;code dir="ltr"&gt;git diff --staged&lt;/code&gt;), &lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gld&lt;/code&gt; (&lt;code dir="ltr"&gt;git log --pretty=format:"%h %ad %s" --date=short --all&lt;/code&gt;),&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gpoh&lt;/code&gt; (&lt;code dir="ltr"&gt;git push origin HEAD&lt;/code&gt;), &lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;grb&lt;/code&gt; (&lt;code dir="ltr"&gt;git rebase&lt;/code&gt;), &lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;grba&lt;/code&gt; (&lt;code dir="ltr"&gt;git rebase --abort&lt;/code&gt;), &lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;grbc&lt;/code&gt; (&lt;code dir="ltr"&gt;git rebase --continue&lt;/code&gt;),&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gs&lt;/code&gt; (&lt;code dir="ltr"&gt;git status&lt;/code&gt;).&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;I've also set up auto-completion, so when typing &lt;code dir="ltr"&gt;gco mas&amp;lt;TAB&amp;gt;&lt;/code&gt;, &lt;code dir="ltr"&gt;master&lt;/code&gt; auto-completes. Here's what to put to &lt;code dir="ltr"&gt;~/.bash_aliases&lt;/code&gt; (or some other place from where your terminal loads custom code from) to set all this up: &lt;a href="https://rokpovsic.com/pages/git-aliases.html" dir="ltr"&gt;Git Aliases&lt;/a&gt;&lt;/p&gt;&lt;video width="600" src="https://rokpovsic.com/videos/efficiency-hacks/git-aliases.webm" controls="" preload="metadata"&gt;&lt;/video&gt;&lt;h2&gt;3. Gnome Shell&lt;/h2&gt;&lt;p dir="ltr"&gt;Gnome Shell has an excellent &lt;a href="https://extensions.gnome.org/" dir="ltr"&gt;extension system&lt;/a&gt; which provides some truly great extensions. Here's a couple I use.&lt;/p&gt;&lt;h3&gt;Gtile&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;a href="https://extensions.gnome.org/extension/28/gtile/" dir="ltr"&gt;Gtile&lt;/a&gt; provides the functionality of re-positioning of windows within a workspace, similar to what is done when using a tiled window manager. Instead of grabbing a mouse and dragging/resizing a window, use one of the numerous Gtile shortcuts I've set up that position my windows to the places I most often want them to be. For example, I've set up the shortcuts &lt;code dir="ltr"&gt;CTRL+WIN+U/I/N/M&lt;/code&gt; to move the currently focused window to top-left/top-right/bottom-left/bottom-right quarter of the screen, respectively.&lt;/p&gt;&lt;video width="600" src="https://rokpovsic.com/videos/efficiency-hacks/gtile.webm" controls="" preload="metadata"&gt;&lt;/video&gt;&lt;h3&gt;Impatience&lt;/h3&gt;&lt;p dir="ltr"&gt;To speed up animations that take place when switching between workspaces (see below), I use the extension called &lt;a href="https://extensions.gnome.org/extension/277/impatience/" dir="ltr"&gt;Impatiance&lt;/a&gt; which makes animations go faster.&lt;/p&gt;&lt;h3&gt;Drop down terminal&lt;/h3&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://extensions.gnome.org/extension/442/drop-down-terminal/" dir="ltr"&gt;Drop down terminal&lt;/a&gt; extension displays a quick terminal window on the top of the screen, after pressing &lt;code dir="ltr"&gt;CTRL+ALT+F11&lt;/code&gt;.&lt;/p&gt;&lt;video width="600" src="https://rokpovsic.com/videos/efficiency-hacks/top-terminal.webm" controls="" preload="metadata"&gt;&lt;/video&gt;&lt;h3&gt;Hide top bar / No title bar&lt;/h3&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://extensions.gnome.org/extension/545/hide-top-bar/" dir="ltr"&gt;Hide top bar&lt;/a&gt; and &lt;a href="https://extensions.gnome.org/extension/1267/no-title-bar/" dir="ltr"&gt;No title bar&lt;/a&gt; extensions make every program, when on full-screen, use all the available screen real-estate. To me, immersion is increased when the display is showing strictly what's necessary for work to get done.&lt;/p&gt;&lt;h3&gt;Gnome Shell workspaces&lt;/h3&gt;&lt;p dir="ltr"&gt;This is actually not an extension but a part of the base Gnome system. It allows you to have windows in multiple workspaces, between which you can move using a keyboard or a mouse. I use 4 workspaces in one row and move between them using shortcuts &lt;code dir="ltr"&gt;CTRL+ALT+H&lt;/code&gt;/&lt;code dir="ltr"&gt;CTRL+ALT+L&lt;/code&gt; to switch to a workspace on the left/right, and &lt;code dir="ltr"&gt;CTRL+SHIFT+ALT+H/L&lt;/code&gt; to move a window to a workspace on the left/right. I usually use the first workspace to host IDEs and terminals, the second to host Firefox and Slack, and the other two for various less-accessed programs such as KeePass. Using workspaces means in such a way means better organization and fewer pressings of &lt;code dir="ltr"&gt;ALT+TAB&lt;/code&gt;.&lt;/p&gt;&lt;h2&gt;4. Conclusion&lt;/h2&gt;&lt;p dir="ltr"&gt;These efficiency hacks did make my computer usage flow smoother and more enjoyable. It takes time to set everything up, but what I've described here is more or less a fixed cost. One could spend &lt;em dir="ltr"&gt;too much&lt;/em&gt; time if tinkering with it all the time, but from my experience once I add a tool and get used to it, the fixed setup costs are soon reimbursed by increased speed and enjoyment. I highly recommend you give some of these a try.&lt;/p&gt;</description><pubDate>Sun, 08 Sep 2019 09:49:18 -0500</pubDate></item><item><title>dl_platform detection effectively performs "cripple AMD"</title><link>https://lobste.rs/s/mrf5vl</link><description>&lt;div&gt;&lt;span&gt;Sourceware Bugzilla – Bug&amp;nbsp;24979&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span&gt;sysdeps: dl_platform detection effectively performs "cripple AMD"&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span&gt;Last modified: 2019-09-08 06:29:23 UTC&lt;/span&gt;&lt;/div&gt;</description><pubDate>Sun, 08 Sep 2019 04:19:28 -0500</pubDate></item><item><title>Visualising Operating System Derivation</title><link>https://lobste.rs/s/0c2la6</link><description>&lt;article&gt;&lt;time datetime="2019-09-08T16:21"&gt;08 September 2019&lt;/time&gt;&lt;/article&gt;&lt;p dir="ltr"&gt;After I ordered a new laptop yesterday (Huawei MateBook X Pro (2018)) I started
+&lt;/table&gt;&lt;div role="status" aria-live="polite"&gt;Showing 1 to 452 of 452 entries&lt;/div&gt;</description><pubDate>Sun, 08 Sep 2019 10:38:08 -0500</pubDate></item><item><title>The Cult of Kubernetes</title><link>https://lobste.rs/s/zl1d0i</link><description>&lt;p&gt;or: How I got my blog onto it with autodeployment via GitHub Actions.&lt;/p&gt;&lt;p&gt;The world was once a simple place. Things used to make sense, or at least there
+weren’t so many layers that it became difficult to tell what the hell is going
+on.&lt;/p&gt;&lt;p&gt;Then complexity happened. This is a tale of how I literally recreated this meme:&lt;/p&gt;&lt;div class="embed-placeholder" data-type="twitter" data-id="856639005462417409"&gt;&lt;/div&gt;&lt;p&gt;This is how I deployed my blog (the one you are reading right now) to Kubernetes.&lt;/p&gt;&lt;h2&gt;The Old State of the World&lt;/h2&gt;&lt;p dir="ltr"&gt;Before I deployed my blog to Kubernetes, I used &lt;a href="http://dokku.viewdocs.io/dokku/" dir="ltr"&gt;Dokku&lt;/a&gt;, as I had been
+for years. Dokku is great. It emulates most of the Heroku “git push; don’t care”
+workflow, but on your own server that you can self-manage.&lt;/p&gt;&lt;p&gt;This is a blessing and a curse.&lt;/p&gt;&lt;p dir="ltr"&gt;The real advantage of managed services like Heroku is that you literally just
+&lt;em dir="ltr"&gt;HAND OFF&lt;/em&gt; operations to Heroku’s team. This is not the case with Dokku. Unless
+you pay someone a lot of money, you are going to have to manage the server
+yourself. My dokku server was unmanaged, and I run &lt;em dir="ltr"&gt;many&lt;/em&gt; apps on it (this
+listing was taken after I started to move apps over):&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;=====&amp;gt; My Apps
+bsnk
+cinemaquestria
+fordaplot-backup
+graphviz.christine.website
+identicond
+ilo-kesi
+johaus
+maison
+olin
+printerfacts
+since
+tulpaforce.tk
+tulpanomicon
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This is enough apps (plus 5 more that I’ve already migrated) that it really
+doesn’t make sense paying for something like Heroku; nor does it really make
+sense to use the free tier either.&lt;/p&gt;&lt;p dir="ltr"&gt;So, I decided that it was time for me to properly learn how to Kubernetes, and I
+set off to create a cluster via &lt;a href="https://www.digitalocean.com/products/kubernetes/" dir="ltr"&gt;DigitalOcean managed Kubernetes&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;The Cluster&lt;/h2&gt;&lt;p dir="ltr"&gt;I decided it would be a good idea to create my cluster using
+&lt;a href="https://www.terraform.io/" dir="ltr"&gt;Terraform&lt;/a&gt;, mostly because I wanted to learn how to use it better.
+I use Terraform at work, so I figured this would also be a way to level up my
+skills in a mostly sane environment.&lt;/p&gt;&lt;div class="embed-placeholder" data-type="twitter" data-id="1165390942679048192"&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;I have been creating and playing with a small Terraform wrapper tool called
+&lt;a href="https://github.com/Xe/within-terraform/tree/master/dyson" dir="ltr"&gt;dyson&lt;/a&gt;. This tool is probably overly simplistic and is written in Nim.
+With the config in &lt;code dir="ltr"&gt;~/.config/dyson/dyson.ini&lt;/code&gt;, I can simplify my Terraform
+usage by moving my secrets &lt;em dir="ltr"&gt;out of&lt;/em&gt; the Terraform code directly. I also avoid
+having my API tokens exposed in my shell to avoid accidental exposure of the
+secrets.&lt;/p&gt;&lt;p&gt;Dyson is very simple to use:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ dyson
+Usage:
+  dyson {SUBCMD}  [sub-command options &amp;amp; parameters]
+where {SUBCMD} is one of:
+  help         print comprehensive or per-cmd help
+  apply        apply Terraform code to production
+  destroy      destroy resources managed by Terraform
+  env          dump envvars
+  init         init Terraform
+  manifest     generate a somewhat sane manifest for a kubernetes app based on the arguments.
+  plan         plan a future Terraform run
+  slug2docker  converts a heroku/dokku slug to a docker image
+
+dyson {-h|--help} or with no args at all prints this message.
+dyson --help-syntax gives general cligen syntax help.
+Run "dyson {help SUBCMD|SUBCMD --help}" to see help for just SUBCMD.
+Run "dyson help" to get *comprehensive* help.
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;So I wrote up my config:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;# main.tf
+provider "digitalocean" {}
+
+resource "digitalocean_kubernetes_cluster" "main" {
+  name    = "kubermemes"
+  region  = "${var.region}"
+  version = "${var.kubernetes_version}"
+
+  node_pool {
+    name       = "worker-pool"
+    size       = "${var.node_size}"
+    node_count = 2
+  }
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;PRE&gt;&lt;code&gt;# variables.tf
+variable "region" {
+  type    = "string"
+  default = "nyc3"
+}
+
+variable "kubernetes_version" {
+  type    = "string"
+  default = "1.15.3-do.1"
+}
+
+variable "node_size" {
+  type    = "string"
+  default = "s-1vcpu-2gb"
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;and ran it:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ dyson plan
+&amp;lt;... many lines of plan output ...&amp;gt;
+$ dyson apply
+&amp;lt;... many lines of apply output ...&amp;gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Then I had a working but mostly unconfigured Kubernetes cluster.&lt;/p&gt;&lt;h2&gt;Configuration&lt;/h2&gt;&lt;p&gt;This is where things started to go downhill. I wanted to do a few things with
+this cluster so I could consider it “ready” for me to use for deploying applications
+to.&lt;/p&gt;&lt;p&gt;I wanted to do the following:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;setup &lt;a href="https://helm.sh/" dir="ltr"&gt;helm&lt;/a&gt; to install packages for things like DNS management and HTTP/HTTPS ingress&lt;/LI&gt;&lt;LI&gt;setup HTTP/HTTPS request ingress with &lt;a href="https://kubernetes.github.io/ingress-nginx/" dir="ltr"&gt;nginx-ingress&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;setup &lt;a href="https://github.com/kubernetes-incubator/external-dns" dir="ltr"&gt;automatic DNS management&lt;/a&gt; because the external IP addresses of Kubernetes nodes can and will change&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;After a lot of trial, error, pain, suffering and the like, I created
+&lt;a href="https://github.com/Xe/within-terraform/blob/master/do/setup.sh" dir="ltr"&gt;this script&lt;/a&gt; which I am not pasting here. Look at it if you want to
+get a streamlined overview of how to set these things up.&lt;/p&gt;&lt;p dir="ltr"&gt;Now that all of this is set up, I can deploy an &lt;a href="https://exanple.within.website/" dir="ltr"&gt;example app&lt;/a&gt; with a
+manifest that looks something like &lt;a href="https://github.com/Xe/within-terraform/blob/master/do/ingress_test.yaml" dir="ltr"&gt;this&lt;/a&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;apiVersion: v1
+kind: Service
+metadata:
+  name: hello-kubernetes-first
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: exanple.within.website
+    external-dns.alpha.kubernetes.io/ttl: "120" #optional
+    external-dns.alpha.kubernetes.io/cloudflare-proxied: "false"
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8080
+  selector:
+    app: hello-kubernetes-first
+    
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-kubernetes-first
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hello-kubernetes-first
+  template:
+    metadata:
+      labels:
+        app: hello-kubernetes-first
+    spec:
+      containers:
+      - name: hello-kubernetes
+        image: paulbouwer/hello-kubernetes:1.5
+        ports:
+        - containerPort: 8080
+        env:
+        - name: MESSAGE
+          value: Henlo this are an exanple deployment
+          
+---
+
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: hello-kubernetes-ingress
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    certmanager.k8s.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  tls:
+  - hosts:
+    - exanple.within.website
+    secretName: prod-certs
+  rules:
+  - host: exanple.within.website
+    http:
+      paths:
+      - backend:
+          serviceName: hello-kubernetes-first
+          servicePort: 80
+&lt;/code&gt;&lt;/PRE&gt;&lt;div class="embed-placeholder" data-type="twitter" data-id="1169997202971930624"&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;It was about this time when I wondered if I was making a mistake moving off of
+Dokku. Dokku really does a lot to abstract almost everything involved with nginx
+away from you, and it &lt;em dir="ltr"&gt;really shows&lt;/em&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;However, as a side effect of everything being so declarative and Kubernetes really
+not assuming anything, you have &lt;em dir="ltr"&gt;a lot&lt;/em&gt; more freedom to do basically anything
+you want. You don’t have to have specially magic names for tasks like &lt;code dir="ltr"&gt;web&lt;/code&gt; or
+&lt;code dir="ltr"&gt;worker&lt;/code&gt; like you do in Heroku/Dokku. You just have a deployment that belongs to
+an “app” that just so happens to expose a TCP port that just so happens to have
+a correlating ingress associated with it.&lt;/p&gt;&lt;p&gt;Lucky for me, most of the apps I write fit into that general format, and the ones
+that don’t can mostly use the same format without the ingress.&lt;/p&gt;&lt;p dir="ltr"&gt;So I &lt;a href="https://github.com/Xe/within-terraform/blob/master/dyson/src/dysonPkg/deployment_with_ingress.yaml" dir="ltr"&gt;templated&lt;/a&gt; that sucker as a subcommand in dyson.
+This lets me do commands like &lt;a href="https://github.com/Xe/within-terraform/blob/master/kube_manifests/h.sh" dir="ltr"&gt;this&lt;/a&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ dyson manifest \
+      --name=hlang \
+      --domain=h.christine.website \
+      --dockerImage=docker.pkg.github.com/xe/x/h:v1.1.8 \
+      --containerPort=5000 \
+      --replicas=1 \
+      --useProdLE=true | kubectl apply -f-
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;And the service gets shunted into the cloud without any extra effort on my part.
+This also automatically sets up Let’s Encrypt, DNS and other things that were
+manual in my Dokku setup. This saves me time for when I want to go add services
+in the future. All I have to do is create a docker image somehow, identify what
+port should be exposed, give it a domain name and number of replicas and just
+send it on its merry way.&lt;/p&gt;&lt;h2&gt;GitHub Actions&lt;/h2&gt;&lt;p dir="ltr"&gt;This does however mean that deployment is no longer as simple as
+“git push; don’t care”. This is where &lt;a href="https://github.com/features/actions" dir="ltr"&gt;GitHub Actions&lt;/a&gt; come into play.
+They claimed to have the ability to run full end-to-end CI/CD on my applications.&lt;/p&gt;&lt;p dir="ltr"&gt;I have been using them for a while for &lt;a href="https://github.com/Xe/site/blob/master/.github/workflows/go.yml" dir="ltr"&gt;CI on my website&lt;/a&gt; and have
+been pleased with them, so I decided to give it a try and set up continuous
+deployment with them.&lt;/p&gt;&lt;p dir="ltr"&gt;As &lt;a href="https://github.com/Xe/site/commits/master/.github/workflows/kubernetes-cd.yml" dir="ltr"&gt;the commit log for the deployment manifest can tell&lt;/a&gt;,
+this took a lot of trial and error. One of the main sources of problems here
+was that GitHub Actions had recently had &lt;em dir="ltr"&gt;a lot&lt;/em&gt; of changes made to
+configuration and usage as compared to when it was in private beta. This
+included changing the configuration schema from &lt;a href="https://github.com/hashicorp/hcl" dir="ltr"&gt;HCL&lt;/a&gt; to &lt;a href="https://yaml.org/" dir="ltr"&gt;YAML&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Of course, all of the documentation (outside of GitHub’s
+&lt;a href="https://help.github.com/en/articles/about-github-actions" dir="ltr"&gt;quite excellent documentation&lt;/a&gt;) was out of date and wrong.
+I tried following a tutorial by &lt;a href="https://blog.digitalocean.com/how-to-deploy-to-digitalocean-kubernetes-with-github-actions/" dir="ltr"&gt;DigitalOcean themselves&lt;/a&gt; on
+how to do this exact thing I wanted to do, but it referenced the old HCL syntax
+for GitHub Actions and did not work. To make things worse, examples
+&lt;a href="https://github.com/marketplace/actions/github-action-for-digitalocean-doctl" dir="ltr"&gt;in the marketplace READMEs&lt;/a&gt; simply DID NOT WORK because
+they were written for the old GitHub Actions syntax.&lt;/p&gt;&lt;p&gt;This was frustrating to say the least.&lt;/p&gt;&lt;p dir="ltr"&gt;After trying to make them work anyways with a combination of the “Use Latest
+Version” button in the marketplace, prayer and gratuitous use of the &lt;code dir="ltr"&gt;with.args&lt;/code&gt;
+field in steps I gave up and decided to manually download the tools I needed
+from their upstream providers and execute them by hand.&lt;/p&gt;&lt;p dir="ltr"&gt;This is how I ended up with &lt;a href="https://github.com/Xe/site/blob/master/.github/workflows/kubernetes-cd.yml#L53-L65" dir="ltr"&gt;this monstrosity&lt;/a&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;- name: Configure/Deploy/Verify Kubernetes
+  run: |
+    curl -L https://github.com/digitalocean/doctl/releases/download/v1.30.0/doctl-1.30.0-linux-amd64.tar.gz | tar xz
+    ./doctl auth init -t $DIGITALOCEAN_ACCESS_TOKEN
+    ./doctl kubernetes cluster kubeconfig show kubermemes &amp;gt; .kubeconfig
+
+    curl -LO https://storage.googleapis.com/kubernetes-release/release/`curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt`/bin/linux/amd64/kubectl
+    chmod +x kubectl
+    ./kubectl --kubeconfig .kubeconfig apply -n apps -f deploy.yml
+    sleep 2
+    ./kubectl --kubeconfig .kubeconfig rollout -n apps status deployment/christinewebsite
+  env:
+    DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;I am almost &lt;em dir="ltr"&gt;certain&lt;/em&gt; that I am doing it wrong here, I don’t know how robust this
+is and I’m very sure that this can and should be done another way; but this is
+the only thing I could get working (for some definition of “working”).&lt;/p&gt;&lt;p&gt;Now when I git push things to the master branch of my blog repo, it will
+automatically get deployed to my Kubernetes cluster.&lt;/p&gt;&lt;p dir="ltr"&gt;If you work at DigitalOcean and are reading this post. Please get someone to
+update &lt;a href="https://blog.digitalocean.com/how-to-deploy-to-digitalocean-kubernetes-with-github-actions/" dir="ltr"&gt;this tutorial&lt;/a&gt; and the README of &lt;a href="https://github.com/marketplace/actions/github-action-for-digitalocean-doctl" dir="ltr"&gt;this repo&lt;/a&gt;.
+The examples listed &lt;em dir="ltr"&gt;DO NOT WORK&lt;/em&gt; for me because I was not in the private beta
+of GitHub Actions. It would also be nice if you had better documentation on how
+to use [your premade action][doctlgithubaction] for usecases like mine. I just
+wanted to download the kubernetes configuration file and run apply against a yaml
+file.&lt;/p&gt;&lt;p&gt;Thanks for reading, I hope this was entertaining. Be well.&lt;/p&gt;&lt;div class="embed-placeholder" data-type="twitter" data-id="1169999209438859264"&gt;&lt;/div&gt;&lt;div dir="ltr"&gt;
+
+
+&lt;button onclick="share_on_mastodon()" dir="ltr"&gt;Share on Mastodon&lt;/button&gt;
+
+&lt;/div&gt;&lt;p dir="ltr"&gt;This article was posted on 2019-09-07. Facts and circumstances may have changed since publication. Please &lt;a href="https://christine.website/contact" dir="ltr"&gt;contact me&lt;/a&gt; before jumping to conclusions if something seems wrong or unclear.&lt;/p&gt;&lt;BLOCKQUOTE&gt;Copyright 2019 Christine Dodrill. Any and all opinions listed here are my own and not representative of my employers; future, past and present.&lt;/BLOCKQUOTE&gt;</description><pubDate>Sat, 07 Sep 2019 16:33:01 -0500</pubDate></item><item><title>Efficiency hacks for programmers</title><link>https://lobste.rs/s/lfl2en</link><description>&lt;p dir="ltr"&gt;Over the years, I've found a number of &lt;em dir="ltr"&gt;efficiency hacks&lt;/em&gt; which make using the computer as a software developer much more smooth and elegant. This involves how I use the OS, the IDE, and other tools. I've found it pays to sharpen the saw and make the flow of work as hurdle-free as possible, especially for the tasks that are repeated many times. The cost of setting things up and learning to use any particular hack non-trivial but fixed, and the benefit is ongoing. In this post, I describe the hacks that made the most impact for me.&lt;/p&gt;&lt;p dir="ltr"&gt;My observation is that efficiency of using a computer &lt;em dir="ltr"&gt;is&lt;/em&gt; important when it comes to software development. Even if the process of programming involves a lot (or even the majority) of thinking instead of typing, the ability to move these thoughts into computer as quickly as possible is of great benefit. How quickly would we build software if we could make the code appear, move around, refactor, delete instantly, all with the power of our thoughts? We cannot do that (at least not in in 2019), but we can definitely make improvements in how we use the currently available interface - the keyboard.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Warning: Certain tips only apply to *nix system, and some only to the Gnome window manager.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h2&gt;1. Vim everywhere&lt;/h2&gt;&lt;h3&gt;Programming&lt;/h3&gt;&lt;p dir="ltr"&gt;I use Vim-mode everywhere I need to type text. This includes programming, of course, but other interfaces as well. Most modern IDEs have some variant of a "Vim mode" or a "Vim plugin" (at least do the JetBrains IDEs, Visual Studio, Eclipse, VS Code, Sublime, Atom). While these are only simulations of the original Vim and do not behave &lt;em dir="ltr"&gt;exactly&lt;/em&gt; the same in all cases, the commands that I actually use are available and mostly identical. Some tinkering is required to resolve any keyboard shortcuts conflicts between the IDE and Vim. But once this is done, programming is faster, and in my experience, more enjoyable.&lt;/p&gt;&lt;video width="600" src="https://rokpovsic.com/videos/efficiency-hacks/vim.webm" controls="" preload="metadata"&gt;&lt;/video&gt;&lt;h3&gt;Browser&lt;/h3&gt;&lt;p dir="ltr"&gt;I also use a Vim extension in the browsers I use, both in &lt;a href="https://addons.mozilla.org/en-US/firefox/addon/vimium-ff/" dir="ltr"&gt;Firefox&lt;/a&gt; and &lt;a href="https://chrome.google.com/webstore/detail/vimium/dbepggeogbaibhgnhhndojpepiihcmeb" dir="ltr"&gt;Chrome&lt;/a&gt;. It makes it possible to browse without leaving the home row position, using K/J to move up/down (I use U/D do move up/down with greater speed), and using F + some-key-combination to visit links. I've also added shortcuts ALT+H and ALT+L to move to back/forward, as I have the same shortcuts for Back and Forward in my IDEs as well.&lt;/p&gt;&lt;video width="600" src="https://rokpovsic.com/videos/efficiency-hacks/browser.webm" controls="" preload="metadata"&gt;&lt;/video&gt;&lt;h3&gt;Terminal&lt;/h3&gt;&lt;p dir="ltr"&gt;I've also have enabled &lt;a href="http://vim.wikia.com/wiki/Use_vi_shortcuts_in_terminal" dir="ltr"&gt;vi-mode&lt;/a&gt; in my Bash terminal. By default, you're in the insert mode, so the command line behaves as it would on some other machine. But you can, of course, switch to the command mode pressing ESC. This comes in handy when there's a long command I'm working on, and can quickly move between the words (with W and B), delete words (DW etc.), insert and beginning/end of the line with I and A, etc.&lt;/p&gt;&lt;video width="600" src="https://rokpovsic.com/videos/efficiency-hacks/terminal.webm" controls="" preload="metadata"&gt;&lt;/video&gt;&lt;h2&gt;2. Terminal usage&lt;/h2&gt;&lt;h3&gt;Better command history with CTRL+R&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/junegunn/fzf" dir="ltr"&gt;fzf&lt;/a&gt; is an excellent tool providing fuzzy (i.e. non-exact) search. This comes in handy when searching for a command which has been executed in the past. The default CTRL+R shell already gives the functionality to scroll through the last commands, and fzf is an improved replacement of that, providing fuzzy search of past commands, and giving a better overview of the history last few commands.&lt;/p&gt;&lt;video width="600" src="https://rokpovsic.com/videos/efficiency-hacks/fzf.webm" controls="" preload="metadata"&gt;&lt;/video&gt;&lt;h3&gt;Git command line shortcuts&lt;/h3&gt;&lt;p dir="ltr"&gt;One of the terminal commands I use the most is &lt;code dir="ltr"&gt;git&lt;/code&gt;. But typing out the &lt;code dir="ltr"&gt;git &amp;lt;something&amp;gt;&lt;/code&gt; commands many times each day became repetitive, so I've set up a number of Git aliases (I got the idea from &lt;a href="https://jonsuh.com/blog/git-command-line-shortcuts/" dir="ltr"&gt;this blog post&lt;/a&gt;).&lt;/p&gt;&lt;p&gt;The shortcuts I mostly use are:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gaa&lt;/code&gt; (&lt;code dir="ltr"&gt;git add .&lt;/code&gt;), &lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gcm&lt;/code&gt; (&lt;code dir="ltr"&gt;git commit --message&lt;/code&gt;), &lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gco&lt;/code&gt; (&lt;code dir="ltr"&gt;git checkout&lt;/code&gt;),&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gcob&lt;/code&gt; (&lt;code dir="ltr"&gt;git checkout --branch&lt;/code&gt;),&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gd&lt;/code&gt; (&lt;code dir="ltr"&gt;git diff&lt;/code&gt;), &lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gds&lt;/code&gt; (&lt;code dir="ltr"&gt;git diff --staged&lt;/code&gt;), &lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gld&lt;/code&gt; (&lt;code dir="ltr"&gt;git log --pretty=format:"%h %ad %s" --date=short --all&lt;/code&gt;),&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gpoh&lt;/code&gt; (&lt;code dir="ltr"&gt;git push origin HEAD&lt;/code&gt;), &lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;grb&lt;/code&gt; (&lt;code dir="ltr"&gt;git rebase&lt;/code&gt;), &lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;grba&lt;/code&gt; (&lt;code dir="ltr"&gt;git rebase --abort&lt;/code&gt;), &lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;grbc&lt;/code&gt; (&lt;code dir="ltr"&gt;git rebase --continue&lt;/code&gt;),&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;gs&lt;/code&gt; (&lt;code dir="ltr"&gt;git status&lt;/code&gt;).&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;I've also set up auto-completion, so when typing &lt;code dir="ltr"&gt;gco mas&amp;lt;TAB&amp;gt;&lt;/code&gt;, &lt;code dir="ltr"&gt;master&lt;/code&gt; auto-completes. Here's what to put to &lt;code dir="ltr"&gt;~/.bash_aliases&lt;/code&gt; (or some other place from where your terminal loads custom code from) to set all this up: &lt;a href="https://rokpovsic.com/pages/git-aliases.html" dir="ltr"&gt;Git Aliases&lt;/a&gt;&lt;/p&gt;&lt;video width="600" src="https://rokpovsic.com/videos/efficiency-hacks/git-aliases.webm" controls="" preload="metadata"&gt;&lt;/video&gt;&lt;h2&gt;3. Gnome Shell&lt;/h2&gt;&lt;p dir="ltr"&gt;Gnome Shell has an excellent &lt;a href="https://extensions.gnome.org/" dir="ltr"&gt;extension system&lt;/a&gt; which provides some truly great extensions. Here's a couple I use.&lt;/p&gt;&lt;h3&gt;Gtile&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;a href="https://extensions.gnome.org/extension/28/gtile/" dir="ltr"&gt;Gtile&lt;/a&gt; provides the functionality of re-positioning of windows within a workspace, similar to what is done when using a tiled window manager. Instead of grabbing a mouse and dragging/resizing a window, use one of the numerous Gtile shortcuts I've set up that position my windows to the places I most often want them to be. For example, I've set up the shortcuts &lt;code dir="ltr"&gt;CTRL+WIN+U/I/N/M&lt;/code&gt; to move the currently focused window to top-left/top-right/bottom-left/bottom-right quarter of the screen, respectively.&lt;/p&gt;&lt;video width="600" src="https://rokpovsic.com/videos/efficiency-hacks/gtile.webm" controls="" preload="metadata"&gt;&lt;/video&gt;&lt;h3&gt;Impatience&lt;/h3&gt;&lt;p dir="ltr"&gt;To speed up animations that take place when switching between workspaces (see below), I use the extension called &lt;a href="https://extensions.gnome.org/extension/277/impatience/" dir="ltr"&gt;Impatiance&lt;/a&gt; which makes animations go faster.&lt;/p&gt;&lt;h3&gt;Drop down terminal&lt;/h3&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://extensions.gnome.org/extension/442/drop-down-terminal/" dir="ltr"&gt;Drop down terminal&lt;/a&gt; extension displays a quick terminal window on the top of the screen, after pressing &lt;code dir="ltr"&gt;CTRL+ALT+F11&lt;/code&gt;.&lt;/p&gt;&lt;video width="600" src="https://rokpovsic.com/videos/efficiency-hacks/top-terminal.webm" controls="" preload="metadata"&gt;&lt;/video&gt;&lt;h3&gt;Hide top bar / No title bar&lt;/h3&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://extensions.gnome.org/extension/545/hide-top-bar/" dir="ltr"&gt;Hide top bar&lt;/a&gt; and &lt;a href="https://extensions.gnome.org/extension/1267/no-title-bar/" dir="ltr"&gt;No title bar&lt;/a&gt; extensions make every program, when on full-screen, use all the available screen real-estate. To me, immersion is increased when the display is showing strictly what's necessary for work to get done.&lt;/p&gt;&lt;h3&gt;Gnome Shell workspaces&lt;/h3&gt;&lt;p dir="ltr"&gt;This is actually not an extension but a part of the base Gnome system. It allows you to have windows in multiple workspaces, between which you can move using a keyboard or a mouse. I use 4 workspaces in one row and move between them using shortcuts &lt;code dir="ltr"&gt;CTRL+ALT+H&lt;/code&gt;/&lt;code dir="ltr"&gt;CTRL+ALT+L&lt;/code&gt; to switch to a workspace on the left/right, and &lt;code dir="ltr"&gt;CTRL+SHIFT+ALT+H/L&lt;/code&gt; to move a window to a workspace on the left/right. I usually use the first workspace to host IDEs and terminals, the second to host Firefox and Slack, and the other two for various less-accessed programs such as KeePass. Using workspaces means in such a way means better organization and fewer pressings of &lt;code dir="ltr"&gt;ALT+TAB&lt;/code&gt;.&lt;/p&gt;&lt;h2&gt;4. Conclusion&lt;/h2&gt;&lt;p dir="ltr"&gt;These efficiency hacks did make my computer usage flow smoother and more enjoyable. It takes time to set everything up, but what I've described here is more or less a fixed cost. One could spend &lt;em dir="ltr"&gt;too much&lt;/em&gt; time if tinkering with it all the time, but from my experience once I add a tool and get used to it, the fixed setup costs are soon reimbursed by increased speed and enjoyment. I highly recommend you give some of these a try.&lt;/p&gt;</description><pubDate>Sun, 08 Sep 2019 09:49:18 -0500</pubDate></item><item><title>dl_platform detection effectively performs "cripple AMD"</title><link>https://lobste.rs/s/mrf5vl</link><description>&lt;div&gt;&lt;span&gt;Sourceware Bugzilla – Bug&amp;nbsp;24979&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span&gt;sysdeps: dl_platform detection effectively performs "cripple AMD"&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span&gt;Last modified: 2019-09-08 06:29:23 UTC&lt;/span&gt;&lt;/div&gt;</description><pubDate>Sun, 08 Sep 2019 04:19:28 -0500</pubDate></item><item><title>Visualising Operating System Derivation</title><link>https://lobste.rs/s/0c2la6</link><description>&lt;article&gt;&lt;time datetime="2019-09-08T16:21"&gt;08 September 2019&lt;/time&gt;&lt;/article&gt;&lt;p dir="ltr"&gt;After I ordered a new laptop yesterday (Huawei MateBook X Pro (2018)) I started
 pondering what OS I might run on it. I started looking through the
 &lt;a href="https://www.distrowatch.com/" dir="ltr"&gt;DistroWatch.com&lt;/a&gt; Top 100 OSes (by Page Hit
 Ranking). This table (shown in the right side bar on the homepage) ranks OSes
@@ -4469,7 +4469,148 @@ Tested build environments are Linux, FreeBSD, and Windows 10 (Windows Subsystem 
 &lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;this will build only kernel (kernel.bin).&lt;/p&gt;&lt;p&gt;To build userspace binaries (while in userspace directory):&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;make
 &lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;this will build userspace binaries in userspace/bin directory.&lt;/p&gt;&lt;p&gt;Now an initrd (initial ramdisk) image is needed to put userspace binaries. To create it, run as root (linux specific):&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;./create-initrd.sh
 &lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This will create initrd.fat file. This is a mountable FAT32 initrd image. Once kernel initialization is complete, initrd contents are copied into /dev/ramdisk1 and it is mounted to /initrd. After that kernel runs the /initrd/shell ELF file.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;./create-cd-image.sh
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This will create soso.iso cd image.&lt;/p&gt;</description><pubDate>Sat, 07 Sep 2019 09:09:48 -0500</pubDate></item><item><title>Why Haskell is important</title><link>https://lobste.rs/s/t0xrew</link><description>&lt;h2&gt;&lt;a href="https://www.tweag.io/blog"&gt;All posts&lt;/a&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;Mark Karpov&lt;/span&gt;&amp;nbsp;&amp;nbsp;|&amp;nbsp;&amp;nbsp;&lt;span dir="ltr"&gt;6 September 2019&lt;/span&gt;&amp;nbsp;&amp;nbsp;|&amp;nbsp;&amp;nbsp;&lt;span dir="ltr"&gt;Tags:&amp;nbsp;&amp;nbsp;&lt;a href="https://www.tweag.io/tag/haskell.html" dir="ltr"&gt;haskell&lt;/a&gt;&lt;/span&gt;&lt;/p&gt;&lt;p&gt;People keep asking me, “What's the point of Haskell, why do you folks even
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This will create soso.iso cd image.&lt;/p&gt;</description><pubDate>Sat, 07 Sep 2019 09:09:48 -0500</pubDate></item><item><title>Kafka Streams, the Clojure way ·</title><link>https://lobste.rs/s/arbxwf</link><description>&lt;h1&gt;Kafka Streams, the Clojure way&lt;/h1&gt;&lt;div dir="ltr"&gt;
+        Posted on
+        &lt;time datetime="2019-08-27T00:00:00+01:00" dir="ltr"&gt;
+          Aug 27, 2019
+        &lt;/time&gt;
+      &lt;/div&gt;&lt;p dir="ltr"&gt;In this blog post, I’ll walk you through how to create a Kafka Streams application in an idiomatic Clojure style. I won’t assume any knowledge of Kafka or Kafka Streams, but if you’ve never heard of them before this post may be a bit overwhelming - I’d check out Confluent’s &lt;a href="https://www.confluent.io/blog/introducing-kafka-streams-stream-processing-made-simple/" dir="ltr"&gt;introduction to Kafka Streams&lt;/a&gt;, and also the &lt;a href="https://kafka.apache.org/documentation/streams/" dir="ltr"&gt;Kafka Streams docs&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Kafka can be thought of as a persistent, highly scalable, distributed message queue. Kafka stores all messages in “topics”, which can be produced to and consumed from. Kafka Streams is an abstraction on top of Kafka, which treats topics as a reactive stream of data onto which you can apply transformations (&lt;code dir="ltr"&gt;map&lt;/code&gt;, &lt;code dir="ltr"&gt;filter&lt;/code&gt;, etc.). It also gives you a way to perform stateful aggregations, in such a way that your application can be safely restarted.&lt;/p&gt;&lt;p dir="ltr"&gt;The Java API for Kafka Streams is very powerful, but has a few drawbacks. It gives you a mutable &lt;a href="http://kafka.apache.org/23/javadoc/org/apache/kafka/streams/StreamsBuilder.html" dir="ltr"&gt;StreamsBuilder&lt;/a&gt; object, on which you call methods like &lt;code dir="ltr"&gt;.map(...)&lt;/code&gt; and &lt;code dir="ltr"&gt;.filter(...)&lt;/code&gt;. You use this builder object to build a &lt;a href="https://kafka.apache.org/23/javadoc/org/apache/kafka/streams/Topology.html" dir="ltr"&gt;Topology&lt;/a&gt;, a logical representation of your application as a graph of processing nodes. You then use the &lt;code dir="ltr"&gt;Topology&lt;/code&gt; to initialise a &lt;a href="http://kafka.apache.org/23/javadoc/org/apache/kafka/streams/KafkaStreams.html" dir="ltr"&gt;KafkaStreams&lt;/a&gt; object, which executes the topology’s logic. We’ll develop an application in this style using the &lt;a href="https://github.com/FundingCircle/jackdaw" dir="ltr"&gt;Jackdaw&lt;/a&gt; library, a Clojure library for Kafka, and then evolve it into a more idiomatic, data-driven style. All the code I’m going to show you is in &lt;a href="https://github.com/DaveWM/kafka-streams-the-clojure-way" dir="ltr"&gt;this walkthrough repo&lt;/a&gt;, so clone it now if you’d like to follow along.&lt;/p&gt;&lt;h2&gt;A Simple Example&lt;/h2&gt;&lt;p&gt;Let’s imagine that you work at Fidget-no-more Incorporated, the world’s largest purveyor of fidget spinners (or whatever the kids are buying nowadays). Your website currently records every purchase in a DB, but other departments are finding it difficult to write applications that react when a purchase is made. The sales team would like their apps to somehow be notified when a large purchase is made, so they can send the user a personalised thank you email. This sounds like the perfect job for Kafka! Here’s what we’ll do:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;On every purchase, produce a message to the &lt;code dir="ltr"&gt;purchase-made&lt;/code&gt; Kafka topic.&lt;/LI&gt;&lt;LI&gt;Create a Kafka Streams app that:
+
+&lt;UL&gt;&lt;LI&gt;Reads from this topic&lt;/LI&gt;&lt;LI&gt;Filters for large purchases (above £100)&lt;/LI&gt;&lt;LI&gt;Removes any extraneous fields from each message (the sales team only need a user id and an amount)&lt;/LI&gt;&lt;LI&gt;Writes to the &lt;code dir="ltr"&gt;large-transaction-made&lt;/code&gt; topic
+&lt;br dir="ltr"&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;Before we start, we need to start up a Kafka “broker”, a server running Kafka. The easiest way to do this is to spin up a &lt;a href="https://github.com/Landoop/fast-data-dev" dir="ltr"&gt;landoop/fast-data-dev&lt;/a&gt; Docker container. You can do this by running the following command (you’ll need &lt;a href="https://www.docker.com/" dir="ltr"&gt;Docker&lt;/a&gt; installed):&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;# On Linux&lt;/span&gt;
+&lt;span dir="ltr"&gt;docker&lt;/span&gt; run &lt;span dir="ltr"&gt;--rm --net=host landoop/fast-data-dev&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;# On Mac&lt;/span&gt;
+&lt;span dir="ltr"&gt;docker&lt;/span&gt; run &lt;span dir="ltr"&gt;--rm -p 2181:2181 -p 3030:3030 -p 8081-8083:8081-8083 -p 9581-9585:9581-9585 -p 9092:9092 -e ADV_HOST=localhost landoop/fast-data-dev:latest &lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;We’ll start by creating the &lt;code dir="ltr"&gt;purchase-made&lt;/code&gt; and &lt;code dir="ltr"&gt;large-transaction-made&lt;/code&gt; topics. Clone the &lt;a href="https://github.com/DaveWM/kafka-streams-the-clojure-way" dir="ltr"&gt;walkthrough repo&lt;/a&gt; if you haven’t already, and start up your repl. Navigate to the &lt;code dir="ltr"&gt;kafka-streams-the-clojure-way.core&lt;/code&gt; namespace, and run these commands:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;;; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;create&lt;/span&gt; the &lt;span dir="ltr"&gt;"purchase-made"&lt;/span&gt; &lt;span dir="ltr"&gt;and&lt;/span&gt; &lt;span dir="ltr"&gt;"large-transaction-made"&lt;/span&gt; topics
+(ja/&lt;span dir="ltr"&gt;create&lt;/span&gt;-topics! admin-client [purchase-made-topic large-&lt;span dir="ltr"&gt;transaction&lt;/span&gt;-made-topic])
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;By the way - all the commands we’re going to run are in the comment block at the bottom of the &lt;code dir="ltr"&gt;kafka-streams-the-clojure-way.core&lt;/code&gt; namespace.&lt;/p&gt;&lt;p dir="ltr"&gt;We now need to produce some dummy messages onto the &lt;code dir="ltr"&gt;purchase-made&lt;/code&gt; topic. These messages are going to look like this:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;{&lt;span dir="ltr"&gt;:id&lt;/span&gt; &lt;span dir="ltr"&gt;1&lt;/span&gt;
+ &lt;span dir="ltr"&gt;:user-id&lt;/span&gt; &lt;span dir="ltr"&gt;1234&lt;/span&gt;
+ &lt;span dir="ltr"&gt;:amount&lt;/span&gt; &lt;span dir="ltr"&gt;20&lt;/span&gt;
+ &lt;span dir="ltr"&gt;:quantity&lt;/span&gt; &lt;span dir="ltr"&gt;5&lt;/span&gt;}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;We’ve already got a &lt;code dir="ltr"&gt;make-purchase!&lt;/code&gt; function defined for us in the &lt;code dir="ltr"&gt;kafka-streams-the-clojure-way.core&lt;/code&gt; namespace, so just run these commands:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;;; Make &lt;span dir="ltr"&gt;a&lt;/span&gt; few dummy purchases
+(&lt;span dir="ltr"&gt;make&lt;/span&gt;-purchase! &lt;span dir="ltr"&gt;10&lt;/span&gt;)
+(&lt;span dir="ltr"&gt;make&lt;/span&gt;-purchase! &lt;span dir="ltr"&gt;500&lt;/span&gt;)
+(&lt;span dir="ltr"&gt;make&lt;/span&gt;-purchase! &lt;span dir="ltr"&gt;50&lt;/span&gt;)
+(&lt;span dir="ltr"&gt;make&lt;/span&gt;-purchase! &lt;span dir="ltr"&gt;1000&lt;/span&gt;)
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;If you’re interested in how &lt;code dir="ltr"&gt;make-purchase!&lt;/code&gt; works, check out the code in the walkthrough repo. It uses the Kafka (not Kafka &lt;em dir="ltr"&gt;Streams&lt;/em&gt;) API, so I’ll just gloss over it here.&lt;/p&gt;&lt;p dir="ltr"&gt;You should see in the &lt;a href="http://localhost:3030/kafka-topics-ui/#/cluster/fast-data-dev/topic/n/purchase-made/" dir="ltr"&gt;fast-data-dev UI&lt;/a&gt; that messages appear in the topic. Now we have a topic with some dummy data in it, we can start writing our Kafka Streams topology. This is already defined in the walkthrough repo, here’s the code:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;(defn simple-topology [builder]
+  (-&amp;gt; ;; &lt;span dir="ltr"&gt;Read&lt;/span&gt; the purchase-made topic into a &lt;span dir="ltr"&gt;KStream&lt;/span&gt;
+      (js/kstream builder purchase-made-topic)
+      ;; &lt;span dir="ltr"&gt;Filter&lt;/span&gt; the &lt;span dir="ltr"&gt;KStream&lt;/span&gt; &lt;span dir="ltr"&gt;for&lt;/span&gt; purchases greater than £&lt;span dir="ltr"&gt;100&lt;/span&gt;
+      (js/filter (fn [[&lt;span dir="ltr"&gt;_&lt;/span&gt; purchase]]
+                   (&amp;lt;= &lt;span dir="ltr"&gt;100&lt;/span&gt; (&lt;span dir="ltr"&gt;:amount&lt;/span&gt; purchase))))
+      ;; &lt;span dir="ltr"&gt;Remove&lt;/span&gt; all but the &lt;span dir="ltr"&gt;:amount&lt;/span&gt; &lt;span dir="ltr"&gt;and&lt;/span&gt; &lt;span dir="ltr"&gt;:user-id&lt;/span&gt; fields from the message.
+      ;; &lt;span dir="ltr"&gt;Note&lt;/span&gt; that the function passed to map takes &lt;span dir="ltr"&gt;and&lt;/span&gt; returns a tuple of [key value].
+      (js/map (fn [[key purchase]]
+                [key (select-keys purchase [&lt;span dir="ltr"&gt;:amount&lt;/span&gt; &lt;span dir="ltr"&gt;:user-id&lt;/span&gt;])]))
+      ;; &lt;span dir="ltr"&gt;Write&lt;/span&gt; our &lt;span dir="ltr"&gt;KStream&lt;/span&gt; to the large-transaction-made topic
+      (js/to large-transaction-made-topic))) 
+
+(defn start! []
+  &lt;span dir="ltr"&gt;"Starts the simple topology"&lt;/span&gt;
+  (let [builder (js/streams-builder)]
+    (simple-topology builder)
+    (doto (js/kafka-streams builder kafka-config)
+      (js/start))))
+
+(defn stop! [kafka-streams-app]
+  &lt;span dir="ltr"&gt;"Stops the given KafkaStreams application"&lt;/span&gt;
+  (js/close kafka-streams-app))
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Run &lt;code dir="ltr"&gt;(def app (start!))&lt;/code&gt; in the repl to start the topology. You should shortly see messages appear on the &lt;code dir="ltr"&gt;large-transaction-made&lt;/code&gt; topic. Magic! Try producing some more messages to the &lt;code dir="ltr"&gt;purchase-made&lt;/code&gt; topic, and your topology should pick them up and process them immediately. When you’re ready to move on, run &lt;code dir="ltr"&gt;(stop! app)&lt;/code&gt; to stop the topology.&lt;/p&gt;&lt;h2&gt;Introducing Transducers&lt;/h2&gt;&lt;p dir="ltr"&gt;We’ve made a good start, but there are a few problems with our code at the moment. One is that our code is not as easy to test as it could be. We can’t directly test the logic of our topology, because it’s tied to the Kafka Streams API. You can use Kafka’s &lt;a href="https://kafka.apache.org/11/javadoc/org/apache/kafka/streams/TopologyTestDriver.html" dir="ltr"&gt;TopologyTestDriver&lt;/a&gt; to run your topology in memory, but this can be quite cumbersome. It would be much easier if we could express our topology’s logic as pure functions, and then test them. Secondly, our code isn’t very composable. If you have 2 separate topologies, there is no easy way of merging them together. Thirdly, the code is tied to a specific context - Kafka Streams. If you want to re-use the same logic for transforming, for example, a core.async channel you’d be forced to re-write it.&lt;/p&gt;&lt;p dir="ltr"&gt;To alleviate these problems, we’re going to use &lt;a href="https://clojure.org/reference/transducers" dir="ltr"&gt;transducers&lt;/a&gt;. Transducers are “a powerful and composable way to build algorithmic transformations that you can reuse in many contexts”. Basically, they allow you to encapsulate the logic of transforming a stream of data, without specific knowledge of what the stream &lt;em dir="ltr"&gt;is&lt;/em&gt;. The stream could be a seq, a core.async channel, or a Kafka topic. If you’re not familiar with them already, you may want to check out &lt;a href="http://blog.cognitect.com/blog/2014/8/6/transducers-are-coming" dir="ltr"&gt;this introductory blog post&lt;/a&gt;. Let’s write a transducer that captures the logic of our topology:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;def&lt;/span&gt; &lt;/span&gt;purchase-made-transducer
+  (comp
+    ;; &lt;span dir="ltr"&gt;Note&lt;/span&gt; that each step takes a [key value] tuple
+    (filter (fn [[&lt;span dir="ltr"&gt;_&lt;/span&gt; purchase]]
+              (&amp;lt;= &lt;span dir="ltr"&gt;100&lt;/span&gt; (&lt;span dir="ltr"&gt;:amount&lt;/span&gt; purchase))))
+    (map (fn [[key purchase]]
+           [key (select-keys purchase [&lt;span dir="ltr"&gt;:amount&lt;/span&gt; &lt;span dir="ltr"&gt;:user-id&lt;/span&gt;])]))))
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;We can easily test the transducer in the repl like this:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;(into []
+      purchase-made-transducer
+      [[&lt;span dir="ltr"&gt;1&lt;/span&gt; {&lt;span dir="ltr"&gt;:purchase-id&lt;/span&gt; &lt;span dir="ltr"&gt;1&lt;/span&gt; &lt;span dir="ltr"&gt;:user-id&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt; &lt;span dir="ltr"&gt;:amount&lt;/span&gt; &lt;span dir="ltr"&gt;10&lt;/span&gt; &lt;span dir="ltr"&gt;:quantity&lt;/span&gt; &lt;span dir="ltr"&gt;1&lt;/span&gt;}]
+       [&lt;span dir="ltr"&gt;3&lt;/span&gt; {&lt;span dir="ltr"&gt;:purchase-id&lt;/span&gt; &lt;span dir="ltr"&gt;3&lt;/span&gt; &lt;span dir="ltr"&gt;:user-id&lt;/span&gt; &lt;span dir="ltr"&gt;4&lt;/span&gt; &lt;span dir="ltr"&gt;:amount&lt;/span&gt; &lt;span dir="ltr"&gt;500&lt;/span&gt; &lt;span dir="ltr"&gt;:quantity&lt;/span&gt; &lt;span dir="ltr"&gt;100&lt;/span&gt;}]])
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;We’ve successfully isolated the logic of our topology as a pure function. This enables us to easily test our topology’s logic. Now we’ll update our topology to use this transducer. We’re going to use the &lt;code dir="ltr"&gt;transduce-stream&lt;/code&gt; function here - you don’t need to know exactly how it works, only that it applies a transducer to a &lt;code dir="ltr"&gt;KStream&lt;/code&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;(defn build-topology-&lt;span dir="ltr"&gt;with&lt;/span&gt;-transducer [builder]
+  (&lt;span dir="ltr"&gt;-&amp;gt;&lt;/span&gt; (js/kstream builder purchase-made-topic)
+      (transduce-stream purchase-made-transducer)
+      (js/to large-transaction-made-topic)))
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Great, this seems to have made our code more testable, flexible, and composable.&lt;/p&gt;&lt;h2&gt;A more complicated Example&lt;/h2&gt;&lt;p dir="ltr"&gt;Unfortunately, your boss now comes to you with another requirement (as they always do). Your company has just launched a new way of buying fidget spinners - The Humble Spinner Bundle™. Your customers pay whatever they think is fair for a bundle of 10 (ten!) fidget spinners. This is on a completely separate site, but luckily the team in charge of building it have created a Kafka topic for you, onto which they’ll publish all the purchases of the humble bundle - &lt;code dir="ltr"&gt;humble-donation-made&lt;/code&gt;. The sales team would like to send a congratulatory email to customers who pay a large amount for the bundle, in the same way as they do for regular purchases. Therefore, you’ve been tasked with consuming this topic in your application. Unfortunately, the team building the &lt;code dir="ltr"&gt;humble-donation-made&lt;/code&gt; topic have come up with a message schema that’s slightly different to &lt;code dir="ltr"&gt;purchase-made&lt;/code&gt;. &lt;code dir="ltr"&gt;humble-donation-made&lt;/code&gt; messages look like this:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;{&lt;span dir="ltr"&gt;:user-id&lt;/span&gt; &lt;span dir="ltr"&gt;1234&lt;/span&gt;
+ &lt;span dir="ltr"&gt;:donation-amount-cents&lt;/span&gt; &lt;span dir="ltr"&gt;1000&lt;/span&gt; ;; £&lt;span dir="ltr"&gt;10&lt;/span&gt;
+ &lt;span dir="ltr"&gt;:donation-date&lt;/span&gt; &lt;span dir="ltr"&gt;"2019-01-02"&lt;/span&gt;}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;We’ll need to create a &lt;code dir="ltr"&gt;KStream&lt;/code&gt; from the &lt;code dir="ltr"&gt;humble-donation-made&lt;/code&gt; topic, apply a transducer to it, then use Jackdaw’s &lt;code dir="ltr"&gt;merge&lt;/code&gt; function to merge it with the &lt;code dir="ltr"&gt;KStream&lt;/code&gt; from our previous topology. Let’s start with the transducer for the &lt;code dir="ltr"&gt;humble-donation-made&lt;/code&gt; topic:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;(def humble-donation-made-transducer
+  (comp
+    ;; Again, each step takes a [key value] tuple
+    (filter (fn [[_ donation]]
+              (&amp;lt;= &lt;span dir="ltr"&gt;10000&lt;/span&gt; (:donation-amount-cents donation))))
+    (map (fn [[key donation]]
+           [key {:user-&lt;span dir="ltr"&gt;id&lt;/span&gt; (:user-&lt;span dir="ltr"&gt;id&lt;/span&gt; donation)
+                 :amount (&lt;span dir="ltr"&gt;int&lt;/span&gt; (/ (:donation-amount-cents donation) &lt;span dir="ltr"&gt;100&lt;/span&gt;))}]))))
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Now for the topology itself, this is what the code looks like:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;(defn more-complicated-topology [builder]
+  (&lt;span dir="ltr"&gt;js&lt;/span&gt;/merge
+    (-&amp;gt; (&lt;span dir="ltr"&gt;js&lt;/span&gt;/kstream builder purchase-made-topic)
+        (transduce-stream purchase-made-transducer))
+    (-&amp;gt; (&lt;span dir="ltr"&gt;js&lt;/span&gt;/kstream builder humble-donation-made-transducer)
+        (transduce-stream humble-donation-made-transducer))))
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This will work, but we’ve re-introduced all the problems we had before we started using transducers. Our code is now less testable, less composable, and less portable. As Clojure programmers, we know exactly what to do when we’re confronted with this problem - express everything as data! If only there were a library that could help us out…&lt;/p&gt;&lt;h2&gt;Introducing Willa&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/DaveWM/willa" dir="ltr"&gt;Willa&lt;/a&gt; is just such a library. It allows you to express your topology as data and functions, rather than using the mutable &lt;code dir="ltr"&gt;StreamsBuilder&lt;/code&gt; API. Full disclosure - I’m the author of Willa, so if you’re looking for an unbiased critique of it, I’d just stop reading now. Let’s see how it would affect our code. We’ll start by defining all our topics and &lt;code dir="ltr"&gt;KStream&lt;/code&gt;s. In Willa, these are called “entities”. We first need to construct a map of entity id to entity config, like so:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;def&lt;/span&gt; &lt;span dir="ltr"&gt;entities&lt;/span&gt;
+&lt;/span&gt;  ;; &lt;span dir="ltr"&gt;We&lt;/span&gt;&lt;span dir="ltr"&gt;'ll&lt;/span&gt; define our topic entities first
+  ;; &lt;span dir="ltr"&gt;For&lt;/span&gt; the values, we just need to add the ::w/entity-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;to&lt;/span&gt; &lt;span dir="ltr"&gt;our&lt;/span&gt; &lt;span dir="ltr"&gt;existing&lt;/span&gt; &lt;span dir="ltr"&gt;topic&lt;/span&gt; &lt;span dir="ltr"&gt;configs&lt;/span&gt;
+&lt;/span&gt;  {:topic/purchase-made (assoc purchase-made-topic ::w/entity-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt; :&lt;/span&gt;topic)
+   :topic/humble-donation-made (assoc humble-donation-made-topic ::w/entity-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt; :&lt;/span&gt;topic)
+   :topic/large-transaction-made (assoc large-transaction-made-topic ::w/entity-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt; :&lt;/span&gt;topic)
+   
+   ;; &lt;span dir="ltr"&gt;We&lt;/span&gt; now define our &lt;span dir="ltr"&gt;KStreams&lt;/span&gt;
+   ;; &lt;span dir="ltr"&gt;This&lt;/span&gt; is where we define the transducers we apply to the &lt;span dir="ltr"&gt;KStream&lt;/span&gt;, as the ::w/xform key
+   :stream/large-purchase-made {::w/entity-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt; :&lt;/span&gt;kstream
+                                ::w/xform purchase-made-transducer}
+   :stream/large-donation-made {::w/entity-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt; :&lt;/span&gt;kstream
+                                ::w/xform humble-donation-made-transducer}})
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;So far so good. We now need to define how our topics and streams relate to each other - how the data flows through our topology. Willa models a topology as a graph (a DAG) of entities. You express this as a vector of tuples. Each tuple has 2 elements, in the format &lt;code dir="ltr"&gt;[:entity-id-from :entity-id-to]&lt;/code&gt;, and represents a directed edge on the topology graph. Willa calls this a “workflow”. Our workflow looks like this:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;def&lt;/span&gt; &lt;/span&gt;workflow
+  [[&lt;span dir="ltr"&gt;:topic/purchase-made&lt;/span&gt; &lt;span dir="ltr"&gt;:stream/large-purchase-made&lt;/span&gt;]
+   [&lt;span dir="ltr"&gt;:topic/humble-donation-made&lt;/span&gt; &lt;span dir="ltr"&gt;:stream/large-donation-made&lt;/span&gt;]
+   
+   ;; &lt;span dir="ltr"&gt;When&lt;/span&gt; there are multiple edges pointing to the same node, &lt;span dir="ltr"&gt;Willa&lt;/span&gt; will merge the inputs by default
+   [&lt;span dir="ltr"&gt;:stream/large-purchase-made&lt;/span&gt; &lt;span dir="ltr"&gt;:topic/large-transaction-made&lt;/span&gt;]
+   [&lt;span dir="ltr"&gt;:stream/large-donation-made&lt;/span&gt; &lt;span dir="ltr"&gt;:topic/large-transaction-made&lt;/span&gt;]])
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Putting it together:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;def&lt;/span&gt; &lt;/span&gt;topology
+  {&lt;span dir="ltr"&gt;:workflow&lt;/span&gt; workflow
+   &lt;span dir="ltr"&gt;:entities&lt;/span&gt; entities})
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;That’s all we need to do to completely specify our topology. One nice advantage of doing it this way is that we can now visualise our topology. Run this command in the repl:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;(&lt;span dir="ltr"&gt;wv&lt;/span&gt;/&lt;span dir="ltr"&gt;view&lt;/span&gt;-topology topology)
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;You should see a diagram like this:&lt;/p&gt;&lt;img src="https://clojure-conundrums.co.uk/images/topology.png" alt="Topology Diagram" width="330" height="150"&gt;&lt;p&gt;Nice! To get it running, we just need a few lines of code to compile Willa’s representation of our topology into an actual Kafka Streams topology:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;;; Create the humble-purchase-made topic
+(ja/create-topics! admin-client [humble-donation-made-topic])
+
+;; Start the topology
+(&lt;span dir="ltr"&gt;let&lt;/span&gt; [builder (js/streams-builder)]
+    (&lt;span dir="ltr"&gt;w&lt;/span&gt;/build-topology! builder topology)
+    (js/start (js/kafka-streams builder kafka-config)))
+	
+;; Publish &lt;span dir="ltr"&gt;a&lt;/span&gt; couple of &lt;span dir="ltr"&gt;messages&lt;/span&gt; &lt;span dir="ltr"&gt;to&lt;/span&gt; the &lt;span dir="ltr"&gt;input&lt;/span&gt; topics
+(&lt;span dir="ltr"&gt;make&lt;/span&gt;-purchase! &lt;span dir="ltr"&gt;200&lt;/span&gt;)
+(&lt;span dir="ltr"&gt;make&lt;/span&gt;-humble-donation! &lt;span dir="ltr"&gt;15000&lt;/span&gt;)
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;You should now see some more messages appear in the &lt;a href="http://localhost:3030/kafka-topics-ui/#/cluster/fast-data-dev/topic/n/large-transaction-made/" dir="ltr"&gt;large-transaction-made topic&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;So now we’ve completely specified our topology as data structures and transducers. What does that give us, other than being able to brag to other developers about how decomplected our code is? (Note - please don’t do that). One advantage is that, as we saw earlier, we’re able to test each transducer in isolation without knowing anything about Kafka Streams. We can also see how data flows through our topology, without interacting with Kafka at all. Willa calls this an “experiment”. Run this in the repl:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;  ;; &lt;span dir="ltr"&gt;Run&lt;/span&gt; an experiment
+  (&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;def&lt;/span&gt; &lt;/span&gt;experiment
+    (we/run-experiment
+      topology
+      {&lt;span dir="ltr"&gt;:topic/purchase-made&lt;/span&gt; [{&lt;span dir="ltr"&gt;:key&lt;/span&gt; &lt;span dir="ltr"&gt;1&lt;/span&gt;
+                              &lt;span dir="ltr"&gt;:value&lt;/span&gt; {&lt;span dir="ltr"&gt;:id&lt;/span&gt; &lt;span dir="ltr"&gt;1&lt;/span&gt;
+                                      &lt;span dir="ltr"&gt;:amount&lt;/span&gt; &lt;span dir="ltr"&gt;200&lt;/span&gt;
+                                      &lt;span dir="ltr"&gt;:user-id&lt;/span&gt; &lt;span dir="ltr"&gt;1234&lt;/span&gt;
+                                      &lt;span dir="ltr"&gt;:quantity&lt;/span&gt; &lt;span dir="ltr"&gt;100&lt;/span&gt;}}]
+       &lt;span dir="ltr"&gt;:topic/humble-donation-made&lt;/span&gt; [{&lt;span dir="ltr"&gt;:key&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;
+                                     &lt;span dir="ltr"&gt;:value&lt;/span&gt; {&lt;span dir="ltr"&gt;:user-id&lt;/span&gt; &lt;span dir="ltr"&gt;2345&lt;/span&gt;
+                                             &lt;span dir="ltr"&gt;:donation-amount-cents&lt;/span&gt; &lt;span dir="ltr"&gt;15000&lt;/span&gt;
+                                             &lt;span dir="ltr"&gt;:donation-date&lt;/span&gt; &lt;span dir="ltr"&gt;"2019-01-02"&lt;/span&gt;}}]}))
+
+  ;; &lt;span dir="ltr"&gt;Visualise&lt;/span&gt; experiment result
+  (wv/view-topology experiment)
+
+  ;; &lt;span dir="ltr"&gt;View&lt;/span&gt; results as data
+  (we/results-only experiment)
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The experiment results should look like this:&lt;/p&gt;&lt;img src="https://clojure-conundrums.co.uk/images/experiment.png" alt="Experiment Results Diagram" width="330" height="67"&gt;&lt;p dir="ltr"&gt;You can also verify that the topology is valid in the repl, using &lt;a href="https://clojure.org/about/spec" dir="ltr"&gt;clojure.spec&lt;/a&gt;. You can do this by running:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;;; &lt;span dir="ltr"&gt;Should&lt;/span&gt; print &lt;span dir="ltr"&gt;"Success!!"&lt;/span&gt;
+(s/explain &lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;:ws/topology&lt;/span&gt; topology)
+
+
+;; &lt;span dir="ltr"&gt;What&lt;/span&gt; happens with an invalid topology?
+(s/explain &lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;:ws/topology&lt;/span&gt;
+           ;; introduce a loop &lt;span dir="ltr"&gt;in&lt;/span&gt; our topology, which is &lt;span dir="ltr"&gt;not&lt;/span&gt; allowed
+           (update topology &lt;span dir="ltr"&gt;:workflow&lt;/span&gt; conj [&lt;span dir="ltr"&gt;:topic/large-transaction-made&lt;/span&gt; &lt;span dir="ltr"&gt;:topic/purchase-made&lt;/span&gt;]))
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The real advantage of Willa is that it relies on standard Clojure data structures as much as possible. This allows you to do things like serialise your topology as EDN, programatically manipulate it, and also query it - for example, try writing a function to count the number of topics involved in a topology.&lt;/p&gt;&lt;h2&gt;Summary&lt;/h2&gt;&lt;p dir="ltr"&gt;I hope that’s given you a brief overview of how to write a basic Kafka Streams topology. If you’re interested in learning more I’d recommend reading &lt;a href="https://docs.confluent.io/current/streams/concepts.html#kafka-101" dir="ltr"&gt;Kafka 101&lt;/a&gt; and &lt;a href="https://www.confluent.io/designing-event-driven-systems" dir="ltr"&gt;Designing Event Driven Systems&lt;/a&gt;. I’d also recommend &lt;a href="https://www.udemy.com/share/1006h8BUIbeF9VQHw=/?xref=E0cacVdTQnkBSV82AT0GJVUWTx4dChQ%2BVFE=" dir="ltr"&gt;this Kafka Streams Udemy course&lt;/a&gt;. We’ve barely scratched the surface of Kafka Streams, there are many more concepts to learn (😓). We haven’t even touched on things like &lt;code dir="ltr"&gt;KTable&lt;/code&gt;s, aggregations, or joins. Willa is just an experiment at this point, but hopefully it’s given you some food for thought. I’d also recommend checking out the &lt;a href="https://github.com/cddr/ksml" dir="ltr"&gt;ksml&lt;/a&gt; and &lt;a href="https://github.com/blak3mill3r/noah" dir="ltr"&gt;Noah&lt;/a&gt; libraries, which have similar goals to Willa but a slightly different approach. Thanks for reading, please don’t hesitate to email me if you have any questions or comments.&lt;/p&gt;&lt;img alt="Author Avatar" src="https://clojure-conundrums.co.uk/images/profile.jpg" width="100" height="100"&gt;&lt;h1&gt;Dave Martin&lt;/h1&gt;&lt;div&gt;Clojure developer at Funding Circle&lt;/div&gt;</description><pubDate>Sun, 08 Sep 2019 13:31:12 -0500</pubDate></item><item><title>Why Haskell is important</title><link>https://lobste.rs/s/t0xrew</link><description>&lt;h2&gt;&lt;a href="https://www.tweag.io/blog"&gt;All posts&lt;/a&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;Mark Karpov&lt;/span&gt;&amp;nbsp;&amp;nbsp;|&amp;nbsp;&amp;nbsp;&lt;span dir="ltr"&gt;6 September 2019&lt;/span&gt;&amp;nbsp;&amp;nbsp;|&amp;nbsp;&amp;nbsp;&lt;span dir="ltr"&gt;Tags:&amp;nbsp;&amp;nbsp;&lt;a href="https://www.tweag.io/tag/haskell.html" dir="ltr"&gt;haskell&lt;/a&gt;&lt;/span&gt;&lt;/p&gt;&lt;p&gt;People keep asking me, “What's the point of Haskell, why do you folks even
 use it?”. How can you answer this? Most of us Haskell practitioners would
 start talking about strong static types, the elegance of abstractions, and
 ease of refactoring—but we would be missing the bigger picture. That's
@@ -5716,6 +5857,4 @@ Sudoku        |    &lt;span dir="ltr"&gt;6&lt;/span&gt;      &lt;span dir="ltr"&
  directories:
    - /home/travis/.julia&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;We let it run on Julia 1.0 (Long term support version), the current latest release 1.2 and the latest not released build of Julia (nightly) on both linux and osx. It's okay if it fails on nightly. Additionally we want to see whether we test every part of our code with &lt;code dir="ltr"&gt;codecov&lt;/code&gt;. &lt;/p&gt;&lt;p dir="ltr"&gt;After pushing the repository to &lt;a href="https://github.com/Wikunia/ConstraintSolver.jl" dir="ltr"&gt;GitHub&lt;/a&gt; we can set up &lt;a href="https://travis-ci.org/" dir="ltr"&gt;travis-ci&lt;/a&gt;. There we need to activate our repository in the settings tab and then trigger the build. The codecov is shown on &lt;a href="https://codecov.io/gh/Wikunia/ConstraintSolver.jl" dir="ltr"&gt;codecov.io&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;There we see that we didn't test for any kind of infeasibility calls and the biggest blog is that we never printed the search space. I'll add that but the blog post is long enough ;)&lt;/p&gt;&lt;p&gt;And the second post is online:&lt;/p&gt;&lt;p&gt;Thanks for reading!&lt;/p&gt;&lt;p dir="ltr"&gt;I'll keep you updated if there are any news on this on &lt;a href="https://twitter.com/opensourcesblog" dir="ltr"&gt;Twitter OpenSourcES&lt;/a&gt; as well as my more personal one:
 &lt;a href="https://twitter.com/wikunia_de" dir="ltr"&gt;Twitter Wikunia_de&lt;/a&gt; &lt;/p&gt;&lt;p dir="ltr"&gt;If you enjoy the blog in general please consider a donation via &lt;a href="https://www.patreon.com/opensources" dir="ltr"&gt;Patreon&lt;/a&gt;.
-You can read my posts earlier than everyone else and keep this blog running.&lt;/p&gt;</description><pubDate>Sat, 07 Sep 2019 17:18:10 -0500</pubDate></item><item><title>Approximating the Sine Function</title><link>https://lobste.rs/s/pslzfj</link><description>&lt;div&gt;Sines and cosines are familiar to all students of trigonometry.  Typically associated with right triangles, they are projections onto Cartesian x and y axes of a line sweeping around a unit circle centered on the origin.&lt;/div&gt;&lt;div&gt;Below is an animation showing the sine function.  Sines and cosines are periodic in nature and repeat after a complete revolution of the unit circle in 2π radians (360°).&lt;/div&gt;&lt;div dir="ltr"&gt;There is no exact polynomial equation for a sine wave.  Those familiar with &lt;a href="https://en.wikipedia.org/wiki/Taylor_series" dir="ltr"&gt;Taylor’s and MacLaurin’s functions&lt;/a&gt; will know they can be approximated by an infinite series of polynomials.&lt;/div&gt;&lt;div&gt;For example, close to x=0, the value for sine can be approximated by:&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/mc.png" width="320" height="30"&gt;&lt;div&gt;That’s a lot of calculation.&lt;/div&gt;&lt;div dir="ltr"&gt;&lt;small dir="ltr"&gt;Advertisement:&lt;/small&gt;		
-
-&lt;/div&gt;&lt;h2&gt;Good Enough?&lt;/h2&gt;&lt;div dir="ltr"&gt;These days, computer CPUs have built in trig functions and these are heavily optimized, but when I first started with coding you had to do everything yourself.  In the interests of speed, often approximations were acceptable that gave results that were &lt;i dir="ltr"&gt;”good enough”&lt;/i&gt; which could be calculated computationally cheaply.  Typically, these approximations were used in games.&lt;/div&gt;&lt;div&gt;Let’s look at some ways we can approximate the sine function (and thus the cosine function, which is just the same, with a constant phase lag).&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/ban.png" width="320" height="31"&gt;&lt;div&gt;Because of the periodic nature of the sine wave, we only need to consider a small part of the continuous function (which repeats every 2π radians).  With simple reflections and translations, if we can approximate just one part, we can use this to determine the sine at any value.&lt;/div&gt;&lt;div&gt;If you look at the first hump of a sine wave it looks vaguely quadratic in nature.  If we were to generate this as a quadratic, how good is this polynomial approximation?&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/sinequadopt.gif" width="320" height="154"&gt;&lt;div dir="ltr"&gt;Let’s break out a little math.  To generate a quadratic, we need to specify three points.  We can select the two locations where the function crosses the x-axis, and the peak value: &lt;i dir="ltr"&gt;p1, p2, p3&lt;/i&gt;.&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/3p.png" width="320" height="227"&gt;&lt;div&gt;The generic formula for a quadratic is:&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/eq1.png" width="320" height="15"&gt;&lt;div&gt;For the three points: p1, p2, p3 we can generate three equations:&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/eq2.png" width="320" height="65"&gt;&lt;div&gt;Combining these simultaneous equations, we get the results that.&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/eq3.png" width="320" height="11"&gt;&lt;div&gt;This gives the equation:&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/eq4.png" width="320" height="104"&gt;&lt;div&gt;Which is pretty neat, just a couple of multiplications, and a subtraction, we have a quadratic approximation for sine. Pretty cool!  &lt;/div&gt;&lt;h2&gt;How good is this approximation?&lt;/h2&gt;&lt;div dir="ltr"&gt;OK, how good is this approximation? One way to quickly see is to try and use it!  Using the formula above for sin, and applying the appropriate translations/reflections to extent outside of the range &lt;i dir="ltr"&gt;0-π&lt;/i&gt; and making a cosine approximation with a phase lag, we can use these approximate sine and cosine functions to regenerate the unit circle. (Use the buttons at the top to toggle rendering of each curve).&lt;/div&gt;&lt;div&gt;As you can see, the results are fairly good.  Sure, the circle is slightly distorted, but as a first approximation it’s really not bad.  If you were using these approximations in a rapidly moving game, you’d probably not notice the difference too much (though to be honest, if you needed that much speed, the old standby of usiong a pre-computed look-up table of values would be your best choice! If you had the memory; The dilemas modern programmers don't often have to be concerned about …)&lt;/div&gt;&lt;h2&gt;Errors&lt;/h2&gt;&lt;div dir="ltr"&gt;Mathematically, how good is our approximation?  Let’s take a closer look.  Here is a plot of the two curves over the range &lt;i dir="ltr"&gt;0-π&lt;/i&gt;.  You can see they are close, to a first order approximation.&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/g1.png" width="320" height="96"&gt;&lt;div dir="ltr"&gt;Below is a plot of their &lt;i dir="ltr"&gt;differences&lt;/i&gt; over the same range.  The peak error is approximately 0.056 (12.2%), corresponding to around 0.47 radians (approx. 27°).  This the worst the approximation gets.  The error is the difference between our approximation and the true value of sin at that location.  Interestingly, the quadratic approximation is always higher than the true sine.&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/g2.png" width="320" height="96"&gt;&lt;div&gt;However, a better measure of “goodness” can be obtained by squaring the error (to both always make it positive and penalize large variances), and integrating over the entire range.&lt;/div&gt;&lt;div&gt;Here is a plot of the error squared.  The smaller we can make the area under the curve the “better” our approximation is (I’m using “better” in quotes here as it’s open to interpretation what better means, depending on your need).&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/g3.png" width="320" height="96"&gt;&lt;h2&gt;Can we do better?&lt;/h2&gt;&lt;div&gt;The approximate sine function we derived above is always larger than the true sine value.&lt;/div&gt;&lt;div&gt;Can we get a slightly smaller squared error if we relax our constraints?  To calculate the quadratic above we applied the restriction that the curve passed through the three points: p1, p2, p3 (these were sensible constraints as we know the true sine function passes through these cardinal points).  What if we removed these restrictions, and generated a quadratic with the lowest squared error?&lt;/div&gt;&lt;div dir="ltr"&gt;If this resulted in a quadratic that &lt;i dir="ltr"&gt;straddled&lt;/i&gt; the sine function this might lower the total error even if it did not pass through the cardinal points.&lt;/div&gt;&lt;div&gt;Let's take a look.&lt;/div&gt;&lt;div&gt;Here is the formula for the error squared metric.  We take the difference between the quadratic approximation and the true sine, square it, then integrate it over the range we care about.&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/eq5.png" width="320" height="39"&gt;&lt;div dir="ltr"&gt;You can expand this out and do the integration (better make a fresh pot of tea), or you can cheat and use &lt;b dir="ltr"&gt;WolframAlpha&lt;/b&gt;. You get this result:&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/eq6.png" width="320" height="32"&gt;&lt;div dir="ltr"&gt;We now need to determine the values for &lt;i dir="ltr"&gt;a,b,c&lt;/i&gt; to minimize this function.&lt;/div&gt;&lt;div&gt;Calculus comes to the rescue again, and we can find the turning points by calculating the partial derivatives with respect to each variable and setting these to zero.&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/eq7.png" width="320" height="37"&gt;&lt;div&gt;This gives us three equations for the three unknowns:&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/eq8.png" width="320" height="109"&gt;&lt;div&gt;A little bit of substution later gives the values of the three variables.&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/eq9.png" width="320" height="33"&gt;&lt;div&gt;This gives the final formula for the quadratic as (I've also given the approximate decimal values for the parameters):&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/eq10.png" width="320" height="61"&gt;&lt;h2&gt;How does this look?&lt;/h2&gt;&lt;div&gt;Here we can see how this new quadratic looks against the unit circle.&lt;/div&gt;&lt;div dir="ltr"&gt;As you can see, it's a better fit and laces in and out of the true sine circle.  It lowers the squared error this way (like a &lt;a href="http://datagenetics.com/blog/august12013/index.html" dir="ltr"&gt;least squared fit&lt;/a&gt;), but at the expense that it's not 'true' at four cardinal points (though it &lt;i dir="ltr"&gt;is&lt;/i&gt; true at &lt;i dir="ltr"&gt;twice&lt;/i&gt; as many points as the first quadratic!)&lt;/div&gt;&lt;h2&gt;Graphing&lt;/h2&gt;&lt;div&gt;Here's our least squared error quadratic plotted next to the true sine.  You can see it's much closer, and vacilates over and under the true curve to keep the error low.&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/g4.png" width="320" height="96"&gt;&lt;div&gt;Here is the difference (error) between the the two curves.  As you can see, this time, sometimes the errors are positive, and sometimes negative.  The peak error occurs at zero.&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/g5.png" width="320" height="96"&gt;&lt;div dir="ltr"&gt;And finally, here is a graph of the error&lt;sup dir="ltr"&gt;2&lt;/sup&gt;.&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/g6.png" width="320" height="96"&gt;&lt;div&gt;Our first quadratic had an errors squared intergral of approx 0.00404  The least squared quadratic reduces this to approx 0.000957 (a four fold improvement).&lt;/div&gt;&lt;h2&gt;Can we do better still?&lt;/h2&gt;&lt;div dir="ltr"&gt;Can we do better still? Using a single quadratic, no.  The least squared quadratic, by definition, minimizes the error squared integral (and we proved this with Calculus).  We could get a better fit curve by increasing the order of the polynomial.  Instead of using an order two polynomial, we could fit a higher order through more known points, but there's another fascinating and historical approximation created by the ratio of &lt;i dir="ltr"&gt;two&lt;/i&gt; quadratics.  I'll explain it first, and then we'll look at a (potential) way it was discovered, because, it's so old, and there is no documentation about how it was originally derived.&lt;/div&gt;&lt;h2&gt;Bhaskara I approximation&lt;/h2&gt;&lt;div dir="ltr"&gt;Back in ancient times &lt;i dir="ltr"&gt;(c. 600-680)&lt;/i&gt;, long before Calculus, and even when the value for Pi was not known very accurately, a seventh-century Indian mathematician called &lt;i dir="ltr"&gt;Bhaskara I&lt;/i&gt; derived a staggeringly simple and accurate approximation for the sine function. This formula is given in his treatise titled Mahabhaskariya. It is not known how Bhaskara I arrived at his approximation formula.&lt;/div&gt;&lt;div&gt;Here is his formula.  It's quotient of two quadratics.&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/eq11.png" width="320" height="35"&gt;&lt;div&gt;This approximation is so good that, at the scale of the graphs I'm using here, the curve is indistinguishable from the true sine curve.  Below, the true sine line is shown in the red-dashed line, and the approximation in blue.&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/g7.png" width="320" height="96"&gt;&lt;div&gt;When used to plot the unit circle, at the resolution of this web page, the 'circle' produced by Bhaskara is indistinguishable from a true unit circle.&lt;/div&gt;&lt;h2&gt;Derivation&lt;/h2&gt;&lt;div dir="ltr"&gt;As mentioned above, there is no record about how Bhaskara derived his equation.  Here is some speculation of a way that it &lt;i dir="ltr"&gt;could&lt;/i&gt; have been done. Hold on, we're on for a bumpy ride …&lt;/div&gt;&lt;div&gt;Let's go back to our first quadratic approximation:&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/eq12.png" width="320" height="36"&gt;&lt;div&gt;This approximation was accurate at the cardinal points of x=0, and x=π (where the curve crosses the axis), and also at x=π/2 (the peak), but not so accurate in the middle.  We know that sin(π/6)=0.5; this is sin(30°); similarly at x=5π/6, 150° the value should be 0.5 If we insert the value x=π/6 into the above equation, we get y=5/9 and not the desired value of 1/2.  If we could find a way to scale the above equation to make so the value at x=π/6 was 1/2, without disturbing too much the other values, we might have a solution …&lt;/div&gt;&lt;div&gt;We can apply a scale factor by dividing by another function.  It can't be a linear function (as this would adjust all values the same and change the end points).  Let's try another quadratic … &lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/eq13.png" width="320" height="61"&gt;&lt;div dir="ltr"&gt;We need the value at x=π/2 to remain the same so the value of our denominator function should be 1.0 at this point.  We've also determined that the value at x=π/6 &lt;i dir="ltr"&gt;should&lt;/i&gt; be 1/2, but it's actually 5/9, so if we can make our denominator factor here 10/9, then (5/9)÷(10/9) = 1/2, which is what we need.  For symmetry, we also want our denominator function at x=5π/6 to have a value to 10/9.&lt;/div&gt;&lt;div&gt;We now have three points, and can make a scaling quadratic.&lt;/div&gt;&lt;div&gt;(x=π/6, y=10/9)&amp;nbsp;&amp;nbsp;&amp;nbsp;(x=π/2, y=1)&amp;nbsp;&amp;nbsp;&amp;nbsp;(x=5π/6, y=10/9)&lt;/div&gt;&lt;div dir="ltr"&gt;Plug these points into the generic quadratic formula gives three equations.  We need to determine the three unknowns: &lt;i dir="ltr"&gt;a,b,c&lt;/i&gt;.&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/eq14.png" width="320" height="120"&gt;&lt;div&gt;A little substition reveals these constants are:&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/eq15.png" width="320" height="34"&gt;&lt;div&gt;This gives the equation for the demonimator function to be:&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/eq16.png" width="320" height="37"&gt;&lt;div&gt;Inserting this into the ratio, and simplifying, gives this result.&lt;/div&gt;&lt;img src="http://datagenetics.com/blog/july12019/eq17.png" width="320" height="146"&gt;&lt;div dir="ltr"&gt;Which happens to be &lt;i dir="ltr"&gt;Bhaskara I's&lt;/i&gt; equation!  I have no idea if he derived it this way, but it's certainly a very cool equation.  The accuracy, for such a simple function, is staggering!&lt;/div&gt;&lt;p&gt;© 2009-2019 DataGenetics&lt;/p&gt;</description><pubDate>Sat, 07 Sep 2019 08:02:02 -0500</pubDate></item></channel></rss>
+You can read my posts earlier than everyone else and keep this blog running.&lt;/p&gt;</description><pubDate>Sat, 07 Sep 2019 17:18:10 -0500</pubDate></item></channel></rss>
