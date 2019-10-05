@@ -771,176 +771,7 @@ and beating &lt;code dir="ltr"&gt;std::visit&lt;/code&gt; entirely by accident.&
       with
       &lt;a href="http://jaspervdj.be/hakyll" dir="ltr"&gt;Hakyll&lt;/a&gt;.
       Hosted with &lt;span dir="ltr"&gt;♥&lt;/span&gt; by some random IRC dude.
-    &lt;/div&gt;</description><pubDate>Fri, 04 Oct 2019 21:02:38 -0500</pubDate></item><item><title>Why printk() is so complicated (and how to fix it)</title><link>https://lobste.rs/s/1k13r5</link><description>&lt;div dir="ltr"&gt;
-The kernel's &lt;a href="https://www.kernel.org/doc/html/latest/driver-api/basics.html#c.printk" dir="ltr"&gt;&lt;tt dir="ltr"&gt;printk()&lt;/tt&gt;&lt;/a&gt;
-function seems like it should be relatively simple; all it does is format a
-string and output it to the kernel logs.  That simplicity hides a lot of
-underlying complexity, though, and that complexity is why kernel developers
-are still unhappy with &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; after 28 years.  At the 2019 Linux
-Plumbers Conference, John Ogness &lt;a href="https://www.linuxplumbersconf.org/event/4/contributions/290/" dir="ltr"&gt;explained&lt;/a&gt;
-where the complexity in &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; comes from and what is being done
-to improve the situation.
-&lt;/div&gt;&lt;p dir="ltr"&gt;
-The core problem, Ogness began, comes from the fact that kernel code must
-be able to call &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; from any context.  Calls from atomic
-context prevent it from blocking; calls from non-maskable interrupts
-(NMIs) can even 
-rule out the use of spinlocks.  At the same time, output from
-&lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; is crucial when the kernel runs into trouble; developers
-do not want to lose any printed messages even if the kernel is crashing or
-hanging.  Those messages should appear on console devices, which may be
-attached to serial ports, graphic adapters, or network connections.
-Meanwhile, &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; cannot interfere with the normal operation of
-the system.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-In other words, he summarized, &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; is seemingly simple and
-definitely ubiquitous, but it has to be wired deeply into the system.
-&lt;/p&gt;&lt;h4&gt;The path to the present&lt;/h4&gt;&lt;p dir="ltr"&gt;
-Ogness then launched into a detailed history of &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt;; see &lt;a href="https://www.linuxplumbersconf.org/event/4/contributions/290/attachments/276/463/lpc2019_jogness_printk.pdf" dir="ltr"&gt;his
-slides [PDF]&lt;/a&gt; for all the details.  The first kernel release — v0.01 —
-included a &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; implementation; it was synchronous and simply
-pushed messages directly to a TTY port with a bit of assembly code.  It was
-reliable, but not particularly scalable; once the kernel started supporting
-multiple CPUs, things needed to change.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Version 0.99.7a added console registration; the "log level" abstraction was
-added in v0.99.13k.  The &lt;tt dir="ltr"&gt;bust_spinlocks()&lt;/tt&gt; mechanism, which
-prevents waiting for spinlocks when the system is crashing and "goes
-
-&lt;/p&gt;&lt;img src="https://static.lwn.net/images/conf/2019/lpc/JohnOgness-sm.jpg" alt="[John Ogness]" title="John Ogness" width="200" height="250"&gt;&lt;p dir="ltr"&gt;
-
-against everything everybody has learned", was added in 2.4.0.  With
-2.4.10, big changes to &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; made it asynchronous.  By 2.6.26,
-&lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; was causing large latency spikes; kernel developers dealt
-with this problem by ignoring &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; in the latency tracer, thus
-sweeping it under the rug.  The 3.4 release added &lt;a href="https://lwn.net/Articles/492125/" dir="ltr"&gt;structured logging&lt;/a&gt;, sequence numbers, and the
-&lt;tt dir="ltr"&gt;/dev/kmsg&lt;/tt&gt; interface.  The "safe buffers" mechanism, used for
-printing in NMI context, showed up in 4.10.  A problem where one CPU
-could get stuck outputting messages indefinitely was (somewhat) addressed
-in 4.15.  In 5.0, the concept of caller identifiers was added.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-So &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; has seen a lot of development over the years, but
-there are still a number of open issues.  One of them is the raw spinlock
-used to protect the ring buffer; it cannot be taken in NMI context, so
-&lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; must output to the lockless safe buffers instead.  That
-will create bogus timestamps when the messages are finally copied to the real
-ring buffer, can lose messages, and cause the buffers to not be flushed when CPUs
-don't go offline properly.
-&lt;/p&gt;&lt;p&gt;
-Then, there is the issue of the console drivers, which are slow but are
-nonetheless called with interrupts disabled.  Most console devices are not
-designed to work in a kernel-panic situation, so they are not reliable when
-they may be needed most.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Other problems include the fact that all log levels are treated equally by
-&lt;tt dir="ltr"&gt;printk()&lt;/tt&gt;; chatter treated like urgent information can create
-latency problems, causing some users to restrict the levels that are
-actually logged.  The problem with one CPU being stuck logging forever has
-been fixed, but the last CPU to come along and take over log output can
-still be saddled with a lot of work.  That makes any &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; call
-potentially expensive.  The whole &lt;tt dir="ltr"&gt;bust_spinlocks()&lt;/tt&gt; mechanism can
-be described as "ignoring locks and hoping for the best"; there should be a
-better way, he said.
-&lt;/p&gt;&lt;h4&gt;The better way&lt;/h4&gt;&lt;p dir="ltr"&gt;
-The difficulties with &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; over the years, Ogness said, come
-down to the tension between non-interference and reliability.  Trying to
-achieve both goals in the same place has been shown not to work, so a
-better approach would be to split them apart.  Non-interference can be
-addressed by making &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; fully preemptable, making the ring
-buffer safe in all contexts, and moving console handling to dedicated
-kernel threads.  Reliability, instead, can be achieved by providing a
-synchronous channel for important messages, an "atomic consoles" concept,
-and the notion of "emergency messages".
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Both goals depend on support from the &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; ring buffer.  This
-buffer has multiple concurrent readers and a single writer; it is stored
-contiguously in memory and is protected by a special spinlock (the "CPU
-lock") that can be 
-acquired multiple times on the same CPU.  This lock, he said, feels a lot
-like the old big kernel lock.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Like any self-respecting kernel-development project, the &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt;
-work starts with the creation of &lt;a href="https://lwn.net/ml/linux-kernel/20190807222634.1723-1-john.ogness@linutronix.de/" dir="ltr"&gt;a
-new ring buffer&lt;/a&gt; meant to address the problems with the current one.  It
-is fully lockless, supporting multiple readers and writers in all
-contexts.  Metadata has been pushed out to a separate descriptor mechanism;
-it handles tasks like timestamps and sequencing.  The ring buffer has some nice
-features, but it is also complicated, including no less than nine
-memory-barrier pairs.  It is hard to document and hard to review; he is
-also not convinced that the multiple writer support — which adds a lot of
-the complexity — is really needed.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-The addition of the per-console kernel threads serves to decouple
-&lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; calls from console handling.  Each console will now go as
-fast as it can, and each can have its own log level.  Shifting the
-responsibility for consoles simplifies a lot of things, but leads to some
-unresolved questions about locking and whether a thread-based
-implementation can be relied upon to always get the messages out.  But
-reliability, Ogness said, will be handled by other mechanisms; the
-per-console threads are a non-interference mechanism.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-For reliability, the plan is to add an "atomic console" concept.  Consoles
-with this support would have a &lt;tt dir="ltr"&gt;write_atomic()&lt;/tt&gt; method that can be
-expected to work in any context.  This method is defined to operate
-synchronously, meaning that it will slow down the system considerably;
-it is thus only to be used for emergency messages.  The advantage is that there
-is no longer any need for &lt;tt dir="ltr"&gt;bust_spinlocks()&lt;/tt&gt; or the global
-&lt;tt dir="ltr"&gt;oops_in_progress&lt;/tt&gt; variable.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-The challenge is creating console drivers that can actually implement
-&lt;tt dir="ltr"&gt;write_atomic()&lt;/tt&gt;.  He did an implementation for consoles attached to
-an 8250 UART; it was "not trivial".  There will almost certainly be a lot
-of systems that never get atomic-console support, so some other sort of
-solution will be needed.  He said that options include creating a special
-console that fills a memory area instead, trying to print synchronously
-outside of atomic context, or just "falling back to the current
-craziness".
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Associated with atomic consoles is the idea of "emergency messages" that
-must go out right away.  The biggest problem here may be deciding which
-messages are important enough to warrant that treatment.  Log levels are
-"kind of a gray area" and, he said, not really the way to go.  There are
-only a few situations where &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; output is really that
-important; the right solution might be to hook into macros like
-&lt;tt dir="ltr"&gt;BUG()&lt;/tt&gt;.
-&lt;/p&gt;&lt;p&gt;
-Ogness concluded by noting that this work began in February, with
-the current version having been posted in August.  Most of the features
-described above have been implemented, he said, giving developers
-"something to play with".
-&lt;/p&gt;&lt;h4&gt;Further discussion&lt;/h4&gt;&lt;p dir="ltr"&gt;
-A separate session was held later in the conference; your editor was
-unfortunately unable to attend.  Ogness has posted &lt;a href="https://lwn.net/ml/linux-kernel/87k1acz5rx.fsf@linutronix.de/" dir="ltr"&gt;a summary&lt;/a&gt; of the
-conclusions that were reached there, though.  He thanked the community for
-its participation in this meeting, which "&lt;span dir="ltr"&gt;certainly
-saved hundreds of hours of reading/writing emails&lt;/span&gt;".
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-From the summary, it seems that &lt;a href="https://lwn.net/ml/linux-kernel/20190704103321.10022-1-pmladek@suse.com/" dir="ltr"&gt;an
-alternative ring buffer implementation&lt;/a&gt; posted by Petr Mladek will be
-used instead; it is much simpler and thus easier to review.  Ogness has
-ported the rest of his work to use this buffer and shown that it works.
-The per-console kernel threads will be used.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-The "emergency messages" idea seems to have been superseded by the idea of
-an "emergency state" that affects the system as a whole.  When the kernel
-is in that state, all messages will be flushed using the
-&lt;tt dir="ltr"&gt;write_atomic()&lt;/tt&gt; callback where it is available.  Flushing to
-consoles without atomic support will not be supported.  The CPU lock will
-remain, but its purpose will be to synchronize the console threads when the
-system is in the emergency state.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-There will be other changes, including the addition of a
-&lt;tt dir="ltr"&gt;pr_flush()&lt;/tt&gt; function that will wait for all messages to be sent out
-to all consoles.  Patches implementing all this work have not yet been
-posted, but presumably they can be expected soon.
-
-&lt;/p&gt;&lt;p&gt;
-[Your editor thanks the Linux Foundation, LWN's travel sponsor, for
-supporting his travel to this event.]&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;td dir="ltr"&gt;
-&lt;b dir="ltr"&gt;Did you like this article?&lt;/b&gt;  Please accept our 
-&lt;a href="https://lwn.net/Promo/slink-trial2-3/claim" dir="ltr"&gt;trial subscription offer&lt;/a&gt; to be
-able to see more content like it and to participate in the discussion.
-&lt;/td&gt;&lt;/BLOCKQUOTE&gt;</description><pubDate>Fri, 04 Oct 2019 21:05:44 -0500</pubDate></item><item><title>Who Does That Server Really Serve?</title><link>https://lobste.rs/s/3vuufj</link><description>&lt;p dir="ltr"&gt;by &lt;strong dir="ltr"&gt;Richard Stallman&lt;/strong&gt;&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;(The first version was published
+    &lt;/div&gt;</description><pubDate>Fri, 04 Oct 2019 21:02:38 -0500</pubDate></item><item><title>Who Does That Server Really Serve?</title><link>https://lobste.rs/s/3vuufj</link><description>&lt;p dir="ltr"&gt;by &lt;strong dir="ltr"&gt;Richard Stallman&lt;/strong&gt;&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;(The first version was published
 in &lt;a href="http://www.bostonreview.net/richard-stallman-free-software-DRM" dir="ltr"&gt;
 Boston Review&lt;/a&gt;.)&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;&lt;strong&gt;On the Internet, proprietary software isn't the only way to
 lose your freedom.  Service as a Software Substitute, or SaaSS, is
@@ -1215,7 +1046,176 @@ install “thin clients”, which are simply computers so weak
 they make you do the real work on a server, unless you're going to use
 them with &lt;em dir="ltr"&gt;your&lt;/em&gt; server.  Use a real computer and keep your
 data there.  Do your own computing with your own copy of a free
-program, for your freedom's sake.&lt;/p&gt;</description><pubDate>Fri, 04 Oct 2019 23:53:49 -0500</pubDate></item><item><title>Good Design and Type Safety in Yahtzee</title><link>https://lobste.rs/s/sqld6i</link><description>&lt;h1&gt;Good design and type safety in Yahtzee&lt;/h1&gt;&lt;p dir="ltr"&gt;Mark Dominus wrote &lt;a href="https://blog.plover.com/prog/haskell/type-markers.html" dir="ltr"&gt;an article asking how to take advantage of Haskell’s type safety in a simple dice-rolling simulation function&lt;/a&gt; for the game Yahtzee. He added wrapper types so that one cannot mistakenly apply the function to values that merely have the correct type “by accident”. He says the result is “unreadable” and “unmaintainable”. It certainly doesn’t look nice! I’d claim it’s not even of much practical safety benefit (although I suppose that depends on what the rest of the program looks like).&lt;/p&gt;&lt;p&gt;Mark says&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;I don’t claim this code is any good; I was just hacking around exploring the problem space. But it does do what I wanted.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;But we can’t just expect to sprinkle type safety on a bad design and get something good. Type safety and good design are qualities that evolve symbiotically. By using type safety merely to make things safer for our callers we miss out on a host of benefits. Type safety should be used to guide us in the design of our &lt;em dir="ltr"&gt;implementations&lt;/em&gt;, which our callers never see. In fact I would argue that Mark is trying to add type safety in exactly the wrong way.&lt;/p&gt;&lt;p dir="ltr"&gt;If there is an interface whose implementation we don’t control then all we can do is to slap a type safe wrapper on it and be done with it. That is of some benefit. On the other hand, if we &lt;em dir="ltr"&gt;do&lt;/em&gt; control the implementation then the type safe wrapper specifies invariants that we can take advantage of inside the implementation. They can help us &lt;em dir="ltr"&gt;write&lt;/em&gt; the implementation.&lt;/p&gt;&lt;p&gt;We should build type safe structures and combinators relevant to our domain and implement our solution in terms of those. Likewise we should look at our solution and factor out repeated patterns into type safe structures and combinators relevant to our domain. This is symbiotic evolution!&lt;/p&gt;&lt;p&gt;Type safety and good design proceed hand-in-hand along the road of implementation evolution. Type safety nudges us in the direction of good design and good design nudges us in the direction of type safety. One of the reasons I prefer Haskell to other languages is that the compiler can enforce the type safety end of this bargain. On the other hand, there’s no reason a design in Python, say, can’t be guided by “type safety” in the same sense as a design in Haskell. It’s just that the “type safety” won’t be checked by any tooling and so there’s no evolutionary pressure in that direction (Python’s recent type annotations notwithstanding).&lt;/p&gt;&lt;p dir="ltr"&gt;Let’s evolve Mark’s program in the direction of good design and see what arises. In this case, as we’ll see, I’m not sure there’s much to be gained by trying to “add type safety”. On the other hand, that there &lt;em dir="ltr"&gt;is&lt;/em&gt; much to be gained by improving the design &lt;em dir="ltr"&gt;guided by&lt;/em&gt; considerations of type safety. The design improvements would apply equally well to an implementation in Python.&lt;/p&gt;&lt;p dir="ltr"&gt;I’ve shown the stages of program evolution as diffs. Sometimes they’re easy to read and sometimes they’re difficult. If anyone knows how to get diffs to render nicely in Pandoc (perhaps like GitHub renders them) then please please &lt;a href="http://web.jaguarpaw.co.uk/~tom/contact/" dir="ltr"&gt;contact me&lt;/a&gt;.&lt;/p&gt;&lt;h3&gt;Original implementation&lt;/h3&gt;&lt;p dir="ltr"&gt;This is the original implementation, before Mark added wrapper types. Most of the refactorings that I will perform are independent of what the implementation actually does; they are simply small changes that are obviously correct. Some are not obviously correct unless you know what the program does, so let’s explain that &lt;code dir="ltr"&gt;allRolls&lt;/code&gt; does the following&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;takes &lt;code dir="ltr"&gt;DiceState&lt;/code&gt; (a list of dice values and an &lt;code dir="ltr"&gt;Integer&lt;/code&gt; &lt;code dir="ltr"&gt;n&lt;/code&gt; of rolls left to perform), and also&lt;/LI&gt;&lt;LI&gt;takes &lt;code dir="ltr"&gt;DiceChoice&lt;/code&gt; (a choice of which dice to reroll), and&lt;/LI&gt;&lt;LI&gt;returns a list of all the possible rerolls along with an &lt;code dir="ltr"&gt;Integer&lt;/code&gt; of rolls left to perform.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Instead of adding wrapper types let’s just try to improve the design and see what happens.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;DiceChoice&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; [ &lt;span dir="ltr"&gt;Bool&lt;/span&gt; ]
+program, for your freedom's sake.&lt;/p&gt;</description><pubDate>Fri, 04 Oct 2019 23:53:49 -0500</pubDate></item><item><title>Why printk() is so complicated (and how to fix it)</title><link>https://lobste.rs/s/1k13r5</link><description>&lt;div dir="ltr"&gt;
+The kernel's &lt;a href="https://www.kernel.org/doc/html/latest/driver-api/basics.html#c.printk" dir="ltr"&gt;&lt;tt dir="ltr"&gt;printk()&lt;/tt&gt;&lt;/a&gt;
+function seems like it should be relatively simple; all it does is format a
+string and output it to the kernel logs.  That simplicity hides a lot of
+underlying complexity, though, and that complexity is why kernel developers
+are still unhappy with &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; after 28 years.  At the 2019 Linux
+Plumbers Conference, John Ogness &lt;a href="https://www.linuxplumbersconf.org/event/4/contributions/290/" dir="ltr"&gt;explained&lt;/a&gt;
+where the complexity in &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; comes from and what is being done
+to improve the situation.
+&lt;/div&gt;&lt;p dir="ltr"&gt;
+The core problem, Ogness began, comes from the fact that kernel code must
+be able to call &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; from any context.  Calls from atomic
+context prevent it from blocking; calls from non-maskable interrupts
+(NMIs) can even 
+rule out the use of spinlocks.  At the same time, output from
+&lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; is crucial when the kernel runs into trouble; developers
+do not want to lose any printed messages even if the kernel is crashing or
+hanging.  Those messages should appear on console devices, which may be
+attached to serial ports, graphic adapters, or network connections.
+Meanwhile, &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; cannot interfere with the normal operation of
+the system.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+In other words, he summarized, &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; is seemingly simple and
+definitely ubiquitous, but it has to be wired deeply into the system.
+&lt;/p&gt;&lt;h4&gt;The path to the present&lt;/h4&gt;&lt;p dir="ltr"&gt;
+Ogness then launched into a detailed history of &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt;; see &lt;a href="https://www.linuxplumbersconf.org/event/4/contributions/290/attachments/276/463/lpc2019_jogness_printk.pdf" dir="ltr"&gt;his
+slides [PDF]&lt;/a&gt; for all the details.  The first kernel release — v0.01 —
+included a &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; implementation; it was synchronous and simply
+pushed messages directly to a TTY port with a bit of assembly code.  It was
+reliable, but not particularly scalable; once the kernel started supporting
+multiple CPUs, things needed to change.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Version 0.99.7a added console registration; the "log level" abstraction was
+added in v0.99.13k.  The &lt;tt dir="ltr"&gt;bust_spinlocks()&lt;/tt&gt; mechanism, which
+prevents waiting for spinlocks when the system is crashing and "goes
+
+&lt;/p&gt;&lt;img src="https://static.lwn.net/images/conf/2019/lpc/JohnOgness-sm.jpg" alt="[John Ogness]" title="John Ogness" width="200" height="250"&gt;&lt;p dir="ltr"&gt;
+
+against everything everybody has learned", was added in 2.4.0.  With
+2.4.10, big changes to &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; made it asynchronous.  By 2.6.26,
+&lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; was causing large latency spikes; kernel developers dealt
+with this problem by ignoring &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; in the latency tracer, thus
+sweeping it under the rug.  The 3.4 release added &lt;a href="https://lwn.net/Articles/492125/" dir="ltr"&gt;structured logging&lt;/a&gt;, sequence numbers, and the
+&lt;tt dir="ltr"&gt;/dev/kmsg&lt;/tt&gt; interface.  The "safe buffers" mechanism, used for
+printing in NMI context, showed up in 4.10.  A problem where one CPU
+could get stuck outputting messages indefinitely was (somewhat) addressed
+in 4.15.  In 5.0, the concept of caller identifiers was added.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+So &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; has seen a lot of development over the years, but
+there are still a number of open issues.  One of them is the raw spinlock
+used to protect the ring buffer; it cannot be taken in NMI context, so
+&lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; must output to the lockless safe buffers instead.  That
+will create bogus timestamps when the messages are finally copied to the real
+ring buffer, can lose messages, and cause the buffers to not be flushed when CPUs
+don't go offline properly.
+&lt;/p&gt;&lt;p&gt;
+Then, there is the issue of the console drivers, which are slow but are
+nonetheless called with interrupts disabled.  Most console devices are not
+designed to work in a kernel-panic situation, so they are not reliable when
+they may be needed most.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Other problems include the fact that all log levels are treated equally by
+&lt;tt dir="ltr"&gt;printk()&lt;/tt&gt;; chatter treated like urgent information can create
+latency problems, causing some users to restrict the levels that are
+actually logged.  The problem with one CPU being stuck logging forever has
+been fixed, but the last CPU to come along and take over log output can
+still be saddled with a lot of work.  That makes any &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; call
+potentially expensive.  The whole &lt;tt dir="ltr"&gt;bust_spinlocks()&lt;/tt&gt; mechanism can
+be described as "ignoring locks and hoping for the best"; there should be a
+better way, he said.
+&lt;/p&gt;&lt;h4&gt;The better way&lt;/h4&gt;&lt;p dir="ltr"&gt;
+The difficulties with &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; over the years, Ogness said, come
+down to the tension between non-interference and reliability.  Trying to
+achieve both goals in the same place has been shown not to work, so a
+better approach would be to split them apart.  Non-interference can be
+addressed by making &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; fully preemptable, making the ring
+buffer safe in all contexts, and moving console handling to dedicated
+kernel threads.  Reliability, instead, can be achieved by providing a
+synchronous channel for important messages, an "atomic consoles" concept,
+and the notion of "emergency messages".
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Both goals depend on support from the &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; ring buffer.  This
+buffer has multiple concurrent readers and a single writer; it is stored
+contiguously in memory and is protected by a special spinlock (the "CPU
+lock") that can be 
+acquired multiple times on the same CPU.  This lock, he said, feels a lot
+like the old big kernel lock.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Like any self-respecting kernel-development project, the &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt;
+work starts with the creation of &lt;a href="https://lwn.net/ml/linux-kernel/20190807222634.1723-1-john.ogness@linutronix.de/" dir="ltr"&gt;a
+new ring buffer&lt;/a&gt; meant to address the problems with the current one.  It
+is fully lockless, supporting multiple readers and writers in all
+contexts.  Metadata has been pushed out to a separate descriptor mechanism;
+it handles tasks like timestamps and sequencing.  The ring buffer has some nice
+features, but it is also complicated, including no less than nine
+memory-barrier pairs.  It is hard to document and hard to review; he is
+also not convinced that the multiple writer support — which adds a lot of
+the complexity — is really needed.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+The addition of the per-console kernel threads serves to decouple
+&lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; calls from console handling.  Each console will now go as
+fast as it can, and each can have its own log level.  Shifting the
+responsibility for consoles simplifies a lot of things, but leads to some
+unresolved questions about locking and whether a thread-based
+implementation can be relied upon to always get the messages out.  But
+reliability, Ogness said, will be handled by other mechanisms; the
+per-console threads are a non-interference mechanism.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+For reliability, the plan is to add an "atomic console" concept.  Consoles
+with this support would have a &lt;tt dir="ltr"&gt;write_atomic()&lt;/tt&gt; method that can be
+expected to work in any context.  This method is defined to operate
+synchronously, meaning that it will slow down the system considerably;
+it is thus only to be used for emergency messages.  The advantage is that there
+is no longer any need for &lt;tt dir="ltr"&gt;bust_spinlocks()&lt;/tt&gt; or the global
+&lt;tt dir="ltr"&gt;oops_in_progress&lt;/tt&gt; variable.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+The challenge is creating console drivers that can actually implement
+&lt;tt dir="ltr"&gt;write_atomic()&lt;/tt&gt;.  He did an implementation for consoles attached to
+an 8250 UART; it was "not trivial".  There will almost certainly be a lot
+of systems that never get atomic-console support, so some other sort of
+solution will be needed.  He said that options include creating a special
+console that fills a memory area instead, trying to print synchronously
+outside of atomic context, or just "falling back to the current
+craziness".
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Associated with atomic consoles is the idea of "emergency messages" that
+must go out right away.  The biggest problem here may be deciding which
+messages are important enough to warrant that treatment.  Log levels are
+"kind of a gray area" and, he said, not really the way to go.  There are
+only a few situations where &lt;tt dir="ltr"&gt;printk()&lt;/tt&gt; output is really that
+important; the right solution might be to hook into macros like
+&lt;tt dir="ltr"&gt;BUG()&lt;/tt&gt;.
+&lt;/p&gt;&lt;p&gt;
+Ogness concluded by noting that this work began in February, with
+the current version having been posted in August.  Most of the features
+described above have been implemented, he said, giving developers
+"something to play with".
+&lt;/p&gt;&lt;h4&gt;Further discussion&lt;/h4&gt;&lt;p dir="ltr"&gt;
+A separate session was held later in the conference; your editor was
+unfortunately unable to attend.  Ogness has posted &lt;a href="https://lwn.net/ml/linux-kernel/87k1acz5rx.fsf@linutronix.de/" dir="ltr"&gt;a summary&lt;/a&gt; of the
+conclusions that were reached there, though.  He thanked the community for
+its participation in this meeting, which "&lt;span dir="ltr"&gt;certainly
+saved hundreds of hours of reading/writing emails&lt;/span&gt;".
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+From the summary, it seems that &lt;a href="https://lwn.net/ml/linux-kernel/20190704103321.10022-1-pmladek@suse.com/" dir="ltr"&gt;an
+alternative ring buffer implementation&lt;/a&gt; posted by Petr Mladek will be
+used instead; it is much simpler and thus easier to review.  Ogness has
+ported the rest of his work to use this buffer and shown that it works.
+The per-console kernel threads will be used.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+The "emergency messages" idea seems to have been superseded by the idea of
+an "emergency state" that affects the system as a whole.  When the kernel
+is in that state, all messages will be flushed using the
+&lt;tt dir="ltr"&gt;write_atomic()&lt;/tt&gt; callback where it is available.  Flushing to
+consoles without atomic support will not be supported.  The CPU lock will
+remain, but its purpose will be to synchronize the console threads when the
+system is in the emergency state.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+There will be other changes, including the addition of a
+&lt;tt dir="ltr"&gt;pr_flush()&lt;/tt&gt; function that will wait for all messages to be sent out
+to all consoles.  Patches implementing all this work have not yet been
+posted, but presumably they can be expected soon.
+
+&lt;/p&gt;&lt;p&gt;
+[Your editor thanks the Linux Foundation, LWN's travel sponsor, for
+supporting his travel to this event.]&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;td dir="ltr"&gt;
+&lt;b dir="ltr"&gt;Did you like this article?&lt;/b&gt;  Please accept our 
+&lt;a href="https://lwn.net/Promo/slink-trial2-3/claim" dir="ltr"&gt;trial subscription offer&lt;/a&gt; to be
+able to see more content like it and to participate in the discussion.
+&lt;/td&gt;&lt;/BLOCKQUOTE&gt;</description><pubDate>Fri, 04 Oct 2019 21:05:44 -0500</pubDate></item><item><title>Good Design and Type Safety in Yahtzee</title><link>https://lobste.rs/s/sqld6i</link><description>&lt;h1&gt;Good design and type safety in Yahtzee&lt;/h1&gt;&lt;p dir="ltr"&gt;Mark Dominus wrote &lt;a href="https://blog.plover.com/prog/haskell/type-markers.html" dir="ltr"&gt;an article asking how to take advantage of Haskell’s type safety in a simple dice-rolling simulation function&lt;/a&gt; for the game Yahtzee. He added wrapper types so that one cannot mistakenly apply the function to values that merely have the correct type “by accident”. He says the result is “unreadable” and “unmaintainable”. It certainly doesn’t look nice! I’d claim it’s not even of much practical safety benefit (although I suppose that depends on what the rest of the program looks like).&lt;/p&gt;&lt;p&gt;Mark says&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;I don’t claim this code is any good; I was just hacking around exploring the problem space. But it does do what I wanted.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;But we can’t just expect to sprinkle type safety on a bad design and get something good. Type safety and good design are qualities that evolve symbiotically. By using type safety merely to make things safer for our callers we miss out on a host of benefits. Type safety should be used to guide us in the design of our &lt;em dir="ltr"&gt;implementations&lt;/em&gt;, which our callers never see. In fact I would argue that Mark is trying to add type safety in exactly the wrong way.&lt;/p&gt;&lt;p dir="ltr"&gt;If there is an interface whose implementation we don’t control then all we can do is to slap a type safe wrapper on it and be done with it. That is of some benefit. On the other hand, if we &lt;em dir="ltr"&gt;do&lt;/em&gt; control the implementation then the type safe wrapper specifies invariants that we can take advantage of inside the implementation. They can help us &lt;em dir="ltr"&gt;write&lt;/em&gt; the implementation.&lt;/p&gt;&lt;p&gt;We should build type safe structures and combinators relevant to our domain and implement our solution in terms of those. Likewise we should look at our solution and factor out repeated patterns into type safe structures and combinators relevant to our domain. This is symbiotic evolution!&lt;/p&gt;&lt;p&gt;Type safety and good design proceed hand-in-hand along the road of implementation evolution. Type safety nudges us in the direction of good design and good design nudges us in the direction of type safety. One of the reasons I prefer Haskell to other languages is that the compiler can enforce the type safety end of this bargain. On the other hand, there’s no reason a design in Python, say, can’t be guided by “type safety” in the same sense as a design in Haskell. It’s just that the “type safety” won’t be checked by any tooling and so there’s no evolutionary pressure in that direction (Python’s recent type annotations notwithstanding).&lt;/p&gt;&lt;p dir="ltr"&gt;Let’s evolve Mark’s program in the direction of good design and see what arises. In this case, as we’ll see, I’m not sure there’s much to be gained by trying to “add type safety”. On the other hand, that there &lt;em dir="ltr"&gt;is&lt;/em&gt; much to be gained by improving the design &lt;em dir="ltr"&gt;guided by&lt;/em&gt; considerations of type safety. The design improvements would apply equally well to an implementation in Python.&lt;/p&gt;&lt;p dir="ltr"&gt;I’ve shown the stages of program evolution as diffs. Sometimes they’re easy to read and sometimes they’re difficult. If anyone knows how to get diffs to render nicely in Pandoc (perhaps like GitHub renders them) then please please &lt;a href="http://web.jaguarpaw.co.uk/~tom/contact/" dir="ltr"&gt;contact me&lt;/a&gt;.&lt;/p&gt;&lt;h3&gt;Original implementation&lt;/h3&gt;&lt;p dir="ltr"&gt;This is the original implementation, before Mark added wrapper types. Most of the refactorings that I will perform are independent of what the implementation actually does; they are simply small changes that are obviously correct. Some are not obviously correct unless you know what the program does, so let’s explain that &lt;code dir="ltr"&gt;allRolls&lt;/code&gt; does the following&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;takes &lt;code dir="ltr"&gt;DiceState&lt;/code&gt; (a list of dice values and an &lt;code dir="ltr"&gt;Integer&lt;/code&gt; &lt;code dir="ltr"&gt;n&lt;/code&gt; of rolls left to perform), and also&lt;/LI&gt;&lt;LI&gt;takes &lt;code dir="ltr"&gt;DiceChoice&lt;/code&gt; (a choice of which dice to reroll), and&lt;/LI&gt;&lt;LI&gt;returns a list of all the possible rerolls along with an &lt;code dir="ltr"&gt;Integer&lt;/code&gt; of rolls left to perform.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Instead of adding wrapper types let’s just try to improve the design and see what happens.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;DiceChoice&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; [ &lt;span dir="ltr"&gt;Bool&lt;/span&gt; ]
 &lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;DiceVals&lt;/span&gt;   &lt;span dir="ltr"&gt;=&lt;/span&gt; [ &lt;span dir="ltr"&gt;Integer&lt;/span&gt; ]
 &lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;DiceState&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; (&lt;span dir="ltr"&gt;DiceVals&lt;/span&gt;, &lt;span dir="ltr"&gt;Integer&lt;/span&gt;)
 
