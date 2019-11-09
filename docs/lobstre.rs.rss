@@ -228,176 +228,7 @@ eager to review PRs which add documentation to some of the APIs in this crate.&l
 for a few weeks to receive any bug reports about APIs that are mistaken
 somehow, then move &lt;code dir="ltr"&gt;uring-sys&lt;/code&gt; to &lt;code dir="ltr"&gt;1.0.0&lt;/code&gt;.&lt;/p&gt;&lt;p&gt;I would be excited to mentor other people to take over maintainership of both
 of these crates in the longer term. I don’t hope to be actively involved in
-maintaining this code once it is stable and off the ground.&lt;/p&gt;</description><pubDate>Fri, 08 Nov 2019 20:51:08 -0600</pubDate></item><item><title>Kubernetes made my latency 10x higher</title><link>https://lobste.rs/s/e5kipe</link><description>&lt;header dir="ltr"&gt;
-    &lt;p dir="ltr"&gt;&lt;time datetime="2019-10-22T06:07:31+00:00" itemprop="datePublished" dir="ltr"&gt;Oct 22, 2019&lt;/time&gt;&lt;/p&gt;
-  &lt;/header&gt;&lt;p&gt;Last week my team was busy with the migration of one microservice to our
-central platform, which bundles CI/CD, a Kubernetes based runtime,
-metrics and other goodies.  This exercise is meant to provide a blueprint
-to accelerate moving a fleet of ~150 more in the coming months, all of
-which power some of the main online marketplaces in Spain (Infojobs,
-Fotocasa, etc.)&lt;/p&gt;&lt;p&gt;After we had the application deployed in Kubernetes and routed some
-production traffic to it, things started looking worrisome. Request
-latencies in the Kubernetes deployment were up to x10 higher than on
-EC2.  Unless we found a solution this would not only become a hard
-blocker to migrate this microservice, but could also jettison the entire
-project.&lt;/p&gt;&lt;h2&gt;Why is latency so much higher in Kubernetes than EC2?&lt;/h2&gt;&lt;p dir="ltr"&gt;To pinpoint the bottleneck we collected metrics for the entire request
-path.  The architecture is simple, an API Gateway (Zuul) that proxies
-requests to the microservice instances in EC2 or Kubernetes.  In
-Kubernetes, we use the NGINX Ingress controller and backends are
-ordinary
-&lt;a href="https://kubernetes.io/docs/concepts/workloads/controllers/deployment/" dir="ltr"&gt;Deployment&lt;/a&gt;
-objects running a JVM application based in Spring.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;                                  EC2
-                            +---------------+
-                            |  +---------+  |
-                            |  |         |  |
-                       +-------&amp;gt; BACKEND |  |
-                       |    |  |         |  |
-                       |    |  +---------+  |                   
-                       |    +---------------+
-             +------+  |
-Public       |      |  |
-      -------&amp;gt; ZUUL +--+
-traffic      |      |  |              Kubernetes
-             +------+  |    +-----------------------------+
-                       |    |  +-------+      +---------+ |
-                       |    |  |       |  xx  |         | |
-                       +-------&amp;gt; NGINX +------&amp;gt; BACKEND | |
-                            |  |       |  xx  |         | |
-                            |  +-------+      +---------+ |
-                            +-----------------------------+
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The problem seemed to be upstream latency at the backend (I marked the
-connection with “xx” in the graph). When the application was deployed in
-EC2 it took ~20ms to respond.  In Kubernetes it was taking 100-200 ms.&lt;/p&gt;&lt;p&gt;We quickly discarded likely suspects that could have appeared with the
-change of runtime. The JVM version was identical.  Issues related to
-containerisation were discarded as the application already ran in
-containers on EC2.  It wasn’t related to load, as we saw high latencies
-even with 1 request per second.  GC pauses were negligible.&lt;/p&gt;&lt;p&gt;One of our Kubernetes admins asked whether the application had any
-external dependencies as DNS resolution had caused similar problems in
-the past, this was our best hypothesis so far.&lt;/p&gt;&lt;h2&gt;Hypothesis 1: DNS resolution&lt;/h2&gt;&lt;p dir="ltr"&gt;On every request, our application makes 1-3 queries to an AWS
-ElasticSearch instance at a domain similar to
-&lt;code dir="ltr"&gt;elastic.spain.adevinta.com&lt;/code&gt;.  We &lt;a href="https://kubernetes.io/docs/tasks/debug-application-cluster/get-shell-running-container/" dir="ltr"&gt;got a shell inside the
-containers&lt;/a&gt;
-and could verify that DNS resolution to that domain was taking too long.&lt;/p&gt;&lt;p&gt;DNS queries from the container:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;[root@be-851c76f696-alf8z /]# while true; do dig "elastic.spain.adevinta.com" | grep time; sleep 2; done
-;; Query time: 22 msec
-;; Query time: 22 msec
-;; Query time: 29 msec
-;; Query time: 21 msec
-;; Query time: 28 msec
-;; Query time: 43 msec
-;; Query time: 39 msec
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The same queries from one of the EC2 instances that run this application:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;bash-4.4# while true; do dig "elastic.spain.adevinta.com" | grep time; sleep 2; done
-;; Query time: 77 msec
-;; Query time: 0 msec
-;; Query time: 0 msec
-;; Query time: 0 msec
-;; Query time: 0 msec
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Given the ~30ms resolution time, it seemed clear that our application
-was adding DNS resolution overhead talking to its ElasticSearch.&lt;/p&gt;&lt;p&gt;But this was strange for two reasons:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;We already have many applications in Kubernetes that communicate with
-AWS resources and don’t suffer such high latencies.  Whatever the
-cause it had to be be specific to this one.&lt;/LI&gt;&lt;LI&gt;We know that the JVM implements in-memory DNS caching.  Looking at the
-configuration in these images, the TTL configured at
-&lt;code dir="ltr"&gt;$JAVA_HOME/jre/lib/security/java.security&lt;/code&gt; and it was set to
-&lt;code dir="ltr"&gt;networkaddress.cache.ttl = 10&lt;/code&gt;.  The JVM should be caching all DNS
-queries for 10 seconds.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;To confirm the DNS hypothesis we decided to avoid DNS resolution and see
-if the problem disappeared.  Our first attempt was to have the
-application talk directly to the Elasticsearch IP, rather than the
-domain name.  This required changing code and a new deploy so instead
-we simply added a line mapping the domain to its IP in &lt;code dir="ltr"&gt;/etc/hosts&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;34.55.5.111 elastic.spain.adevinta.com
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This way the container would resolve the IP almost instantly.  We did
-observe a relative improvement, but nowhere near our target latency.
-Even though DNS resolution was too high, there real cause was still
-hidden.&lt;/p&gt;&lt;h2&gt;Network plumbing&lt;/h2&gt;&lt;p dir="ltr"&gt;We decided to &lt;code dir="ltr"&gt;tcpdump&lt;/code&gt; from the container so we could see exactly what
-was going on with the network.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;[root@be-851c76f696-alf8z /]# tcpdump -leni any -w capture.pcap
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;We then sent a few requests and downloaded the capture (&lt;code dir="ltr"&gt;kubectl cp
-my-service:/capture.pcap capture.pcap&lt;/code&gt;) to inspect it with
-&lt;a href="https://wiki.wireshark.org/FrontPage" dir="ltr"&gt;Wireshark&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;There was nothing suspicious with DNS queries (except a detail I’ll
-mention later.)  But something in the way our service handled each
-request seemed strange.  Below is a screenshot of the capture, showing
-the reception of a request until the start of the response.&lt;/p&gt;&lt;img src="https://srvaroa.github.io/assets/tcpdump_dns.jpg" width="340" height="75"&gt;&lt;p&gt;The packet numbers are shown in the first column.  I coloured the
-different TCP streams for clarity.&lt;/p&gt;&lt;p dir="ltr"&gt;The green stream starting at packet 328 shows the client (172.17.22.150)
-opened a TCP connection to our container (172.17.36.147).  After the
-initial handshake (328-330), packet 331 brought an &lt;code dir="ltr"&gt;HTTP GET /v1/..&lt;/code&gt;,
-the incoming request to our service.  The whole process was over in 1ms.&lt;/p&gt;&lt;p&gt;The grey stream from packet 339 shows that our service sent an HTTP
-request to the Elasticsearch instance (you don’t see the TCP handshake
-because it was using an existing TCP connection.)  This took 18ms.&lt;/p&gt;&lt;p&gt;So far this makes sense, and the times roughly fit in the overall
-response latencies we expected (~20-30ms measured from the client).&lt;/p&gt;&lt;p dir="ltr"&gt;But inbetween both exchanges, the blue section consumes 86ms.  What was
-going on there? At packet 333, our service sent an HTTP GET request to
-&lt;code dir="ltr"&gt;/latest/meta-data/iam/security-credentials&lt;/code&gt;, and right after, on the
-same TCP connection, another GET to
-&lt;code dir="ltr"&gt;/latest/meta-data/iam/security-credentials/arn:..&lt;/code&gt;.&lt;/p&gt;&lt;p&gt;We verified that this was happening on every single request for the
-entire trace.  DNS resolution is indeed a bit slower in our containers
-(the explanation is interesting, I will leave that for another post).
-But the actual cause for the high latencies were queries to the AWS
-Instance Metadata service on every single request.&lt;/p&gt;&lt;h2&gt;Hypothesis 2: rogue calls to AWS&lt;/h2&gt;&lt;p dir="ltr"&gt;Both endpoints are part of the &lt;a href="https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html#instance-metadata-security-credentials" dir="ltr"&gt;AWS Instance Metadata
-API&lt;/a&gt;.
-This service is used from our microservice during reads from
-Elasticsearch.  The two calls are a basic authorisation workflow.  The
-endpoint queried in the first request yields the IAM role associated to
-the instance.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;/ # curl http://169.254.169.254/latest/meta-data/iam/security-credentials/
-arn:aws:iam::&amp;lt;account_id&amp;gt;:role/some_role
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The second request queries the second endpoint for temporary credentials for that
-instance:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;/ # curl http://169.254.169.254/latest/meta-data/iam/security-credentials/arn:aws:iam::&amp;lt;account_id&amp;gt;:role/some_role`
-{
-    "Code" : "Success",
-    "LastUpdated" : "2012-04-26T16:39:16Z",
-    "Type" : "AWS-HMAC",
-    "AccessKeyId" : "ASIAIOSFODNN7EXAMPLE",
-    "SecretAccessKey" : "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-    "Token" : "token",
-    "Expiration" : "2017-05-17T15:09:54Z"
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The client is able to use them for a short period of time, and is
-expected to retrieve new ones periodically (before the &lt;code dir="ltr"&gt;Expiration&lt;/code&gt;
-deadline).  The model is simple: AWS rotates temporary keys often for
-security reasons, but clients can cache them for a few minutes
-amortizing the performance penalty of retrieving new credentials.&lt;/p&gt;&lt;p&gt;The AWS Java SDK should be taking care of this process for us but, for
-some reason, it is not.&lt;/p&gt;&lt;p dir="ltr"&gt;Searching among its GitHub issues we landed on
-&lt;a href="https://github.com/aws/aws-sdk-java/issues/1921" dir="ltr"&gt;#1921&lt;/a&gt; which gave us
-the clue we needed.&lt;/p&gt;&lt;p&gt;The AWS SDK refreshes credentials when one of two conditions is met:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;Expiration&lt;/code&gt; is within an &lt;code dir="ltr"&gt;EXPIRATION_THRESHOLD&lt;/code&gt;, hardcoded to 15
-minutes.&lt;/LI&gt;&lt;LI&gt;The last attempt to refresh credentials is greater than the
-&lt;code dir="ltr"&gt;REFRESH_THRESHOLD&lt;/code&gt;, hardcoded to 60 minutes.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;We wanted to see the actual expiration time in the certificates we were
-getting so we ran the two &lt;code dir="ltr"&gt;cURL&lt;/code&gt; commands shown above against the AWS
-API, both from the container and EC2 instance.  The one retrieved from
-the container was much shorter: exactly 15 mins.&lt;/p&gt;&lt;p&gt;The problem was now clear: our service would fetch temporary credentials
-for the first request. Since these had a 15 min expiration time, in the
-next request, the AWS SDK would decide to eagerly refresh them.  The
-same would happen on every request.&lt;/p&gt;&lt;h2&gt;Why was the credential expiration time shorter?&lt;/h2&gt;&lt;p dir="ltr"&gt;The AWS Instance Metadata Service is meant to be used from an EC2
-instance, not Kubernetes.  It is still convenient to let applications
-retain the same interface. For this we use
-&lt;a href="https://github.com/uswitch/kiam" dir="ltr"&gt;KIAM&lt;/a&gt;, a tool that runs an agent on
-each Kubernetes node, allowing users (engineers deploying applications
-to the cluster) to associate IAM roles to Pod containers as if they were
-EC2 instances.  It works by intercepting calls to the AWS Instance
-Metadata service and serving them from its own cache, pre-fetched from
-AWS.  From the point of view of the application, there is no difference
-with running in EC2.&lt;/p&gt;&lt;p dir="ltr"&gt;KIAM happens to provide short-lived credentials to Pods, which makes
-sense as it’s fair to assume that the average lifetime of a Pod is
-shorter than EC2 instances.  The &lt;a href="https://github.com/uswitch/kiam/blob/adf03bb349373e22e3d894623870369d45fe2538/cmd/kiam/server.go#L57" dir="ltr"&gt;default is precisely 15
-min&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;But if you put both defaults together, you have a problem.  Each
-certificate provided to the application has a 15 min expiration time.
-The AWS Java SDK will force refreshing any certificate with less than 15
-min expiration time left.&lt;/p&gt;&lt;p dir="ltr"&gt;The result is that every request will be forced to refresh the temporary
-certificate, which requires two calls to the AWS API that add a huge
-latency penalty to each request.  We later found a &lt;a href="https://github.com/aws/aws-sdk-java/issues/1893" dir="ltr"&gt;feature
-request&lt;/a&gt; in the AWS
-Java SDK that mentions this same issue.&lt;/p&gt;&lt;p&gt;The fix was easy.  We reconfigured KIAM to request credentials with a
-longer expiration period.  Once this change was applied, requests
-started being served without involving the AWS Metadata service and
-returned to an even lower latency than in EC2.&lt;/p&gt;&lt;h2&gt;Takeaways&lt;/h2&gt;&lt;p dir="ltr"&gt;In our experience with these migrations, one of the most frequent
-sources of problems is not bugs in Kubernetes or other pieces of the
-platform.  It isn’t either about fundamental flaws in the microservices
-we’re migrating.  &lt;strong dir="ltr"&gt;Problems often appear just because we put some
-pieces together in the first place&lt;/strong&gt;.&lt;/p&gt;&lt;p&gt;We are blending complex systems that had never interacted together
-before with the expectation that they collaborate forming a single,
-larger system.  More moving pieces, more surface for failures, more
-entropy.&lt;/p&gt;&lt;p dir="ltr"&gt;In this case, our high latency wasn’t the result of bugs or bad
-decisions in Kubernetes, KIAM, the AWS Java SDK, or our microservice.
-It was a behaviour resulting from the combination of two independent
-defaults, in KIAM and the AWS Java SDK.  Both choices make sense in
-isolation: an eager credential refresh policy in the AWS Java SDK, and
-the lower default expiration in KIAM.  It is when they come together
-that the results are pathological.  &lt;strong dir="ltr"&gt;Two independently sound decisions
-don’t necessarily make sense together&lt;/strong&gt;.&lt;/p&gt;</description><pubDate>Fri, 08 Nov 2019 22:12:19 -0600</pubDate></item><item><title>Let's Create a Simple Load Balancer With Go</title><link>https://lobste.rs/s/0x64nn</link><description>&lt;div dir="ltr"&gt;
+maintaining this code once it is stable and off the ground.&lt;/p&gt;</description><pubDate>Fri, 08 Nov 2019 20:51:08 -0600</pubDate></item><item><title>Let's Create a Simple Load Balancer With Go</title><link>https://lobste.rs/s/0x64nn</link><description>&lt;div dir="ltr"&gt;
         &lt;span dir="ltr"&gt; 2019-11-09 &lt;/span&gt;
         &lt;div dir="ltr"&gt;
             &lt;a href="https://kasvith.github.io/categories/go/" dir="ltr"&gt; go &lt;/a&gt;
@@ -773,352 +604,7 @@ Percentage of the requests served within a certain time (ms)
   95%   1413
   98%   4433
   99%   4442
- 100%   7695 (longest request)&lt;/PRE&gt;&lt;p&gt;We get around 130req/s for our simple load balancer, which is not bad at all.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p&gt;We covered a lot of stuff in this article.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Round Robin Selection&lt;/LI&gt;&lt;LI&gt;ReverseProxy from the standard library&lt;/LI&gt;&lt;LI&gt;Mutexes&lt;/LI&gt;&lt;LI&gt;Atomic Operations&lt;/LI&gt;&lt;LI&gt;Closures&lt;/LI&gt;&lt;LI&gt;Callbacks&lt;/LI&gt;&lt;LI&gt;Select Operation&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;There is a lot we can do to improve our tiny load balancer.&lt;/p&gt;&lt;p&gt;For example,&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Use a heap for sort out alive backends to reduce search surface&lt;/LI&gt;&lt;LI&gt;Collect statistics&lt;/LI&gt;&lt;LI&gt;Implement weighted round-robin/least connections&lt;/LI&gt;&lt;LI&gt;Add support for a configuration file&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;etc.&lt;/p&gt;&lt;p dir="ltr"&gt;You can find the source code to repository &lt;a href="https://github.com/kasvith/simplelb/" dir="ltr"&gt;here&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;Thank you for reading this article 😄&lt;/p&gt;</description><pubDate>Sat, 09 Nov 2019 04:43:18 -0600</pubDate></item><item><title>What are you doing this weekend?</title><link>https://lobste.rs/s/v1ziw2</link><description>&lt;p&gt;Feel free to tell what you plan on doing this weekend and even ask for help or feedback.&lt;/p&gt;&lt;p&gt;Please keep in mind it’s more than OK to do nothing at all too!&lt;/p&gt;</description><pubDate>Fri, 08 Nov 2019 05:46:50 -0600</pubDate></item><item><title>Go Turns 10</title><link>https://lobste.rs/s/jiyvuh</link><description>&lt;p dir="ltr"&gt;
-    Russ Cox, for the Go team&lt;br dir="ltr"&gt;
-    8 November 2019
-    &lt;/p&gt;&lt;p&gt;
-    Happy birthday, Go!
-  &lt;/p&gt;&lt;p dir="ltr"&gt;
-    This weekend we celebrate the 10th anniversary of
-
-
-    &lt;a href="https://opensource.googleblog.com/2009/11/hey-ho-lets-go.html" dir="ltr"&gt;the Go release&lt;/a&gt;,
-
-
-    marking the 10th birthday of Go as an open-source programming language
-
-
-    and ecosystem for building modern networked software.
-  &lt;/p&gt;&lt;p dir="ltr"&gt;
-    To mark the occasion,
-
-
-    &lt;a href="https://twitter.com/reneefrench" dir="ltr"&gt;Renee French&lt;/a&gt;,
-
-
-    the creator of the
-
-
-    &lt;a href="https://blog.golang.org/gopher" dir="ltr"&gt;Go gopher&lt;/a&gt;,
-
-
-    painted this delightful scene:
-  &lt;/p&gt;&lt;img src="https://blog.golang.org/10years/gopher10th-small.jpg" width="300" alt="" height="223"&gt;&lt;p&gt;
-    Celebrating 10 years of Go makes me think back to early November 2009,
-
-
-    when we were getting ready to share Go with the world.
-
-
-    We didn’t know what kind of reaction to expect,
-
-
-    whether anyone would care about this little language.
-
-
-    I hoped that even if no one ended up using Go,
-
-
-    we would at least have drawn attention to some good ideas,
-
-
-    especially Go’s approach to concurrency and interfaces,
-
-
-    that could influence follow-on languages.
-  &lt;/p&gt;&lt;p&gt;
-    Once it became clear that people were excited about Go,
-
-
-    I looked at the history of popular languages
-
-
-    like C, C++, Perl, Python, and Ruby,
-
-
-    examining how long each took to gain widespread adoption.
-
-
-    For example, Perl seemed to me to have appeared fully-formed
-
-
-    in the mid-to-late 1990s, with CGI scripts and the web,
-
-
-    but it was first released in 1987.
-
-
-    This pattern repeated for almost every language I looked at:
-
-
-    it seems to take roughly a decade of quiet, steady improvement
-
-
-    and dissemination before a new language really takes off.
-  &lt;/p&gt;&lt;p&gt;
-    I wondered: where would Go be after a decade?
-  &lt;/p&gt;&lt;p dir="ltr"&gt;
-    Today, we can answer that question:
-
-
-    Go is everywhere, used by at least &lt;a href="https://research.swtch.com/gophercount" dir="ltr"&gt;a million developers worldwide&lt;/a&gt;.
-  &lt;/p&gt;&lt;p dir="ltr"&gt;
-    Go’s original target was networked system infrastructure,
-
-
-    what we now call cloud software.
-
-
-    Every major cloud provider today uses core cloud infrastructure written in Go,
-
-
-    such as Docker, Etcd, Istio, Kubernetes, Prometheus, and Terraform;
-
-
-    the majority of the
-
-
-    &lt;a href="https://www.cncf.io/projects/" dir="ltr"&gt;Cloud Native Computing Foundation’s projects&lt;/a&gt;
-
-
-    are written in Go.
-
-
-    Countless companies are using Go to move their own work to the cloud as well,
-
-
-    from startups building from scratch
-
-
-    to enterprises modernizing their software stack.
-
-
-    Go has also found adoption well beyond its original cloud target,
-
-
-    with uses ranging
-
-
-    from
-
-
-    controlling tiny embedded systems with
-
-
-    &lt;a href="https://gobot.io/" dir="ltr"&gt;GoBot&lt;/a&gt; and &lt;a href="https://tinygo.org/" dir="ltr"&gt;TinyGo&lt;/a&gt;
-
-
-    to detecting cancer with
-
-
-    &lt;a href="https://medium.com/grail-eng/bigslice-a-cluster-computing-system-for-go-7e03acd2419b" dir="ltr"&gt;massive big data analysis and machine learning at GRAIL&lt;/a&gt;,
-
-
-    and everything in between.
-  &lt;/p&gt;&lt;p&gt;
-    All this is to say that Go has succeeded beyond our wildest dreams.
-
-
-    And Go’s success isn’t just about the language.
-
-
-    It’s about the language, the ecosystem, and especially the community working together.
-  &lt;/p&gt;&lt;p dir="ltr"&gt;
-    In 2009, the language was a good idea with a working sketch of an implementation.
-
-
-    The &lt;code dir="ltr"&gt;go&lt;/code&gt; command did not exist:
-
-
-    we ran commands like &lt;code dir="ltr"&gt;6g&lt;/code&gt; to compile and &lt;code dir="ltr"&gt;6l&lt;/code&gt; to link binaries,
-
-
-    automated with makefiles.
-
-
-    We typed semicolons at the ends of statements.
-
-
-    The entire program stopped during garbage collection,
-
-
-    which then struggled to make good use of two cores.
-
-
-    Go ran only on Linux and Mac, on 32- and 64-bit x86 and 32-bit ARM.
-  &lt;/p&gt;&lt;p dir="ltr"&gt;
-    Over the last decade, with the help of Go developers all over the world,
-
-
-    we have evolved this idea and sketch into a productive language
-
-
-    with fantastic tooling,
-
-
-    a production-quality implementation,
-
-
-    a
-
-
-    &lt;a href="https://blog.golang.org/ismmkeynote" dir="ltr"&gt;state-of-the-art garbage collector&lt;/a&gt;,
-
-
-    and &lt;a href="https://golang.org/doc/install/source#introduction" dir="ltr"&gt;ports to a 12 operating systems and 10 architectures&lt;/a&gt;.
-  &lt;/p&gt;&lt;p dir="ltr"&gt;
-    Any programming language needs the support of a thriving ecosystem.
-
-
-    The open source release was the seed for that ecosystem,
-
-
-    but since then, many people have contributed their time and talent
-
-
-    to fill the Go ecosystem with great tutorials, books, courses, blog posts,
-
-
-    podcasts, tools, integrations, and of course reusable Go packages importable with &lt;code dir="ltr"&gt;go&lt;/code&gt; &lt;code dir="ltr"&gt;get&lt;/code&gt;.
-
-
-    Go could never have succeeded without the support of this ecosystem.
-  &lt;/p&gt;&lt;p dir="ltr"&gt;
-    Of course, the ecosystem needs the support of a thriving community.
-
-
-    In 2019 there are dozens of Go conferences all over the world,
-
-
-    along with
-
-
-    &lt;a href="https://www.meetup.com/pro/go" dir="ltr"&gt;over 150 Go meetup groups with over 90,000 members&lt;/a&gt;.
-
-
-    &lt;a href="https://golangbridge.org/" dir="ltr"&gt;GoBridge&lt;/a&gt;
-
-
-    and
-
-
-    &lt;a href="https://medium.com/@carolynvs/www-loves-gobridge-ccb26309f667" dir="ltr"&gt;Women Who Go&lt;/a&gt;
-
-
-    help bring new voices into the Go community,
-
-
-    through mentoring, training, and conference scholarships.
-
-
-    This year alone, they have taught
-
-
-    hundreds of people from traditionally underrepresented groups
-
-
-    at workshops where community members teach and mentor those new to Go.
-  &lt;/p&gt;&lt;p dir="ltr"&gt;
-    There are
-
-
-    &lt;a href="https://research.swtch.com/gophercount" dir="ltr"&gt;over a million Go developers&lt;/a&gt;
-
-
-    worldwide,
-
-
-    and companies all over the globe are looking to hire more.
-
-
-    In fact, people often tell us that learning Go
-
-
-    helped them get their first jobs in the tech industry.
-
-
-    In the end, what we’re most proud of about Go
-
-
-    is not a well-designed feature or a clever bit of code
-
-
-    but the positive impact Go has had in so many people’s lives.
-
-
-    We aimed to create a language that would help us be better developers,
-
-
-    and we are thrilled that Go has helped so many others.
-  &lt;/p&gt;&lt;p dir="ltr"&gt;
-    As
-
-
-    &lt;a href="https://twitter.com/search?q=%23GoTurns10" dir="ltr"&gt;#GoTurns10&lt;/a&gt;,
-
-
-    I hope everyone will take a moment to celebrate
-
-
-    the Go community and all we have achieved.
-
-
-    On behalf of the entire Go team at Google,
-
-
-    thank you to everyone who has joined us over the past decade.
-
-
-    Let’s make the next one even more incredible!
-  &lt;/p&gt;&lt;img src="https://blog.golang.org/10years/gopher10th-pin-small.jpg" width="150" alt="" height="150"&gt;&lt;img src="https://blog.golang.org/lib/godoc/images/footer-gopher.jpg" alt="The Go Gopher" width="80" height="51"&gt;</description><pubDate>Fri, 08 Nov 2019 10:50:24 -0600</pubDate></item><item><title>Why I can't remove Python 2 from my systems (yet)</title><link>https://lobste.rs/s/3vkmm8</link><description>&lt;h2&gt;Why I can't remove Python 2 from my systems (yet)&lt;/h2&gt;&lt;p dir="ltr"&gt;The end of 2019 is fast approaching, and Python 2 &lt;a href="https://pythonclock.org/" rel="nofollow" dir="ltr"&gt;will not be maintained&lt;/a&gt; past 2020. So I spent some time today trying to remove Python 2 from my systems. What follows is the result.&lt;/p&gt;&lt;p dir="ltr"&gt;I have two computer systems I maintain at home. Work systems are different matters, which I won't go into in this post. Both of them run Debian GNU/Linux, unstable version. This is mostly relic of time when I went through Debian New Maintainers process. I didn't finish the process, but that's a different story... In general, I don't recommend running Debian unstable, since Debian testing is not that less up-to-date and much more stable. If you must run Debian unstable, &lt;code dir="ltr"&gt;apt-listbugs&lt;/code&gt; is your friend.&lt;/p&gt;&lt;p&gt;I will call these two systems "laptop" and "server". Laptop is what I sit in front of. It has a screen, and I run a web browser (Firefox) and terminals on it. Server is under the desk and headless. I connect to it using SSH and do the development on it.&lt;/p&gt;&lt;h3&gt;Laptop&lt;/h3&gt;&lt;p dir="ltr"&gt;The only software I have installed on laptop that depends on Python 2 is &lt;a href="https://launchpad.net/wicd" rel="nofollow" dir="ltr"&gt;wicd&lt;/a&gt;, &lt;code dir="ltr"&gt;wicd-curses&lt;/code&gt; package in particular. It is a wireless network manager that I can run in terminal. The main alternative is &lt;a href="https://wiki.gnome.org/Projects/NetworkManager" rel="nofollow" dir="ltr"&gt;NetworkManager&lt;/a&gt;, maybe I should try it again? On the other hand, I am pretty happy with my current setup.&lt;/p&gt;&lt;p dir="ltr"&gt;Looking at the issue tracker, it seems &lt;a href="https://bugs.launchpad.net/wicd/+bug/1848020" rel="nofollow" dir="ltr"&gt;Python 3 support&lt;/a&gt; is in progress, and its importance is set to high by the main developer. It seems promising, so I just subscribed to the issue.&lt;/p&gt;&lt;h3&gt;Server&lt;/h3&gt;&lt;p dir="ltr"&gt;On the development server, three packages depend on Python 2. One is &lt;a href="http://llvm.org/" rel="nofollow" dir="ltr"&gt;LLVM&lt;/a&gt;, &lt;code dir="ltr"&gt;llvm-9-dev&lt;/code&gt; package in particular. This is due to &lt;a href="http://llvm.org/docs/CommandGuide/lit.html" rel="nofollow" dir="ltr"&gt;lit&lt;/a&gt;, LLVM Integrated Tester.&lt;/p&gt;&lt;p dir="ltr"&gt;I can't figure out the current status of Python 3 support for lit. Looking at the commit log, it seems to get a stream of Python 3 fixes, most recently in the last month (October 2019). For example, &lt;a href="https://github.com/llvm/llvm-project/commit/e5ee89c0d3efc1a7a34357d1d04e3d9e9f65d2be" dir="ltr"&gt;Fix several Python 2/3 compatibility issues and tests&lt;/a&gt;. My best guess is that Python 3 support is done in best effort basis and Python 2 is still the "official" way to run lit, and that's why Debian maintainer set the dependency to Python 2.&lt;/p&gt;&lt;p dir="ltr"&gt;The next is &lt;a href="https://www.mercurial-scm.org/" rel="nofollow" dir="ltr"&gt;Mercurial&lt;/a&gt;, a distributed version control system. Projects I care about, for example Firefox, uses Mercurial, so I want to have it working.&lt;/p&gt;&lt;p dir="ltr"&gt;According to &lt;a href="https://www.mercurial-scm.org/wiki/Python3" rel="nofollow" dir="ltr"&gt;Mercurial Wiki&lt;/a&gt;, Python 3 support is currently in "beta". Complicating the matter is that Mercurial is extensible, and many third party extensions have not yet been ported to Python 3.&lt;/p&gt;&lt;p dir="ltr"&gt;The last is &lt;a href="https://www.npmjs.com/" rel="nofollow" dir="ltr"&gt;npm&lt;/a&gt;, a package manager for Node.js. This is due to &lt;a href="https://chromium.googlesource.com/external/gyp/" rel="nofollow" dir="ltr"&gt;GYP&lt;/a&gt;, standing for Generate Your Projects. It is used to build native addon modules for Node.js.&lt;/p&gt;&lt;p dir="ltr"&gt;The state of GYP seems similar to lit. The commit log shows commits like &lt;a href="https://chromium.googlesource.com/external/gyp/+/aca1e2c3d346d704adfa60944e6b4dd06f4728be" rel="nofollow" dir="ltr"&gt;Fix Python 3 incompatibilities&lt;/a&gt;. On the one hand, this is great. On the other hand, it shows Python 3 support isn't official, since these issues wouldn't have passed CI otherwise.&lt;/p&gt;&lt;h3&gt;Conclusion&lt;/h3&gt;&lt;p&gt;All in all, it seems to be in pretty good shape. wicd port is in progress, and Mercurial port is already done. What's needed for lit and GYP seems to be the official declaration (and addition to CI) of Python 3 support. I plan to repeat this exercise the next year, after the deadline has passed.&lt;/p&gt;</description><pubDate>Thu, 07 Nov 2019 23:06:25 -0600</pubDate></item><item><title>Whats your vim setup like ?</title><link>https://lobste.rs/s/ffhwse</link><description>&lt;p dir="ltr"&gt;I’ve been vivid user of vim for few years now. Inspired on previous &lt;code dir="ltr"&gt;emacs&lt;/code&gt; topic, how do you organize your config and dotfiles for vim? Show us what your setup looks like. What plugins or plugin manager do you use. Screenshots would be a huge plus.&lt;/p&gt;&lt;p&gt;Thank you all!&lt;/p&gt;</description><pubDate>Thu, 07 Nov 2019 14:31:15 -0600</pubDate></item><item><title>System design hack: Postgres is a great pub/sub &amp; job server</title><link>https://lobste.rs/s/lkuyq5</link><description>&lt;figure&gt;&lt;img srcset="https://layerci.com/blog/content/images/size/w300/2019/11/postgres.png 300w, https://layerci.com/blog/content/images/size/w600/2019/11/postgres.png 600w, https://layerci.com/blog/content/images/size/w1000/2019/11/postgres.png 1000w, https://layerci.com/blog/content/images/size/w2000/2019/11/postgres.png 2000w" src="https://layerci.com/blog/content/images/size/w2000/2019/11/postgres.png" alt="System design hack: Postgres is a great pub/sub &amp;amp; job server" width="360" height="400"&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;If you're making any project of sufficient complexity, you'll need a &lt;a href="https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern" dir="ltr"&gt;publish/subscribe&lt;/a&gt; server to process events. This article will introduce you to Postgres, explain the alternatives, and walk you through an example use case of pub/sub and its solution.&lt;/p&gt;&lt;p&gt;&lt;strong&gt;Postgres is an amazing relational database&lt;/strong&gt;&lt;/p&gt;&lt;p&gt;If you aren't too familiar with Postgres, it's a feature-packed relational database that many companies use as a traditional central data store. By storing your "users" table in Postgres, you can immediately scale to 100 columns and a row for every living person.&lt;/p&gt;&lt;p&gt;It's possible to scale Postgres to storing a billion 1KB rows entirely in memory - This means you could quickly run queries against the full name of everyone on the planet on commodity hardware and with little fine-tuning.&lt;/p&gt;&lt;p&gt;I'm not going to belabor the point that something called "PostgresSQL" is a good SQL database. I'll show you a more interesting use case for it where we combine a few features to turn Postgres into a powerful pubsub / job server.&lt;/p&gt;&lt;p&gt;&lt;strong&gt;Postgres makes a great persistent pubsub server&lt;/strong&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;If you do enough system design, you'll inevitably need to solve a problem with &lt;a href="https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern" dir="ltr"&gt;publish/subscribe architecture&lt;/a&gt;. We hit it quickly at LayerCI - we needed to keep the viewers of a test run's page and the github API notified about a run as it progressed.&lt;/p&gt;&lt;p&gt;For your pub/sub server, you have a lot of options:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Postgres?&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;There are very few use cases where you'd need a dedicated pub/sub server like Kafka. Postgres can &lt;a href="https://severalnines.com/blog/benchmarking-postgresql-performance" dir="ltr"&gt;easily handle 10,000 insertions per second&lt;/a&gt;, and it can be tuned to even higher numbers. It's rarely a mistake to start with Postgres and then switch out the most performance critical parts of your system when the time comes.&lt;/p&gt;&lt;h3&gt;Pub/sub + atomic operations ⇒ no job server necessary.&lt;/h3&gt;&lt;p&gt;In the list above, I skipped things similar to pub/sub servers called "job queues" - they only let one "subscriber" watch for new "events" at a time, and keep a queue of unprocessed events:&lt;/p&gt;&lt;p&gt;It turns out that Postgres generally supersedes job servers as well. You can have your workers "watch" the "new events" channel and try to claim a job whenever a new one is pushed. As a bonus, Postgres lets other services watch the status of the events with no added complexity.&lt;/p&gt;&lt;h3&gt;Our use case: CI runs processed by sequential workers&lt;/h3&gt;&lt;p&gt;At LayerCI, we run "test runs", which start by cloning a repository, and then running some user specified tests. There are microservices that do various initialization steps for the test run, and additional microservices (such as the websocket gateway) that need to listen to the status of the runs.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://layerci.com/blog/content/images/2019/11/run-flow.svg" width="331" height="166"&gt;&lt;figcaption dir="auto"&gt;How a test run is processed at LayerCI&lt;/figcaption&gt;&lt;/figure&gt;&lt;p&gt;An instance of an API server creates a run by inserting a row into the "Runs" row of a Postgres table:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;CREATE&lt;/span&gt; &lt;span dir="ltr"&gt;TYPE&lt;/span&gt; ci_job_status &lt;span dir="ltr"&gt;AS&lt;/span&gt; &lt;span dir="ltr"&gt;ENUM&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;'new'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;'initializing'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;'initialized'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;'running'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;'success'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;'error'&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;CREATE&lt;/span&gt; &lt;span dir="ltr"&gt;TABLE&lt;/span&gt; ci_jobs&lt;span dir="ltr"&gt;(&lt;/span&gt;
-	id &lt;span dir="ltr"&gt;SERIAL&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; 
-	repository &lt;span dir="ltr"&gt;varchar&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;256&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; 
-	&lt;span dir="ltr"&gt;status&lt;/span&gt; ci_job_status&lt;span dir="ltr"&gt;,&lt;/span&gt; 
-	status_change_time &lt;span dir="ltr"&gt;timestamp&lt;/span&gt;
-&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-
-&lt;span spellcheck="true" dir="ltr"&gt;/*on API call*/&lt;/span&gt;
-&lt;span dir="ltr"&gt;INSERT&lt;/span&gt; &lt;span dir="ltr"&gt;INTO&lt;/span&gt; ci_job_status&lt;span dir="ltr"&gt;(&lt;/span&gt;repository&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;status&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; status_change_time&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;VALUES&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;'https:&lt;span spellcheck="true" dir="ltr"&gt;//github.com/colinchartier/layerci-color-test', 'new', NOW());&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;How do the workers worker "claim" a job? By setting the job status atomically:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;UPDATE&lt;/span&gt; ci_jobs &lt;span dir="ltr"&gt;SET&lt;/span&gt; &lt;span dir="ltr"&gt;status&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;'initializing'&lt;/span&gt;
-&lt;span dir="ltr"&gt;WHERE&lt;/span&gt; id &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;
-  &lt;span dir="ltr"&gt;SELECT&lt;/span&gt; id
-  &lt;span dir="ltr"&gt;FROM&lt;/span&gt; ci_jobs
-  &lt;span dir="ltr"&gt;WHERE&lt;/span&gt; &lt;span dir="ltr"&gt;status&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;'new'&lt;/span&gt;
-  &lt;span dir="ltr"&gt;ORDER&lt;/span&gt; &lt;span dir="ltr"&gt;BY&lt;/span&gt; id
-  &lt;span dir="ltr"&gt;FOR&lt;/span&gt; &lt;span dir="ltr"&gt;UPDATE&lt;/span&gt; SKIP LOCKED
-  &lt;span dir="ltr"&gt;LIMIT&lt;/span&gt; &lt;span dir="ltr"&gt;1&lt;/span&gt;
-&lt;span dir="ltr"&gt;)&lt;/span&gt;
-RETURNING &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Finally, we can use a trigger and a channel to notify the workers that there might be new work available:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;CREATE&lt;/span&gt; &lt;span dir="ltr"&gt;OR&lt;/span&gt; REPLACE &lt;span dir="ltr"&gt;FUNCTION&lt;/span&gt; ci_jobs_status_notify&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-	&lt;span dir="ltr"&gt;RETURNS&lt;/span&gt; &lt;span dir="ltr"&gt;trigger&lt;/span&gt; &lt;span dir="ltr"&gt;AS&lt;/span&gt;
-$$
-&lt;span dir="ltr"&gt;BEGIN&lt;/span&gt;
-	PERFORM pg_notify&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;'ci_jobs_status_channel'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; NEW&lt;span dir="ltr"&gt;.&lt;/span&gt;id::&lt;span dir="ltr"&gt;text&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-	&lt;span dir="ltr"&gt;RETURN&lt;/span&gt; NEW&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;END&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-$$ LANGUAGE plpgsql&lt;span dir="ltr"&gt;;&lt;/span&gt;
-
-
-&lt;span dir="ltr"&gt;CREATE&lt;/span&gt; &lt;span dir="ltr"&gt;TRIGGER&lt;/span&gt; ci_jobs_status
-	&lt;span dir="ltr"&gt;AFTER&lt;/span&gt; &lt;span dir="ltr"&gt;INSERT&lt;/span&gt; &lt;span dir="ltr"&gt;OR&lt;/span&gt; &lt;span dir="ltr"&gt;UPDATE&lt;/span&gt; &lt;span dir="ltr"&gt;OF&lt;/span&gt; &lt;span dir="ltr"&gt;status&lt;/span&gt;
-	&lt;span dir="ltr"&gt;ON&lt;/span&gt; ci_jobs
-	&lt;span dir="ltr"&gt;FOR EACH ROW&lt;/span&gt;
-&lt;span dir="ltr"&gt;EXECUTE&lt;/span&gt; &lt;span dir="ltr"&gt;PROCEDURE&lt;/span&gt; ci_jobs_status_notify&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;All the workers have to do is "listen" on this status channel and try to claim a job whenever a job's status changes:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;tryPickupJob := make(chan interface{})
-//equivalent to 'LISTEN ci_jobs_status_channel;'
-listener.Listen("ci_jobs_status_channel")
-go func() {
-  for event := range listener.Notify {
-    select {
-    case tryPickupJob &amp;lt;- true:
-    }
-  }
-  close(tryPickupJob)
-}
-
-for job := range tryPickupJob {
-  //try to "claim" a job
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;When we combine these elements, we get something like the following:&lt;/p&gt;&lt;figure&gt;&lt;img src="https://layerci.com/blog/content/images/2019/11/queue-system-3.svg" width="331" height="189"&gt;&lt;/figure&gt;&lt;p&gt;This architecture scales to many sequential workers processing the job in a row, all you need is a "processing" state and a "processed" state for each worker. For LayerCI that looks like: new, initializing, initialized, running, complete.&lt;/p&gt;&lt;p dir="ltr"&gt;It also allows other services to watch the &lt;code dir="ltr"&gt;ci_jobs_status_channel&lt;/code&gt; - Our websocket gateway for the /run page and github notification services simply watch the channel and notify any relevant parties of the published events.&lt;/p&gt;&lt;h2&gt;Other benefits of using Postgres for Pub/Sub&lt;/h2&gt;&lt;p&gt;There are also a bunch of other benefits to using postgres instead of something like Redis Pub/Sub:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Many SQL users will already have Postgres installed for use as a database, so there are no extra setup costs for using it for pub/sub.&lt;/LI&gt;&lt;LI&gt;As a database, Postgres has very good persistence guarantees - It's easy to query "dead" jobs with, e.g., &lt;code dir="ltr"&gt;SELECT * FROM ci_jobs WHERE status='initializing' AND NOW() - status_change_time &amp;gt; '1 hour'::interval&lt;/code&gt; to handle workers crashing or hanging.&lt;/LI&gt;&lt;LI&gt;Since jobs are defined in SQL, it's easy to generate graphql and protobuf representations of them (i.e., to provide APIs that checks the run status.)&lt;/LI&gt;&lt;LI&gt;It's easy to have multiple watchers of status changes, you can have other services use the same "LISTEN ci_jobs_status_channel"&lt;/LI&gt;&lt;LI&gt;Postgres has very good language support, with bindings for most popular languages. This is a stark difference from most other pub/sub servers.&lt;/LI&gt;&lt;LI&gt;You can also run complicated SQL queries on things that are still in your "work queues" to give highly tailored API endpoints to your users. LayerCI has pages like &lt;a href="https://layerci.com/github/distributed-containers-inc/sanic" dir="ltr"&gt;https://layerci.com/github/distributed-containers-inc/sanic&lt;/a&gt; that show the status of various jobs (even running ones.)&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p&gt;If you need a publish/subscribe or job server at any point in your project, it's not a bad idea to start by using Postgres. It'll give you lots of data integrity and performance guarantees, and it doesn't require you or your team learning any new technology.&lt;/p&gt;</description><pubDate>Fri, 08 Nov 2019 16:58:49 -0600</pubDate></item><item><title>Padding the Struct: How a Compiler Optimization Can Disclose Stack Memory</title><link>https://lobste.rs/s/uxxyyu</link><description>&lt;h2&gt;Introduction&lt;/h2&gt;&lt;p dir="ltr"&gt;In their eternal quest for more performance, compilers like GCC perform clever optimizations behind the scenes to make your code more performant, among other optimization classes. One example of this is adding padding to &lt;em dir="ltr"&gt;struct&lt;/em&gt; objects so that accessing their members is memory-aligned and is therefore faster.&lt;/p&gt;&lt;p dir="ltr"&gt;However, &lt;strong dir="ltr"&gt;this can lead to subtle vulnerabilities&lt;/strong&gt;!&lt;/p&gt;&lt;p&gt;In this post we will:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Take a detailed stroll through what &lt;em dir="ltr"&gt;structs&lt;/em&gt; are and how GCC uses padding bytes to achieve efficient alignment of members&lt;/LI&gt;&lt;LI&gt;Look at how this padding can lead to a process disclosing stack memory, with two examples: an RPC server and a kernel driver&lt;/LI&gt;&lt;LI&gt;Discuss how this issue can be fixed&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;C Structures&lt;/h2&gt;&lt;p dir="ltr"&gt;To start off, let us understand what a &lt;em dir="ltr"&gt;structure&lt;/em&gt; is in the C programming language.&lt;/p&gt;&lt;p dir="ltr"&gt;A &lt;em dir="ltr"&gt;structure&lt;/em&gt;, or struct, groups some logically tied data; each item of data is known as a struct &lt;em dir="ltr"&gt;member&lt;/em&gt;. The intention is similar to something you may be more familiar with in other languages: — classes — we can reuse the notion of some "thing", expecting it to have certain attributes, reading and writing them.&lt;/p&gt;&lt;p dir="ltr"&gt;As an example, consider the following &lt;code dir="ltr"&gt;struct&lt;/code&gt; &lt;em dir="ltr"&gt;declaration&lt;/em&gt;, representing users in a hypothetical program:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; user &lt;span dir="ltr"&gt;{&lt;/span&gt;
+ 100%   7695 (longest request)&lt;/PRE&gt;&lt;p&gt;We get around 130req/s for our simple load balancer, which is not bad at all.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p&gt;We covered a lot of stuff in this article.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Round Robin Selection&lt;/LI&gt;&lt;LI&gt;ReverseProxy from the standard library&lt;/LI&gt;&lt;LI&gt;Mutexes&lt;/LI&gt;&lt;LI&gt;Atomic Operations&lt;/LI&gt;&lt;LI&gt;Closures&lt;/LI&gt;&lt;LI&gt;Callbacks&lt;/LI&gt;&lt;LI&gt;Select Operation&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;There is a lot we can do to improve our tiny load balancer.&lt;/p&gt;&lt;p&gt;For example,&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Use a heap for sort out alive backends to reduce search surface&lt;/LI&gt;&lt;LI&gt;Collect statistics&lt;/LI&gt;&lt;LI&gt;Implement weighted round-robin/least connections&lt;/LI&gt;&lt;LI&gt;Add support for a configuration file&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;etc.&lt;/p&gt;&lt;p dir="ltr"&gt;You can find the source code to repository &lt;a href="https://github.com/kasvith/simplelb/" dir="ltr"&gt;here&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;Thank you for reading this article 😄&lt;/p&gt;</description><pubDate>Sat, 09 Nov 2019 04:43:18 -0600</pubDate></item><item><title>Padding the Struct: How a Compiler Optimization Can Disclose Stack Memory</title><link>https://lobste.rs/s/uxxyyu</link><description>&lt;h2&gt;Introduction&lt;/h2&gt;&lt;p dir="ltr"&gt;In their eternal quest for more performance, compilers like GCC perform clever optimizations behind the scenes to make your code more performant, among other optimization classes. One example of this is adding padding to &lt;em dir="ltr"&gt;struct&lt;/em&gt; objects so that accessing their members is memory-aligned and is therefore faster.&lt;/p&gt;&lt;p dir="ltr"&gt;However, &lt;strong dir="ltr"&gt;this can lead to subtle vulnerabilities&lt;/strong&gt;!&lt;/p&gt;&lt;p&gt;In this post we will:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Take a detailed stroll through what &lt;em dir="ltr"&gt;structs&lt;/em&gt; are and how GCC uses padding bytes to achieve efficient alignment of members&lt;/LI&gt;&lt;LI&gt;Look at how this padding can lead to a process disclosing stack memory, with two examples: an RPC server and a kernel driver&lt;/LI&gt;&lt;LI&gt;Discuss how this issue can be fixed&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;C Structures&lt;/h2&gt;&lt;p dir="ltr"&gt;To start off, let us understand what a &lt;em dir="ltr"&gt;structure&lt;/em&gt; is in the C programming language.&lt;/p&gt;&lt;p dir="ltr"&gt;A &lt;em dir="ltr"&gt;structure&lt;/em&gt;, or struct, groups some logically tied data; each item of data is known as a struct &lt;em dir="ltr"&gt;member&lt;/em&gt;. The intention is similar to something you may be more familiar with in other languages: — classes — we can reuse the notion of some "thing", expecting it to have certain attributes, reading and writing them.&lt;/p&gt;&lt;p dir="ltr"&gt;As an example, consider the following &lt;code dir="ltr"&gt;struct&lt;/code&gt; &lt;em dir="ltr"&gt;declaration&lt;/em&gt;, representing users in a hypothetical program:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; user &lt;span dir="ltr"&gt;{&lt;/span&gt;
   &lt;span dir="ltr"&gt;int&lt;/span&gt; userid&lt;span dir="ltr"&gt;;&lt;/span&gt;
   bool superuser&lt;span dir="ltr"&gt;;&lt;/span&gt;
 &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;When we operate on a &lt;em dir="ltr"&gt;user&lt;/em&gt; in our program, we &lt;em dir="ltr"&gt;declare&lt;/em&gt; an associated struct, and then we have access to the &lt;em dir="ltr"&gt;members&lt;/em&gt; we expect users to have (such as their &lt;code dir="ltr"&gt;userid&lt;/code&gt;).&lt;/p&gt;&lt;p dir="ltr"&gt;Besides &lt;em dir="ltr"&gt;declaration&lt;/em&gt;, there is &lt;em dir="ltr"&gt;initialization&lt;/em&gt; and &lt;em dir="ltr"&gt;assignment&lt;/em&gt; of structs.&lt;/p&gt;&lt;p dir="ltr"&gt;You can control &lt;em dir="ltr"&gt;initialization&lt;/em&gt; to give (some or all) members a value when creating an instance of some particular struct.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;include&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;stdbool.h&amp;gt;&lt;/span&gt;&lt;/span&gt;
@@ -1354,7 +840,176 @@ b'\xb9-f]\x01W\xf0\xd2\x01\x00\x00\x00'
             n &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;write&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;newsockfd&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;foo&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;sizeof&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;foo&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
             &lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;n &lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;error&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"ERROR writing to socket"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
             &lt;span dir="ltr"&gt;break&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-         &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;In the Linux kernel space, PaX developed a GCC Plugin, &lt;code dir="ltr"&gt;STRUCTLEAK&lt;/code&gt;. &lt;code dir="ltr"&gt;STRUCTLEAK&lt;/code&gt; works by emitting the equivilent of an empty designated initializer list, if a struct it is inspecting lacks an initializer list (by looking for a &lt;code dir="ltr"&gt;CONSTRUCTOR&lt;/code&gt; node emitted by GCC); this zeroes members&lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn37" dir="ltr"&gt;&lt;sup dir="ltr"&gt;37&lt;/sup&gt;&lt;/a&gt; and padding bytes.&lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn38" dir="ltr"&gt;&lt;sup dir="ltr"&gt;38&lt;/sup&gt;&lt;/a&gt; See pages 39 ‐ 41&lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn39" dir="ltr"&gt;&lt;sup dir="ltr"&gt;39&lt;/sup&gt;&lt;/a&gt; for details. Something useful to note is that GCC does not&lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn40" dir="ltr"&gt;&lt;sup dir="ltr"&gt;40&lt;/sup&gt;&lt;/a&gt; emit a &lt;code dir="ltr"&gt;CONSTRUCTOR&lt;/code&gt; node when an initializer is specified for all struct members (i.e., this case&lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn41" dir="ltr"&gt;&lt;sup dir="ltr"&gt;41&lt;/sup&gt;&lt;/a&gt;), which is funtionally equivilent to this code &lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn42" dir="ltr"&gt;&lt;sup dir="ltr"&gt;42&lt;/sup&gt;&lt;/a&gt; (individual member assignment). Thus, this GCC behavior a) results in padding bytes remaining &lt;em dir="ltr"&gt;uninitialized&lt;/em&gt; when a full initializer list is used and b) is why &lt;code dir="ltr"&gt;STACKLEAK&lt;/code&gt; will also zero padding bytes for structs of this nature: to the plugin, it lacks a &lt;code dir="ltr"&gt;CONSTRUCTOR&lt;/code&gt; node, so it will be given the equivilent of an empty initializer list. Upstream Linux has merged an adaptation of PaX's &lt;code dir="ltr"&gt;STRUCTLEAK&lt;/code&gt; plugin,&lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn43" dir="ltr"&gt;&lt;sup dir="ltr"&gt;43&lt;/sup&gt;&lt;/a&gt; and has added illustrative test cases.&lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn44" dir="ltr"&gt;&lt;sup dir="ltr"&gt;44&lt;/sup&gt;&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;As discussed in the last paragraph of this post's Padding and Alignment section, the behavior of an empty initializer list (zeroes padding and members) is not affected by GCC's optimization in practice, &lt;strong dir="ltr"&gt;as long as the struct is not subsequently copied with GCC's built-in &lt;code dir="ltr"&gt;memcpy&lt;/code&gt;&lt;/strong&gt;; for example, &lt;code dir="ltr"&gt;fwrite(3)&lt;/code&gt; and &lt;code dir="ltr"&gt;copy_to_user&lt;/code&gt; were tested and do not trigger this behavior. Grsecurity's latest patches now provide a &lt;code dir="ltr"&gt;STRUCTLEAK&lt;/code&gt; plugin that zeroes padding in the face of GCC's erroenous optimization behavior in this case. While the author of this post found Linux kernel code treated by &lt;code dir="ltr"&gt;STRUCTLEAK&lt;/code&gt; by adding an empty initializer list (noted during kernel build logs) that followed this pattern (i.e. after member assignment, fully copied to some other buffer and not touched again),&lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn45" dir="ltr"&gt;&lt;sup dir="ltr"&gt;45&lt;/sup&gt;&lt;/a&gt; no concretely exploitable cases were found; in this case the destination buffer is user-accessible,&lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn46" dir="ltr"&gt;&lt;sup dir="ltr"&gt;46&lt;/sup&gt;&lt;/a&gt; but the struct is not padded. So, whether or not there are exploitable cases in the Linux kernel under older versions of &lt;code dir="ltr"&gt;STRUCTLEAK&lt;/code&gt; remains an open question.&lt;/p&gt;&lt;p dir="ltr"&gt;For detecting usage of uninitialized memory more generally, there is also MemorySanitizer,&lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn47" dir="ltr"&gt;&lt;sup dir="ltr"&gt;47&lt;/sup&gt;&lt;/a&gt; which is available to the Clang compiler.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p&gt;In this blog post, we explored in detail how alignment and padding bytes in C structs can lead to subtly dangerous behavior; for example, disclosing bytes on the stack.&lt;/p&gt;&lt;p&gt;This behavior has been exploited in kernel drivers, disclosing memory to userspace, as well as server processes, disclosing memory to clients.&lt;/p&gt;&lt;p&gt;In general, to fix this issue you can:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;memset&lt;/code&gt; over the struct with zeroes before member assignment&lt;/LI&gt;&lt;LI&gt;Use GCC's &lt;code dir="ltr"&gt;-Wuninitialized&lt;/code&gt; to alert on usage of &lt;em dir="ltr"&gt;uninitialized&lt;/em&gt; values, such as struct members (this doesn't catch uninitialized padding bytes)&lt;/LI&gt;&lt;LI&gt;Use Valgrind to detect when any &lt;em dir="ltr"&gt;uninitialized&lt;/em&gt; memory is transfered elsewhere, e.g. to &lt;code dir="ltr"&gt;write(2)&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Use MemorySanitizer to detect usage of &lt;em dir="ltr"&gt;uninitialized&lt;/em&gt; memory (more generally) if LLVM/Clang can be used&lt;/LI&gt;&lt;LI&gt;Enable &lt;code dir="ltr"&gt;STRUCTLEAK&lt;/code&gt; in your Linux kernel builds with the &lt;code dir="ltr"&gt;CONFIG_GCC_PLUGIN_STRUCTLEAK*&lt;/code&gt; KCONFIGs&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;If you enjoyed this post or have any questions (or spot errors!), &lt;a href="https://twitter.com/randohacker" dir="ltr"&gt;feel free to reach out&lt;/a&gt;, I'd love to chat.&lt;/p&gt;&lt;p dir="ltr"&gt;Thanks to &lt;a href="https://www.twitter.com/grsecurity" dir="ltr"&gt;grsecurity&lt;/a&gt; for discussion that improved this post.&lt;/p&gt;</description><pubDate>Sat, 09 Nov 2019 02:44:04 -0600</pubDate></item><item><title>A History of UNIX before Berkeley: UNIX Evolution: 1975-1984 (1984)</title><link>https://lobste.rs/s/dtwyqy</link><description>&lt;h1&gt;A History of UNIX before Berkeley:
+         &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;In the Linux kernel space, PaX developed a GCC Plugin, &lt;code dir="ltr"&gt;STRUCTLEAK&lt;/code&gt;. &lt;code dir="ltr"&gt;STRUCTLEAK&lt;/code&gt; works by emitting the equivilent of an empty designated initializer list, if a struct it is inspecting lacks an initializer list (by looking for a &lt;code dir="ltr"&gt;CONSTRUCTOR&lt;/code&gt; node emitted by GCC); this zeroes members&lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn37" dir="ltr"&gt;&lt;sup dir="ltr"&gt;37&lt;/sup&gt;&lt;/a&gt; and padding bytes.&lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn38" dir="ltr"&gt;&lt;sup dir="ltr"&gt;38&lt;/sup&gt;&lt;/a&gt; See pages 39 ‐ 41&lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn39" dir="ltr"&gt;&lt;sup dir="ltr"&gt;39&lt;/sup&gt;&lt;/a&gt; for details. Something useful to note is that GCC does not&lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn40" dir="ltr"&gt;&lt;sup dir="ltr"&gt;40&lt;/sup&gt;&lt;/a&gt; emit a &lt;code dir="ltr"&gt;CONSTRUCTOR&lt;/code&gt; node when an initializer is specified for all struct members (i.e., this case&lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn41" dir="ltr"&gt;&lt;sup dir="ltr"&gt;41&lt;/sup&gt;&lt;/a&gt;), which is funtionally equivilent to this code &lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn42" dir="ltr"&gt;&lt;sup dir="ltr"&gt;42&lt;/sup&gt;&lt;/a&gt; (individual member assignment). Thus, this GCC behavior a) results in padding bytes remaining &lt;em dir="ltr"&gt;uninitialized&lt;/em&gt; when a full initializer list is used and b) is why &lt;code dir="ltr"&gt;STACKLEAK&lt;/code&gt; will also zero padding bytes for structs of this nature: to the plugin, it lacks a &lt;code dir="ltr"&gt;CONSTRUCTOR&lt;/code&gt; node, so it will be given the equivilent of an empty initializer list. Upstream Linux has merged an adaptation of PaX's &lt;code dir="ltr"&gt;STRUCTLEAK&lt;/code&gt; plugin,&lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn43" dir="ltr"&gt;&lt;sup dir="ltr"&gt;43&lt;/sup&gt;&lt;/a&gt; and has added illustrative test cases.&lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn44" dir="ltr"&gt;&lt;sup dir="ltr"&gt;44&lt;/sup&gt;&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;As discussed in the last paragraph of this post's Padding and Alignment section, the behavior of an empty initializer list (zeroes padding and members) is not affected by GCC's optimization in practice, &lt;strong dir="ltr"&gt;as long as the struct is not subsequently copied with GCC's built-in &lt;code dir="ltr"&gt;memcpy&lt;/code&gt;&lt;/strong&gt;; for example, &lt;code dir="ltr"&gt;fwrite(3)&lt;/code&gt; and &lt;code dir="ltr"&gt;copy_to_user&lt;/code&gt; were tested and do not trigger this behavior. Grsecurity's latest patches now provide a &lt;code dir="ltr"&gt;STRUCTLEAK&lt;/code&gt; plugin that zeroes padding in the face of GCC's erroenous optimization behavior in this case. While the author of this post found Linux kernel code treated by &lt;code dir="ltr"&gt;STRUCTLEAK&lt;/code&gt; by adding an empty initializer list (noted during kernel build logs) that followed this pattern (i.e. after member assignment, fully copied to some other buffer and not touched again),&lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn45" dir="ltr"&gt;&lt;sup dir="ltr"&gt;45&lt;/sup&gt;&lt;/a&gt; no concretely exploitable cases were found; in this case the destination buffer is user-accessible,&lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn46" dir="ltr"&gt;&lt;sup dir="ltr"&gt;46&lt;/sup&gt;&lt;/a&gt; but the struct is not padded. So, whether or not there are exploitable cases in the Linux kernel under older versions of &lt;code dir="ltr"&gt;STRUCTLEAK&lt;/code&gt; remains an open question.&lt;/p&gt;&lt;p dir="ltr"&gt;For detecting usage of uninitialized memory more generally, there is also MemorySanitizer,&lt;a href="https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2019/october/padding-the-struct-how-a-compiler-optimization-can-disclose-stack-memory/#fn47" dir="ltr"&gt;&lt;sup dir="ltr"&gt;47&lt;/sup&gt;&lt;/a&gt; which is available to the Clang compiler.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p&gt;In this blog post, we explored in detail how alignment and padding bytes in C structs can lead to subtly dangerous behavior; for example, disclosing bytes on the stack.&lt;/p&gt;&lt;p&gt;This behavior has been exploited in kernel drivers, disclosing memory to userspace, as well as server processes, disclosing memory to clients.&lt;/p&gt;&lt;p&gt;In general, to fix this issue you can:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;memset&lt;/code&gt; over the struct with zeroes before member assignment&lt;/LI&gt;&lt;LI&gt;Use GCC's &lt;code dir="ltr"&gt;-Wuninitialized&lt;/code&gt; to alert on usage of &lt;em dir="ltr"&gt;uninitialized&lt;/em&gt; values, such as struct members (this doesn't catch uninitialized padding bytes)&lt;/LI&gt;&lt;LI&gt;Use Valgrind to detect when any &lt;em dir="ltr"&gt;uninitialized&lt;/em&gt; memory is transfered elsewhere, e.g. to &lt;code dir="ltr"&gt;write(2)&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Use MemorySanitizer to detect usage of &lt;em dir="ltr"&gt;uninitialized&lt;/em&gt; memory (more generally) if LLVM/Clang can be used&lt;/LI&gt;&lt;LI&gt;Enable &lt;code dir="ltr"&gt;STRUCTLEAK&lt;/code&gt; in your Linux kernel builds with the &lt;code dir="ltr"&gt;CONFIG_GCC_PLUGIN_STRUCTLEAK*&lt;/code&gt; KCONFIGs&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;If you enjoyed this post or have any questions (or spot errors!), &lt;a href="https://twitter.com/randohacker" dir="ltr"&gt;feel free to reach out&lt;/a&gt;, I'd love to chat.&lt;/p&gt;&lt;p dir="ltr"&gt;Thanks to &lt;a href="https://www.twitter.com/grsecurity" dir="ltr"&gt;grsecurity&lt;/a&gt; for discussion that improved this post.&lt;/p&gt;</description><pubDate>Sat, 09 Nov 2019 02:44:04 -0600</pubDate></item><item><title>Kubernetes made my latency 10x higher</title><link>https://lobste.rs/s/e5kipe</link><description>&lt;header dir="ltr"&gt;
+    &lt;p dir="ltr"&gt;&lt;time datetime="2019-10-22T06:07:31+00:00" itemprop="datePublished" dir="ltr"&gt;Oct 22, 2019&lt;/time&gt;&lt;/p&gt;
+  &lt;/header&gt;&lt;p&gt;Last week my team was busy with the migration of one microservice to our
+central platform, which bundles CI/CD, a Kubernetes based runtime,
+metrics and other goodies.  This exercise is meant to provide a blueprint
+to accelerate moving a fleet of ~150 more in the coming months, all of
+which power some of the main online marketplaces in Spain (Infojobs,
+Fotocasa, etc.)&lt;/p&gt;&lt;p&gt;After we had the application deployed in Kubernetes and routed some
+production traffic to it, things started looking worrisome. Request
+latencies in the Kubernetes deployment were up to x10 higher than on
+EC2.  Unless we found a solution this would not only become a hard
+blocker to migrate this microservice, but could also jettison the entire
+project.&lt;/p&gt;&lt;h2&gt;Why is latency so much higher in Kubernetes than EC2?&lt;/h2&gt;&lt;p dir="ltr"&gt;To pinpoint the bottleneck we collected metrics for the entire request
+path.  The architecture is simple, an API Gateway (Zuul) that proxies
+requests to the microservice instances in EC2 or Kubernetes.  In
+Kubernetes, we use the NGINX Ingress controller and backends are
+ordinary
+&lt;a href="https://kubernetes.io/docs/concepts/workloads/controllers/deployment/" dir="ltr"&gt;Deployment&lt;/a&gt;
+objects running a JVM application based in Spring.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;                                  EC2
+                            +---------------+
+                            |  +---------+  |
+                            |  |         |  |
+                       +-------&amp;gt; BACKEND |  |
+                       |    |  |         |  |
+                       |    |  +---------+  |                   
+                       |    +---------------+
+             +------+  |
+Public       |      |  |
+      -------&amp;gt; ZUUL +--+
+traffic      |      |  |              Kubernetes
+             +------+  |    +-----------------------------+
+                       |    |  +-------+      +---------+ |
+                       |    |  |       |  xx  |         | |
+                       +-------&amp;gt; NGINX +------&amp;gt; BACKEND | |
+                            |  |       |  xx  |         | |
+                            |  +-------+      +---------+ |
+                            +-----------------------------+
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The problem seemed to be upstream latency at the backend (I marked the
+connection with “xx” in the graph). When the application was deployed in
+EC2 it took ~20ms to respond.  In Kubernetes it was taking 100-200 ms.&lt;/p&gt;&lt;p&gt;We quickly discarded likely suspects that could have appeared with the
+change of runtime. The JVM version was identical.  Issues related to
+containerisation were discarded as the application already ran in
+containers on EC2.  It wasn’t related to load, as we saw high latencies
+even with 1 request per second.  GC pauses were negligible.&lt;/p&gt;&lt;p&gt;One of our Kubernetes admins asked whether the application had any
+external dependencies as DNS resolution had caused similar problems in
+the past, this was our best hypothesis so far.&lt;/p&gt;&lt;h2&gt;Hypothesis 1: DNS resolution&lt;/h2&gt;&lt;p dir="ltr"&gt;On every request, our application makes 1-3 queries to an AWS
+ElasticSearch instance at a domain similar to
+&lt;code dir="ltr"&gt;elastic.spain.adevinta.com&lt;/code&gt;.  We &lt;a href="https://kubernetes.io/docs/tasks/debug-application-cluster/get-shell-running-container/" dir="ltr"&gt;got a shell inside the
+containers&lt;/a&gt;
+and could verify that DNS resolution to that domain was taking too long.&lt;/p&gt;&lt;p&gt;DNS queries from the container:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;[root@be-851c76f696-alf8z /]# while true; do dig "elastic.spain.adevinta.com" | grep time; sleep 2; done
+;; Query time: 22 msec
+;; Query time: 22 msec
+;; Query time: 29 msec
+;; Query time: 21 msec
+;; Query time: 28 msec
+;; Query time: 43 msec
+;; Query time: 39 msec
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The same queries from one of the EC2 instances that run this application:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;bash-4.4# while true; do dig "elastic.spain.adevinta.com" | grep time; sleep 2; done
+;; Query time: 77 msec
+;; Query time: 0 msec
+;; Query time: 0 msec
+;; Query time: 0 msec
+;; Query time: 0 msec
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Given the ~30ms resolution time, it seemed clear that our application
+was adding DNS resolution overhead talking to its ElasticSearch.&lt;/p&gt;&lt;p&gt;But this was strange for two reasons:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;We already have many applications in Kubernetes that communicate with
+AWS resources and don’t suffer such high latencies.  Whatever the
+cause it had to be be specific to this one.&lt;/LI&gt;&lt;LI&gt;We know that the JVM implements in-memory DNS caching.  Looking at the
+configuration in these images, the TTL configured at
+&lt;code dir="ltr"&gt;$JAVA_HOME/jre/lib/security/java.security&lt;/code&gt; and it was set to
+&lt;code dir="ltr"&gt;networkaddress.cache.ttl = 10&lt;/code&gt;.  The JVM should be caching all DNS
+queries for 10 seconds.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;To confirm the DNS hypothesis we decided to avoid DNS resolution and see
+if the problem disappeared.  Our first attempt was to have the
+application talk directly to the Elasticsearch IP, rather than the
+domain name.  This required changing code and a new deploy so instead
+we simply added a line mapping the domain to its IP in &lt;code dir="ltr"&gt;/etc/hosts&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;34.55.5.111 elastic.spain.adevinta.com
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This way the container would resolve the IP almost instantly.  We did
+observe a relative improvement, but nowhere near our target latency.
+Even though DNS resolution was too high, there real cause was still
+hidden.&lt;/p&gt;&lt;h2&gt;Network plumbing&lt;/h2&gt;&lt;p dir="ltr"&gt;We decided to &lt;code dir="ltr"&gt;tcpdump&lt;/code&gt; from the container so we could see exactly what
+was going on with the network.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;[root@be-851c76f696-alf8z /]# tcpdump -leni any -w capture.pcap
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;We then sent a few requests and downloaded the capture (&lt;code dir="ltr"&gt;kubectl cp
+my-service:/capture.pcap capture.pcap&lt;/code&gt;) to inspect it with
+&lt;a href="https://wiki.wireshark.org/FrontPage" dir="ltr"&gt;Wireshark&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;There was nothing suspicious with DNS queries (except a detail I’ll
+mention later.)  But something in the way our service handled each
+request seemed strange.  Below is a screenshot of the capture, showing
+the reception of a request until the start of the response.&lt;/p&gt;&lt;img src="https://srvaroa.github.io/assets/tcpdump_dns.jpg" width="340" height="75"&gt;&lt;p&gt;The packet numbers are shown in the first column.  I coloured the
+different TCP streams for clarity.&lt;/p&gt;&lt;p dir="ltr"&gt;The green stream starting at packet 328 shows the client (172.17.22.150)
+opened a TCP connection to our container (172.17.36.147).  After the
+initial handshake (328-330), packet 331 brought an &lt;code dir="ltr"&gt;HTTP GET /v1/..&lt;/code&gt;,
+the incoming request to our service.  The whole process was over in 1ms.&lt;/p&gt;&lt;p&gt;The grey stream from packet 339 shows that our service sent an HTTP
+request to the Elasticsearch instance (you don’t see the TCP handshake
+because it was using an existing TCP connection.)  This took 18ms.&lt;/p&gt;&lt;p&gt;So far this makes sense, and the times roughly fit in the overall
+response latencies we expected (~20-30ms measured from the client).&lt;/p&gt;&lt;p dir="ltr"&gt;But inbetween both exchanges, the blue section consumes 86ms.  What was
+going on there? At packet 333, our service sent an HTTP GET request to
+&lt;code dir="ltr"&gt;/latest/meta-data/iam/security-credentials&lt;/code&gt;, and right after, on the
+same TCP connection, another GET to
+&lt;code dir="ltr"&gt;/latest/meta-data/iam/security-credentials/arn:..&lt;/code&gt;.&lt;/p&gt;&lt;p&gt;We verified that this was happening on every single request for the
+entire trace.  DNS resolution is indeed a bit slower in our containers
+(the explanation is interesting, I will leave that for another post).
+But the actual cause for the high latencies were queries to the AWS
+Instance Metadata service on every single request.&lt;/p&gt;&lt;h2&gt;Hypothesis 2: rogue calls to AWS&lt;/h2&gt;&lt;p dir="ltr"&gt;Both endpoints are part of the &lt;a href="https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html#instance-metadata-security-credentials" dir="ltr"&gt;AWS Instance Metadata
+API&lt;/a&gt;.
+This service is used from our microservice during reads from
+Elasticsearch.  The two calls are a basic authorisation workflow.  The
+endpoint queried in the first request yields the IAM role associated to
+the instance.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;/ # curl http://169.254.169.254/latest/meta-data/iam/security-credentials/
+arn:aws:iam::&amp;lt;account_id&amp;gt;:role/some_role
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The second request queries the second endpoint for temporary credentials for that
+instance:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;/ # curl http://169.254.169.254/latest/meta-data/iam/security-credentials/arn:aws:iam::&amp;lt;account_id&amp;gt;:role/some_role`
+{
+    "Code" : "Success",
+    "LastUpdated" : "2012-04-26T16:39:16Z",
+    "Type" : "AWS-HMAC",
+    "AccessKeyId" : "ASIAIOSFODNN7EXAMPLE",
+    "SecretAccessKey" : "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "Token" : "token",
+    "Expiration" : "2017-05-17T15:09:54Z"
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The client is able to use them for a short period of time, and is
+expected to retrieve new ones periodically (before the &lt;code dir="ltr"&gt;Expiration&lt;/code&gt;
+deadline).  The model is simple: AWS rotates temporary keys often for
+security reasons, but clients can cache them for a few minutes
+amortizing the performance penalty of retrieving new credentials.&lt;/p&gt;&lt;p&gt;The AWS Java SDK should be taking care of this process for us but, for
+some reason, it is not.&lt;/p&gt;&lt;p dir="ltr"&gt;Searching among its GitHub issues we landed on
+&lt;a href="https://github.com/aws/aws-sdk-java/issues/1921" dir="ltr"&gt;#1921&lt;/a&gt; which gave us
+the clue we needed.&lt;/p&gt;&lt;p&gt;The AWS SDK refreshes credentials when one of two conditions is met:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;Expiration&lt;/code&gt; is within an &lt;code dir="ltr"&gt;EXPIRATION_THRESHOLD&lt;/code&gt;, hardcoded to 15
+minutes.&lt;/LI&gt;&lt;LI&gt;The last attempt to refresh credentials is greater than the
+&lt;code dir="ltr"&gt;REFRESH_THRESHOLD&lt;/code&gt;, hardcoded to 60 minutes.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;We wanted to see the actual expiration time in the certificates we were
+getting so we ran the two &lt;code dir="ltr"&gt;cURL&lt;/code&gt; commands shown above against the AWS
+API, both from the container and EC2 instance.  The one retrieved from
+the container was much shorter: exactly 15 mins.&lt;/p&gt;&lt;p&gt;The problem was now clear: our service would fetch temporary credentials
+for the first request. Since these had a 15 min expiration time, in the
+next request, the AWS SDK would decide to eagerly refresh them.  The
+same would happen on every request.&lt;/p&gt;&lt;h2&gt;Why was the credential expiration time shorter?&lt;/h2&gt;&lt;p dir="ltr"&gt;The AWS Instance Metadata Service is meant to be used from an EC2
+instance, not Kubernetes.  It is still convenient to let applications
+retain the same interface. For this we use
+&lt;a href="https://github.com/uswitch/kiam" dir="ltr"&gt;KIAM&lt;/a&gt;, a tool that runs an agent on
+each Kubernetes node, allowing users (engineers deploying applications
+to the cluster) to associate IAM roles to Pod containers as if they were
+EC2 instances.  It works by intercepting calls to the AWS Instance
+Metadata service and serving them from its own cache, pre-fetched from
+AWS.  From the point of view of the application, there is no difference
+with running in EC2.&lt;/p&gt;&lt;p dir="ltr"&gt;KIAM happens to provide short-lived credentials to Pods, which makes
+sense as it’s fair to assume that the average lifetime of a Pod is
+shorter than EC2 instances.  The &lt;a href="https://github.com/uswitch/kiam/blob/adf03bb349373e22e3d894623870369d45fe2538/cmd/kiam/server.go#L57" dir="ltr"&gt;default is precisely 15
+min&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;But if you put both defaults together, you have a problem.  Each
+certificate provided to the application has a 15 min expiration time.
+The AWS Java SDK will force refreshing any certificate with less than 15
+min expiration time left.&lt;/p&gt;&lt;p dir="ltr"&gt;The result is that every request will be forced to refresh the temporary
+certificate, which requires two calls to the AWS API that add a huge
+latency penalty to each request.  We later found a &lt;a href="https://github.com/aws/aws-sdk-java/issues/1893" dir="ltr"&gt;feature
+request&lt;/a&gt; in the AWS
+Java SDK that mentions this same issue.&lt;/p&gt;&lt;p&gt;The fix was easy.  We reconfigured KIAM to request credentials with a
+longer expiration period.  Once this change was applied, requests
+started being served without involving the AWS Metadata service and
+returned to an even lower latency than in EC2.&lt;/p&gt;&lt;h2&gt;Takeaways&lt;/h2&gt;&lt;p dir="ltr"&gt;In our experience with these migrations, one of the most frequent
+sources of problems is not bugs in Kubernetes or other pieces of the
+platform.  It isn’t either about fundamental flaws in the microservices
+we’re migrating.  &lt;strong dir="ltr"&gt;Problems often appear just because we put some
+pieces together in the first place&lt;/strong&gt;.&lt;/p&gt;&lt;p&gt;We are blending complex systems that had never interacted together
+before with the expectation that they collaborate forming a single,
+larger system.  More moving pieces, more surface for failures, more
+entropy.&lt;/p&gt;&lt;p dir="ltr"&gt;In this case, our high latency wasn’t the result of bugs or bad
+decisions in Kubernetes, KIAM, the AWS Java SDK, or our microservice.
+It was a behaviour resulting from the combination of two independent
+defaults, in KIAM and the AWS Java SDK.  Both choices make sense in
+isolation: an eager credential refresh policy in the AWS Java SDK, and
+the lower default expiration in KIAM.  It is when they come together
+that the results are pathological.  &lt;strong dir="ltr"&gt;Two independently sound decisions
+don’t necessarily make sense together&lt;/strong&gt;.&lt;/p&gt;</description><pubDate>Fri, 08 Nov 2019 22:12:19 -0600</pubDate></item><item><title>A History of UNIX before Berkeley: UNIX Evolution: 1975-1984 (1984)</title><link>https://lobste.rs/s/dtwyqy</link><description>&lt;h1&gt;A History of UNIX before Berkeley:
 UNIX Evolution: 1975-1984
 &lt;/h1&gt;&lt;dd&gt;&lt;i dir="ltr"&gt;Copyright © 1984&lt;br dir="ltr"&gt;
 Ian F. Darwin&lt;br dir="ltr"&gt;
@@ -2703,7 +2358,352 @@ While it's not really possible for people outside ``the Labs''
 to get an exact picture of UNIX history,
 we have done our best, and assume responsibility for the
 accuracy of the material presented here.
-&lt;/p&gt;</description><pubDate>Sat, 09 Nov 2019 06:36:19 -0600</pubDate></item><item><title>TDD Doesn't Work (2016)</title><link>https://lobste.rs/s/sock03</link><description>&lt;p&gt;TDD Doesn’t work.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;It doesn’t?  That’s odd.  I’ve always found it to work quite well.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Not according to &lt;a href="http://people.brunel.ac.uk/~csstmms/FucciEtAl_ESEM2016.pdf" dir="ltr"&gt;a new study&lt;/a&gt;.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;Another study?&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;Yeah, an in-depth study that repeated another study that was done a few years back.  Both showed that TDD doesn’t work.  The new one uses a multi-site, blind analysis, approach.  It looks conclusive.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;Do the authors consider it conclusive?&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;The authors recommend more study.  But they’re probably just being humble.  The data is pretty convincing.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;What is the data?&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;The study shows that the claims about TDD are false.  TDD doesn’t make you go faster; it doesn’t reduce defects; and it doesn’t help you to write better code.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;That’s very strange.  I think TDD does make me go faster, improve my code, and my accuracy.  I know others who have said the same.  So I’m puzzled about why this study would show something different.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Well, it did.  DHH was right.  &lt;a href="http://david.heinemeierhansson.com/2014/tdd-is-dead-long-live-testing.html" dir="ltr"&gt;TDD is Dead&lt;/a&gt;.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;Hmmm.  OK, so what exactly did the authors study?  How did they come to this conclusion?&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;I don’t know, I just know there was a study.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;How did you find out about the study?&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;I read a &lt;a href="http://neverworkintheory.org/2016/10/05/test-driven-development.html" dir="ltr"&gt;blog&lt;/a&gt; about it.  At the end the author said that the study has made him reconsider TDD.  He used to think it worked.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;OK, well, let’s look at the study.  Hmmm.  Yes, right here it says that they compared TDD to TLD.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;What’s TLD?&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Test LAST development.  That’s when you write your unit tests _after&lt;/em&gt; you write your code._&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;See? So the study showed that it’s better to write your tests last!&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;Hmmm.  No, that doesn’t seem to be what the study showed.  In fact, the study found that there was no significant difference.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;OK, fine.  So if I write my code, and then write my tests it’s just as good as TDD.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;Well, no, not quite.  At least that’s not what the study showed.  The study asked the folks doing TLD to work in “small chunks”.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;Small Chunks?&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;Yes.  The folks doing TLD would write a little bit of production code, followed by a little bit of test code.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;Oh.  I see.  So they’d write production code for 10 minutes and then write unit tests for ten minutes or something like that.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;Well, maybe.  But, see here, it says that all the participants were trained in TDD.  And then some of them were asked to do TLD in small chunks.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;Right.  OK.  So, my statement still holds.  They wrote production code, then they wrote unit tests; and it didn’t matter.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;So let me ask you how you would write unit tests, _after&lt;/em&gt; production code; but in small chunks._&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;I’d write some production code – enough to pass a test or two – and then I’d write those tests.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;How would you know how much code would pass a test or two?&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;I’d think of a couple of tests to pass, then I’d write the code that would pass those tests.  Then I’d write the tests.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;And since you had been trained in TDD; that kind of thought process would be natural to you; wouldn’t it?&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;Um.  Hmmm.  I think I see your point.  The TLDers were doing TDD in their heads, and then just reversing the order.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;_Right.  In order to work in small chunks, they had to imagine the tests that they’d be writing; so that they could write production code that was _testable.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;So maybe this study wasn’t studying what they thought they were studying.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;It seems to me that they were trying to study the _order&lt;/em&gt; of writing the tests, more than the process of TDD.  In their effort to reduce the number of variables they inadvertently eliminated them all.  They forced the participants doing TLD to use the TDD &lt;em dir="ltr"&gt;process&lt;/em&gt; of short cycles, and that forced the participants to drive the production code by thinking about tests first._&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;OK.  Maybe.  But still, those TLDers &lt;em dir="ltr"&gt;did write their tests last&lt;/em&gt;.  So at least the study showed that you don’t really have to write the tests first – so long as you work in very short cycles.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;Sure.  The really effective part of TDD is the size of the cycle, not so much whether you write the test first.  The reason we write the tests first is that it encourages us to keep the cycles really short.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;So what the study showed is that people who work in short cycles don’t have to worry about writing tests first, so long as they continue to work in short cycles.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;That’s probably a fair statement.  However, look here.  The problem that the participants were solving was _The Bowling Game&lt;/em&gt;. This is a very small problem.  In fact, they said the entire programming session took three hours._&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;Is that important?&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Sure.  The benefit of writing the tests first is _disciplinary&lt;/em&gt;.  Writing the test first keeps your cycles short; and keeps your coverage high, over long periods of time._&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;OK, but if you had enough internal discipline to keep your cycles short, then the study shows that it doesn’t matter if you write your tests first.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;That’s a big “if”; but sure.  The study shows that if you take a group of people, trained in TDD, and then tell them to keep everything the same, including the size of their cycles, and just change the ordering of the tests, then in three hours of programming you won’t see much difference.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;Yeah.  Yeah.  That’s what the study shows.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;So, really, the study was making a distinction without a difference.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Well..  Heh, heh, they &lt;em dir="ltr"&gt;found&lt;/em&gt; no difference, so I guess that’s right.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;So the study didn’t show that TDD doesn’t work, did it?&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;No, I guess not.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;What _did&lt;/em&gt; it show?_&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;I think it showed that you can’t interpret the conclusions of a study without &lt;em dir="ltr"&gt;reading&lt;/em&gt; the study.&lt;/p&gt;</description><pubDate>Fri, 08 Nov 2019 21:38:28 -0600</pubDate></item><item><title>Riak Core on Partisan on Elixir: We can make a Key Value Store out of that</title><link>https://lobste.rs/s/bdn1tv</link><description>&lt;p&gt;Now that we have the foundation of our service laid out, let's make it do
+&lt;/p&gt;</description><pubDate>Sat, 09 Nov 2019 06:36:19 -0600</pubDate></item><item><title>What are you doing this weekend?</title><link>https://lobste.rs/s/v1ziw2</link><description>&lt;p&gt;Feel free to tell what you plan on doing this weekend and even ask for help or feedback.&lt;/p&gt;&lt;p&gt;Please keep in mind it’s more than OK to do nothing at all too!&lt;/p&gt;</description><pubDate>Fri, 08 Nov 2019 05:46:50 -0600</pubDate></item><item><title>Go Turns 10</title><link>https://lobste.rs/s/jiyvuh</link><description>&lt;p dir="ltr"&gt;
+    Russ Cox, for the Go team&lt;br dir="ltr"&gt;
+    8 November 2019
+    &lt;/p&gt;&lt;p&gt;
+    Happy birthday, Go!
+  &lt;/p&gt;&lt;p dir="ltr"&gt;
+    This weekend we celebrate the 10th anniversary of
+
+
+    &lt;a href="https://opensource.googleblog.com/2009/11/hey-ho-lets-go.html" dir="ltr"&gt;the Go release&lt;/a&gt;,
+
+
+    marking the 10th birthday of Go as an open-source programming language
+
+
+    and ecosystem for building modern networked software.
+  &lt;/p&gt;&lt;p dir="ltr"&gt;
+    To mark the occasion,
+
+
+    &lt;a href="https://twitter.com/reneefrench" dir="ltr"&gt;Renee French&lt;/a&gt;,
+
+
+    the creator of the
+
+
+    &lt;a href="https://blog.golang.org/gopher" dir="ltr"&gt;Go gopher&lt;/a&gt;,
+
+
+    painted this delightful scene:
+  &lt;/p&gt;&lt;img src="https://blog.golang.org/10years/gopher10th-small.jpg" width="300" alt="" height="223"&gt;&lt;p&gt;
+    Celebrating 10 years of Go makes me think back to early November 2009,
+
+
+    when we were getting ready to share Go with the world.
+
+
+    We didn’t know what kind of reaction to expect,
+
+
+    whether anyone would care about this little language.
+
+
+    I hoped that even if no one ended up using Go,
+
+
+    we would at least have drawn attention to some good ideas,
+
+
+    especially Go’s approach to concurrency and interfaces,
+
+
+    that could influence follow-on languages.
+  &lt;/p&gt;&lt;p&gt;
+    Once it became clear that people were excited about Go,
+
+
+    I looked at the history of popular languages
+
+
+    like C, C++, Perl, Python, and Ruby,
+
+
+    examining how long each took to gain widespread adoption.
+
+
+    For example, Perl seemed to me to have appeared fully-formed
+
+
+    in the mid-to-late 1990s, with CGI scripts and the web,
+
+
+    but it was first released in 1987.
+
+
+    This pattern repeated for almost every language I looked at:
+
+
+    it seems to take roughly a decade of quiet, steady improvement
+
+
+    and dissemination before a new language really takes off.
+  &lt;/p&gt;&lt;p&gt;
+    I wondered: where would Go be after a decade?
+  &lt;/p&gt;&lt;p dir="ltr"&gt;
+    Today, we can answer that question:
+
+
+    Go is everywhere, used by at least &lt;a href="https://research.swtch.com/gophercount" dir="ltr"&gt;a million developers worldwide&lt;/a&gt;.
+  &lt;/p&gt;&lt;p dir="ltr"&gt;
+    Go’s original target was networked system infrastructure,
+
+
+    what we now call cloud software.
+
+
+    Every major cloud provider today uses core cloud infrastructure written in Go,
+
+
+    such as Docker, Etcd, Istio, Kubernetes, Prometheus, and Terraform;
+
+
+    the majority of the
+
+
+    &lt;a href="https://www.cncf.io/projects/" dir="ltr"&gt;Cloud Native Computing Foundation’s projects&lt;/a&gt;
+
+
+    are written in Go.
+
+
+    Countless companies are using Go to move their own work to the cloud as well,
+
+
+    from startups building from scratch
+
+
+    to enterprises modernizing their software stack.
+
+
+    Go has also found adoption well beyond its original cloud target,
+
+
+    with uses ranging
+
+
+    from
+
+
+    controlling tiny embedded systems with
+
+
+    &lt;a href="https://gobot.io/" dir="ltr"&gt;GoBot&lt;/a&gt; and &lt;a href="https://tinygo.org/" dir="ltr"&gt;TinyGo&lt;/a&gt;
+
+
+    to detecting cancer with
+
+
+    &lt;a href="https://medium.com/grail-eng/bigslice-a-cluster-computing-system-for-go-7e03acd2419b" dir="ltr"&gt;massive big data analysis and machine learning at GRAIL&lt;/a&gt;,
+
+
+    and everything in between.
+  &lt;/p&gt;&lt;p&gt;
+    All this is to say that Go has succeeded beyond our wildest dreams.
+
+
+    And Go’s success isn’t just about the language.
+
+
+    It’s about the language, the ecosystem, and especially the community working together.
+  &lt;/p&gt;&lt;p dir="ltr"&gt;
+    In 2009, the language was a good idea with a working sketch of an implementation.
+
+
+    The &lt;code dir="ltr"&gt;go&lt;/code&gt; command did not exist:
+
+
+    we ran commands like &lt;code dir="ltr"&gt;6g&lt;/code&gt; to compile and &lt;code dir="ltr"&gt;6l&lt;/code&gt; to link binaries,
+
+
+    automated with makefiles.
+
+
+    We typed semicolons at the ends of statements.
+
+
+    The entire program stopped during garbage collection,
+
+
+    which then struggled to make good use of two cores.
+
+
+    Go ran only on Linux and Mac, on 32- and 64-bit x86 and 32-bit ARM.
+  &lt;/p&gt;&lt;p dir="ltr"&gt;
+    Over the last decade, with the help of Go developers all over the world,
+
+
+    we have evolved this idea and sketch into a productive language
+
+
+    with fantastic tooling,
+
+
+    a production-quality implementation,
+
+
+    a
+
+
+    &lt;a href="https://blog.golang.org/ismmkeynote" dir="ltr"&gt;state-of-the-art garbage collector&lt;/a&gt;,
+
+
+    and &lt;a href="https://golang.org/doc/install/source#introduction" dir="ltr"&gt;ports to a 12 operating systems and 10 architectures&lt;/a&gt;.
+  &lt;/p&gt;&lt;p dir="ltr"&gt;
+    Any programming language needs the support of a thriving ecosystem.
+
+
+    The open source release was the seed for that ecosystem,
+
+
+    but since then, many people have contributed their time and talent
+
+
+    to fill the Go ecosystem with great tutorials, books, courses, blog posts,
+
+
+    podcasts, tools, integrations, and of course reusable Go packages importable with &lt;code dir="ltr"&gt;go&lt;/code&gt; &lt;code dir="ltr"&gt;get&lt;/code&gt;.
+
+
+    Go could never have succeeded without the support of this ecosystem.
+  &lt;/p&gt;&lt;p dir="ltr"&gt;
+    Of course, the ecosystem needs the support of a thriving community.
+
+
+    In 2019 there are dozens of Go conferences all over the world,
+
+
+    along with
+
+
+    &lt;a href="https://www.meetup.com/pro/go" dir="ltr"&gt;over 150 Go meetup groups with over 90,000 members&lt;/a&gt;.
+
+
+    &lt;a href="https://golangbridge.org/" dir="ltr"&gt;GoBridge&lt;/a&gt;
+
+
+    and
+
+
+    &lt;a href="https://medium.com/@carolynvs/www-loves-gobridge-ccb26309f667" dir="ltr"&gt;Women Who Go&lt;/a&gt;
+
+
+    help bring new voices into the Go community,
+
+
+    through mentoring, training, and conference scholarships.
+
+
+    This year alone, they have taught
+
+
+    hundreds of people from traditionally underrepresented groups
+
+
+    at workshops where community members teach and mentor those new to Go.
+  &lt;/p&gt;&lt;p dir="ltr"&gt;
+    There are
+
+
+    &lt;a href="https://research.swtch.com/gophercount" dir="ltr"&gt;over a million Go developers&lt;/a&gt;
+
+
+    worldwide,
+
+
+    and companies all over the globe are looking to hire more.
+
+
+    In fact, people often tell us that learning Go
+
+
+    helped them get their first jobs in the tech industry.
+
+
+    In the end, what we’re most proud of about Go
+
+
+    is not a well-designed feature or a clever bit of code
+
+
+    but the positive impact Go has had in so many people’s lives.
+
+
+    We aimed to create a language that would help us be better developers,
+
+
+    and we are thrilled that Go has helped so many others.
+  &lt;/p&gt;&lt;p dir="ltr"&gt;
+    As
+
+
+    &lt;a href="https://twitter.com/search?q=%23GoTurns10" dir="ltr"&gt;#GoTurns10&lt;/a&gt;,
+
+
+    I hope everyone will take a moment to celebrate
+
+
+    the Go community and all we have achieved.
+
+
+    On behalf of the entire Go team at Google,
+
+
+    thank you to everyone who has joined us over the past decade.
+
+
+    Let’s make the next one even more incredible!
+  &lt;/p&gt;&lt;img src="https://blog.golang.org/10years/gopher10th-pin-small.jpg" width="150" alt="" height="150"&gt;&lt;img src="https://blog.golang.org/lib/godoc/images/footer-gopher.jpg" alt="The Go Gopher" width="80" height="51"&gt;</description><pubDate>Fri, 08 Nov 2019 10:50:24 -0600</pubDate></item><item><title>Why I can't remove Python 2 from my systems (yet)</title><link>https://lobste.rs/s/3vkmm8</link><description>&lt;h2&gt;Why I can't remove Python 2 from my systems (yet)&lt;/h2&gt;&lt;p dir="ltr"&gt;The end of 2019 is fast approaching, and Python 2 &lt;a href="https://pythonclock.org/" rel="nofollow" dir="ltr"&gt;will not be maintained&lt;/a&gt; past 2020. So I spent some time today trying to remove Python 2 from my systems. What follows is the result.&lt;/p&gt;&lt;p dir="ltr"&gt;I have two computer systems I maintain at home. Work systems are different matters, which I won't go into in this post. Both of them run Debian GNU/Linux, unstable version. This is mostly relic of time when I went through Debian New Maintainers process. I didn't finish the process, but that's a different story... In general, I don't recommend running Debian unstable, since Debian testing is not that less up-to-date and much more stable. If you must run Debian unstable, &lt;code dir="ltr"&gt;apt-listbugs&lt;/code&gt; is your friend.&lt;/p&gt;&lt;p&gt;I will call these two systems "laptop" and "server". Laptop is what I sit in front of. It has a screen, and I run a web browser (Firefox) and terminals on it. Server is under the desk and headless. I connect to it using SSH and do the development on it.&lt;/p&gt;&lt;h3&gt;Laptop&lt;/h3&gt;&lt;p dir="ltr"&gt;The only software I have installed on laptop that depends on Python 2 is &lt;a href="https://launchpad.net/wicd" rel="nofollow" dir="ltr"&gt;wicd&lt;/a&gt;, &lt;code dir="ltr"&gt;wicd-curses&lt;/code&gt; package in particular. It is a wireless network manager that I can run in terminal. The main alternative is &lt;a href="https://wiki.gnome.org/Projects/NetworkManager" rel="nofollow" dir="ltr"&gt;NetworkManager&lt;/a&gt;, maybe I should try it again? On the other hand, I am pretty happy with my current setup.&lt;/p&gt;&lt;p dir="ltr"&gt;Looking at the issue tracker, it seems &lt;a href="https://bugs.launchpad.net/wicd/+bug/1848020" rel="nofollow" dir="ltr"&gt;Python 3 support&lt;/a&gt; is in progress, and its importance is set to high by the main developer. It seems promising, so I just subscribed to the issue.&lt;/p&gt;&lt;h3&gt;Server&lt;/h3&gt;&lt;p dir="ltr"&gt;On the development server, three packages depend on Python 2. One is &lt;a href="http://llvm.org/" rel="nofollow" dir="ltr"&gt;LLVM&lt;/a&gt;, &lt;code dir="ltr"&gt;llvm-9-dev&lt;/code&gt; package in particular. This is due to &lt;a href="http://llvm.org/docs/CommandGuide/lit.html" rel="nofollow" dir="ltr"&gt;lit&lt;/a&gt;, LLVM Integrated Tester.&lt;/p&gt;&lt;p dir="ltr"&gt;I can't figure out the current status of Python 3 support for lit. Looking at the commit log, it seems to get a stream of Python 3 fixes, most recently in the last month (October 2019). For example, &lt;a href="https://github.com/llvm/llvm-project/commit/e5ee89c0d3efc1a7a34357d1d04e3d9e9f65d2be" dir="ltr"&gt;Fix several Python 2/3 compatibility issues and tests&lt;/a&gt;. My best guess is that Python 3 support is done in best effort basis and Python 2 is still the "official" way to run lit, and that's why Debian maintainer set the dependency to Python 2.&lt;/p&gt;&lt;p dir="ltr"&gt;The next is &lt;a href="https://www.mercurial-scm.org/" rel="nofollow" dir="ltr"&gt;Mercurial&lt;/a&gt;, a distributed version control system. Projects I care about, for example Firefox, uses Mercurial, so I want to have it working.&lt;/p&gt;&lt;p dir="ltr"&gt;According to &lt;a href="https://www.mercurial-scm.org/wiki/Python3" rel="nofollow" dir="ltr"&gt;Mercurial Wiki&lt;/a&gt;, Python 3 support is currently in "beta". Complicating the matter is that Mercurial is extensible, and many third party extensions have not yet been ported to Python 3.&lt;/p&gt;&lt;p dir="ltr"&gt;The last is &lt;a href="https://www.npmjs.com/" rel="nofollow" dir="ltr"&gt;npm&lt;/a&gt;, a package manager for Node.js. This is due to &lt;a href="https://chromium.googlesource.com/external/gyp/" rel="nofollow" dir="ltr"&gt;GYP&lt;/a&gt;, standing for Generate Your Projects. It is used to build native addon modules for Node.js.&lt;/p&gt;&lt;p dir="ltr"&gt;The state of GYP seems similar to lit. The commit log shows commits like &lt;a href="https://chromium.googlesource.com/external/gyp/+/aca1e2c3d346d704adfa60944e6b4dd06f4728be" rel="nofollow" dir="ltr"&gt;Fix Python 3 incompatibilities&lt;/a&gt;. On the one hand, this is great. On the other hand, it shows Python 3 support isn't official, since these issues wouldn't have passed CI otherwise.&lt;/p&gt;&lt;h3&gt;Conclusion&lt;/h3&gt;&lt;p&gt;All in all, it seems to be in pretty good shape. wicd port is in progress, and Mercurial port is already done. What's needed for lit and GYP seems to be the official declaration (and addition to CI) of Python 3 support. I plan to repeat this exercise the next year, after the deadline has passed.&lt;/p&gt;</description><pubDate>Thu, 07 Nov 2019 23:06:25 -0600</pubDate></item><item><title>Whats your vim setup like ?</title><link>https://lobste.rs/s/ffhwse</link><description>&lt;p dir="ltr"&gt;I’ve been vivid user of vim for few years now. Inspired on previous &lt;code dir="ltr"&gt;emacs&lt;/code&gt; topic, how do you organize your config and dotfiles for vim? Show us what your setup looks like. What plugins or plugin manager do you use. Screenshots would be a huge plus.&lt;/p&gt;&lt;p&gt;Thank you all!&lt;/p&gt;</description><pubDate>Thu, 07 Nov 2019 14:31:15 -0600</pubDate></item><item><title>System design hack: Postgres is a great pub/sub &amp; job server</title><link>https://lobste.rs/s/lkuyq5</link><description>&lt;figure&gt;&lt;img srcset="https://layerci.com/blog/content/images/size/w300/2019/11/postgres.png 300w, https://layerci.com/blog/content/images/size/w600/2019/11/postgres.png 600w, https://layerci.com/blog/content/images/size/w1000/2019/11/postgres.png 1000w, https://layerci.com/blog/content/images/size/w2000/2019/11/postgres.png 2000w" src="https://layerci.com/blog/content/images/size/w2000/2019/11/postgres.png" alt="System design hack: Postgres is a great pub/sub &amp;amp; job server" width="360" height="400"&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;If you're making any project of sufficient complexity, you'll need a &lt;a href="https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern" dir="ltr"&gt;publish/subscribe&lt;/a&gt; server to process events. This article will introduce you to Postgres, explain the alternatives, and walk you through an example use case of pub/sub and its solution.&lt;/p&gt;&lt;p&gt;&lt;strong&gt;Postgres is an amazing relational database&lt;/strong&gt;&lt;/p&gt;&lt;p&gt;If you aren't too familiar with Postgres, it's a feature-packed relational database that many companies use as a traditional central data store. By storing your "users" table in Postgres, you can immediately scale to 100 columns and a row for every living person.&lt;/p&gt;&lt;p&gt;It's possible to scale Postgres to storing a billion 1KB rows entirely in memory - This means you could quickly run queries against the full name of everyone on the planet on commodity hardware and with little fine-tuning.&lt;/p&gt;&lt;p&gt;I'm not going to belabor the point that something called "PostgresSQL" is a good SQL database. I'll show you a more interesting use case for it where we combine a few features to turn Postgres into a powerful pubsub / job server.&lt;/p&gt;&lt;p&gt;&lt;strong&gt;Postgres makes a great persistent pubsub server&lt;/strong&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;If you do enough system design, you'll inevitably need to solve a problem with &lt;a href="https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern" dir="ltr"&gt;publish/subscribe architecture&lt;/a&gt;. We hit it quickly at LayerCI - we needed to keep the viewers of a test run's page and the github API notified about a run as it progressed.&lt;/p&gt;&lt;p&gt;For your pub/sub server, you have a lot of options:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Postgres?&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;There are very few use cases where you'd need a dedicated pub/sub server like Kafka. Postgres can &lt;a href="https://severalnines.com/blog/benchmarking-postgresql-performance" dir="ltr"&gt;easily handle 10,000 insertions per second&lt;/a&gt;, and it can be tuned to even higher numbers. It's rarely a mistake to start with Postgres and then switch out the most performance critical parts of your system when the time comes.&lt;/p&gt;&lt;h3&gt;Pub/sub + atomic operations ⇒ no job server necessary.&lt;/h3&gt;&lt;p&gt;In the list above, I skipped things similar to pub/sub servers called "job queues" - they only let one "subscriber" watch for new "events" at a time, and keep a queue of unprocessed events:&lt;/p&gt;&lt;p&gt;It turns out that Postgres generally supersedes job servers as well. You can have your workers "watch" the "new events" channel and try to claim a job whenever a new one is pushed. As a bonus, Postgres lets other services watch the status of the events with no added complexity.&lt;/p&gt;&lt;h3&gt;Our use case: CI runs processed by sequential workers&lt;/h3&gt;&lt;p&gt;At LayerCI, we run "test runs", which start by cloning a repository, and then running some user specified tests. There are microservices that do various initialization steps for the test run, and additional microservices (such as the websocket gateway) that need to listen to the status of the runs.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://layerci.com/blog/content/images/2019/11/run-flow.svg" width="331" height="166"&gt;&lt;figcaption dir="auto"&gt;How a test run is processed at LayerCI&lt;/figcaption&gt;&lt;/figure&gt;&lt;p&gt;An instance of an API server creates a run by inserting a row into the "Runs" row of a Postgres table:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;CREATE&lt;/span&gt; &lt;span dir="ltr"&gt;TYPE&lt;/span&gt; ci_job_status &lt;span dir="ltr"&gt;AS&lt;/span&gt; &lt;span dir="ltr"&gt;ENUM&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;'new'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;'initializing'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;'initialized'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;'running'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;'success'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;'error'&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;CREATE&lt;/span&gt; &lt;span dir="ltr"&gt;TABLE&lt;/span&gt; ci_jobs&lt;span dir="ltr"&gt;(&lt;/span&gt;
+	id &lt;span dir="ltr"&gt;SERIAL&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; 
+	repository &lt;span dir="ltr"&gt;varchar&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;256&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; 
+	&lt;span dir="ltr"&gt;status&lt;/span&gt; ci_job_status&lt;span dir="ltr"&gt;,&lt;/span&gt; 
+	status_change_time &lt;span dir="ltr"&gt;timestamp&lt;/span&gt;
+&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+
+&lt;span spellcheck="true" dir="ltr"&gt;/*on API call*/&lt;/span&gt;
+&lt;span dir="ltr"&gt;INSERT&lt;/span&gt; &lt;span dir="ltr"&gt;INTO&lt;/span&gt; ci_job_status&lt;span dir="ltr"&gt;(&lt;/span&gt;repository&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;status&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; status_change_time&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;VALUES&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;'https:&lt;span spellcheck="true" dir="ltr"&gt;//github.com/colinchartier/layerci-color-test', 'new', NOW());&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;How do the workers worker "claim" a job? By setting the job status atomically:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;UPDATE&lt;/span&gt; ci_jobs &lt;span dir="ltr"&gt;SET&lt;/span&gt; &lt;span dir="ltr"&gt;status&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;'initializing'&lt;/span&gt;
+&lt;span dir="ltr"&gt;WHERE&lt;/span&gt; id &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;
+  &lt;span dir="ltr"&gt;SELECT&lt;/span&gt; id
+  &lt;span dir="ltr"&gt;FROM&lt;/span&gt; ci_jobs
+  &lt;span dir="ltr"&gt;WHERE&lt;/span&gt; &lt;span dir="ltr"&gt;status&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;'new'&lt;/span&gt;
+  &lt;span dir="ltr"&gt;ORDER&lt;/span&gt; &lt;span dir="ltr"&gt;BY&lt;/span&gt; id
+  &lt;span dir="ltr"&gt;FOR&lt;/span&gt; &lt;span dir="ltr"&gt;UPDATE&lt;/span&gt; SKIP LOCKED
+  &lt;span dir="ltr"&gt;LIMIT&lt;/span&gt; &lt;span dir="ltr"&gt;1&lt;/span&gt;
+&lt;span dir="ltr"&gt;)&lt;/span&gt;
+RETURNING &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Finally, we can use a trigger and a channel to notify the workers that there might be new work available:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;CREATE&lt;/span&gt; &lt;span dir="ltr"&gt;OR&lt;/span&gt; REPLACE &lt;span dir="ltr"&gt;FUNCTION&lt;/span&gt; ci_jobs_status_notify&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+	&lt;span dir="ltr"&gt;RETURNS&lt;/span&gt; &lt;span dir="ltr"&gt;trigger&lt;/span&gt; &lt;span dir="ltr"&gt;AS&lt;/span&gt;
+$$
+&lt;span dir="ltr"&gt;BEGIN&lt;/span&gt;
+	PERFORM pg_notify&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;'ci_jobs_status_channel'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; NEW&lt;span dir="ltr"&gt;.&lt;/span&gt;id::&lt;span dir="ltr"&gt;text&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+	&lt;span dir="ltr"&gt;RETURN&lt;/span&gt; NEW&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;END&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+$$ LANGUAGE plpgsql&lt;span dir="ltr"&gt;;&lt;/span&gt;
+
+
+&lt;span dir="ltr"&gt;CREATE&lt;/span&gt; &lt;span dir="ltr"&gt;TRIGGER&lt;/span&gt; ci_jobs_status
+	&lt;span dir="ltr"&gt;AFTER&lt;/span&gt; &lt;span dir="ltr"&gt;INSERT&lt;/span&gt; &lt;span dir="ltr"&gt;OR&lt;/span&gt; &lt;span dir="ltr"&gt;UPDATE&lt;/span&gt; &lt;span dir="ltr"&gt;OF&lt;/span&gt; &lt;span dir="ltr"&gt;status&lt;/span&gt;
+	&lt;span dir="ltr"&gt;ON&lt;/span&gt; ci_jobs
+	&lt;span dir="ltr"&gt;FOR EACH ROW&lt;/span&gt;
+&lt;span dir="ltr"&gt;EXECUTE&lt;/span&gt; &lt;span dir="ltr"&gt;PROCEDURE&lt;/span&gt; ci_jobs_status_notify&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;All the workers have to do is "listen" on this status channel and try to claim a job whenever a job's status changes:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;tryPickupJob := make(chan interface{})
+//equivalent to 'LISTEN ci_jobs_status_channel;'
+listener.Listen("ci_jobs_status_channel")
+go func() {
+  for event := range listener.Notify {
+    select {
+    case tryPickupJob &amp;lt;- true:
+    }
+  }
+  close(tryPickupJob)
+}
+
+for job := range tryPickupJob {
+  //try to "claim" a job
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;When we combine these elements, we get something like the following:&lt;/p&gt;&lt;figure&gt;&lt;img src="https://layerci.com/blog/content/images/2019/11/queue-system-3.svg" width="331" height="189"&gt;&lt;/figure&gt;&lt;p&gt;This architecture scales to many sequential workers processing the job in a row, all you need is a "processing" state and a "processed" state for each worker. For LayerCI that looks like: new, initializing, initialized, running, complete.&lt;/p&gt;&lt;p dir="ltr"&gt;It also allows other services to watch the &lt;code dir="ltr"&gt;ci_jobs_status_channel&lt;/code&gt; - Our websocket gateway for the /run page and github notification services simply watch the channel and notify any relevant parties of the published events.&lt;/p&gt;&lt;h2&gt;Other benefits of using Postgres for Pub/Sub&lt;/h2&gt;&lt;p&gt;There are also a bunch of other benefits to using postgres instead of something like Redis Pub/Sub:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Many SQL users will already have Postgres installed for use as a database, so there are no extra setup costs for using it for pub/sub.&lt;/LI&gt;&lt;LI&gt;As a database, Postgres has very good persistence guarantees - It's easy to query "dead" jobs with, e.g., &lt;code dir="ltr"&gt;SELECT * FROM ci_jobs WHERE status='initializing' AND NOW() - status_change_time &amp;gt; '1 hour'::interval&lt;/code&gt; to handle workers crashing or hanging.&lt;/LI&gt;&lt;LI&gt;Since jobs are defined in SQL, it's easy to generate graphql and protobuf representations of them (i.e., to provide APIs that checks the run status.)&lt;/LI&gt;&lt;LI&gt;It's easy to have multiple watchers of status changes, you can have other services use the same "LISTEN ci_jobs_status_channel"&lt;/LI&gt;&lt;LI&gt;Postgres has very good language support, with bindings for most popular languages. This is a stark difference from most other pub/sub servers.&lt;/LI&gt;&lt;LI&gt;You can also run complicated SQL queries on things that are still in your "work queues" to give highly tailored API endpoints to your users. LayerCI has pages like &lt;a href="https://layerci.com/github/distributed-containers-inc/sanic" dir="ltr"&gt;https://layerci.com/github/distributed-containers-inc/sanic&lt;/a&gt; that show the status of various jobs (even running ones.)&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p&gt;If you need a publish/subscribe or job server at any point in your project, it's not a bad idea to start by using Postgres. It'll give you lots of data integrity and performance guarantees, and it doesn't require you or your team learning any new technology.&lt;/p&gt;</description><pubDate>Fri, 08 Nov 2019 16:58:49 -0600</pubDate></item><item><title>TDD Doesn't Work (2016)</title><link>https://lobste.rs/s/sock03</link><description>&lt;p&gt;TDD Doesn’t work.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;It doesn’t?  That’s odd.  I’ve always found it to work quite well.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Not according to &lt;a href="http://people.brunel.ac.uk/~csstmms/FucciEtAl_ESEM2016.pdf" dir="ltr"&gt;a new study&lt;/a&gt;.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;Another study?&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;Yeah, an in-depth study that repeated another study that was done a few years back.  Both showed that TDD doesn’t work.  The new one uses a multi-site, blind analysis, approach.  It looks conclusive.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;Do the authors consider it conclusive?&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;The authors recommend more study.  But they’re probably just being humble.  The data is pretty convincing.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;What is the data?&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;The study shows that the claims about TDD are false.  TDD doesn’t make you go faster; it doesn’t reduce defects; and it doesn’t help you to write better code.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;That’s very strange.  I think TDD does make me go faster, improve my code, and my accuracy.  I know others who have said the same.  So I’m puzzled about why this study would show something different.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Well, it did.  DHH was right.  &lt;a href="http://david.heinemeierhansson.com/2014/tdd-is-dead-long-live-testing.html" dir="ltr"&gt;TDD is Dead&lt;/a&gt;.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;Hmmm.  OK, so what exactly did the authors study?  How did they come to this conclusion?&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;I don’t know, I just know there was a study.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;How did you find out about the study?&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;I read a &lt;a href="http://neverworkintheory.org/2016/10/05/test-driven-development.html" dir="ltr"&gt;blog&lt;/a&gt; about it.  At the end the author said that the study has made him reconsider TDD.  He used to think it worked.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;OK, well, let’s look at the study.  Hmmm.  Yes, right here it says that they compared TDD to TLD.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;What’s TLD?&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Test LAST development.  That’s when you write your unit tests _after&lt;/em&gt; you write your code._&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;See? So the study showed that it’s better to write your tests last!&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;Hmmm.  No, that doesn’t seem to be what the study showed.  In fact, the study found that there was no significant difference.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;OK, fine.  So if I write my code, and then write my tests it’s just as good as TDD.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;Well, no, not quite.  At least that’s not what the study showed.  The study asked the folks doing TLD to work in “small chunks”.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;Small Chunks?&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;Yes.  The folks doing TLD would write a little bit of production code, followed by a little bit of test code.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;Oh.  I see.  So they’d write production code for 10 minutes and then write unit tests for ten minutes or something like that.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;Well, maybe.  But, see here, it says that all the participants were trained in TDD.  And then some of them were asked to do TLD in small chunks.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;Right.  OK.  So, my statement still holds.  They wrote production code, then they wrote unit tests; and it didn’t matter.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;So let me ask you how you would write unit tests, _after&lt;/em&gt; production code; but in small chunks._&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;I’d write some production code – enough to pass a test or two – and then I’d write those tests.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;How would you know how much code would pass a test or two?&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;I’d think of a couple of tests to pass, then I’d write the code that would pass those tests.  Then I’d write the tests.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;And since you had been trained in TDD; that kind of thought process would be natural to you; wouldn’t it?&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;Um.  Hmmm.  I think I see your point.  The TLDers were doing TDD in their heads, and then just reversing the order.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;_Right.  In order to work in small chunks, they had to imagine the tests that they’d be writing; so that they could write production code that was _testable.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;So maybe this study wasn’t studying what they thought they were studying.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;It seems to me that they were trying to study the _order&lt;/em&gt; of writing the tests, more than the process of TDD.  In their effort to reduce the number of variables they inadvertently eliminated them all.  They forced the participants doing TLD to use the TDD &lt;em dir="ltr"&gt;process&lt;/em&gt; of short cycles, and that forced the participants to drive the production code by thinking about tests first._&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;OK.  Maybe.  But still, those TLDers &lt;em dir="ltr"&gt;did write their tests last&lt;/em&gt;.  So at least the study showed that you don’t really have to write the tests first – so long as you work in very short cycles.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;Sure.  The really effective part of TDD is the size of the cycle, not so much whether you write the test first.  The reason we write the tests first is that it encourages us to keep the cycles really short.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;So what the study showed is that people who work in short cycles don’t have to worry about writing tests first, so long as they continue to work in short cycles.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;That’s probably a fair statement.  However, look here.  The problem that the participants were solving was _The Bowling Game&lt;/em&gt;. This is a very small problem.  In fact, they said the entire programming session took three hours._&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;Is that important?&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Sure.  The benefit of writing the tests first is _disciplinary&lt;/em&gt;.  Writing the test first keeps your cycles short; and keeps your coverage high, over long periods of time._&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;OK, but if you had enough internal discipline to keep your cycles short, then the study shows that it doesn’t matter if you write your tests first.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;That’s a big “if”; but sure.  The study shows that if you take a group of people, trained in TDD, and then tell them to keep everything the same, including the size of their cycles, and just change the ordering of the tests, then in three hours of programming you won’t see much difference.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;Yeah.  Yeah.  That’s what the study shows.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;So, really, the study was making a distinction without a difference.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Well..  Heh, heh, they &lt;em dir="ltr"&gt;found&lt;/em&gt; no difference, so I guess that’s right.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;So the study didn’t show that TDD doesn’t work, did it?&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;No, I guess not.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;What _did&lt;/em&gt; it show?_&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;I think it showed that you can’t interpret the conclusions of a study without &lt;em dir="ltr"&gt;reading&lt;/em&gt; the study.&lt;/p&gt;</description><pubDate>Fri, 08 Nov 2019 21:38:28 -0600</pubDate></item><item><title>Riak Core on Partisan on Elixir: We can make a Key Value Store out of that</title><link>https://lobste.rs/s/bdn1tv</link><description>&lt;p&gt;Now that we have the foundation of our service laid out, let's make it do
 something useful.&lt;/p&gt;&lt;p dir="ltr"&gt;Given that riak_core is an implementation of the &lt;a href="https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf" dir="ltr"&gt;Dynamo Architecture&lt;/a&gt; which was
 created to build scalable key value stores, we should follow the same path and
 build one.&lt;/p&gt;&lt;p&gt;Let's start from the end, imagine our code is ready, what would be the
