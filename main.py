@@ -12,6 +12,7 @@ import urllib
 import logging
 import subprocess
 import click
+from pathlib import Path
 #from pyvirtualdisplay import Display
 
 import attr
@@ -96,14 +97,7 @@ def clean(url: str, moble_flag: bool = True) -> str:
     """
     with tempfile.TemporaryDirectory() as tdir:
         chrome_options = Options()
-        if moble_flag:
-            chrome_options.add_experimental_option(
-                "mobileEmulation",
-                {
-                    "deviceMetrics": {"width": 360, "height": 640, "pixelRatio": 3.0},
-                    "userAgent": USER_AGENT,
-                },
-            )
+        chrome_options.binary_location = '/usr/bin/google-chrome-stable'
         shutil.rmtree(tdir)
         shutil.copytree("../dat", tdir)
         chrome_options.add_argument(f"--user-data-dir={tdir}")
@@ -131,6 +125,7 @@ def clean_through_fb(url: str, moble_flag: bool = True) -> str:
     """
     with tempfile.TemporaryDirectory() as tdir:
         chrome_options = Options()
+        chrome_options.binary_location = '/usr/bin/google-chrome-stable'
         if moble_flag:
             chrome_options.add_experimental_option(
                 "mobileEmulation",
@@ -143,7 +138,7 @@ def clean_through_fb(url: str, moble_flag: bool = True) -> str:
         shutil.copytree("../dat", tdir)
         chrome_options.add_argument(f"--user-data-dir={tdir}")
         chrome_options.add_argument("--incognito")
-        chrome_options.add_argument("--disable-gpu")
+        #chrome_options.add_argument("--disable-gpu")
         driver = webdriver.Chrome(chrome_options=chrome_options)
         driver.get(f"https://l.facebook.com/l.php?u={url}")
         l = driver.find_element_by_link_text("Follow link")
