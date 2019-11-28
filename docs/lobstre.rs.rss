@@ -804,7 +804,66 @@ vacation -- back on the 11th of December. We hope you enjoy &lt;a href="https://
 Tolnay, and countless others for their help and assistance with this post,
 issues, bug fixes, designs, and all the other work that goes into making a
 release. Tide wouldn't have been possible without everyone who has been
-involved.&lt;/em&gt;&lt;/p&gt;</description><pubDate>Wed, 27 Nov 2019 18:19:34 -0600</pubDate></item><item><title>patchbay - a poor man's message queue implemented over HTTP</title><link>https://lobste.rs/s/t8dsft</link><description>&lt;h1&gt;TL;DR&lt;/h1&gt;&lt;p dir="ltr"&gt;
+involved.&lt;/em&gt;&lt;/p&gt;</description><pubDate>Wed, 27 Nov 2019 18:19:34 -0600</pubDate></item><item><title>Moving gnome-shell's styles to Rust</title><link>https://lobste.rs/s/qdamr4</link><description>&lt;p dir="ltr"&gt;Gnome-shell uses CSS processing code that dates from
+&lt;a href="https://blog.ometer.com/2006/10/14/text-layout-that-works-properly/" dir="ltr"&gt;HippoCanvas&lt;/a&gt;,
+a CSS-aware canvas from around 2006.  It uses libcroco to parse CSS,
+and implements selector matching by hand in C.&lt;/p&gt;&lt;p&gt;This code is getting rather dated, and libcroco is unmaintained.&lt;/p&gt;&lt;p dir="ltr"&gt;I've been reading the code for
+&lt;a href="https://gitlab.gnome.org/GNOME/gnome-shell/blob/66fc5c07/src/st/st-theme.c" dir="ltr"&gt;&lt;code dir="ltr"&gt;StTheme&lt;/code&gt;&lt;/a&gt;
+and
+&lt;a href="https://gitlab.gnome.org/GNOME/gnome-shell/blob/66fc5c07/src/st/st-theme-node.c" dir="ltr"&gt;&lt;code dir="ltr"&gt;StThemeNode&lt;/code&gt;&lt;/a&gt;,
+and it looks very feasible to port it gradually to Rust, by using the
+same crates that librsvg uses, and eventually removing libcroco
+altogether:  &lt;strong dir="ltr"&gt;gnome-shell is the last module that uses libcroco in
+distro packages&lt;/strong&gt;.&lt;/p&gt;&lt;h2&gt;Strategy&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;StTheme&lt;/code&gt; and &lt;code dir="ltr"&gt;StThemeNode&lt;/code&gt; use libcroco to load CSS stylesheets and
+keep them in memory.  The values of individual properties are just
+tokenized and kept around as a linked list of &lt;code dir="ltr"&gt;CRTerm&lt;/code&gt;; this struct
+represents a single token.&lt;/p&gt;&lt;p dir="ltr"&gt;Later, the drawing code uses functions like
+&lt;code dir="ltr"&gt;st_theme_node_lookup_color(node, "property_name")&lt;/code&gt; or
+&lt;code dir="ltr"&gt;st_theme_node_lookup_length()&lt;/code&gt; to query the various properties that
+it needs.  It is &lt;em dir="ltr"&gt;then&lt;/em&gt; that the type of each property gets
+determined:  prior to that step, property values are just tokenized,
+not parsed into usable values.&lt;/p&gt;&lt;p&gt;I am going to start by porting the individual parsers to Rust, similar
+to what Paolo and I did for librsvg.  It turns out that there's some
+code we can share.&lt;/p&gt;&lt;p dir="ltr"&gt;So far I have the &lt;a href="https://gitlab.gnome.org/federico/stylish/blob/master/src/color.rs" dir="ltr"&gt;parser for
+colors&lt;/a&gt;
+implemented in Rust.  This &lt;a href="https://gitlab.gnome.org/federico/gnome-shell/commit/f1bc7b8ece4dd3384a76c46492d61de70b3d670a" dir="ltr"&gt;removes a little bunch of
+code&lt;/a&gt;
+from the C parsers, and replaces it with a little Rust code, since the
+cssparser crate can already parse CSS colors with alpha with no extra
+work — libcroco didn't support alpha.&lt;/p&gt;&lt;p dir="ltr"&gt;As a bonus, this supports &lt;code dir="ltr"&gt;hsl()&lt;/code&gt; colors in addition to &lt;code dir="ltr"&gt;rgb()&lt;/code&gt; ones
+out of the box!&lt;/p&gt;&lt;p&gt;After all the parsers are done, the next step would be to convert the
+representation of complete stylesheets into pure Rust code.&lt;/p&gt;&lt;h2&gt;What can we expect?&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;A well-maintained CSS stack.&lt;/strong&gt;  Firefox and Servo both use the
+crates in question, so librsvg and gnome-shell should get maintenance
+of a robust CSS stack "for free", for the foreseeable future.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Speed.&lt;/strong&gt;  Caveat: I have no profile data for gnome-shell yet, so I don't
+know how much time it spends doing CSS parsing and cascading, but it
+looks like the Rust version has a good chance of being more efficient.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://docs.rs/selectors/" dir="ltr"&gt;selectors crate&lt;/a&gt; has some very
+interesting
+&lt;a href="https://hacks.mozilla.org/2017/08/inside-a-super-fast-css-engine-quantum-css-aka-stylo/" dir="ltr"&gt;optimizations&lt;/a&gt;
+from Mozilla Servo, and it is also now used in Firefox.  It supports
+doing selector matching using Bloom filters, and can also avoid
+re-cascading child nodes if a change to a parent would not cause its
+children to change.&lt;/p&gt;&lt;p dir="ltr"&gt;All the parsing is done with zero-copy parsers thanks to Rust's string
+slices; without so many &lt;code dir="ltr"&gt;malloc()&lt;/code&gt; calls in the parsing code path,
+the parsing stage should really fly.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;More CSS features.&lt;/strong&gt; The selectors crate can do matching on
+basically all kinds of selectors as defined by recent CSS specs; one
+just has to provide the correct hooks into the calling code's
+representation of the DOM tree.  The kind of matching that &lt;code dir="ltr"&gt;StTheme&lt;/code&gt;
+can do is somewhat limited; the rustification should make it match
+much more closely to what people expect from CSS engines in web
+browsers.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;A well-defined model of property inheritance.&lt;/strong&gt; &lt;code dir="ltr"&gt;StThemeNode&lt;/code&gt;'s
+model for CSS property inheritance is a bit ad-hoc and inconsistent.
+I haven't quite tested it, but from looking at the code, it seems that
+not all properties get inherited in the same way.  I hope to move it
+to something closer to what librsvg already does, which should make it
+match people's expectations from the web.&lt;/p&gt;&lt;h2&gt;In the meantime&lt;/h2&gt;&lt;p&gt;I have a merge request ready to simply move the libcroco source code
+directly inside gnome-shell's source tree.  This should let distros
+remove their libcroco package as soon as possible.  That MR does not
+require Rust yet.&lt;/p&gt;&lt;p&gt;My playground is here:&lt;/p&gt;&lt;p&gt;This does not compile yet!  I'll plug things together tomorrow.&lt;/p&gt;&lt;p&gt;(Oh, yes, the project to redo Firefox's CSS stack in Rust used to be
+called Stylo.  I'm calling this Stylish, as in Styles for the Shell.)&lt;/p&gt;&lt;footer dir="ltr"&gt;
+    &lt;time datetime="2019-11-25T21:10:06-06:00" dir="ltr"&gt;
+      Last modified: Mon 2019/Nov/25
+    &lt;/time&gt;
+  &lt;/footer&gt;</description><pubDate>Wed, 27 Nov 2019 04:54:10 -0600</pubDate></item><item><title>patchbay - a poor man's message queue implemented over HTTP</title><link>https://lobste.rs/s/t8dsft</link><description>&lt;h1&gt;TL;DR&lt;/h1&gt;&lt;p dir="ltr"&gt;
         patchbay.pub is a free web service you can use to implement things like
         &lt;a href="https://patchbay.pub/#static-hosting" dir="ltr"&gt;static site hosting&lt;/a&gt;,
         &lt;a href="https://patchbay.pub/#file-sharing" dir="ltr"&gt;file sharing&lt;/a&gt;,
@@ -1166,66 +1225,7 @@ patchbay-cli host https://patchbay.pub/&lt;span dir="ltr"&gt;8tv8-s1q7&lt;/span&
           OS buffer. That said, the server should never close a producer
           connection until a consumer has attached and all data has been read
           from the producer.
-        &lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Tue, 26 Nov 2019 11:22:28 -0600</pubDate></item><item><title>Moving gnome-shell's styles to Rust</title><link>https://lobste.rs/s/qdamr4</link><description>&lt;p dir="ltr"&gt;Gnome-shell uses CSS processing code that dates from
-&lt;a href="https://blog.ometer.com/2006/10/14/text-layout-that-works-properly/" dir="ltr"&gt;HippoCanvas&lt;/a&gt;,
-a CSS-aware canvas from around 2006.  It uses libcroco to parse CSS,
-and implements selector matching by hand in C.&lt;/p&gt;&lt;p&gt;This code is getting rather dated, and libcroco is unmaintained.&lt;/p&gt;&lt;p dir="ltr"&gt;I've been reading the code for
-&lt;a href="https://gitlab.gnome.org/GNOME/gnome-shell/blob/66fc5c07/src/st/st-theme.c" dir="ltr"&gt;&lt;code dir="ltr"&gt;StTheme&lt;/code&gt;&lt;/a&gt;
-and
-&lt;a href="https://gitlab.gnome.org/GNOME/gnome-shell/blob/66fc5c07/src/st/st-theme-node.c" dir="ltr"&gt;&lt;code dir="ltr"&gt;StThemeNode&lt;/code&gt;&lt;/a&gt;,
-and it looks very feasible to port it gradually to Rust, by using the
-same crates that librsvg uses, and eventually removing libcroco
-altogether:  &lt;strong dir="ltr"&gt;gnome-shell is the last module that uses libcroco in
-distro packages&lt;/strong&gt;.&lt;/p&gt;&lt;h2&gt;Strategy&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;StTheme&lt;/code&gt; and &lt;code dir="ltr"&gt;StThemeNode&lt;/code&gt; use libcroco to load CSS stylesheets and
-keep them in memory.  The values of individual properties are just
-tokenized and kept around as a linked list of &lt;code dir="ltr"&gt;CRTerm&lt;/code&gt;; this struct
-represents a single token.&lt;/p&gt;&lt;p dir="ltr"&gt;Later, the drawing code uses functions like
-&lt;code dir="ltr"&gt;st_theme_node_lookup_color(node, "property_name")&lt;/code&gt; or
-&lt;code dir="ltr"&gt;st_theme_node_lookup_length()&lt;/code&gt; to query the various properties that
-it needs.  It is &lt;em dir="ltr"&gt;then&lt;/em&gt; that the type of each property gets
-determined:  prior to that step, property values are just tokenized,
-not parsed into usable values.&lt;/p&gt;&lt;p&gt;I am going to start by porting the individual parsers to Rust, similar
-to what Paolo and I did for librsvg.  It turns out that there's some
-code we can share.&lt;/p&gt;&lt;p dir="ltr"&gt;So far I have the &lt;a href="https://gitlab.gnome.org/federico/stylish/blob/master/src/color.rs" dir="ltr"&gt;parser for
-colors&lt;/a&gt;
-implemented in Rust.  This &lt;a href="https://gitlab.gnome.org/federico/gnome-shell/commit/f1bc7b8ece4dd3384a76c46492d61de70b3d670a" dir="ltr"&gt;removes a little bunch of
-code&lt;/a&gt;
-from the C parsers, and replaces it with a little Rust code, since the
-cssparser crate can already parse CSS colors with alpha with no extra
-work — libcroco didn't support alpha.&lt;/p&gt;&lt;p dir="ltr"&gt;As a bonus, this supports &lt;code dir="ltr"&gt;hsl()&lt;/code&gt; colors in addition to &lt;code dir="ltr"&gt;rgb()&lt;/code&gt; ones
-out of the box!&lt;/p&gt;&lt;p&gt;After all the parsers are done, the next step would be to convert the
-representation of complete stylesheets into pure Rust code.&lt;/p&gt;&lt;h2&gt;What can we expect?&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;A well-maintained CSS stack.&lt;/strong&gt;  Firefox and Servo both use the
-crates in question, so librsvg and gnome-shell should get maintenance
-of a robust CSS stack "for free", for the foreseeable future.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Speed.&lt;/strong&gt;  Caveat: I have no profile data for gnome-shell yet, so I don't
-know how much time it spends doing CSS parsing and cascading, but it
-looks like the Rust version has a good chance of being more efficient.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://docs.rs/selectors/" dir="ltr"&gt;selectors crate&lt;/a&gt; has some very
-interesting
-&lt;a href="https://hacks.mozilla.org/2017/08/inside-a-super-fast-css-engine-quantum-css-aka-stylo/" dir="ltr"&gt;optimizations&lt;/a&gt;
-from Mozilla Servo, and it is also now used in Firefox.  It supports
-doing selector matching using Bloom filters, and can also avoid
-re-cascading child nodes if a change to a parent would not cause its
-children to change.&lt;/p&gt;&lt;p dir="ltr"&gt;All the parsing is done with zero-copy parsers thanks to Rust's string
-slices; without so many &lt;code dir="ltr"&gt;malloc()&lt;/code&gt; calls in the parsing code path,
-the parsing stage should really fly.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;More CSS features.&lt;/strong&gt; The selectors crate can do matching on
-basically all kinds of selectors as defined by recent CSS specs; one
-just has to provide the correct hooks into the calling code's
-representation of the DOM tree.  The kind of matching that &lt;code dir="ltr"&gt;StTheme&lt;/code&gt;
-can do is somewhat limited; the rustification should make it match
-much more closely to what people expect from CSS engines in web
-browsers.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;A well-defined model of property inheritance.&lt;/strong&gt; &lt;code dir="ltr"&gt;StThemeNode&lt;/code&gt;'s
-model for CSS property inheritance is a bit ad-hoc and inconsistent.
-I haven't quite tested it, but from looking at the code, it seems that
-not all properties get inherited in the same way.  I hope to move it
-to something closer to what librsvg already does, which should make it
-match people's expectations from the web.&lt;/p&gt;&lt;h2&gt;In the meantime&lt;/h2&gt;&lt;p&gt;I have a merge request ready to simply move the libcroco source code
-directly inside gnome-shell's source tree.  This should let distros
-remove their libcroco package as soon as possible.  That MR does not
-require Rust yet.&lt;/p&gt;&lt;p&gt;My playground is here:&lt;/p&gt;&lt;p&gt;This does not compile yet!  I'll plug things together tomorrow.&lt;/p&gt;&lt;p&gt;(Oh, yes, the project to redo Firefox's CSS stack in Rust used to be
-called Stylo.  I'm calling this Stylish, as in Styles for the Shell.)&lt;/p&gt;&lt;footer dir="ltr"&gt;
-    &lt;time datetime="2019-11-25T21:10:06-06:00" dir="ltr"&gt;
-      Last modified: Mon 2019/Nov/25
-    &lt;/time&gt;
-  &lt;/footer&gt;</description><pubDate>Wed, 27 Nov 2019 04:54:10 -0600</pubDate></item><item><title>syscall call-from verification</title><link>https://lobste.rs/s/ox39a1</link><description>&lt;PRE&gt;&lt;b dir="ltr"&gt;[&lt;a href="https://marc.info/?l=openbsd-tech&amp;amp;m=157488269713173&amp;amp;w=2" dir="ltr"&gt;prev in list&lt;/a&gt;] [&lt;a href="https://marc.info/?l=openbsd-tech&amp;amp;m=157489224118677&amp;amp;w=2" dir="ltr"&gt;next in list&lt;/a&gt;] [&lt;font dir="ltr"&gt;prev in thread&lt;/font&gt;] [&lt;a href="https://marc.info/?l=openbsd-tech&amp;amp;m=157489224118677&amp;amp;w=2" dir="ltr"&gt;next in thread&lt;/a&gt;] &lt;/b&gt;
+        &lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Tue, 26 Nov 2019 11:22:28 -0600</pubDate></item><item><title>syscall call-from verification</title><link>https://lobste.rs/s/ox39a1</link><description>&lt;PRE&gt;&lt;b dir="ltr"&gt;[&lt;a href="https://marc.info/?l=openbsd-tech&amp;amp;m=157488269713173&amp;amp;w=2" dir="ltr"&gt;prev in list&lt;/a&gt;] [&lt;a href="https://marc.info/?l=openbsd-tech&amp;amp;m=157489224118677&amp;amp;w=2" dir="ltr"&gt;next in list&lt;/a&gt;] [&lt;font dir="ltr"&gt;prev in thread&lt;/font&gt;] [&lt;a href="https://marc.info/?l=openbsd-tech&amp;amp;m=157489224118677&amp;amp;w=2" dir="ltr"&gt;next in thread&lt;/a&gt;] &lt;/b&gt;
 &lt;b dir="ltr"&gt;&lt;font size="+1" dir="ltr"&gt;
 List:       &lt;a href="https://marc.info/?l=openbsd-tech&amp;amp;r=1&amp;amp;w=2" dir="ltr"&gt;openbsd-tech&lt;/a&gt;
 Subject:    &lt;a href="https://marc.info/?t=157488910800016&amp;amp;r=1&amp;amp;w=2" dir="ltr"&gt;syscall call-from verification&lt;/a&gt;
