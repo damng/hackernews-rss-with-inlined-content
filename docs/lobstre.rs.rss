@@ -160,7 +160,424 @@ net.core.somaxconn = 1024
     and tagged &lt;a href="https://stressgrid.com/tags/cowboy/" dir="ltr"&gt;cowboy&lt;/a&gt;, &lt;a href="https://stressgrid.com/tags/elixir/" dir="ltr"&gt;elixir&lt;/a&gt;, &lt;a href="https://stressgrid.com/tags/erlang/" dir="ltr"&gt;erlang&lt;/a&gt; and &lt;a href="https://stressgrid.com/tags/ranch/" dir="ltr"&gt;ranch&lt;/a&gt;
   
   using &lt;span itemprop="wordCount" dir="ltr"&gt;614&lt;/span&gt; words.
-&lt;/p&gt;</description><pubDate>Thu, 05 Dec 2019 09:06:36 -0600</pubDate></item><item><title>Authentication vulnerabilities in OpenBSD</title><link>https://lobste.rs/s/bufolq</link><description>&lt;PRE&gt;Date: Wed, 4 Dec 2019 20:49:22 +0000
+&lt;/p&gt;</description><pubDate>Thu, 05 Dec 2019 09:06:36 -0600</pubDate></item><item><title>Tokio 0.2 - Rust Crash Course lesson 9</title><link>https://lobste.rs/s/jabva7</link><description>&lt;UL&gt;&lt;LI&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;In the &lt;a href="https://www.snoyman.com/blog/2019/12/rust-crash-course-08-down-dirty-future" dir="ltr"&gt;previous lesson in the crash course&lt;/a&gt;, we covered the new &lt;code dir="ltr"&gt;async/.await&lt;/code&gt; syntax stabilized in Rust 1.39, and the &lt;code dir="ltr"&gt;Future&lt;/code&gt; trait which lives underneath it. This information greatly supercedes the now-defunct lesson 7 from last year, which covered the older &lt;code dir="ltr"&gt;Future&lt;/code&gt; approach.&lt;/p&gt;&lt;p&gt;Now it’s time to update the second half of lesson 7, and teach the hot-off-the-presses Tokio 0.2 release. For those not familiar with it, let me quote the project’s overview:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Tokio is an event-driven, non-blocking I/O platform for writing asynchronous applications with the Rust programming language.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;If you want to write an efficient, concurrent network service in Rust, you’ll want to use something like Tokio. That’s not to say that this is the only use case for Tokio; you can do lots of great things with an event driven scheduler outside of network services. It’s also not to say that Tokio is the only solution; the &lt;a href="https://async.rs/" dir="ltr"&gt;&lt;code dir="ltr"&gt;async-std&lt;/code&gt;&lt;/a&gt; library provides similar functionality.&lt;/p&gt;&lt;p&gt;However, network services are likely the most common domain agitating for a non-blocking I/O system. And Tokio is the most popular and established of these systems today. So this combination is where we’re going to get started.&lt;/p&gt;&lt;p dir="ltr"&gt;And as a side note, if you have some other topic you’d like me to cover around this, please &lt;a href="https://twitter.com/snoyberg" dir="ltr"&gt;let me know on Twitter&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;&lt;em&gt;Exercise solutions will be included at the end of the blog post. Yes, I keep changing the rules, sue me.&lt;/em&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;This post is part of a series based on &lt;a href="https://tech.fpcomplete.com/rust" dir="ltr"&gt;teaching Rust at FP
+Complete&lt;/a&gt;. If you’re reading this post outside
+of the blog, you can find links to all posts in the series &lt;a href="https://www.snoyman.com/blog/2018/10/introducing-rust-crash-course" dir="ltr"&gt;at the top of the
+introduction
+post&lt;/a&gt;. You
+can also &lt;a href="https://www.snoyman.com/feed/rust-crash-course" dir="ltr"&gt;subscribe to the RSS
+feed&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;Hello Tokio!&lt;/h2&gt;&lt;p&gt;Let’s kick this off. Go ahead and create a new Rust project for experimenting:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ cargo new --bin usetokio
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;If you want to make sure you’re using the same compiler version as me, set up your &lt;code dir="ltr"&gt;rust-toolchain&lt;/code&gt; correctly:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ echo 1.39.0 &amp;gt; rust-toolchain
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;And then set up Tokio as a dependency. For simplicity, we’ll install all the bells and whistles. In your &lt;code dir="ltr"&gt;Cargo.toml&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;[dependencies]&lt;/span&gt;
+&lt;span dir="ltr"&gt;tokio&lt;/span&gt; = { version = &lt;span dir="ltr"&gt;"0.2"&lt;/span&gt;, features = [&lt;span dir="ltr"&gt;"full"&lt;/span&gt;] }
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;PROTIP&lt;/strong&gt; You can run &lt;code dir="ltr"&gt;cargo build&lt;/code&gt; now to kick off the download and build of crates while you keep reading…&lt;/p&gt;&lt;p dir="ltr"&gt;And now we’re going to write an asynchronous hello world application. Type this into your &lt;code dir="ltr"&gt;src/main.rs&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io;
+
+&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout = io::stdout();
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; hello: &amp;amp;[&lt;span dir="ltr"&gt;u8&lt;/span&gt;] = &lt;span dir="ltr"&gt;b"Hello, world!\n"&lt;/span&gt;;
+    io::copy(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; hello, &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout).await?;
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;NOTE&lt;/strong&gt; I specifically said “type this in” instead of “copy and paste.” For getting comfortable with this stuff, I recommend manually typing in the code.&lt;/p&gt;&lt;p&gt;A lot of this should look familiar from our previous lesson. To recap:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Since we’ll be &lt;code dir="ltr"&gt;await&lt;/code&gt;ing something and generating a &lt;code dir="ltr"&gt;Future&lt;/code&gt;, our &lt;code dir="ltr"&gt;main&lt;/code&gt; function is &lt;code dir="ltr"&gt;async&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;Since &lt;code dir="ltr"&gt;main&lt;/code&gt; is &lt;code dir="ltr"&gt;async&lt;/code&gt;, we need to use an executor to run it. That’s why we use the &lt;code dir="ltr"&gt;#[tokio::main]&lt;/code&gt; attribute.&lt;/LI&gt;&lt;LI&gt;Since performing I/O can fail, we return a &lt;code dir="ltr"&gt;Result&lt;/code&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;The first really new thing since last lesson is this little bit of syntax:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;.await?
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;I mentioned it last time, but now we’re seeing it in real life. This is just the combination of our two pieces of prior art: &lt;code dir="ltr"&gt;.await&lt;/code&gt; for chaining together &lt;code dir="ltr"&gt;Future&lt;/code&gt;s, and &lt;code dir="ltr"&gt;?&lt;/code&gt; for error handling. The fact that these work together so nicely is really awesome. I’ll probably mention this a few more times, because I love it that much.&lt;/p&gt;&lt;p dir="ltr"&gt;The next thing to note is that we use &lt;code dir="ltr"&gt;tokio::io::stdout()&lt;/code&gt; to get access to some value that lets us interact with standard output. If you’re familiar with it, this looks really similar to &lt;code dir="ltr"&gt;std::io::stdout()&lt;/code&gt;. That’s by design: a large part of the &lt;code dir="ltr"&gt;tokio&lt;/code&gt; API is simply async-ifying things from &lt;code dir="ltr"&gt;std&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;And finally, we can look at the actual &lt;code dir="ltr"&gt;tokio::io::copy&lt;/code&gt; call. As you may have guessed, and as stated in the &lt;a href="https://docs.rs/tokio/0.2.2/tokio/io/fn.copy.html" dir="ltr"&gt;API docs&lt;/a&gt;:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;This is an asynchronous version of &lt;a href="https://doc.rust-lang.org/std/io/fn.copy.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;std::io::copy&lt;/code&gt;&lt;/a&gt;.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;However, instead of working with the &lt;code dir="ltr"&gt;Read&lt;/code&gt; and &lt;code dir="ltr"&gt;Write&lt;/code&gt; traits, this works with their async cousins: &lt;code dir="ltr"&gt;AsyncRead&lt;/code&gt; and &lt;code dir="ltr"&gt;AsyncWrite&lt;/code&gt;. A byte slice (&lt;code dir="ltr"&gt;&amp;amp;[u8]&lt;/code&gt;) is a valid &lt;code dir="ltr"&gt;AsyncRead&lt;/code&gt;, so we’re able to store our input there. And as you may have guessed, &lt;code dir="ltr"&gt;Stdout&lt;/code&gt; is an &lt;code dir="ltr"&gt;AsyncWrite&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;EXERCISE 1&lt;/strong&gt; Modify this application so that instead of printing “Hello, world!”, it copies the entire contents of standard input to standard output.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;NOTE&lt;/strong&gt; You can simplify this code using &lt;code dir="ltr"&gt;stdout.write_all&lt;/code&gt; after &lt;code dir="ltr"&gt;use&lt;/code&gt;ing &lt;code dir="ltr"&gt;tokio::io::AsyncWriteExt&lt;/code&gt;, but we’ll stick to &lt;code dir="ltr"&gt;tokio::io::copy&lt;/code&gt;, since we’ll be using it throughout. But if you’re curious:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io::{&lt;span dir="ltr"&gt;self&lt;/span&gt;, AsyncWriteExt};
+
+&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout = io::stdout();
+    stdout.write_all(&lt;span dir="ltr"&gt;b"Hello, world!\n"&lt;/span&gt;).await?;
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;Spawning processes&lt;/h2&gt;&lt;p dir="ltr"&gt;Tokio provides a &lt;code dir="ltr"&gt;tokio::process&lt;/code&gt; module which resembles the &lt;code dir="ltr"&gt;std::process&lt;/code&gt; module. We can use this to implement Hello World once again:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::process::Command;
+
+&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
+    Command::new(&lt;span dir="ltr"&gt;"echo"&lt;/span&gt;).arg(&lt;span dir="ltr"&gt;"Hello, world!"&lt;/span&gt;).spawn()?.await?;
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Notice how the &lt;code dir="ltr"&gt;?&lt;/code&gt; and &lt;code dir="ltr"&gt;.await&lt;/code&gt; bits can go in whatever order they are needed. You can read this line as:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Create a new &lt;code dir="ltr"&gt;Command&lt;/code&gt; to run &lt;code dir="ltr"&gt;echo&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Give it the argument &lt;code dir="ltr"&gt;"Hello, world!"&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Spawn this, which may fail&lt;/LI&gt;&lt;LI&gt;Using the first &lt;code dir="ltr"&gt;?&lt;/code&gt;: if it fails, return the error. Otherwise, return a &lt;code dir="ltr"&gt;Future&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Using the &lt;code dir="ltr"&gt;.await&lt;/code&gt;: wait until that &lt;code dir="ltr"&gt;Future&lt;/code&gt; completes, and capture its &lt;code dir="ltr"&gt;Result&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Using the second &lt;code dir="ltr"&gt;?&lt;/code&gt;: if that &lt;code dir="ltr"&gt;Result&lt;/code&gt; is &lt;code dir="ltr"&gt;Err&lt;/code&gt;, return that error.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Pretty nice for a single line!&lt;/p&gt;&lt;p dir="ltr"&gt;One of the great advantages of &lt;code dir="ltr"&gt;async&lt;/code&gt;/&lt;code dir="ltr"&gt;.await&lt;/code&gt; versus the previous way of doing async with callbacks is how easily it works with looping.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;EXERCISE 2&lt;/strong&gt; Extend this example so that it prints &lt;code dir="ltr"&gt;Hello, world!&lt;/code&gt; 10 times.&lt;/p&gt;&lt;h2&gt;Take a break&lt;/h2&gt;&lt;p dir="ltr"&gt;So far we’ve only really done a single bit of &lt;code dir="ltr"&gt;.await&lt;/code&gt;ing. But it’s easy enough to &lt;code dir="ltr"&gt;.await&lt;/code&gt; on multiple things. Let’s use &lt;a href="https://docs.rs/tokio/0.2.2/tokio/time/fn.delay_for.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;delay_for&lt;/code&gt;&lt;/a&gt; to pause for a bit.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::time;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::process::Command;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; std::time::Duration;
+
+&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
+    Command::new(&lt;span dir="ltr"&gt;"date"&lt;/span&gt;).spawn()?.await?;
+    time::delay_for(Duration::from_secs(&lt;span dir="ltr"&gt;1&lt;/span&gt;)).await;
+    Command::new(&lt;span dir="ltr"&gt;"date"&lt;/span&gt;).spawn()?.await?;
+    time::delay_for(Duration::from_secs(&lt;span dir="ltr"&gt;1&lt;/span&gt;)).await;
+    Command::new(&lt;span dir="ltr"&gt;"date"&lt;/span&gt;).spawn()?.await?;
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;We can also use the &lt;code dir="ltr"&gt;tokio::time::interval&lt;/code&gt; function to create a stream of “ticks” for each time a certain amount of time has passed. For example, this program will keep calling &lt;code dir="ltr"&gt;date&lt;/code&gt; once per second until it is killed:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::time;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::process::Command;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; std::time::Duration;
+
+&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; interval = time::interval(Duration::from_secs(&lt;span dir="ltr"&gt;1&lt;/span&gt;));
+    &lt;span dir="ltr"&gt;loop&lt;/span&gt; {
+        interval.tick().await;
+        Command::new(&lt;span dir="ltr"&gt;"date"&lt;/span&gt;).spawn()?.await?;
+    }
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;EXERCISE 3&lt;/strong&gt; Why isn’t there a &lt;code dir="ltr"&gt;Ok(())&lt;/code&gt; after the &lt;code dir="ltr"&gt;loop&lt;/code&gt;?&lt;/p&gt;&lt;h2&gt;Time to spawn&lt;/h2&gt;&lt;p&gt;This is all well and good, but we’re not really taking advantage of asynchronous programming at all. Let’s fix that! We’ve seen two different interesting programs:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Infinitely pausing 1 seconds and calling &lt;code dir="ltr"&gt;date&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Copying all input from &lt;code dir="ltr"&gt;stdin&lt;/code&gt; to &lt;code dir="ltr"&gt;stdout&lt;/code&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;It’s time to introduce &lt;code dir="ltr"&gt;spawn&lt;/code&gt; so that we can combine these two into one program. First, let’s demonstrate a trivial usage of &lt;code dir="ltr"&gt;spawn&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; std::time::Duration;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::process::Command;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::task;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::time;
+
+&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
+    task::spawn(dating()).await??;
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
+}
+
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;dating&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; interval = time::interval(Duration::from_secs(&lt;span dir="ltr"&gt;1&lt;/span&gt;));
+    &lt;span dir="ltr"&gt;loop&lt;/span&gt; {
+        interval.tick().await;
+        Command::new(&lt;span dir="ltr"&gt;"date"&lt;/span&gt;).spawn()?.await?;
+    }
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;You may be wondering: what’s up with that &lt;code dir="ltr"&gt;??&lt;/code&gt; operator? Is that some special super-error handler? No, it’s just the normal error handling &lt;code dir="ltr"&gt;?&lt;/code&gt; applied twice. Let’s look at some type signatures to help us out here:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;pub&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;spawn&lt;/span&gt;&lt;/span&gt;&amp;lt;T&amp;gt;(task: T) -&amp;gt; JoinHandle&amp;lt;T::Output&amp;gt;;
+
+&lt;span dir="ltr"&gt;impl&lt;/span&gt;&amp;lt;T&amp;gt; Future &lt;span dir="ltr"&gt;for&lt;/span&gt; JoinHandle&amp;lt;T&amp;gt; {
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;Output&lt;/span&gt;&lt;/span&gt; = &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;T, JoinError&amp;gt;;
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Calling &lt;code dir="ltr"&gt;spawn&lt;/code&gt; gives us back a &lt;code dir="ltr"&gt;JoinHandle&amp;lt;T::Output&amp;gt;&lt;/code&gt;. In our case, the &lt;code dir="ltr"&gt;Future&lt;/code&gt; we provide as input is &lt;code dir="ltr"&gt;dating()&lt;/code&gt;, which has an output of type &lt;code dir="ltr"&gt;Result&amp;lt;(), std::io::Error&amp;gt;&lt;/code&gt;. So that means the type of &lt;code dir="ltr"&gt;take::spawn(dating())&lt;/code&gt; is &lt;code dir="ltr"&gt;JoinHandle&amp;lt;Result&amp;lt;(), std::io::Error&amp;gt;&amp;gt;&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;We also see that &lt;code dir="ltr"&gt;JoinHandle&lt;/code&gt; implements &lt;code dir="ltr"&gt;Future&lt;/code&gt;. So when we apply &lt;code dir="ltr"&gt;.apply&lt;/code&gt; to this value, we end up with whatever that &lt;code dir="ltr"&gt;type Output = Result&amp;lt;T, JoinError&amp;gt;&lt;/code&gt; thing is. Since we know that &lt;code dir="ltr"&gt;T&lt;/code&gt; is &lt;code dir="ltr"&gt;Result&amp;lt;(), std::io::Error&amp;gt;&lt;/code&gt;, this means we end up with &lt;code dir="ltr"&gt;Result&amp;lt;Result&amp;lt;(), std::io::Error&amp;gt;, JoinError&amp;gt;&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;The first &lt;code dir="ltr"&gt;?&lt;/code&gt; deals with the outer &lt;code dir="ltr"&gt;Result&lt;/code&gt;, exiting with the &lt;code dir="ltr"&gt;JoinError&lt;/code&gt; on an &lt;code dir="ltr"&gt;Err&lt;/code&gt;, and giving us a &lt;code dir="ltr"&gt;Result&amp;lt;(), std::io::Error&amp;gt;&lt;/code&gt; value on &lt;code dir="ltr"&gt;Ok&lt;/code&gt;. The second &lt;code dir="ltr"&gt;?&lt;/code&gt; deals with the &lt;code dir="ltr"&gt;std::io::Error&lt;/code&gt;, giving us a &lt;code dir="ltr"&gt;()&lt;/code&gt; on &lt;code dir="ltr"&gt;Ok&lt;/code&gt;. Whew!&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;EXERCISE 4&lt;/strong&gt; Now that we’ve seen &lt;code dir="ltr"&gt;spawn&lt;/code&gt;, you should modify the program so that it calls both &lt;code dir="ltr"&gt;date&lt;/code&gt; in a loop, and copies &lt;code dir="ltr"&gt;stdin&lt;/code&gt; to &lt;code dir="ltr"&gt;stdout&lt;/code&gt;.&lt;/p&gt;&lt;h2&gt;Synchronous code&lt;/h2&gt;&lt;p dir="ltr"&gt;You may not have the luxury of interacting exclusively with &lt;code dir="ltr"&gt;async&lt;/code&gt;-friendly code. Maybe you have some really nice library you want to leverage, but it performs blocking calls internally. Fortunately, Tokio’s got you covered with the &lt;a href="https://docs.rs/tokio/0.2.2/tokio/task/fn.spawn_blocking.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;spawn_blocking&lt;/code&gt;&lt;/a&gt; function. Since the docs are so perfect, let me quote them:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;The &lt;code dir="ltr"&gt;task::spawn_blocking&lt;/code&gt; function is similar to the &lt;code dir="ltr"&gt;task::spawn&lt;/code&gt; function discussed in the previous section, but rather than spawning an &lt;code dir="ltr"&gt;non-blocking&lt;/code&gt; future on the Tokio runtime, it instead spawns a &lt;code dir="ltr"&gt;blocking&lt;/code&gt; function on a dedicated thread pool for blocking tasks.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;EXERCISE 5&lt;/strong&gt; Rewrite the &lt;code dir="ltr"&gt;dating()&lt;/code&gt; function to use &lt;code dir="ltr"&gt;spawn_blocking&lt;/code&gt; and &lt;code dir="ltr"&gt;std::thread::sleep&lt;/code&gt; so that it calls &lt;code dir="ltr"&gt;date&lt;/code&gt; approximately once per second.&lt;/p&gt;&lt;h2&gt;Let’s network!&lt;/h2&gt;&lt;p&gt;I could keep stepping through the other cools functions in the Tokio library. I encourage you to poke around at them yourself. But I promised some networking, and by golly, I’m gonna deliver!&lt;/p&gt;&lt;p dir="ltr"&gt;I’m going to slightly extend the example from the &lt;a href="https://docs.rs/tokio/0.2.2/tokio/net/struct.TcpListener.html#examples" dir="ltr"&gt;&lt;code dir="ltr"&gt;TcpListener&lt;/code&gt; docs&lt;/a&gt; to (1) make it compile and (2) implement an echo server. This program has a pretty major flaw in it though, I recommend trying to find it.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io::*;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::net::{TcpListener, TcpStream};
+
+&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; io::&lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;()&amp;gt; {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; listener = TcpListener::bind(&lt;span dir="ltr"&gt;"127.0.0.1:8080"&lt;/span&gt;).await?;
+
+    &lt;span dir="ltr"&gt;loop&lt;/span&gt; {
+        &lt;span dir="ltr"&gt;let&lt;/span&gt; (socket, _) = listener.accept().await?;
+        echo(socket).await?;
+    }
+}
+
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;echo&lt;/span&gt;&lt;/span&gt;(socket: TcpStream) -&amp;gt; io::&lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;()&amp;gt; {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; (&lt;span dir="ltr"&gt;mut&lt;/span&gt; recv, &lt;span dir="ltr"&gt;mut&lt;/span&gt; send) = io::split(socket);
+    io::copy(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; recv, &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; send).await?;
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;We use &lt;code dir="ltr"&gt;TcpListener&lt;/code&gt; to bind a socket. The binding itself is asynchronous, so we use &lt;code dir="ltr"&gt;.await&lt;/code&gt; to wait for the listening socket to be available. And we use &lt;code dir="ltr"&gt;?&lt;/code&gt; to deal with any errors while binding the listening socket.&lt;/p&gt;&lt;p dir="ltr"&gt;Next, we loop forever. Inside the loop, we accept new connections, using &lt;code dir="ltr"&gt;.await?&lt;/code&gt; like before. We capture the &lt;code dir="ltr"&gt;socket&lt;/code&gt; (ignoring the address as the second part of the tuple). Then we call our &lt;code dir="ltr"&gt;echo&lt;/code&gt; function and &lt;code dir="ltr"&gt;.await&lt;/code&gt; it.&lt;/p&gt;&lt;p dir="ltr"&gt;Within &lt;code dir="ltr"&gt;echo&lt;/code&gt;, we use &lt;code dir="ltr"&gt;tokio::io::split&lt;/code&gt; to split up our &lt;code dir="ltr"&gt;TcpStream&lt;/code&gt; into its constituent read and write halves, and then pass those into &lt;code dir="ltr"&gt;tokio::io::copy&lt;/code&gt;, as we’ve done before.&lt;/p&gt;&lt;p dir="ltr"&gt;Awesome! Where’s the bug? Let me ask you a question: what &lt;em dir="ltr"&gt;should&lt;/em&gt; the behavior be if a second connection comes in while the first connection is still active? Ideally, it would be handled. However, our program has just one task. And that task &lt;code dir="ltr"&gt;.await&lt;/code&gt;s on each call to &lt;code dir="ltr"&gt;echo&lt;/code&gt;. So our second connection won’t be serviced until the first one closes.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;EXERCISE 6&lt;/strong&gt; Modify the program above so that it handles concurrent connections correctly.&lt;/p&gt;&lt;h2&gt;TCP client and ownership&lt;/h2&gt;&lt;p dir="ltr"&gt;Let’s write a poor man’s HTTP client. It will establish a connection to a hard-coded server, copy all of &lt;code dir="ltr"&gt;stdin&lt;/code&gt; to the server, and then copy all data from the server to &lt;code dir="ltr"&gt;stdout&lt;/code&gt;. To use this, you’ll manually type in the HTTP request and then hit &lt;code dir="ltr"&gt;Ctrl-D&lt;/code&gt; for end-of-file.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::net::TcpStream;
+
+&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; io::&lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;()&amp;gt; {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; stream = TcpStream::connect(&lt;span dir="ltr"&gt;"127.0.0.1:8080"&lt;/span&gt;).await?;
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; (&lt;span dir="ltr"&gt;mut&lt;/span&gt; recv, &lt;span dir="ltr"&gt;mut&lt;/span&gt; send) = io::split(stream);
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; stdin = io::stdin();
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout = io::stdout();
+
+    io::copy(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdin, &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; send).await?;
+    io::copy(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; recv, &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout).await?;
+
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;That’s all well and good, but it’s limited. It only handles half-duplex protocols like HTTP, and doesn’t actually support keep-alive in any way. We’d like to use &lt;code dir="ltr"&gt;spawn&lt;/code&gt; to run the two &lt;code dir="ltr"&gt;copy&lt;/code&gt;s in different tasks. Seems easy enough:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;let&lt;/span&gt; send = spawn(io::copy(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdin, &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; send));
+&lt;span dir="ltr"&gt;let&lt;/span&gt; recv = spawn(io::copy(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; recv, &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout));
+
+send.await??;
+recv.await??;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Unfortunately, this doesn’t compile. We get four nearly-identical error messages. Let’s look at the first:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;error[E0597]: `stdin` does not live long enough
+  --&amp;gt; src/main.rs:12:31
+   |
+12 |     let send = spawn(io::copy(&amp;amp;mut stdin, &amp;amp;mut send));
+   |                      ---------^^^^^^^^^^------------
+   |                      |        |
+   |                      |        borrowed value does not live long enough
+   |                      argument requires that `stdin` is borrowed for `'static`
+...
+19 | }
+   | - `stdin` dropped here while still borrowed
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Here’s the issue: our &lt;code dir="ltr"&gt;copy&lt;/code&gt; &lt;code dir="ltr"&gt;Future&lt;/code&gt; does not &lt;em dir="ltr"&gt;own&lt;/em&gt; the &lt;code dir="ltr"&gt;stdin&lt;/code&gt; value (or the &lt;code dir="ltr"&gt;send&lt;/code&gt; value, for that matter). Instead, it has a (mutable) reference to it. That value remains in the &lt;code dir="ltr"&gt;main&lt;/code&gt; function’s &lt;code dir="ltr"&gt;Future&lt;/code&gt;. Ignoring error cases, we know that the &lt;code dir="ltr"&gt;main&lt;/code&gt; function will wait for &lt;code dir="ltr"&gt;send&lt;/code&gt; to complete (thanks to &lt;code dir="ltr"&gt;send.await&lt;/code&gt;), and therefore the lifetimes appear to be correct. However, Rust doesn’t recognize this lifetime information. (Also, and I haven’t thought this through completely, I’m fairly certain that &lt;code dir="ltr"&gt;send&lt;/code&gt; may be dropped earlier than the &lt;code dir="ltr"&gt;Future&lt;/code&gt; using it in the case of &lt;code dir="ltr"&gt;panic&lt;/code&gt;s.)&lt;/p&gt;&lt;p dir="ltr"&gt;In order to fix this, we need to convince the compiler to make a &lt;code dir="ltr"&gt;Future&lt;/code&gt; that owns &lt;code dir="ltr"&gt;stdin&lt;/code&gt;. And the easiest way to do that here is to use an &lt;code dir="ltr"&gt;async move&lt;/code&gt; block.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Exercise 7&lt;/strong&gt; Make the code above compile using two &lt;code dir="ltr"&gt;async move&lt;/code&gt; blocks.&lt;/p&gt;&lt;h2 dir="ltr"&gt;Playing with &lt;code dir="ltr"&gt;lines&lt;/code&gt;&lt;/h2&gt;&lt;p&gt;This section will have a series of modifications to a program. I recommend you solve each challenge before looking at the solution. However, unlike the other exercises, I’m going to show the solutions inline since they build on each other.&lt;/p&gt;&lt;p dir="ltr"&gt;Let’s build an async program that counts the number of lines on standard input. You’ll want to use the &lt;a href="https://docs.rs/tokio/0.2.2/tokio/io/trait.AsyncBufReadExt.html#method.lines" dir="ltr"&gt;&lt;code dir="ltr"&gt;lines&lt;/code&gt;&lt;/a&gt; method for this. Read the docs and try to figure out what &lt;code dir="ltr"&gt;use&lt;/code&gt;s and wrappers will be necessary to make the types line up.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::prelude::*;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io::AsyncBufReadExt;
+
+&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; stdin = io::stdin();
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; stdin = io::BufReader::new(stdin);
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; count = &lt;span dir="ltr"&gt;0u32&lt;/span&gt;;
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; lines = stdin.lines();
+    &lt;span dir="ltr"&gt;while&lt;/span&gt; &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;Some&lt;/span&gt;(_) = lines.next_line().await? {
+        count += &lt;span dir="ltr"&gt;1&lt;/span&gt;;
+    }
+    &lt;span dir="ltr"&gt;println!&lt;/span&gt;(&lt;span dir="ltr"&gt;"Lines on stdin: {}"&lt;/span&gt;, count);
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;OK, bumping this up one more level. Instead of standard input, let’s take a list of file names as command line arguments, and count up the total number of lines in all the files. Initially, it’s OK to read the files one at a time. In other words: don’t bother calling &lt;code dir="ltr"&gt;spawn&lt;/code&gt;. Give it a shot, and then come back here:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::prelude::*;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io::AsyncBufReadExt;
+
+&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; args = std::env::args();
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; _me = args.next(); &lt;span dir="ltr"&gt;// ignore command name&lt;/span&gt;
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; count = &lt;span dir="ltr"&gt;0u32&lt;/span&gt;;
+
+    &lt;span dir="ltr"&gt;for&lt;/span&gt; filename &lt;span dir="ltr"&gt;in&lt;/span&gt; args {
+        &lt;span dir="ltr"&gt;let&lt;/span&gt; file = tokio::fs::File::open(filename).await?;
+        &lt;span dir="ltr"&gt;let&lt;/span&gt; file = io::BufReader::new(file);
+        &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; lines = file.lines();
+        &lt;span dir="ltr"&gt;while&lt;/span&gt; &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;Some&lt;/span&gt;(_) = lines.next_line().await? {
+            count += &lt;span dir="ltr"&gt;1&lt;/span&gt;;
+        }
+    }
+
+    &lt;span dir="ltr"&gt;println!&lt;/span&gt;(&lt;span dir="ltr"&gt;"Total lines: {}"&lt;/span&gt;, count);
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;But now it’s time to make this properly asynchronous, and process the files in separate &lt;code dir="ltr"&gt;spawn&lt;/code&gt;ed tasks. In order to make this work, we need to spawn all of the tasks, and then &lt;code dir="ltr"&gt;.await&lt;/code&gt; each of them. I used a &lt;code dir="ltr"&gt;Vec&lt;/code&gt; of &lt;code dir="ltr"&gt;Future&amp;lt;Output=Result&amp;lt;u32, std::io::Error&amp;gt;&amp;gt;&lt;/code&gt;s for this. Give it a shot!&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::prelude::*;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io::AsyncBufReadExt;
+
+&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; args = std::env::args();
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; _me = args.next(); &lt;span dir="ltr"&gt;// ignore command name&lt;/span&gt;
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; tasks = &lt;span dir="ltr"&gt;vec!&lt;/span&gt;[];
+
+    &lt;span dir="ltr"&gt;for&lt;/span&gt; filename &lt;span dir="ltr"&gt;in&lt;/span&gt; args {
+        tasks.push(tokio::spawn(async {
+            &lt;span dir="ltr"&gt;let&lt;/span&gt; file = tokio::fs::File::open(filename).await?;
+            &lt;span dir="ltr"&gt;let&lt;/span&gt; file = io::BufReader::new(file);
+            &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; lines = file.lines();
+            &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; count = &lt;span dir="ltr"&gt;0u32&lt;/span&gt;;
+            &lt;span dir="ltr"&gt;while&lt;/span&gt; &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;Some&lt;/span&gt;(_) = lines.next_line().await? {
+                count += &lt;span dir="ltr"&gt;1&lt;/span&gt;;
+            }
+            &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(count) &lt;span dir="ltr"&gt;as&lt;/span&gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;&lt;span dir="ltr"&gt;u32&lt;/span&gt;, std::io::Error&amp;gt;
+        }));
+    }
+
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; count = &lt;span dir="ltr"&gt;0&lt;/span&gt;;
+    &lt;span dir="ltr"&gt;for&lt;/span&gt; task &lt;span dir="ltr"&gt;in&lt;/span&gt; tasks {
+        count += task.await??;
+    }
+
+    &lt;span dir="ltr"&gt;println!&lt;/span&gt;(&lt;span dir="ltr"&gt;"Total lines: {}"&lt;/span&gt;, count);
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;And finally in this progression: let’s change how we handle the &lt;code dir="ltr"&gt;count&lt;/code&gt;. Instead of &lt;code dir="ltr"&gt;.await&lt;/code&gt;ing the count in the second &lt;code dir="ltr"&gt;for&lt;/code&gt; loop, let’s have each individual task update a shared mutable variable. You should use an &lt;code dir="ltr"&gt;Arc&amp;lt;Mutex&amp;lt;u32&amp;gt;&amp;gt;&lt;/code&gt; for that. You’ll still need to keep a &lt;code dir="ltr"&gt;Vec&lt;/code&gt; of the tasks though to ensure you wait for all files to be read.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::prelude::*;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io::AsyncBufReadExt;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; std::sync::{Arc, Mutex};
+
+&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; args = std::env::args();
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; _me = args.next(); &lt;span dir="ltr"&gt;// ignore command name&lt;/span&gt;
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; tasks = &lt;span dir="ltr"&gt;vec!&lt;/span&gt;[];
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; count = Arc::new(Mutex::new(&lt;span dir="ltr"&gt;0u32&lt;/span&gt;));
+
+    &lt;span dir="ltr"&gt;for&lt;/span&gt; filename &lt;span dir="ltr"&gt;in&lt;/span&gt; args {
+        &lt;span dir="ltr"&gt;let&lt;/span&gt; count = count.clone();
+        tasks.push(tokio::spawn(async &lt;span dir="ltr"&gt;move&lt;/span&gt; {
+            &lt;span dir="ltr"&gt;let&lt;/span&gt; file = tokio::fs::File::open(filename).await?;
+            &lt;span dir="ltr"&gt;let&lt;/span&gt; file = io::BufReader::new(file);
+            &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; lines = file.lines();
+            &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; local_count = &lt;span dir="ltr"&gt;0u32&lt;/span&gt;;
+            &lt;span dir="ltr"&gt;while&lt;/span&gt; &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;Some&lt;/span&gt;(_) = lines.next_line().await? {
+                local_count += &lt;span dir="ltr"&gt;1&lt;/span&gt;;
+            }
+
+            &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; count = count.lock().unwrap();
+            *count += local_count;
+            &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(()) &lt;span dir="ltr"&gt;as&lt;/span&gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt;
+        }));
+    }
+
+    &lt;span dir="ltr"&gt;for&lt;/span&gt; task &lt;span dir="ltr"&gt;in&lt;/span&gt; tasks {
+        task.await??;
+    }
+
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; count = count.lock().unwrap();
+    &lt;span dir="ltr"&gt;println!&lt;/span&gt;(&lt;span dir="ltr"&gt;"Total lines: {}"&lt;/span&gt;, *count);
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;h2 dir="ltr"&gt;LocalSet and &lt;code dir="ltr"&gt;!Send&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;Thanks to &lt;a href="https://twitter.com/xudesheng/status/1201382514415325185?s=20" dir="ltr"&gt;@xudehseng&lt;/a&gt; for the inspiration on this section.&lt;/p&gt;&lt;p dir="ltr"&gt;OK, did that last exercise seem a bit contrived? It was! In my opinion, the previous approach of &lt;code dir="ltr"&gt;.await&lt;/code&gt;ing the counts and summing in the &lt;code dir="ltr"&gt;main&lt;/code&gt; function itself was superior. However, I wanted to teach you something else.&lt;/p&gt;&lt;p dir="ltr"&gt;What happens if you replace the &lt;code dir="ltr"&gt;Arc&amp;lt;Mutex&amp;lt;u32&amp;gt;&amp;gt;&lt;/code&gt; with a &lt;code dir="ltr"&gt;Rc&amp;lt;RefCell&amp;lt;u32&amp;gt;&amp;gt;&lt;/code&gt;? With this code:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::prelude::*;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io::AsyncBufReadExt;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; std::rc::Rc;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; std::cell::RefCell;
+
+&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; args = std::env::args();
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; _me = args.next(); &lt;span dir="ltr"&gt;// ignore command name&lt;/span&gt;
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; tasks = &lt;span dir="ltr"&gt;vec!&lt;/span&gt;[];
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; count = Rc::new(RefCell::new(&lt;span dir="ltr"&gt;0u32&lt;/span&gt;));
+
+    &lt;span dir="ltr"&gt;for&lt;/span&gt; filename &lt;span dir="ltr"&gt;in&lt;/span&gt; args {
+        &lt;span dir="ltr"&gt;let&lt;/span&gt; count = count.clone();
+        tasks.push(tokio::spawn(async {
+            &lt;span dir="ltr"&gt;let&lt;/span&gt; file = tokio::fs::File::open(filename).await?;
+            &lt;span dir="ltr"&gt;let&lt;/span&gt; file = io::BufReader::new(file);
+            &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; lines = file.lines();
+            &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; local_count = &lt;span dir="ltr"&gt;0u32&lt;/span&gt;;
+            &lt;span dir="ltr"&gt;while&lt;/span&gt; &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;Some&lt;/span&gt;(_) = lines.next_line().await? {
+                local_count += &lt;span dir="ltr"&gt;1&lt;/span&gt;;
+            }
+
+            *count.borrow_mut() += local_count;
+            &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(()) &lt;span dir="ltr"&gt;as&lt;/span&gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt;
+        }));
+    }
+
+    &lt;span dir="ltr"&gt;for&lt;/span&gt; task &lt;span dir="ltr"&gt;in&lt;/span&gt; tasks {
+        task.await??;
+    }
+
+    &lt;span dir="ltr"&gt;println!&lt;/span&gt;(&lt;span dir="ltr"&gt;"Total lines: {}"&lt;/span&gt;, count.borrow());
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;You get an error:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;error[E0277]: `std::rc::Rc&amp;lt;std::cell::RefCell&amp;lt;u32&amp;gt;&amp;gt;` cannot be shared between threads safely
+  --&amp;gt; src/main.rs:15:20
+   |
+15 |         tasks.push(tokio::spawn(async {
+   |                    ^^^^^^^^^^^^ `std::rc::Rc&amp;lt;std::cell::RefCell&amp;lt;u32&amp;gt;&amp;gt;` cannot be shared between threads safely
+   |
+  ::: /Users/michael/.cargo/registry/src/github.com-1ecc6299db9ec823/tokio-0.2.2/src/task/spawn.rs:49:17
+   |
+49 |     T: Future + Send + 'static,
+   |                 ---- required by this bound in `tokio::task::spawn::spawn`
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Tasks can be scheduled to multiple different threads. Therefore, your &lt;code dir="ltr"&gt;Future&lt;/code&gt; must be &lt;code dir="ltr"&gt;Send&lt;/code&gt;. And &lt;code dir="ltr"&gt;Rc&amp;lt;RefCell&amp;lt;u32&amp;gt;&amp;gt;&lt;/code&gt; is definitely &lt;code dir="ltr"&gt;!Send&lt;/code&gt;. However, in our use case, using multiple OS threads is unlikely to speed up our program; we’re going to be doing lots of blocking I/O. It would be nice if we could insist on spawning all our tasks on the same OS thread and avoid the need for &lt;code dir="ltr"&gt;Send&lt;/code&gt;. And sure enough, Tokio provides such a function: &lt;code dir="ltr"&gt;tokio::task::spawn_local&lt;/code&gt;. Using it (and adding back in &lt;code dir="ltr"&gt;async move&lt;/code&gt; instead of &lt;code dir="ltr"&gt;async&lt;/code&gt;), our program compiles, but breaks at runtime:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;thread 'main' panicked at '`spawn_local` called from outside of a local::LocalSet!', src/libcore/option.rs:1190:5
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Uh-oh! Now I’m personally not a big fan of this detect-it-at-runtime stuff, but the concept is simple enough: if you want to spawn onto the current thread, you need to set up your runtime to support that. And the way we do that is with &lt;a href="https://docs.rs/tokio/0.2.2/tokio/task/struct.LocalSet.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;LocalSet&lt;/code&gt;&lt;/a&gt;. In order to use this, you’ll need to ditch the &lt;code dir="ltr"&gt;#[tokio::main]&lt;/code&gt; attribute.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;EXERCISE 8&lt;/strong&gt; Follow the documentation for &lt;code dir="ltr"&gt;LocalSet&lt;/code&gt; to make the program above work with &lt;code dir="ltr"&gt;Rc&amp;lt;RefCell&amp;lt;u32&amp;gt;&amp;gt;&lt;/code&gt;.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p dir="ltr"&gt;That lesson felt short. Definitely compared to the previous Tokio lesson which seemed to go on forever. I think this is a testament to how easy to use the new &lt;code dir="ltr"&gt;async/&lt;/code&gt;.await` syntax is.&lt;/p&gt;&lt;p dir="ltr"&gt;There’s obviously a lot more that can be covered in asynchronous programming, but hopefully this establishes the largest foundations you need to understand to work with the &lt;code dir="ltr"&gt;async&lt;/code&gt;/&lt;code dir="ltr"&gt;.await&lt;/code&gt; syntax and the Tokio library itself.&lt;/p&gt;&lt;p&gt;If we have future lessons, I believe they’ll cover additional libraries like Hyper as they move over to Tokio 0.2, as well as specific use cases people raise. If you want something covered, mention it to me on Twitter or in the comments below.&lt;/p&gt;&lt;h2&gt;Solutions&lt;/h2&gt;&lt;h3&gt;Solution 1&lt;/h3&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io;
+
+&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; stdin = io::stdin();
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout = io::stdout();
+    io::copy(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdin, &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout).await?;
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Solution 2&lt;/h3&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::process::Command;
+
+&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
+    &lt;span dir="ltr"&gt;for&lt;/span&gt; _ &lt;span dir="ltr"&gt;in&lt;/span&gt; &lt;span dir="ltr"&gt;1&lt;/span&gt;..=&lt;span dir="ltr"&gt;10&lt;/span&gt; {
+        Command::new(&lt;span dir="ltr"&gt;"echo"&lt;/span&gt;).arg(&lt;span dir="ltr"&gt;"Hello, world!"&lt;/span&gt;).spawn()?.await?;
+    }
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Solution 3&lt;/h3&gt;&lt;p dir="ltr"&gt;Since the &lt;code dir="ltr"&gt;loop&lt;/code&gt; will either run forever or be short circuited by an error, any code following &lt;code dir="ltr"&gt;loop&lt;/code&gt; will never actually be called. Therefore, code placed there will generate a warning.&lt;/p&gt;&lt;h3&gt;Solution 4&lt;/h3&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; std::time::Duration;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::process::Command;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::{io, task, time};
+
+&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; dating = task::spawn(dating());
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; copying = task::spawn(copying());
+
+    dating.await??;
+    copying.await??;
+
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
+}
+
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;dating&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; interval = time::interval(Duration::from_secs(&lt;span dir="ltr"&gt;1&lt;/span&gt;));
+    &lt;span dir="ltr"&gt;loop&lt;/span&gt; {
+        interval.tick().await;
+        Command::new(&lt;span dir="ltr"&gt;"date"&lt;/span&gt;).spawn()?.await?;
+    }
+}
+
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;copying&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; stdin = io::stdin();
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout = io::stdout();
+    io::copy(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdin, &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout).await?;
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Solution 5&lt;/h3&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;dating&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
+    &lt;span dir="ltr"&gt;loop&lt;/span&gt; {
+        task::spawn_blocking(&lt;span dir="ltr"&gt;||&lt;/span&gt; { std::thread::sleep(Duration::from_secs(&lt;span dir="ltr"&gt;1&lt;/span&gt;)) }).await?;
+        Command::new(&lt;span dir="ltr"&gt;"date"&lt;/span&gt;).spawn()?.await?;
+    }
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Solution 6&lt;/h3&gt;&lt;p dir="ltr"&gt;The simplest tweak is to wrap the &lt;code dir="ltr"&gt;echo&lt;/code&gt; call with &lt;code dir="ltr"&gt;tokio::spawn&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;loop&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; (socket, _) = listener.accept().await?;
+    tokio::spawn(echo(socket));
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;There is a downside to this worth noting, however: we’re ignoring the errors produced by the spawned tasks. Likely the best behavior in this case is to handle the errors inside the spawned task:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; io::&lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;()&amp;gt; {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; listener = TcpListener::bind(&lt;span dir="ltr"&gt;"127.0.0.1:8080"&lt;/span&gt;).await?;
+
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; counter = &lt;span dir="ltr"&gt;1u32&lt;/span&gt;;
+    &lt;span dir="ltr"&gt;loop&lt;/span&gt; {
+        &lt;span dir="ltr"&gt;let&lt;/span&gt; (socket, _) = listener.accept().await?;
+        &lt;span dir="ltr"&gt;println!&lt;/span&gt;(&lt;span dir="ltr"&gt;"Accepted connection #{}"&lt;/span&gt;, counter);
+        tokio::spawn(async &lt;span dir="ltr"&gt;move&lt;/span&gt; {
+            &lt;span dir="ltr"&gt;match&lt;/span&gt; echo(socket).await {
+                &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(()) =&amp;gt; &lt;span dir="ltr"&gt;println!&lt;/span&gt;(&lt;span dir="ltr"&gt;"Connection #{} completed successfully"&lt;/span&gt;, counter),
+                &lt;span dir="ltr"&gt;Err&lt;/span&gt;(e) =&amp;gt; &lt;span dir="ltr"&gt;println!&lt;/span&gt;(&lt;span dir="ltr"&gt;"Connection #{} errored: {:?}"&lt;/span&gt;, counter, e),
+            }
+        });
+        counter += &lt;span dir="ltr"&gt;1&lt;/span&gt;;
+    }
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Exericse 7&lt;/h3&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::spawn;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::net::TcpStream;
+
+&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; io::&lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;()&amp;gt; {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; stream = TcpStream::connect(&lt;span dir="ltr"&gt;"127.0.0.1:8080"&lt;/span&gt;).await?;
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; (&lt;span dir="ltr"&gt;mut&lt;/span&gt; recv, &lt;span dir="ltr"&gt;mut&lt;/span&gt; send) = io::split(stream);
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; stdin = io::stdin();
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout = io::stdout();
+
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; send = spawn(async &lt;span dir="ltr"&gt;move&lt;/span&gt; {
+        io::copy(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdin, &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; send).await
+    });
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; recv = spawn(async &lt;span dir="ltr"&gt;move&lt;/span&gt; {
+        io::copy(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; recv, &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout).await
+    });
+
+    send.await??;
+    recv.await??;
+
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;Solution 8&lt;/h2&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::prelude::*;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io::AsyncBufReadExt;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; std::rc::Rc;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; std::cell::RefCell;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; rt = tokio::runtime::Runtime::new()?;
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; local = tokio::task::LocalSet::new();
+    local.block_on(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; rt, main_inner())
+}
+
+async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main_inner&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; args = std::env::args();
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; _me = args.next(); &lt;span dir="ltr"&gt;// ignore command name&lt;/span&gt;
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; tasks = &lt;span dir="ltr"&gt;vec!&lt;/span&gt;[];
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; count = Rc::new(RefCell::new(&lt;span dir="ltr"&gt;0u32&lt;/span&gt;));
+
+    &lt;span dir="ltr"&gt;for&lt;/span&gt; filename &lt;span dir="ltr"&gt;in&lt;/span&gt; args {
+        &lt;span dir="ltr"&gt;let&lt;/span&gt; count = count.clone();
+        tasks.push(tokio::task::spawn_local(async &lt;span dir="ltr"&gt;move&lt;/span&gt; {
+            &lt;span dir="ltr"&gt;let&lt;/span&gt; file = tokio::fs::File::open(filename).await?;
+            &lt;span dir="ltr"&gt;let&lt;/span&gt; file = io::BufReader::new(file);
+            &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; lines = file.lines();
+            &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; local_count = &lt;span dir="ltr"&gt;0u32&lt;/span&gt;;
+            &lt;span dir="ltr"&gt;while&lt;/span&gt; &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;Some&lt;/span&gt;(_) = lines.next_line().await? {
+                local_count += &lt;span dir="ltr"&gt;1&lt;/span&gt;;
+            }
+
+            *count.borrow_mut() += local_count;
+            &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(()) &lt;span dir="ltr"&gt;as&lt;/span&gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt;
+        }));
+    }
+
+    &lt;span dir="ltr"&gt;for&lt;/span&gt; task &lt;span dir="ltr"&gt;in&lt;/span&gt; tasks {
+        task.await??;
+    }
+
+    &lt;span dir="ltr"&gt;println!&lt;/span&gt;(&lt;span dir="ltr"&gt;"Total lines: {}"&lt;/span&gt;, count.borrow());
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
+}
+&lt;/code&gt;&lt;/PRE&gt;</description><pubDate>Thu, 05 Dec 2019 07:02:16 -0600</pubDate></item><item><title>Authentication vulnerabilities in OpenBSD</title><link>https://lobste.rs/s/bufolq</link><description>&lt;PRE&gt;Date: Wed, 4 Dec 2019 20:49:22 +0000
 From: Qualys Security Advisory &amp;lt;qsa@...lys.com&amp;gt;
 To: "oss-security@...ts.openwall.com" &amp;lt;oss-security@...ts.openwall.com&amp;gt;
 Subject: Authentication vulnerabilities in OpenBSD
@@ -623,424 +1040,7 @@ Your e-mail address:
 
 
 
-&lt;/form&gt;</description><pubDate>Wed, 04 Dec 2019 14:57:38 -0600</pubDate></item><item><title>Tokio 0.2 - Rust Crash Course lesson 9</title><link>https://lobste.rs/s/jabva7</link><description>&lt;UL&gt;&lt;LI&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;In the &lt;a href="https://www.snoyman.com/blog/2019/12/rust-crash-course-08-down-dirty-future" dir="ltr"&gt;previous lesson in the crash course&lt;/a&gt;, we covered the new &lt;code dir="ltr"&gt;async/.await&lt;/code&gt; syntax stabilized in Rust 1.39, and the &lt;code dir="ltr"&gt;Future&lt;/code&gt; trait which lives underneath it. This information greatly supercedes the now-defunct lesson 7 from last year, which covered the older &lt;code dir="ltr"&gt;Future&lt;/code&gt; approach.&lt;/p&gt;&lt;p&gt;Now it’s time to update the second half of lesson 7, and teach the hot-off-the-presses Tokio 0.2 release. For those not familiar with it, let me quote the project’s overview:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Tokio is an event-driven, non-blocking I/O platform for writing asynchronous applications with the Rust programming language.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;If you want to write an efficient, concurrent network service in Rust, you’ll want to use something like Tokio. That’s not to say that this is the only use case for Tokio; you can do lots of great things with an event driven scheduler outside of network services. It’s also not to say that Tokio is the only solution; the &lt;a href="https://async.rs/" dir="ltr"&gt;&lt;code dir="ltr"&gt;async-std&lt;/code&gt;&lt;/a&gt; library provides similar functionality.&lt;/p&gt;&lt;p&gt;However, network services are likely the most common domain agitating for a non-blocking I/O system. And Tokio is the most popular and established of these systems today. So this combination is where we’re going to get started.&lt;/p&gt;&lt;p dir="ltr"&gt;And as a side note, if you have some other topic you’d like me to cover around this, please &lt;a href="https://twitter.com/snoyberg" dir="ltr"&gt;let me know on Twitter&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;&lt;em&gt;Exercise solutions will be included at the end of the blog post. Yes, I keep changing the rules, sue me.&lt;/em&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;This post is part of a series based on &lt;a href="https://tech.fpcomplete.com/rust" dir="ltr"&gt;teaching Rust at FP
-Complete&lt;/a&gt;. If you’re reading this post outside
-of the blog, you can find links to all posts in the series &lt;a href="https://www.snoyman.com/blog/2018/10/introducing-rust-crash-course" dir="ltr"&gt;at the top of the
-introduction
-post&lt;/a&gt;. You
-can also &lt;a href="https://www.snoyman.com/feed/rust-crash-course" dir="ltr"&gt;subscribe to the RSS
-feed&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;Hello Tokio!&lt;/h2&gt;&lt;p&gt;Let’s kick this off. Go ahead and create a new Rust project for experimenting:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ cargo new --bin usetokio
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;If you want to make sure you’re using the same compiler version as me, set up your &lt;code dir="ltr"&gt;rust-toolchain&lt;/code&gt; correctly:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ echo 1.39.0 &amp;gt; rust-toolchain
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;And then set up Tokio as a dependency. For simplicity, we’ll install all the bells and whistles. In your &lt;code dir="ltr"&gt;Cargo.toml&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;[dependencies]&lt;/span&gt;
-&lt;span dir="ltr"&gt;tokio&lt;/span&gt; = { version = &lt;span dir="ltr"&gt;"0.2"&lt;/span&gt;, features = [&lt;span dir="ltr"&gt;"full"&lt;/span&gt;] }
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;PROTIP&lt;/strong&gt; You can run &lt;code dir="ltr"&gt;cargo build&lt;/code&gt; now to kick off the download and build of crates while you keep reading…&lt;/p&gt;&lt;p dir="ltr"&gt;And now we’re going to write an asynchronous hello world application. Type this into your &lt;code dir="ltr"&gt;src/main.rs&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io;
-
-&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout = io::stdout();
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; hello: &amp;amp;[&lt;span dir="ltr"&gt;u8&lt;/span&gt;] = &lt;span dir="ltr"&gt;b"Hello, world!\n"&lt;/span&gt;;
-    io::copy(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; hello, &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout).await?;
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;NOTE&lt;/strong&gt; I specifically said “type this in” instead of “copy and paste.” For getting comfortable with this stuff, I recommend manually typing in the code.&lt;/p&gt;&lt;p&gt;A lot of this should look familiar from our previous lesson. To recap:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Since we’ll be &lt;code dir="ltr"&gt;await&lt;/code&gt;ing something and generating a &lt;code dir="ltr"&gt;Future&lt;/code&gt;, our &lt;code dir="ltr"&gt;main&lt;/code&gt; function is &lt;code dir="ltr"&gt;async&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;Since &lt;code dir="ltr"&gt;main&lt;/code&gt; is &lt;code dir="ltr"&gt;async&lt;/code&gt;, we need to use an executor to run it. That’s why we use the &lt;code dir="ltr"&gt;#[tokio::main]&lt;/code&gt; attribute.&lt;/LI&gt;&lt;LI&gt;Since performing I/O can fail, we return a &lt;code dir="ltr"&gt;Result&lt;/code&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;The first really new thing since last lesson is this little bit of syntax:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;.await?
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;I mentioned it last time, but now we’re seeing it in real life. This is just the combination of our two pieces of prior art: &lt;code dir="ltr"&gt;.await&lt;/code&gt; for chaining together &lt;code dir="ltr"&gt;Future&lt;/code&gt;s, and &lt;code dir="ltr"&gt;?&lt;/code&gt; for error handling. The fact that these work together so nicely is really awesome. I’ll probably mention this a few more times, because I love it that much.&lt;/p&gt;&lt;p dir="ltr"&gt;The next thing to note is that we use &lt;code dir="ltr"&gt;tokio::io::stdout()&lt;/code&gt; to get access to some value that lets us interact with standard output. If you’re familiar with it, this looks really similar to &lt;code dir="ltr"&gt;std::io::stdout()&lt;/code&gt;. That’s by design: a large part of the &lt;code dir="ltr"&gt;tokio&lt;/code&gt; API is simply async-ifying things from &lt;code dir="ltr"&gt;std&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;And finally, we can look at the actual &lt;code dir="ltr"&gt;tokio::io::copy&lt;/code&gt; call. As you may have guessed, and as stated in the &lt;a href="https://docs.rs/tokio/0.2.2/tokio/io/fn.copy.html" dir="ltr"&gt;API docs&lt;/a&gt;:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;This is an asynchronous version of &lt;a href="https://doc.rust-lang.org/std/io/fn.copy.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;std::io::copy&lt;/code&gt;&lt;/a&gt;.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;However, instead of working with the &lt;code dir="ltr"&gt;Read&lt;/code&gt; and &lt;code dir="ltr"&gt;Write&lt;/code&gt; traits, this works with their async cousins: &lt;code dir="ltr"&gt;AsyncRead&lt;/code&gt; and &lt;code dir="ltr"&gt;AsyncWrite&lt;/code&gt;. A byte slice (&lt;code dir="ltr"&gt;&amp;amp;[u8]&lt;/code&gt;) is a valid &lt;code dir="ltr"&gt;AsyncRead&lt;/code&gt;, so we’re able to store our input there. And as you may have guessed, &lt;code dir="ltr"&gt;Stdout&lt;/code&gt; is an &lt;code dir="ltr"&gt;AsyncWrite&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;EXERCISE 1&lt;/strong&gt; Modify this application so that instead of printing “Hello, world!”, it copies the entire contents of standard input to standard output.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;NOTE&lt;/strong&gt; You can simplify this code using &lt;code dir="ltr"&gt;stdout.write_all&lt;/code&gt; after &lt;code dir="ltr"&gt;use&lt;/code&gt;ing &lt;code dir="ltr"&gt;tokio::io::AsyncWriteExt&lt;/code&gt;, but we’ll stick to &lt;code dir="ltr"&gt;tokio::io::copy&lt;/code&gt;, since we’ll be using it throughout. But if you’re curious:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io::{&lt;span dir="ltr"&gt;self&lt;/span&gt;, AsyncWriteExt};
-
-&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout = io::stdout();
-    stdout.write_all(&lt;span dir="ltr"&gt;b"Hello, world!\n"&lt;/span&gt;).await?;
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;Spawning processes&lt;/h2&gt;&lt;p dir="ltr"&gt;Tokio provides a &lt;code dir="ltr"&gt;tokio::process&lt;/code&gt; module which resembles the &lt;code dir="ltr"&gt;std::process&lt;/code&gt; module. We can use this to implement Hello World once again:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::process::Command;
-
-&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
-    Command::new(&lt;span dir="ltr"&gt;"echo"&lt;/span&gt;).arg(&lt;span dir="ltr"&gt;"Hello, world!"&lt;/span&gt;).spawn()?.await?;
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Notice how the &lt;code dir="ltr"&gt;?&lt;/code&gt; and &lt;code dir="ltr"&gt;.await&lt;/code&gt; bits can go in whatever order they are needed. You can read this line as:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Create a new &lt;code dir="ltr"&gt;Command&lt;/code&gt; to run &lt;code dir="ltr"&gt;echo&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Give it the argument &lt;code dir="ltr"&gt;"Hello, world!"&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Spawn this, which may fail&lt;/LI&gt;&lt;LI&gt;Using the first &lt;code dir="ltr"&gt;?&lt;/code&gt;: if it fails, return the error. Otherwise, return a &lt;code dir="ltr"&gt;Future&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Using the &lt;code dir="ltr"&gt;.await&lt;/code&gt;: wait until that &lt;code dir="ltr"&gt;Future&lt;/code&gt; completes, and capture its &lt;code dir="ltr"&gt;Result&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Using the second &lt;code dir="ltr"&gt;?&lt;/code&gt;: if that &lt;code dir="ltr"&gt;Result&lt;/code&gt; is &lt;code dir="ltr"&gt;Err&lt;/code&gt;, return that error.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Pretty nice for a single line!&lt;/p&gt;&lt;p dir="ltr"&gt;One of the great advantages of &lt;code dir="ltr"&gt;async&lt;/code&gt;/&lt;code dir="ltr"&gt;.await&lt;/code&gt; versus the previous way of doing async with callbacks is how easily it works with looping.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;EXERCISE 2&lt;/strong&gt; Extend this example so that it prints &lt;code dir="ltr"&gt;Hello, world!&lt;/code&gt; 10 times.&lt;/p&gt;&lt;h2&gt;Take a break&lt;/h2&gt;&lt;p dir="ltr"&gt;So far we’ve only really done a single bit of &lt;code dir="ltr"&gt;.await&lt;/code&gt;ing. But it’s easy enough to &lt;code dir="ltr"&gt;.await&lt;/code&gt; on multiple things. Let’s use &lt;a href="https://docs.rs/tokio/0.2.2/tokio/time/fn.delay_for.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;delay_for&lt;/code&gt;&lt;/a&gt; to pause for a bit.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::time;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::process::Command;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; std::time::Duration;
-
-&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
-    Command::new(&lt;span dir="ltr"&gt;"date"&lt;/span&gt;).spawn()?.await?;
-    time::delay_for(Duration::from_secs(&lt;span dir="ltr"&gt;1&lt;/span&gt;)).await;
-    Command::new(&lt;span dir="ltr"&gt;"date"&lt;/span&gt;).spawn()?.await?;
-    time::delay_for(Duration::from_secs(&lt;span dir="ltr"&gt;1&lt;/span&gt;)).await;
-    Command::new(&lt;span dir="ltr"&gt;"date"&lt;/span&gt;).spawn()?.await?;
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;We can also use the &lt;code dir="ltr"&gt;tokio::time::interval&lt;/code&gt; function to create a stream of “ticks” for each time a certain amount of time has passed. For example, this program will keep calling &lt;code dir="ltr"&gt;date&lt;/code&gt; once per second until it is killed:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::time;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::process::Command;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; std::time::Duration;
-
-&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; interval = time::interval(Duration::from_secs(&lt;span dir="ltr"&gt;1&lt;/span&gt;));
-    &lt;span dir="ltr"&gt;loop&lt;/span&gt; {
-        interval.tick().await;
-        Command::new(&lt;span dir="ltr"&gt;"date"&lt;/span&gt;).spawn()?.await?;
-    }
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;EXERCISE 3&lt;/strong&gt; Why isn’t there a &lt;code dir="ltr"&gt;Ok(())&lt;/code&gt; after the &lt;code dir="ltr"&gt;loop&lt;/code&gt;?&lt;/p&gt;&lt;h2&gt;Time to spawn&lt;/h2&gt;&lt;p&gt;This is all well and good, but we’re not really taking advantage of asynchronous programming at all. Let’s fix that! We’ve seen two different interesting programs:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Infinitely pausing 1 seconds and calling &lt;code dir="ltr"&gt;date&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Copying all input from &lt;code dir="ltr"&gt;stdin&lt;/code&gt; to &lt;code dir="ltr"&gt;stdout&lt;/code&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;It’s time to introduce &lt;code dir="ltr"&gt;spawn&lt;/code&gt; so that we can combine these two into one program. First, let’s demonstrate a trivial usage of &lt;code dir="ltr"&gt;spawn&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; std::time::Duration;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::process::Command;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::task;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::time;
-
-&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
-    task::spawn(dating()).await??;
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
-}
-
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;dating&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; interval = time::interval(Duration::from_secs(&lt;span dir="ltr"&gt;1&lt;/span&gt;));
-    &lt;span dir="ltr"&gt;loop&lt;/span&gt; {
-        interval.tick().await;
-        Command::new(&lt;span dir="ltr"&gt;"date"&lt;/span&gt;).spawn()?.await?;
-    }
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;You may be wondering: what’s up with that &lt;code dir="ltr"&gt;??&lt;/code&gt; operator? Is that some special super-error handler? No, it’s just the normal error handling &lt;code dir="ltr"&gt;?&lt;/code&gt; applied twice. Let’s look at some type signatures to help us out here:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;pub&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;spawn&lt;/span&gt;&lt;/span&gt;&amp;lt;T&amp;gt;(task: T) -&amp;gt; JoinHandle&amp;lt;T::Output&amp;gt;;
-
-&lt;span dir="ltr"&gt;impl&lt;/span&gt;&amp;lt;T&amp;gt; Future &lt;span dir="ltr"&gt;for&lt;/span&gt; JoinHandle&amp;lt;T&amp;gt; {
-    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;Output&lt;/span&gt;&lt;/span&gt; = &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;T, JoinError&amp;gt;;
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Calling &lt;code dir="ltr"&gt;spawn&lt;/code&gt; gives us back a &lt;code dir="ltr"&gt;JoinHandle&amp;lt;T::Output&amp;gt;&lt;/code&gt;. In our case, the &lt;code dir="ltr"&gt;Future&lt;/code&gt; we provide as input is &lt;code dir="ltr"&gt;dating()&lt;/code&gt;, which has an output of type &lt;code dir="ltr"&gt;Result&amp;lt;(), std::io::Error&amp;gt;&lt;/code&gt;. So that means the type of &lt;code dir="ltr"&gt;take::spawn(dating())&lt;/code&gt; is &lt;code dir="ltr"&gt;JoinHandle&amp;lt;Result&amp;lt;(), std::io::Error&amp;gt;&amp;gt;&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;We also see that &lt;code dir="ltr"&gt;JoinHandle&lt;/code&gt; implements &lt;code dir="ltr"&gt;Future&lt;/code&gt;. So when we apply &lt;code dir="ltr"&gt;.apply&lt;/code&gt; to this value, we end up with whatever that &lt;code dir="ltr"&gt;type Output = Result&amp;lt;T, JoinError&amp;gt;&lt;/code&gt; thing is. Since we know that &lt;code dir="ltr"&gt;T&lt;/code&gt; is &lt;code dir="ltr"&gt;Result&amp;lt;(), std::io::Error&amp;gt;&lt;/code&gt;, this means we end up with &lt;code dir="ltr"&gt;Result&amp;lt;Result&amp;lt;(), std::io::Error&amp;gt;, JoinError&amp;gt;&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;The first &lt;code dir="ltr"&gt;?&lt;/code&gt; deals with the outer &lt;code dir="ltr"&gt;Result&lt;/code&gt;, exiting with the &lt;code dir="ltr"&gt;JoinError&lt;/code&gt; on an &lt;code dir="ltr"&gt;Err&lt;/code&gt;, and giving us a &lt;code dir="ltr"&gt;Result&amp;lt;(), std::io::Error&amp;gt;&lt;/code&gt; value on &lt;code dir="ltr"&gt;Ok&lt;/code&gt;. The second &lt;code dir="ltr"&gt;?&lt;/code&gt; deals with the &lt;code dir="ltr"&gt;std::io::Error&lt;/code&gt;, giving us a &lt;code dir="ltr"&gt;()&lt;/code&gt; on &lt;code dir="ltr"&gt;Ok&lt;/code&gt;. Whew!&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;EXERCISE 4&lt;/strong&gt; Now that we’ve seen &lt;code dir="ltr"&gt;spawn&lt;/code&gt;, you should modify the program so that it calls both &lt;code dir="ltr"&gt;date&lt;/code&gt; in a loop, and copies &lt;code dir="ltr"&gt;stdin&lt;/code&gt; to &lt;code dir="ltr"&gt;stdout&lt;/code&gt;.&lt;/p&gt;&lt;h2&gt;Synchronous code&lt;/h2&gt;&lt;p dir="ltr"&gt;You may not have the luxury of interacting exclusively with &lt;code dir="ltr"&gt;async&lt;/code&gt;-friendly code. Maybe you have some really nice library you want to leverage, but it performs blocking calls internally. Fortunately, Tokio’s got you covered with the &lt;a href="https://docs.rs/tokio/0.2.2/tokio/task/fn.spawn_blocking.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;spawn_blocking&lt;/code&gt;&lt;/a&gt; function. Since the docs are so perfect, let me quote them:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;The &lt;code dir="ltr"&gt;task::spawn_blocking&lt;/code&gt; function is similar to the &lt;code dir="ltr"&gt;task::spawn&lt;/code&gt; function discussed in the previous section, but rather than spawning an &lt;code dir="ltr"&gt;non-blocking&lt;/code&gt; future on the Tokio runtime, it instead spawns a &lt;code dir="ltr"&gt;blocking&lt;/code&gt; function on a dedicated thread pool for blocking tasks.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;EXERCISE 5&lt;/strong&gt; Rewrite the &lt;code dir="ltr"&gt;dating()&lt;/code&gt; function to use &lt;code dir="ltr"&gt;spawn_blocking&lt;/code&gt; and &lt;code dir="ltr"&gt;std::thread::sleep&lt;/code&gt; so that it calls &lt;code dir="ltr"&gt;date&lt;/code&gt; approximately once per second.&lt;/p&gt;&lt;h2&gt;Let’s network!&lt;/h2&gt;&lt;p&gt;I could keep stepping through the other cools functions in the Tokio library. I encourage you to poke around at them yourself. But I promised some networking, and by golly, I’m gonna deliver!&lt;/p&gt;&lt;p dir="ltr"&gt;I’m going to slightly extend the example from the &lt;a href="https://docs.rs/tokio/0.2.2/tokio/net/struct.TcpListener.html#examples" dir="ltr"&gt;&lt;code dir="ltr"&gt;TcpListener&lt;/code&gt; docs&lt;/a&gt; to (1) make it compile and (2) implement an echo server. This program has a pretty major flaw in it though, I recommend trying to find it.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io::*;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::net::{TcpListener, TcpStream};
-
-&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; io::&lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;()&amp;gt; {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; listener = TcpListener::bind(&lt;span dir="ltr"&gt;"127.0.0.1:8080"&lt;/span&gt;).await?;
-
-    &lt;span dir="ltr"&gt;loop&lt;/span&gt; {
-        &lt;span dir="ltr"&gt;let&lt;/span&gt; (socket, _) = listener.accept().await?;
-        echo(socket).await?;
-    }
-}
-
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;echo&lt;/span&gt;&lt;/span&gt;(socket: TcpStream) -&amp;gt; io::&lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;()&amp;gt; {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; (&lt;span dir="ltr"&gt;mut&lt;/span&gt; recv, &lt;span dir="ltr"&gt;mut&lt;/span&gt; send) = io::split(socket);
-    io::copy(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; recv, &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; send).await?;
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;We use &lt;code dir="ltr"&gt;TcpListener&lt;/code&gt; to bind a socket. The binding itself is asynchronous, so we use &lt;code dir="ltr"&gt;.await&lt;/code&gt; to wait for the listening socket to be available. And we use &lt;code dir="ltr"&gt;?&lt;/code&gt; to deal with any errors while binding the listening socket.&lt;/p&gt;&lt;p dir="ltr"&gt;Next, we loop forever. Inside the loop, we accept new connections, using &lt;code dir="ltr"&gt;.await?&lt;/code&gt; like before. We capture the &lt;code dir="ltr"&gt;socket&lt;/code&gt; (ignoring the address as the second part of the tuple). Then we call our &lt;code dir="ltr"&gt;echo&lt;/code&gt; function and &lt;code dir="ltr"&gt;.await&lt;/code&gt; it.&lt;/p&gt;&lt;p dir="ltr"&gt;Within &lt;code dir="ltr"&gt;echo&lt;/code&gt;, we use &lt;code dir="ltr"&gt;tokio::io::split&lt;/code&gt; to split up our &lt;code dir="ltr"&gt;TcpStream&lt;/code&gt; into its constituent read and write halves, and then pass those into &lt;code dir="ltr"&gt;tokio::io::copy&lt;/code&gt;, as we’ve done before.&lt;/p&gt;&lt;p dir="ltr"&gt;Awesome! Where’s the bug? Let me ask you a question: what &lt;em dir="ltr"&gt;should&lt;/em&gt; the behavior be if a second connection comes in while the first connection is still active? Ideally, it would be handled. However, our program has just one task. And that task &lt;code dir="ltr"&gt;.await&lt;/code&gt;s on each call to &lt;code dir="ltr"&gt;echo&lt;/code&gt;. So our second connection won’t be serviced until the first one closes.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;EXERCISE 6&lt;/strong&gt; Modify the program above so that it handles concurrent connections correctly.&lt;/p&gt;&lt;h2&gt;TCP client and ownership&lt;/h2&gt;&lt;p dir="ltr"&gt;Let’s write a poor man’s HTTP client. It will establish a connection to a hard-coded server, copy all of &lt;code dir="ltr"&gt;stdin&lt;/code&gt; to the server, and then copy all data from the server to &lt;code dir="ltr"&gt;stdout&lt;/code&gt;. To use this, you’ll manually type in the HTTP request and then hit &lt;code dir="ltr"&gt;Ctrl-D&lt;/code&gt; for end-of-file.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::net::TcpStream;
-
-&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; io::&lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;()&amp;gt; {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; stream = TcpStream::connect(&lt;span dir="ltr"&gt;"127.0.0.1:8080"&lt;/span&gt;).await?;
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; (&lt;span dir="ltr"&gt;mut&lt;/span&gt; recv, &lt;span dir="ltr"&gt;mut&lt;/span&gt; send) = io::split(stream);
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; stdin = io::stdin();
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout = io::stdout();
-
-    io::copy(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdin, &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; send).await?;
-    io::copy(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; recv, &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout).await?;
-
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;That’s all well and good, but it’s limited. It only handles half-duplex protocols like HTTP, and doesn’t actually support keep-alive in any way. We’d like to use &lt;code dir="ltr"&gt;spawn&lt;/code&gt; to run the two &lt;code dir="ltr"&gt;copy&lt;/code&gt;s in different tasks. Seems easy enough:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;let&lt;/span&gt; send = spawn(io::copy(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdin, &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; send));
-&lt;span dir="ltr"&gt;let&lt;/span&gt; recv = spawn(io::copy(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; recv, &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout));
-
-send.await??;
-recv.await??;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Unfortunately, this doesn’t compile. We get four nearly-identical error messages. Let’s look at the first:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;error[E0597]: `stdin` does not live long enough
-  --&amp;gt; src/main.rs:12:31
-   |
-12 |     let send = spawn(io::copy(&amp;amp;mut stdin, &amp;amp;mut send));
-   |                      ---------^^^^^^^^^^------------
-   |                      |        |
-   |                      |        borrowed value does not live long enough
-   |                      argument requires that `stdin` is borrowed for `'static`
-...
-19 | }
-   | - `stdin` dropped here while still borrowed
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Here’s the issue: our &lt;code dir="ltr"&gt;copy&lt;/code&gt; &lt;code dir="ltr"&gt;Future&lt;/code&gt; does not &lt;em dir="ltr"&gt;own&lt;/em&gt; the &lt;code dir="ltr"&gt;stdin&lt;/code&gt; value (or the &lt;code dir="ltr"&gt;send&lt;/code&gt; value, for that matter). Instead, it has a (mutable) reference to it. That value remains in the &lt;code dir="ltr"&gt;main&lt;/code&gt; function’s &lt;code dir="ltr"&gt;Future&lt;/code&gt;. Ignoring error cases, we know that the &lt;code dir="ltr"&gt;main&lt;/code&gt; function will wait for &lt;code dir="ltr"&gt;send&lt;/code&gt; to complete (thanks to &lt;code dir="ltr"&gt;send.await&lt;/code&gt;), and therefore the lifetimes appear to be correct. However, Rust doesn’t recognize this lifetime information. (Also, and I haven’t thought this through completely, I’m fairly certain that &lt;code dir="ltr"&gt;send&lt;/code&gt; may be dropped earlier than the &lt;code dir="ltr"&gt;Future&lt;/code&gt; using it in the case of &lt;code dir="ltr"&gt;panic&lt;/code&gt;s.)&lt;/p&gt;&lt;p dir="ltr"&gt;In order to fix this, we need to convince the compiler to make a &lt;code dir="ltr"&gt;Future&lt;/code&gt; that owns &lt;code dir="ltr"&gt;stdin&lt;/code&gt;. And the easiest way to do that here is to use an &lt;code dir="ltr"&gt;async move&lt;/code&gt; block.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Exercise 7&lt;/strong&gt; Make the code above compile using two &lt;code dir="ltr"&gt;async move&lt;/code&gt; blocks.&lt;/p&gt;&lt;h2 dir="ltr"&gt;Playing with &lt;code dir="ltr"&gt;lines&lt;/code&gt;&lt;/h2&gt;&lt;p&gt;This section will have a series of modifications to a program. I recommend you solve each challenge before looking at the solution. However, unlike the other exercises, I’m going to show the solutions inline since they build on each other.&lt;/p&gt;&lt;p dir="ltr"&gt;Let’s build an async program that counts the number of lines on standard input. You’ll want to use the &lt;a href="https://docs.rs/tokio/0.2.2/tokio/io/trait.AsyncBufReadExt.html#method.lines" dir="ltr"&gt;&lt;code dir="ltr"&gt;lines&lt;/code&gt;&lt;/a&gt; method for this. Read the docs and try to figure out what &lt;code dir="ltr"&gt;use&lt;/code&gt;s and wrappers will be necessary to make the types line up.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::prelude::*;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io::AsyncBufReadExt;
-
-&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; stdin = io::stdin();
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; stdin = io::BufReader::new(stdin);
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; count = &lt;span dir="ltr"&gt;0u32&lt;/span&gt;;
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; lines = stdin.lines();
-    &lt;span dir="ltr"&gt;while&lt;/span&gt; &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;Some&lt;/span&gt;(_) = lines.next_line().await? {
-        count += &lt;span dir="ltr"&gt;1&lt;/span&gt;;
-    }
-    &lt;span dir="ltr"&gt;println!&lt;/span&gt;(&lt;span dir="ltr"&gt;"Lines on stdin: {}"&lt;/span&gt;, count);
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;OK, bumping this up one more level. Instead of standard input, let’s take a list of file names as command line arguments, and count up the total number of lines in all the files. Initially, it’s OK to read the files one at a time. In other words: don’t bother calling &lt;code dir="ltr"&gt;spawn&lt;/code&gt;. Give it a shot, and then come back here:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::prelude::*;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io::AsyncBufReadExt;
-
-&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; args = std::env::args();
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; _me = args.next(); &lt;span dir="ltr"&gt;// ignore command name&lt;/span&gt;
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; count = &lt;span dir="ltr"&gt;0u32&lt;/span&gt;;
-
-    &lt;span dir="ltr"&gt;for&lt;/span&gt; filename &lt;span dir="ltr"&gt;in&lt;/span&gt; args {
-        &lt;span dir="ltr"&gt;let&lt;/span&gt; file = tokio::fs::File::open(filename).await?;
-        &lt;span dir="ltr"&gt;let&lt;/span&gt; file = io::BufReader::new(file);
-        &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; lines = file.lines();
-        &lt;span dir="ltr"&gt;while&lt;/span&gt; &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;Some&lt;/span&gt;(_) = lines.next_line().await? {
-            count += &lt;span dir="ltr"&gt;1&lt;/span&gt;;
-        }
-    }
-
-    &lt;span dir="ltr"&gt;println!&lt;/span&gt;(&lt;span dir="ltr"&gt;"Total lines: {}"&lt;/span&gt;, count);
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;But now it’s time to make this properly asynchronous, and process the files in separate &lt;code dir="ltr"&gt;spawn&lt;/code&gt;ed tasks. In order to make this work, we need to spawn all of the tasks, and then &lt;code dir="ltr"&gt;.await&lt;/code&gt; each of them. I used a &lt;code dir="ltr"&gt;Vec&lt;/code&gt; of &lt;code dir="ltr"&gt;Future&amp;lt;Output=Result&amp;lt;u32, std::io::Error&amp;gt;&amp;gt;&lt;/code&gt;s for this. Give it a shot!&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::prelude::*;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io::AsyncBufReadExt;
-
-&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; args = std::env::args();
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; _me = args.next(); &lt;span dir="ltr"&gt;// ignore command name&lt;/span&gt;
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; tasks = &lt;span dir="ltr"&gt;vec!&lt;/span&gt;[];
-
-    &lt;span dir="ltr"&gt;for&lt;/span&gt; filename &lt;span dir="ltr"&gt;in&lt;/span&gt; args {
-        tasks.push(tokio::spawn(async {
-            &lt;span dir="ltr"&gt;let&lt;/span&gt; file = tokio::fs::File::open(filename).await?;
-            &lt;span dir="ltr"&gt;let&lt;/span&gt; file = io::BufReader::new(file);
-            &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; lines = file.lines();
-            &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; count = &lt;span dir="ltr"&gt;0u32&lt;/span&gt;;
-            &lt;span dir="ltr"&gt;while&lt;/span&gt; &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;Some&lt;/span&gt;(_) = lines.next_line().await? {
-                count += &lt;span dir="ltr"&gt;1&lt;/span&gt;;
-            }
-            &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(count) &lt;span dir="ltr"&gt;as&lt;/span&gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;&lt;span dir="ltr"&gt;u32&lt;/span&gt;, std::io::Error&amp;gt;
-        }));
-    }
-
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; count = &lt;span dir="ltr"&gt;0&lt;/span&gt;;
-    &lt;span dir="ltr"&gt;for&lt;/span&gt; task &lt;span dir="ltr"&gt;in&lt;/span&gt; tasks {
-        count += task.await??;
-    }
-
-    &lt;span dir="ltr"&gt;println!&lt;/span&gt;(&lt;span dir="ltr"&gt;"Total lines: {}"&lt;/span&gt;, count);
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;And finally in this progression: let’s change how we handle the &lt;code dir="ltr"&gt;count&lt;/code&gt;. Instead of &lt;code dir="ltr"&gt;.await&lt;/code&gt;ing the count in the second &lt;code dir="ltr"&gt;for&lt;/code&gt; loop, let’s have each individual task update a shared mutable variable. You should use an &lt;code dir="ltr"&gt;Arc&amp;lt;Mutex&amp;lt;u32&amp;gt;&amp;gt;&lt;/code&gt; for that. You’ll still need to keep a &lt;code dir="ltr"&gt;Vec&lt;/code&gt; of the tasks though to ensure you wait for all files to be read.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::prelude::*;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io::AsyncBufReadExt;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; std::sync::{Arc, Mutex};
-
-&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; args = std::env::args();
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; _me = args.next(); &lt;span dir="ltr"&gt;// ignore command name&lt;/span&gt;
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; tasks = &lt;span dir="ltr"&gt;vec!&lt;/span&gt;[];
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; count = Arc::new(Mutex::new(&lt;span dir="ltr"&gt;0u32&lt;/span&gt;));
-
-    &lt;span dir="ltr"&gt;for&lt;/span&gt; filename &lt;span dir="ltr"&gt;in&lt;/span&gt; args {
-        &lt;span dir="ltr"&gt;let&lt;/span&gt; count = count.clone();
-        tasks.push(tokio::spawn(async &lt;span dir="ltr"&gt;move&lt;/span&gt; {
-            &lt;span dir="ltr"&gt;let&lt;/span&gt; file = tokio::fs::File::open(filename).await?;
-            &lt;span dir="ltr"&gt;let&lt;/span&gt; file = io::BufReader::new(file);
-            &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; lines = file.lines();
-            &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; local_count = &lt;span dir="ltr"&gt;0u32&lt;/span&gt;;
-            &lt;span dir="ltr"&gt;while&lt;/span&gt; &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;Some&lt;/span&gt;(_) = lines.next_line().await? {
-                local_count += &lt;span dir="ltr"&gt;1&lt;/span&gt;;
-            }
-
-            &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; count = count.lock().unwrap();
-            *count += local_count;
-            &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(()) &lt;span dir="ltr"&gt;as&lt;/span&gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt;
-        }));
-    }
-
-    &lt;span dir="ltr"&gt;for&lt;/span&gt; task &lt;span dir="ltr"&gt;in&lt;/span&gt; tasks {
-        task.await??;
-    }
-
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; count = count.lock().unwrap();
-    &lt;span dir="ltr"&gt;println!&lt;/span&gt;(&lt;span dir="ltr"&gt;"Total lines: {}"&lt;/span&gt;, *count);
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;h2 dir="ltr"&gt;LocalSet and &lt;code dir="ltr"&gt;!Send&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;Thanks to &lt;a href="https://twitter.com/xudesheng/status/1201382514415325185?s=20" dir="ltr"&gt;@xudehseng&lt;/a&gt; for the inspiration on this section.&lt;/p&gt;&lt;p dir="ltr"&gt;OK, did that last exercise seem a bit contrived? It was! In my opinion, the previous approach of &lt;code dir="ltr"&gt;.await&lt;/code&gt;ing the counts and summing in the &lt;code dir="ltr"&gt;main&lt;/code&gt; function itself was superior. However, I wanted to teach you something else.&lt;/p&gt;&lt;p dir="ltr"&gt;What happens if you replace the &lt;code dir="ltr"&gt;Arc&amp;lt;Mutex&amp;lt;u32&amp;gt;&amp;gt;&lt;/code&gt; with a &lt;code dir="ltr"&gt;Rc&amp;lt;RefCell&amp;lt;u32&amp;gt;&amp;gt;&lt;/code&gt;? With this code:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::prelude::*;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io::AsyncBufReadExt;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; std::rc::Rc;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; std::cell::RefCell;
-
-&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; args = std::env::args();
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; _me = args.next(); &lt;span dir="ltr"&gt;// ignore command name&lt;/span&gt;
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; tasks = &lt;span dir="ltr"&gt;vec!&lt;/span&gt;[];
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; count = Rc::new(RefCell::new(&lt;span dir="ltr"&gt;0u32&lt;/span&gt;));
-
-    &lt;span dir="ltr"&gt;for&lt;/span&gt; filename &lt;span dir="ltr"&gt;in&lt;/span&gt; args {
-        &lt;span dir="ltr"&gt;let&lt;/span&gt; count = count.clone();
-        tasks.push(tokio::spawn(async {
-            &lt;span dir="ltr"&gt;let&lt;/span&gt; file = tokio::fs::File::open(filename).await?;
-            &lt;span dir="ltr"&gt;let&lt;/span&gt; file = io::BufReader::new(file);
-            &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; lines = file.lines();
-            &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; local_count = &lt;span dir="ltr"&gt;0u32&lt;/span&gt;;
-            &lt;span dir="ltr"&gt;while&lt;/span&gt; &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;Some&lt;/span&gt;(_) = lines.next_line().await? {
-                local_count += &lt;span dir="ltr"&gt;1&lt;/span&gt;;
-            }
-
-            *count.borrow_mut() += local_count;
-            &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(()) &lt;span dir="ltr"&gt;as&lt;/span&gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt;
-        }));
-    }
-
-    &lt;span dir="ltr"&gt;for&lt;/span&gt; task &lt;span dir="ltr"&gt;in&lt;/span&gt; tasks {
-        task.await??;
-    }
-
-    &lt;span dir="ltr"&gt;println!&lt;/span&gt;(&lt;span dir="ltr"&gt;"Total lines: {}"&lt;/span&gt;, count.borrow());
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;You get an error:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;error[E0277]: `std::rc::Rc&amp;lt;std::cell::RefCell&amp;lt;u32&amp;gt;&amp;gt;` cannot be shared between threads safely
-  --&amp;gt; src/main.rs:15:20
-   |
-15 |         tasks.push(tokio::spawn(async {
-   |                    ^^^^^^^^^^^^ `std::rc::Rc&amp;lt;std::cell::RefCell&amp;lt;u32&amp;gt;&amp;gt;` cannot be shared between threads safely
-   |
-  ::: /Users/michael/.cargo/registry/src/github.com-1ecc6299db9ec823/tokio-0.2.2/src/task/spawn.rs:49:17
-   |
-49 |     T: Future + Send + 'static,
-   |                 ---- required by this bound in `tokio::task::spawn::spawn`
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Tasks can be scheduled to multiple different threads. Therefore, your &lt;code dir="ltr"&gt;Future&lt;/code&gt; must be &lt;code dir="ltr"&gt;Send&lt;/code&gt;. And &lt;code dir="ltr"&gt;Rc&amp;lt;RefCell&amp;lt;u32&amp;gt;&amp;gt;&lt;/code&gt; is definitely &lt;code dir="ltr"&gt;!Send&lt;/code&gt;. However, in our use case, using multiple OS threads is unlikely to speed up our program; we’re going to be doing lots of blocking I/O. It would be nice if we could insist on spawning all our tasks on the same OS thread and avoid the need for &lt;code dir="ltr"&gt;Send&lt;/code&gt;. And sure enough, Tokio provides such a function: &lt;code dir="ltr"&gt;tokio::task::spawn_local&lt;/code&gt;. Using it (and adding back in &lt;code dir="ltr"&gt;async move&lt;/code&gt; instead of &lt;code dir="ltr"&gt;async&lt;/code&gt;), our program compiles, but breaks at runtime:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;thread 'main' panicked at '`spawn_local` called from outside of a local::LocalSet!', src/libcore/option.rs:1190:5
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Uh-oh! Now I’m personally not a big fan of this detect-it-at-runtime stuff, but the concept is simple enough: if you want to spawn onto the current thread, you need to set up your runtime to support that. And the way we do that is with &lt;a href="https://docs.rs/tokio/0.2.2/tokio/task/struct.LocalSet.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;LocalSet&lt;/code&gt;&lt;/a&gt;. In order to use this, you’ll need to ditch the &lt;code dir="ltr"&gt;#[tokio::main]&lt;/code&gt; attribute.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;EXERCISE 8&lt;/strong&gt; Follow the documentation for &lt;code dir="ltr"&gt;LocalSet&lt;/code&gt; to make the program above work with &lt;code dir="ltr"&gt;Rc&amp;lt;RefCell&amp;lt;u32&amp;gt;&amp;gt;&lt;/code&gt;.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p dir="ltr"&gt;That lesson felt short. Definitely compared to the previous Tokio lesson which seemed to go on forever. I think this is a testament to how easy to use the new &lt;code dir="ltr"&gt;async/&lt;/code&gt;.await` syntax is.&lt;/p&gt;&lt;p dir="ltr"&gt;There’s obviously a lot more that can be covered in asynchronous programming, but hopefully this establishes the largest foundations you need to understand to work with the &lt;code dir="ltr"&gt;async&lt;/code&gt;/&lt;code dir="ltr"&gt;.await&lt;/code&gt; syntax and the Tokio library itself.&lt;/p&gt;&lt;p&gt;If we have future lessons, I believe they’ll cover additional libraries like Hyper as they move over to Tokio 0.2, as well as specific use cases people raise. If you want something covered, mention it to me on Twitter or in the comments below.&lt;/p&gt;&lt;h2&gt;Solutions&lt;/h2&gt;&lt;h3&gt;Solution 1&lt;/h3&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io;
-
-&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; stdin = io::stdin();
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout = io::stdout();
-    io::copy(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdin, &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout).await?;
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Solution 2&lt;/h3&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::process::Command;
-
-&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
-    &lt;span dir="ltr"&gt;for&lt;/span&gt; _ &lt;span dir="ltr"&gt;in&lt;/span&gt; &lt;span dir="ltr"&gt;1&lt;/span&gt;..=&lt;span dir="ltr"&gt;10&lt;/span&gt; {
-        Command::new(&lt;span dir="ltr"&gt;"echo"&lt;/span&gt;).arg(&lt;span dir="ltr"&gt;"Hello, world!"&lt;/span&gt;).spawn()?.await?;
-    }
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Solution 3&lt;/h3&gt;&lt;p dir="ltr"&gt;Since the &lt;code dir="ltr"&gt;loop&lt;/code&gt; will either run forever or be short circuited by an error, any code following &lt;code dir="ltr"&gt;loop&lt;/code&gt; will never actually be called. Therefore, code placed there will generate a warning.&lt;/p&gt;&lt;h3&gt;Solution 4&lt;/h3&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; std::time::Duration;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::process::Command;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::{io, task, time};
-
-&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; dating = task::spawn(dating());
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; copying = task::spawn(copying());
-
-    dating.await??;
-    copying.await??;
-
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
-}
-
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;dating&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; interval = time::interval(Duration::from_secs(&lt;span dir="ltr"&gt;1&lt;/span&gt;));
-    &lt;span dir="ltr"&gt;loop&lt;/span&gt; {
-        interval.tick().await;
-        Command::new(&lt;span dir="ltr"&gt;"date"&lt;/span&gt;).spawn()?.await?;
-    }
-}
-
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;copying&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; stdin = io::stdin();
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout = io::stdout();
-    io::copy(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdin, &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout).await?;
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Solution 5&lt;/h3&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;dating&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
-    &lt;span dir="ltr"&gt;loop&lt;/span&gt; {
-        task::spawn_blocking(&lt;span dir="ltr"&gt;||&lt;/span&gt; { std::thread::sleep(Duration::from_secs(&lt;span dir="ltr"&gt;1&lt;/span&gt;)) }).await?;
-        Command::new(&lt;span dir="ltr"&gt;"date"&lt;/span&gt;).spawn()?.await?;
-    }
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Solution 6&lt;/h3&gt;&lt;p dir="ltr"&gt;The simplest tweak is to wrap the &lt;code dir="ltr"&gt;echo&lt;/code&gt; call with &lt;code dir="ltr"&gt;tokio::spawn&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;loop&lt;/span&gt; {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; (socket, _) = listener.accept().await?;
-    tokio::spawn(echo(socket));
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;There is a downside to this worth noting, however: we’re ignoring the errors produced by the spawned tasks. Likely the best behavior in this case is to handle the errors inside the spawned task:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; io::&lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;()&amp;gt; {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; listener = TcpListener::bind(&lt;span dir="ltr"&gt;"127.0.0.1:8080"&lt;/span&gt;).await?;
-
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; counter = &lt;span dir="ltr"&gt;1u32&lt;/span&gt;;
-    &lt;span dir="ltr"&gt;loop&lt;/span&gt; {
-        &lt;span dir="ltr"&gt;let&lt;/span&gt; (socket, _) = listener.accept().await?;
-        &lt;span dir="ltr"&gt;println!&lt;/span&gt;(&lt;span dir="ltr"&gt;"Accepted connection #{}"&lt;/span&gt;, counter);
-        tokio::spawn(async &lt;span dir="ltr"&gt;move&lt;/span&gt; {
-            &lt;span dir="ltr"&gt;match&lt;/span&gt; echo(socket).await {
-                &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(()) =&amp;gt; &lt;span dir="ltr"&gt;println!&lt;/span&gt;(&lt;span dir="ltr"&gt;"Connection #{} completed successfully"&lt;/span&gt;, counter),
-                &lt;span dir="ltr"&gt;Err&lt;/span&gt;(e) =&amp;gt; &lt;span dir="ltr"&gt;println!&lt;/span&gt;(&lt;span dir="ltr"&gt;"Connection #{} errored: {:?}"&lt;/span&gt;, counter, e),
-            }
-        });
-        counter += &lt;span dir="ltr"&gt;1&lt;/span&gt;;
-    }
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Exericse 7&lt;/h3&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::spawn;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::net::TcpStream;
-
-&lt;span dir="ltr"&gt;#[tokio::main]&lt;/span&gt;
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; io::&lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;()&amp;gt; {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; stream = TcpStream::connect(&lt;span dir="ltr"&gt;"127.0.0.1:8080"&lt;/span&gt;).await?;
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; (&lt;span dir="ltr"&gt;mut&lt;/span&gt; recv, &lt;span dir="ltr"&gt;mut&lt;/span&gt; send) = io::split(stream);
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; stdin = io::stdin();
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout = io::stdout();
-
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; send = spawn(async &lt;span dir="ltr"&gt;move&lt;/span&gt; {
-        io::copy(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdin, &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; send).await
-    });
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; recv = spawn(async &lt;span dir="ltr"&gt;move&lt;/span&gt; {
-        io::copy(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; recv, &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; stdout).await
-    });
-
-    send.await??;
-    recv.await??;
-
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;Solution 8&lt;/h2&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::prelude::*;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; tokio::io::AsyncBufReadExt;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; std::rc::Rc;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; std::cell::RefCell;
-
-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; rt = tokio::runtime::Runtime::new()?;
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; local = tokio::task::LocalSet::new();
-    local.block_on(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; rt, main_inner())
-}
-
-async &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main_inner&lt;/span&gt;&lt;/span&gt;() -&amp;gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt; {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; args = std::env::args();
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; _me = args.next(); &lt;span dir="ltr"&gt;// ignore command name&lt;/span&gt;
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; tasks = &lt;span dir="ltr"&gt;vec!&lt;/span&gt;[];
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; count = Rc::new(RefCell::new(&lt;span dir="ltr"&gt;0u32&lt;/span&gt;));
-
-    &lt;span dir="ltr"&gt;for&lt;/span&gt; filename &lt;span dir="ltr"&gt;in&lt;/span&gt; args {
-        &lt;span dir="ltr"&gt;let&lt;/span&gt; count = count.clone();
-        tasks.push(tokio::task::spawn_local(async &lt;span dir="ltr"&gt;move&lt;/span&gt; {
-            &lt;span dir="ltr"&gt;let&lt;/span&gt; file = tokio::fs::File::open(filename).await?;
-            &lt;span dir="ltr"&gt;let&lt;/span&gt; file = io::BufReader::new(file);
-            &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; lines = file.lines();
-            &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; local_count = &lt;span dir="ltr"&gt;0u32&lt;/span&gt;;
-            &lt;span dir="ltr"&gt;while&lt;/span&gt; &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;Some&lt;/span&gt;(_) = lines.next_line().await? {
-                local_count += &lt;span dir="ltr"&gt;1&lt;/span&gt;;
-            }
-
-            *count.borrow_mut() += local_count;
-            &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(()) &lt;span dir="ltr"&gt;as&lt;/span&gt; &lt;span dir="ltr"&gt;Result&lt;/span&gt;&amp;lt;(), std::io::Error&amp;gt;
-        }));
-    }
-
-    &lt;span dir="ltr"&gt;for&lt;/span&gt; task &lt;span dir="ltr"&gt;in&lt;/span&gt; tasks {
-        task.await??;
-    }
-
-    &lt;span dir="ltr"&gt;println!&lt;/span&gt;(&lt;span dir="ltr"&gt;"Total lines: {}"&lt;/span&gt;, count.borrow());
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
-}
-&lt;/code&gt;&lt;/PRE&gt;</description><pubDate>Thu, 05 Dec 2019 07:02:16 -0600</pubDate></item><item><title>An unexpected benefit of thinking functional in Perl</title><link>https://lobste.rs/s/4h94a6</link><description>&lt;p&gt;I’ve been reading more and more about functional programming over the past
+&lt;/form&gt;</description><pubDate>Wed, 04 Dec 2019 14:57:38 -0600</pubDate></item><item><title>An unexpected benefit of thinking functional in Perl</title><link>https://lobste.rs/s/4h94a6</link><description>&lt;p&gt;I’ve been reading more and more about functional programming over the past
 year, and working in Python where many things are immutable, and I’m trying
 to incorporate them into my Perl code.&lt;/p&gt;&lt;p&gt;Probably the biggest influence of functional is that I try to call as few
 verbs as possible.  For example, here’s some code from my codebase at work.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;my @got;
@@ -1221,7 +1221,24 @@ several native &lt;a href="http://man.9front.org/1/sega" dir="ltr"&gt;Sega&lt;/a
 &lt;a href="http://man.9front.org/1/nintendo" dir="ltr"&gt;Nintendo&lt;/a&gt; emulators, and a
 full port of &lt;a href="http://man.9front.org/1/games" dir="ltr"&gt;DOOM&lt;/a&gt;.
 I never would have dreamed anything like this was possible back in 2009.
-As time goes by, there is less and less reason to boot anything else.&lt;/p&gt;&lt;p&gt;For what I do, I’m perfectly happy with it.&lt;/p&gt;</description><pubDate>Wed, 04 Dec 2019 12:32:57 -0600</pubDate></item><item><title>sysget: A single front end for every unix package manager</title><link>https://lobste.rs/s/nu1rgk</link><description>&lt;h1&gt;sysget&lt;/h1&gt;&lt;img src="https://camo.githubusercontent.com/822ba418e00bbf55e028496b46a6eb5dbb669aee/68747470733a2f2f7472617669732d63692e6f72672f656d696c656e676c65722f7379736765742e7376673f6272616e63683d6d6173746572" alt="Build Status" width="90" height="20"&gt;&lt;h3 dir="ltr"&gt;A front-end for every package manager&lt;br dir="ltr"&gt;&lt;/h3&gt;&lt;p dir="ltr"&gt;sysget is a bridge that lets you use one syntax to every package manager on every unix-based operating system.&lt;br dir="ltr"&gt;
+As time goes by, there is less and less reason to boot anything else.&lt;/p&gt;&lt;p&gt;For what I do, I’m perfectly happy with it.&lt;/p&gt;</description><pubDate>Wed, 04 Dec 2019 12:32:57 -0600</pubDate></item><item><title>olaris / olaris-server</title><link>https://lobste.rs/s/hcbhz2</link><description>&lt;h2 data-sourcepos="3:1-3:62" dir="ltr"&gt;&lt;code dir="ltr"&gt;This is all pre-release code, continue at your own peril.&lt;/code&gt;
+&lt;/h2&gt;&lt;h2 data-sourcepos="5:1-5:18" dir="auto"&gt;What is Olaris?&lt;/h2&gt;&lt;p data-sourcepos="7:1-7:243" dir="ltr"&gt;Olaris is an open-source, community driven, media manager and transcoding server. The main interface is the &lt;a href="https://gitlab.com/olaris/olaris-react" dir="ltr"&gt;olaris-react&lt;/a&gt; project although in due time we hope to support multiple clients / applications.&lt;/p&gt;&lt;p data-sourcepos="9:1-9:20" dir="auto"&gt;Our core values are:&lt;/p&gt;&lt;h3 data-sourcepos="11:1-11:32" dir="auto"&gt;Community driven development&lt;/h3&gt;&lt;p data-sourcepos="12:1-12:116" dir="auto"&gt;We want Olaris to be a community project which means we will heavily prioritise features based on our user feedback.&lt;/p&gt;&lt;h3 data-sourcepos="14:1-14:34" dir="auto"&gt;Focus on one feature at a time&lt;/h3&gt;&lt;p data-sourcepos="15:1-15:193" dir="auto"&gt;We will work on features until they are perfect (or as close to it as possible). We would rather have a product where three features work really well than a product with 30 unfinished features.&lt;/p&gt;&lt;p data-sourcepos="17:1-17:153" dir="auto"&gt;This does not mean we won't work in parallel, it simply means we will not start anything new until we are happy the new feature works to a high standard.&lt;/p&gt;&lt;h3 data-sourcepos="19:1-19:33" dir="auto"&gt;Our users are not our product&lt;/h3&gt;&lt;p data-sourcepos="20:1-20:101" dir="auto"&gt;We don't want to collect metadata, we don't want to sell metadata your data is yours and yours alone.&lt;/p&gt;&lt;h3 data-sourcepos="22:1-22:26" dir="auto"&gt;Singular Focus: Video.&lt;/h3&gt;&lt;p data-sourcepos="23:1-23:245" dir="auto"&gt;Our sole focus is on video and video alone, anything that does not meet this requirement will not be considered. This means for example we will never add music support due to different approach that would be required throughout the application.&lt;/p&gt;&lt;h3 data-sourcepos="25:1-25:15" dir="auto"&gt;Open-source&lt;/h3&gt;&lt;p data-sourcepos="26:1-26:249" dir="auto"&gt;Everything we build should be open-source. We feel strongly that more can be achieved with free open-source software. That's why were are aiming to be and to remain open-source instead of open-core where certain features are locked behind a paywall.&lt;/p&gt;&lt;h2 data-sourcepos="28:1-28:20" dir="auto"&gt;How to run olaris&lt;/h2&gt;&lt;h3 data-sourcepos="30:1-30:17" dir="auto"&gt;Local install&lt;/h3&gt;&lt;h4 data-sourcepos="32:1-32:21" dir="ltr"&gt;Unpack to &lt;code dir="ltr"&gt;/opt&lt;/code&gt;
+&lt;/h4&gt;&lt;PRE&gt;&lt;code&gt;&lt;span lang="plaintext"&gt;sudo unzip olaris-linux-amd64-v0.3.0.zip -d /opt/olaris&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p data-sourcepos="36:1-36:73" dir="auto"&gt;Replace the name of the zipfile with the name of the file you downloaded.&lt;/p&gt;&lt;h4 data-sourcepos="38:1-38:32" dir="auto"&gt;Run as daemon using systemd&lt;/h4&gt;&lt;p data-sourcepos="40:1-40:69" dir="auto"&gt;To run Olaris as a daemon you may use the supplied systemd unit file:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span lang="plaintext" dir="ltr"&gt;mkdir -p ~/.config/systemd/user/&lt;/span&gt;
+&lt;span lang="plaintext" dir="ltr"&gt;cp /opt/olaris/doc/config-examples/systemd/olaris.service ~/.config/systemd/user/&lt;/span&gt;
+&lt;span lang="plaintext" dir="ltr"&gt;systemctl --user daemon-reload&lt;/span&gt;
+&lt;span lang="plaintext" dir="ltr"&gt;systemctl --user start olaris.service&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p data-sourcepos="47:1-47:30" dir="auto"&gt;To start Olaris automatically:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span lang="plaintext" dir="ltr"&gt;# Allow systemd to start in user mode without a login session&lt;/span&gt;
+&lt;span lang="plaintext" dir="ltr"&gt;sudo loginctl enable-linger $USER&lt;/span&gt;
+&lt;span lang="plaintext" dir="ltr"&gt;systemctl --user enable olaris.service&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;h3 data-sourcepos="53:1-53:20" dir="auto"&gt;Run using Docker&lt;/h3&gt;&lt;p data-sourcepos="55:1-55:241" dir="auto"&gt;The following command runs Olaris in a Docker container under your own user‘s UID, ensuring that the Olaris config files end up in your home directory with the correct permissions. It exposes Olaris on port 8080 only on your local machine.&lt;/p&gt;&lt;p data-sourcepos="57:1-57:282" dir="ltr"&gt;The command below mounts &lt;code dir="ltr"&gt;~/Videos&lt;/code&gt; to &lt;code dir="ltr"&gt;/var/media&lt;/code&gt; in the container --- please update this path to match the location of your media files. When you create a library in Olaris, please keep in mind that Olaris is running inside the container and will see your media at &lt;code dir="ltr"&gt;/var/media/&lt;/code&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span lang="plaintext" dir="ltr"&gt;mkdir -p ~/.config/olaris ~/.config/rclone&lt;/span&gt;
+&lt;span lang="plaintext" dir="ltr"&gt;docker run \&lt;/span&gt;
+&lt;span lang="plaintext" dir="ltr"&gt;  -p 127.0.0.1:8080:8080/tcp \&lt;/span&gt;
+&lt;span lang="plaintext" dir="ltr"&gt;  --mount type=bind,source="$HOME/Videos",target=/var/media \&lt;/span&gt;
+&lt;span lang="plaintext" dir="ltr"&gt;  --mount type=bind,source="$HOME/.config/olaris",target=/home/olaris/.config/olaris \&lt;/span&gt;
+&lt;span lang="plaintext" dir="ltr"&gt;  --mount type=bind,source="$HOME/.config/rclone",target="/home/olaris/.config/rclone" \&lt;/span&gt;
+&lt;span lang="plaintext" dir="ltr"&gt;  -e OLARIS_UID=$(id -u) -e OLARIS_GID=$(id -g) \&lt;/span&gt;
+&lt;span lang="plaintext" dir="ltr"&gt;  olaristv/olaris-server&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;h2 data-sourcepos="68:1-68:15" dir="auto"&gt;How to build&lt;/h2&gt;&lt;h3 data-sourcepos="70:1-70:22" dir="auto"&gt;Build dependencies&lt;/h3&gt;&lt;UL&gt;&lt;LI&gt;Install the &lt;a href="https://golang.org/" rel="nofollow noreferrer noopener" dir="ltr"&gt;Go toolchain&lt;/a&gt;
+&lt;/LI&gt;&lt;LI&gt;&lt;UL&gt;&lt;LI&gt;go get github.com/jteeuwen/go-bindata/...&lt;/LI&gt;&lt;LI&gt;go get github.com/elazarl/go-bindata-assetfs/...&lt;/LI&gt;&lt;LI&gt;go get github.com/maxbrunsfeld/counterfeiter&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;Build our custom &lt;a href="https://gitlab.com/olaris/ffmpeg" dir="ltr"&gt;ffmpeg&lt;/a&gt; if you want to actually transcode and playback video and you are not on a Linux amd64 system.&lt;/LI&gt;&lt;/UL&gt;&lt;h3 data-sourcepos="78:1-78:36" dir="auto"&gt;Download other Olaris components&lt;/h3&gt;&lt;UL&gt;&lt;LI&gt;Run &lt;code dir="ltr"&gt;make download-olaris-react&lt;/code&gt; to grab the latest build of the web frontend for Olaris.&lt;/LI&gt;&lt;LI&gt;Run &lt;code dir="ltr"&gt;make download-ffmpeg&lt;/code&gt; to download the custom build of ffmpeg required for Olaris to function. This will only work if you are on an &lt;code dir="ltr"&gt;amd64&lt;/code&gt; Linux machine. If you are on another platform, you will have to build it yourself.&lt;/LI&gt;&lt;/UL&gt;&lt;p data-sourcepos="83:3-83:63" dir="auto"&gt;Once this is done you can use some of the following commands:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;
+&lt;code dir="ltr"&gt;make run&lt;/code&gt; to run a build on your local platform.&lt;/LI&gt;&lt;LI&gt;
+&lt;code dir="ltr"&gt;make build-local&lt;/code&gt; to build a binary for your local platform. The binary will be placed in &lt;code dir="ltr"&gt;build/olaris&lt;/code&gt;.&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Thu, 05 Dec 2019 07:52:46 -0600</pubDate></item><item><title>sysget: A single front end for every unix package manager</title><link>https://lobste.rs/s/nu1rgk</link><description>&lt;h1&gt;sysget&lt;/h1&gt;&lt;img src="https://camo.githubusercontent.com/822ba418e00bbf55e028496b46a6eb5dbb669aee/68747470733a2f2f7472617669732d63692e6f72672f656d696c656e676c65722f7379736765742e7376673f6272616e63683d6d6173746572" alt="Build Status" width="90" height="20"&gt;&lt;h3 dir="ltr"&gt;A front-end for every package manager&lt;br dir="ltr"&gt;&lt;/h3&gt;&lt;p dir="ltr"&gt;sysget is a bridge that lets you use one syntax to every package manager on every unix-based operating system.&lt;br dir="ltr"&gt;
 You probably all know the problem when you are on a new distro and don't know anything about the package manager. With sysget you just need to remember one syntax for every package manager.&lt;br dir="ltr"&gt;
 The syntax is mostly same with apt so it should be easy to use.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;h3&gt;How to install&lt;/h3&gt;&lt;p dir="ltr"&gt;Please take a look at the docs/ folder.&lt;br dir="ltr"&gt;
 In a nutshell:&lt;br dir="ltr"&gt;
@@ -1263,24 +1280,7 @@ The order is: search, install, remove, autoremove, update, upgrade, upgrade_pkg,
 Simply create the file &lt;code dir="ltr"&gt;/etc/sysget/args&lt;/code&gt; and add 10 lines to it.
 The order is: search, install, remove, autoremove, update, upgrade, clean, set, help, about&lt;br dir="ltr"&gt;
 However there are some rules:&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The file needs to have 10 lines&lt;/LI&gt;&lt;LI&gt;The same item twice is forbidden&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;Languages&lt;/h3&gt;&lt;p&gt;We support the following languages:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;English&lt;/LI&gt;&lt;LI&gt;German
-The data is get using $LANG, english is the fallback option&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Wed, 04 Dec 2019 21:53:58 -0600</pubDate></item><item><title>olaris / olaris-server</title><link>https://lobste.rs/s/hcbhz2</link><description>&lt;h2 data-sourcepos="3:1-3:62" dir="ltr"&gt;&lt;code dir="ltr"&gt;This is all pre-release code, continue at your own peril.&lt;/code&gt;
-&lt;/h2&gt;&lt;h2 data-sourcepos="5:1-5:18" dir="auto"&gt;What is Olaris?&lt;/h2&gt;&lt;p data-sourcepos="7:1-7:243" dir="ltr"&gt;Olaris is an open-source, community driven, media manager and transcoding server. The main interface is the &lt;a href="https://gitlab.com/olaris/olaris-react" dir="ltr"&gt;olaris-react&lt;/a&gt; project although in due time we hope to support multiple clients / applications.&lt;/p&gt;&lt;p data-sourcepos="9:1-9:20" dir="auto"&gt;Our core values are:&lt;/p&gt;&lt;h3 data-sourcepos="11:1-11:32" dir="auto"&gt;Community driven development&lt;/h3&gt;&lt;p data-sourcepos="12:1-12:116" dir="auto"&gt;We want Olaris to be a community project which means we will heavily prioritise features based on our user feedback.&lt;/p&gt;&lt;h3 data-sourcepos="14:1-14:34" dir="auto"&gt;Focus on one feature at a time&lt;/h3&gt;&lt;p data-sourcepos="15:1-15:193" dir="auto"&gt;We will work on features until they are perfect (or as close to it as possible). We would rather have a product where three features work really well than a product with 30 unfinished features.&lt;/p&gt;&lt;p data-sourcepos="17:1-17:153" dir="auto"&gt;This does not mean we won't work in parallel, it simply means we will not start anything new until we are happy the new feature works to a high standard.&lt;/p&gt;&lt;h3 data-sourcepos="19:1-19:33" dir="auto"&gt;Our users are not our product&lt;/h3&gt;&lt;p data-sourcepos="20:1-20:101" dir="auto"&gt;We don't want to collect metadata, we don't want to sell metadata your data is yours and yours alone.&lt;/p&gt;&lt;h3 data-sourcepos="22:1-22:26" dir="auto"&gt;Singular Focus: Video.&lt;/h3&gt;&lt;p data-sourcepos="23:1-23:245" dir="auto"&gt;Our sole focus is on video and video alone, anything that does not meet this requirement will not be considered. This means for example we will never add music support due to different approach that would be required throughout the application.&lt;/p&gt;&lt;h3 data-sourcepos="25:1-25:15" dir="auto"&gt;Open-source&lt;/h3&gt;&lt;p data-sourcepos="26:1-26:249" dir="auto"&gt;Everything we build should be open-source. We feel strongly that more can be achieved with free open-source software. That's why were are aiming to be and to remain open-source instead of open-core where certain features are locked behind a paywall.&lt;/p&gt;&lt;h2 data-sourcepos="28:1-28:20" dir="auto"&gt;How to run olaris&lt;/h2&gt;&lt;h3 data-sourcepos="30:1-30:17" dir="auto"&gt;Local install&lt;/h3&gt;&lt;h4 data-sourcepos="32:1-32:21" dir="ltr"&gt;Unpack to &lt;code dir="ltr"&gt;/opt&lt;/code&gt;
-&lt;/h4&gt;&lt;PRE&gt;&lt;code&gt;&lt;span lang="plaintext"&gt;sudo unzip olaris-linux-amd64-v0.3.0.zip -d /opt/olaris&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p data-sourcepos="36:1-36:73" dir="auto"&gt;Replace the name of the zipfile with the name of the file you downloaded.&lt;/p&gt;&lt;h4 data-sourcepos="38:1-38:32" dir="auto"&gt;Run as daemon using systemd&lt;/h4&gt;&lt;p data-sourcepos="40:1-40:69" dir="auto"&gt;To run Olaris as a daemon you may use the supplied systemd unit file:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span lang="plaintext" dir="ltr"&gt;mkdir -p ~/.config/systemd/user/&lt;/span&gt;
-&lt;span lang="plaintext" dir="ltr"&gt;cp /opt/olaris/doc/config-examples/systemd/olaris.service ~/.config/systemd/user/&lt;/span&gt;
-&lt;span lang="plaintext" dir="ltr"&gt;systemctl --user daemon-reload&lt;/span&gt;
-&lt;span lang="plaintext" dir="ltr"&gt;systemctl --user start olaris.service&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p data-sourcepos="47:1-47:30" dir="auto"&gt;To start Olaris automatically:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span lang="plaintext" dir="ltr"&gt;# Allow systemd to start in user mode without a login session&lt;/span&gt;
-&lt;span lang="plaintext" dir="ltr"&gt;sudo loginctl enable-linger $USER&lt;/span&gt;
-&lt;span lang="plaintext" dir="ltr"&gt;systemctl --user enable olaris.service&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;h3 data-sourcepos="53:1-53:20" dir="auto"&gt;Run using Docker&lt;/h3&gt;&lt;p data-sourcepos="55:1-55:241" dir="auto"&gt;The following command runs Olaris in a Docker container under your own user‘s UID, ensuring that the Olaris config files end up in your home directory with the correct permissions. It exposes Olaris on port 8080 only on your local machine.&lt;/p&gt;&lt;p data-sourcepos="57:1-57:282" dir="ltr"&gt;The command below mounts &lt;code dir="ltr"&gt;~/Videos&lt;/code&gt; to &lt;code dir="ltr"&gt;/var/media&lt;/code&gt; in the container --- please update this path to match the location of your media files. When you create a library in Olaris, please keep in mind that Olaris is running inside the container and will see your media at &lt;code dir="ltr"&gt;/var/media/&lt;/code&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span lang="plaintext" dir="ltr"&gt;mkdir -p ~/.config/olaris ~/.config/rclone&lt;/span&gt;
-&lt;span lang="plaintext" dir="ltr"&gt;docker run \&lt;/span&gt;
-&lt;span lang="plaintext" dir="ltr"&gt;  -p 127.0.0.1:8080:8080/tcp \&lt;/span&gt;
-&lt;span lang="plaintext" dir="ltr"&gt;  --mount type=bind,source="$HOME/Videos",target=/var/media \&lt;/span&gt;
-&lt;span lang="plaintext" dir="ltr"&gt;  --mount type=bind,source="$HOME/.config/olaris",target=/home/olaris/.config/olaris \&lt;/span&gt;
-&lt;span lang="plaintext" dir="ltr"&gt;  --mount type=bind,source="$HOME/.config/rclone",target="/home/olaris/.config/rclone" \&lt;/span&gt;
-&lt;span lang="plaintext" dir="ltr"&gt;  -e OLARIS_UID=$(id -u) -e OLARIS_GID=$(id -g) \&lt;/span&gt;
-&lt;span lang="plaintext" dir="ltr"&gt;  olaristv/olaris-server&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;h2 data-sourcepos="68:1-68:15" dir="auto"&gt;How to build&lt;/h2&gt;&lt;h3 data-sourcepos="70:1-70:22" dir="auto"&gt;Build dependencies&lt;/h3&gt;&lt;UL&gt;&lt;LI&gt;Install the &lt;a href="https://golang.org/" rel="nofollow noreferrer noopener" dir="ltr"&gt;Go toolchain&lt;/a&gt;
-&lt;/LI&gt;&lt;LI&gt;&lt;UL&gt;&lt;LI&gt;go get github.com/jteeuwen/go-bindata/...&lt;/LI&gt;&lt;LI&gt;go get github.com/elazarl/go-bindata-assetfs/...&lt;/LI&gt;&lt;LI&gt;go get github.com/maxbrunsfeld/counterfeiter&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;Build our custom &lt;a href="https://gitlab.com/olaris/ffmpeg" dir="ltr"&gt;ffmpeg&lt;/a&gt; if you want to actually transcode and playback video and you are not on a Linux amd64 system.&lt;/LI&gt;&lt;/UL&gt;&lt;h3 data-sourcepos="78:1-78:36" dir="auto"&gt;Download other Olaris components&lt;/h3&gt;&lt;UL&gt;&lt;LI&gt;Run &lt;code dir="ltr"&gt;make download-olaris-react&lt;/code&gt; to grab the latest build of the web frontend for Olaris.&lt;/LI&gt;&lt;LI&gt;Run &lt;code dir="ltr"&gt;make download-ffmpeg&lt;/code&gt; to download the custom build of ffmpeg required for Olaris to function. This will only work if you are on an &lt;code dir="ltr"&gt;amd64&lt;/code&gt; Linux machine. If you are on another platform, you will have to build it yourself.&lt;/LI&gt;&lt;/UL&gt;&lt;p data-sourcepos="83:3-83:63" dir="auto"&gt;Once this is done you can use some of the following commands:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;
-&lt;code dir="ltr"&gt;make run&lt;/code&gt; to run a build on your local platform.&lt;/LI&gt;&lt;LI&gt;
-&lt;code dir="ltr"&gt;make build-local&lt;/code&gt; to build a binary for your local platform. The binary will be placed in &lt;code dir="ltr"&gt;build/olaris&lt;/code&gt;.&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Thu, 05 Dec 2019 07:52:46 -0600</pubDate></item><item><title>dart2native: Compile Dart to self-contained, native executables</title><link>https://lobste.rs/s/fbqdyf</link><description>&lt;img alt="Michael Thomsen" src="https://miro.medium.com/fit/c/96/96/0*Y_CFLc1qadgr3tPK." width="48" height="48"&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Dart already offers &lt;a href="https://dart.dev/platforms" rel="noopener nofollow" dir="ltr"&gt;an extensive set of compilers&lt;/a&gt; for building production-optimized code for mobile devices and the web. These flexible compilers enable our framework partners to target a wide range of form factors: Flutter apps on &lt;a href="https://flutter.dev/docs" rel="noopener nofollow" dir="ltr"&gt;Android &amp;amp; iOS&lt;/a&gt;, Flutter apps on the &lt;a href="https://flutter.dev/web" rel="noopener nofollow" dir="ltr"&gt;web&lt;/a&gt; &amp;amp; &lt;a href="https://flutter.dev/desktop" rel="noopener nofollow" dir="ltr"&gt;desktop&lt;/a&gt;, AngularDart apps on the &lt;a href="https://angulardart.dev/" rel="noopener nofollow" dir="ltr"&gt;web&lt;/a&gt;, and Google Assistant on &lt;a href="https://developers.googleblog.com/2019/05/Flutter-io19.html" rel="noopener nofollow" dir="ltr"&gt;embedded devices&lt;/a&gt;.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Today we’re announcing &lt;code dir="ltr"&gt;&lt;strong dir="ltr"&gt;dart2native&lt;/strong&gt;&lt;/code&gt;, an extension of our existing compiler set, with the ability to compile Dart programs to self-contained executables containing ahead-of-time-compiled machine code. With dart2native, you can create tools for the command line on &lt;strong dir="ltr"&gt;macOS, Windows, or Linux&lt;/strong&gt; using Dart. This feature’s announcement picture &lt;a href="https://gist.github.com/mit-mit/faec2bfc1d1cef7cd09df917e531c5c0" rel="noopener nofollow" dir="ltr"&gt;was implemented&lt;/a&gt; using the feature itself :-)&lt;/p&gt;&lt;figure&gt;&lt;img src="https://miro.medium.com/max/60/0*lY0iF-neazyL0aE-?q=20" width="437" height="185"&gt;&lt;/figure&gt;&lt;h1 data-selectable-paragraph=""&gt;Dart Native and the dart2native compiler&lt;/h1&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Dart has supported AOT (ahead-of-time) compilation to native machine code for several years, and &lt;a href="https://dart.dev/platforms" rel="noopener nofollow" dir="ltr"&gt;Dart Native&lt;/a&gt; is thus fairly mature technology. However, in the past we only exposed this capability on iOS and Android mobile devices, via &lt;a href="http://flutter.dev/" rel="noopener nofollow" dir="ltr"&gt;Flutter&lt;/a&gt;.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;With &lt;code dir="ltr"&gt;dart2native&lt;/code&gt;, we’re extending our native compilation support to support traditional desktop operating systems running macOS, Windows, and Linux. Because the executables created with &lt;code dir="ltr"&gt;dart2native&lt;/code&gt; are self-contained, they can run on machines that don’t have the Dart SDK installed. And because they’re compiled with Dart’s AOT compiler, the executables start running in just a few milliseconds. As with other Dart compilers and runtimes, the same set of rich and consistent &lt;a href="https://dart.dev/guides/libraries" rel="noopener nofollow" dir="ltr"&gt;core libraries&lt;/a&gt; are available in Dart when compiling to native code.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;We’ve heard many customers ask for AOT compilation for desktop operating systems — the &lt;a href="https://github.com/dart-lang/sdk/issues/36915" rel="noopener nofollow" dir="ltr"&gt;sixth highest-rated issue&lt;/a&gt; in our issue tracker — so we’re delighted to be able to make this feature available.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p data-selectable-paragraph=""&gt;If you used dart2aot before, then as of 2.6 you’ll use dart2native. It provides a superset of dart2aot’s functionality.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h1 data-selectable-paragraph=""&gt;Building command line apps with dart2native&lt;/h1&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;The &lt;code dir="ltr"&gt;dart2native&lt;/code&gt; compiler is a great choice for building and deploying &lt;a href="https://dart.dev/tutorials/server/cmdline" rel="noopener nofollow" dir="ltr"&gt;Dart-based apps for the command line&lt;/a&gt;. These apps often use libraries such as &lt;code dir="ltr"&gt;&lt;a href="https://api.dart.dev/stable/dart-io/dart-io-library.html" rel="noopener nofollow" dir="ltr"&gt;dart:io&lt;/a&gt;&lt;/code&gt; (basic I/O), &lt;code dir="ltr"&gt;package:&lt;a href="https://pub.dev/packages/http" rel="noopener nofollow" dir="ltr"&gt;http&lt;/a&gt;&lt;/code&gt; (networking), and &lt;code dir="ltr"&gt;package:&lt;a href="https://pub.dev/packages/args" rel="noopener nofollow" dir="ltr"&gt;args&lt;/a&gt;&lt;/code&gt; (argument parsing). Let’s review the basics of compiling a “hello, world” app to an executable:&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;The source code &lt;code dir="ltr"&gt;hello.dart&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph="" dir="ltr"&gt;main() {&lt;br dir="ltr"&gt;  print(‘Hello Dart developers’);&lt;br dir="ltr"&gt;}&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Compile &lt;code dir="ltr"&gt;hello.dart&lt;/code&gt; to a &lt;code dir="ltr"&gt;hello&lt;/code&gt; executable:&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph="" dir="ltr"&gt;$ dart2native src/hello.dart -o hello&lt;br dir="ltr"&gt;Generated: /Users/mit/hello&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Run &lt;code dir="ltr"&gt;hello&lt;/code&gt; measuring execution time:&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph="" dir="ltr"&gt;$ time ./hello&lt;br dir="ltr"&gt;Hello Dart developers&lt;/span&gt;&lt;span data-selectable-paragraph="" dir="ltr"&gt;real 0m0.049s&lt;br dir="ltr"&gt;user 0m0.018s&lt;br dir="ltr"&gt;sys 0m0.020s&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph=""&gt;Notice how the command starts, prints to stdout, and exits in a combined time of just 49 milliseconds!&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;We’ve seen a few Dart developers already experiment with &lt;code dir="ltr"&gt;dart2native&lt;/code&gt; for command-line tools:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Natalie from the &lt;a href="https://sass-lang.com/" rel="noopener nofollow" dir="ltr"&gt;SASS&lt;/a&gt; (a popular CSS extension tool) team &lt;a href="https://github.com/dart-lang/sdk/issues/32894#issuecomment-513975562" rel="noopener nofollow" dir="ltr"&gt;reports&lt;/a&gt; that after switching their Dart-based SASS implementation to compile with dart2native, it is now competitive in performance with LibSass, a C++ based implementation.&lt;/LI&gt;&lt;LI&gt;Filip from the Dart DevRel team recompiled his &lt;a href="https://github.com/filiph/linkcheck/" rel="noopener nofollow" dir="ltr"&gt;linkchecker&lt;/a&gt; tool with dart2native, and saw a &lt;a href="https://github.com/filiph/linkcheck/issues/7#issuecomment-496308288" rel="noopener nofollow" dir="ltr"&gt;27x speedup&lt;/a&gt; when checking small sites.&lt;/LI&gt;&lt;/UL&gt;&lt;h1 data-selectable-paragraph=""&gt;Interoperability with C code via dart:ffi&lt;/h1&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Native apps often need to access native functionality from the surrounding operating system. These system APIs are typically exposed in native C-based libraries, and Dart supports interoperability with these libraries via &lt;code dir="ltr"&gt;dart:ffi&lt;/code&gt;, our new mechanism for &lt;a href="https://dart.dev/guides/libraries/c-interop" rel="noopener nofollow" dir="ltr"&gt;C interop&lt;/a&gt;, which we launched in preview in &lt;a rel="noopener" href="https://medium.com/dartlang/announcing-dart-2-5-super-charged-development-328822024970" dir="ltr"&gt;Dart 2.5&lt;/a&gt;. The &lt;code dir="ltr"&gt;dart2native&lt;/code&gt; compiler is compatible with &lt;code dir="ltr"&gt;dart:ffi&lt;/code&gt;, so you can create and compile natively Dart apps that use it.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;One team member recently used &lt;code dir="ltr"&gt;dart:ffi&lt;/code&gt; to create a &lt;code dir="ltr"&gt;&lt;a href="https://pub.dev/packages/dart_console" rel="noopener nofollow" dir="ltr"&gt;dart_console&lt;/a&gt;&lt;/code&gt; library for console app development, which has functionality like getting window dimensions, reading and setting the cursor location, managing colors, and reading keys and control sequences. The ability to use &lt;code dir="ltr"&gt;dart:ffi&lt;/code&gt; makes Dart a very powerful language for console apps.&lt;/p&gt;&lt;h1 data-selectable-paragraph=""&gt;kilo: a 7MB code editor written in less than 500 lines of Dart code&lt;/h1&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Using Dart core libraries, &lt;code dir="ltr"&gt;dart:ffi&lt;/code&gt;, and the dart_console library, we can create pretty interesting console apps. The dart_console package includes a full demo of &lt;em dir="ltr"&gt;kilo&lt;/em&gt;, a console text editor written in just ~&lt;a href="https://github.com/timsneath/dart_console/blob/master/example/kilo.dart" rel="noopener nofollow" dir="ltr"&gt;500 lines of Dart code&lt;/a&gt;. The name kilo comes from its origin, &lt;code dir="ltr"&gt;&lt;a href="https://github.com/antirez/kilo/blob/master/kilo.c" rel="noopener nofollow" dir="ltr"&gt;kilo.c&lt;/a&gt;&lt;/code&gt;, which was a C implementation in roughly 1000 lines of code.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;With the new &lt;code dir="ltr"&gt;dart2native&lt;/code&gt; compiler we can easily package this, and we end up with a 7MB self-contained code editor. Here’s a demo of compiling the editor, and then using the compiled editor to edit its own source code to fix a bug:&lt;/p&gt;&lt;figure&gt;&lt;img src="https://miro.medium.com/max/60/0*f5pvUnbesO4mGZmW?q=20" width="437" height="285"&gt;&lt;figcaption dir="auto"&gt;The kilo editor written in Dart and compiled to an executable with dart2native editing it’s own source code&lt;/figcaption&gt;&lt;/figure&gt;&lt;h1 data-selectable-paragraph=""&gt;Building services with dart2native&lt;/h1&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Another potential use of the dart2native compiler is for small services — for example, a backend supporting a frontend app written using Flutter. In recent years, a growing trend has been the use of services running on &lt;a href="https://en.wikipedia.org/wiki/Serverless_computing" rel="noopener nofollow" dir="ltr"&gt;serverless computing&lt;/a&gt;. These are fully managed services that automatically scale, including scaling up from and down to zero (not running), providing the potential to greatly lower cost because they are billed only when actually running. Google Cloud makes serverless computing available via &lt;a href="https://cloud.google.com/run/" rel="noopener nofollow" dir="ltr"&gt;Cloud Run&lt;/a&gt;.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;For serverless backends it’s critical that the service starts quickly. Traditionally, Dart-based services have run with our JIT (just-in-time) compiler, but JIT-based execution has a high latency when starting as the code needs to be compiled and warmed up before it can start executing. By compiling your service’s code ahead-of-time to native code, you can avoid this latency and begin running right away. In addition, with native code you can create Dart services that have a small disk footprint and are self-contained, greatly reducing the size of the container in which the Dart service runs. Dart developer Paul Mundt recently &lt;a href="https://itnext.io/experiments-with-dart-microservices-fa117aa408c7" rel="noopener nofollow" dir="ltr"&gt;documented his experiences&lt;/a&gt; with using the dart2native compiler; he was able to reduce the size of his Docker image by 91% from 220MB using JIT-compiled code down to just 20MB by using native code! See our documentation for more details about &lt;a href="https://dart.dev/tutorials/server/httpserver" rel="noopener nofollow" dir="ltr"&gt;server-side apps&lt;/a&gt; and &lt;a href="https://dart.dev/server/libraries#server-packages" rel="noopener nofollow" dir="ltr"&gt;packages&lt;/a&gt;.&lt;/p&gt;&lt;h1 data-selectable-paragraph=""&gt;Availability&lt;/h1&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;The &lt;code dir="ltr"&gt;dart2native&lt;/code&gt; compiler is available in the Dart SDK starting with version 2.6, which is available starting today from &lt;a href="https://dart.dev/get-dart" rel="noopener nofollow" dir="ltr"&gt;dart.dev/get-dart&lt;/a&gt;. Once you’ve installed the SDK, you should see the new compiler inside the bin/ directory and in your &lt;code dir="ltr"&gt;PATH&lt;/code&gt;. Dart.dev has &lt;a href="https://dart.dev/tools/dart2native" rel="noopener nofollow" dir="ltr"&gt;more documentation&lt;/a&gt;.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;If you’re getting the Dart SDK via Flutter, note that current Flutter builds have incomplete dart2native support. We recommend you install the Dart 2.6 SDK from &lt;a href="https://dart.dev/get-dart" rel="noopener nofollow" dir="ltr"&gt;dart.dev/get-dart&lt;/a&gt;.&lt;/p&gt;&lt;h1 data-selectable-paragraph=""&gt;Known limitations&lt;/h1&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;This initial version of the &lt;code dir="ltr"&gt;dart2native&lt;/code&gt; compiler has a few known limitations, listed below. You can let us know which issues are important to you by adding a “thumbs up” to the issue in our GitHub issue tracker.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;No cross-compilation support (&lt;a href="https://github.com/dart-lang/sdk/issues/28617" rel="noopener nofollow" dir="ltr"&gt;issue 28617&lt;/a&gt;): The dart2native compiler supports creating machine code only for the operating system it’s running on. Thus, you’ll need to run the compiler three times — on macOS, Windows, and Linux — if you want to create executables for all three. One way of doing this is by using a CI (Continuous Integration) provider that supports all three operating systems.&lt;/LI&gt;&lt;LI&gt;No signing support (&lt;a href="https://github.com/dart-lang/sdk/issues/39106" rel="noopener nofollow" dir="ltr"&gt;issue 39106&lt;/a&gt;): The executables produced use a format that isn’t compatible with standard signing tools such as &lt;code dir="ltr"&gt;codesign&lt;/code&gt; and &lt;code dir="ltr"&gt;signtool&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;No support for &lt;code dir="ltr"&gt;dart:mirrors&lt;/code&gt; and &lt;code dir="ltr"&gt;dart:developer&lt;/code&gt; (see &lt;a href="https://dart.dev/guides/libraries" rel="noopener nofollow" dir="ltr"&gt;Dart core libraries&lt;/a&gt;).&lt;/LI&gt;&lt;/UL&gt;&lt;h1 data-selectable-paragraph=""&gt;Other changes in Dart 2.6&lt;/h1&gt;&lt;p data-selectable-paragraph=""&gt;Version 2.6 of the Dart SDK also has a few other changes.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;We launched a preview of &lt;code dir="ltr"&gt;dart:ffi&lt;/code&gt;, our new mechanism for &lt;a href="https://dart.dev/guides/libraries/c-interop" rel="noopener nofollow" dir="ltr"&gt;C interop&lt;/a&gt;, in &lt;a rel="noopener" href="https://medium.com/dartlang/announcing-dart-2-5-super-charged-development-328822024970" dir="ltr"&gt;Dart 2.5&lt;/a&gt;. Dart 2.6 has a new version of &lt;code dir="ltr"&gt;dart:ffi&lt;/code&gt;. This new version has a number of breaking API changes to make our APIs easier to use, provide more type safety, and to provide convenient access to memory. For additional details, see the &lt;a href="https://github.com/dart-lang/sdk/blob/master/CHANGELOG.md#foreign-function-interface-dartffi" rel="noopener nofollow" dir="ltr"&gt;Dart 2.6 changelog&lt;/a&gt;. With these changes &lt;code dir="ltr"&gt;dart:ffi&lt;/code&gt; graduates to the beta, and we expect API changes to be much less frequent going forward, and general stability is expected to be high. Please continue to give us feedback via the &lt;a href="https://github.com/dart-lang/sdk/issues" rel="noopener nofollow" dir="ltr"&gt;issue tracker&lt;/a&gt;.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Dart 2.6 also contains a preview of an exciting new language feature, &lt;a href="https://github.com/dart-lang/language/issues/41" rel="noopener nofollow" dir="ltr"&gt;extension methods&lt;/a&gt;. We still have a bit of polish and tools work left to complete this feature, but we hope to formally launch it in our next Dart SDK version. We’ll have much more to say about extension methods then; for now you can read about the &lt;a rel="noopener" href="https://medium.com/dartlang/extension-methods-2d466cd8b308" dir="ltr"&gt;design considerations behind the feature&lt;/a&gt;.&lt;/p&gt;&lt;h1 data-selectable-paragraph=""&gt;Next steps&lt;/h1&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Download the Dart 2.6 SDK (&lt;a href="https://dart.dev/get-dart" rel="noopener nofollow" dir="ltr"&gt;dart.dev/get-dart&lt;/a&gt;), build something cool with dart2native, and then tell us about it. If you’re willing to share the details, please leave a response at the bottom of this article. We’re excited to see what you build!&lt;/p&gt;</description><pubDate>Wed, 04 Dec 2019 18:38:00 -0600</pubDate></item><item><title>Inside SoftRAM 95 (1996)</title><link>https://lobste.rs/s/q9uuw7</link><description>&lt;p dir="ltr"&gt;The slogan "Double click. Double Memory" was at the heart of one of the most successful advertising campaigns in the history of PC software. In May of 1995, Syncronys Softcorp rolled out a software package called "SoftRAM for Windows 3.1" for users frustrated by "out of memory" errors and other resource limitations. Six months and a Windows 95 version later, Syncronys reported net revenues of $11 million for the third quarter of 1995, based almost entirely on SoftRAM sales of 650,000 units. SoftRAM coasted into the new year as one of the top three best-selling software products of 1995, up there with the likes of the Windows 95 Upgrade.
+The data is get using $LANG, english is the fallback option&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Wed, 04 Dec 2019 21:53:58 -0600</pubDate></item><item><title>Inside SoftRAM 95 (1996)</title><link>https://lobste.rs/s/q9uuw7</link><description>&lt;p dir="ltr"&gt;The slogan "Double click. Double Memory" was at the heart of one of the most successful advertising campaigns in the history of PC software. In May of 1995, Syncronys Softcorp rolled out a software package called "SoftRAM for Windows 3.1" for users frustrated by "out of memory" errors and other resource limitations. Six months and a Windows 95 version later, Syncronys reported net revenues of $11 million for the third quarter of 1995, based almost entirely on SoftRAM sales of 650,000 units. SoftRAM coasted into the new year as one of the top three best-selling software products of 1995, up there with the likes of the Windows 95 Upgrade.
 
 
 &lt;/p&gt;&lt;div&gt;More Insights&lt;/div&gt;&lt;h3&gt;White Papers&lt;/h3&gt;&lt;p&gt;After a summer of extremely strong sales, however, speculation began building that SoftRAM wasn't doing what Syncronys claimed. Toward the end of October, several independent sources (including one of the authors, Mark Russinovich) examined the internals of the software to find out the extent of RAM doubling underneath the pretty dials that SoftRAM presents to both Windows 3.x or Windows 95 users. About the same time, Syncronys issued a press release announcing that in the Windows 95 version "RAM compression is not being delivered to the operating system."
@@ -1303,7 +1303,7 @@ Figure 1: Typical Windows application memory-access profile.&lt;/b&gt;&lt;/p&gt;
 &lt;/p&gt;&lt;p&gt;The first thing to note about the Windows 95 version of SoftRAM is that, under Windows 95, the pagefile-sizing limitations, and the conventional memory-allocation bottleneck are effectively gone. Further, the resource-heap size limitations of Windows 3.x are also a thing of the past. Out of the RAM-doubling techniques claimed by SoftRAM, that leaves just RAM compression as a Windows 95 memory enhancement possibility.
 &lt;/p&gt;&lt;p&gt;The Windows 95 version of SoftRAM is based on the Microsoft Device Driver Kit's (DDK) Dynapage example (see DDK \BASE\SAMPLES\DYNAPAGE) pagefile device. This device driver takes pagefile read and write requests and creates the appropriate disk I/O requests. When SoftRAM is loaded during Windows start-up, the first thing it attempts to do is allocate a buffer for its cache. The default size of this buffer, as determined by the SoftRAM MaxPhys parameter created in the system.ini file, is 100 percent of the memory that Windows reports to it as free. Windows will not let all this memory be allocated in one try at that time, so the memory allocation specified by the default will always fail. From that point on, SoftRAM turns off its code, and only the Microsoft dynapage code within it remains active. This is the behavior that users will get unless they modify SoftRAM's default configuration.
 &lt;/p&gt;&lt;p&gt;If the SoftRAM MaxPhys parameter is lowered by users to a point where the allocation succeeds, SoftRAM actually does manage a pagefile cache. Data that would normally go to the swap file stops in this cache, and conversely, when data is read from the swap file it also ends up in this cache. However, the data in the cache is not compressed. Moreover, thorough disassembly reveals the presence of code that manages pseudocompressed pages. At idle time, SoftRAM goes through the area of the cache containing non-pseudocompressed pages and copies them to another area of the cache, attaching a 3-byte header containing only one piece of information that is used-the size of the header! It is clear that while the author of the code may have at some point intended to put in a compression routine instead of this pseudocompression, no such routine exists.
-&lt;/p&gt;</description><pubDate>Wed, 04 Dec 2019 18:31:36 -0600</pubDate></item><item><title>PJW's Face</title><link>https://lobste.rs/s/8bcjxs</link><description>&lt;img src="http://spinroot.com/pico/pjw.jpg" width="100" height="104"&gt;&lt;img src="http://spinroot.com/pico/pjw_logo.gif" width="105" height="105"&gt;&lt;font face="helvetica" dir="ltr"&gt;
+&lt;/p&gt;</description><pubDate>Wed, 04 Dec 2019 18:31:36 -0600</pubDate></item><item><title>dart2native: Compile Dart to self-contained, native executables</title><link>https://lobste.rs/s/fbqdyf</link><description>&lt;img alt="Michael Thomsen" src="https://miro.medium.com/fit/c/96/96/0*Y_CFLc1qadgr3tPK." width="48" height="48"&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Dart already offers &lt;a href="https://dart.dev/platforms" rel="noopener nofollow" dir="ltr"&gt;an extensive set of compilers&lt;/a&gt; for building production-optimized code for mobile devices and the web. These flexible compilers enable our framework partners to target a wide range of form factors: Flutter apps on &lt;a href="https://flutter.dev/docs" rel="noopener nofollow" dir="ltr"&gt;Android &amp;amp; iOS&lt;/a&gt;, Flutter apps on the &lt;a href="https://flutter.dev/web" rel="noopener nofollow" dir="ltr"&gt;web&lt;/a&gt; &amp;amp; &lt;a href="https://flutter.dev/desktop" rel="noopener nofollow" dir="ltr"&gt;desktop&lt;/a&gt;, AngularDart apps on the &lt;a href="https://angulardart.dev/" rel="noopener nofollow" dir="ltr"&gt;web&lt;/a&gt;, and Google Assistant on &lt;a href="https://developers.googleblog.com/2019/05/Flutter-io19.html" rel="noopener nofollow" dir="ltr"&gt;embedded devices&lt;/a&gt;.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Today we’re announcing &lt;code dir="ltr"&gt;&lt;strong dir="ltr"&gt;dart2native&lt;/strong&gt;&lt;/code&gt;, an extension of our existing compiler set, with the ability to compile Dart programs to self-contained executables containing ahead-of-time-compiled machine code. With dart2native, you can create tools for the command line on &lt;strong dir="ltr"&gt;macOS, Windows, or Linux&lt;/strong&gt; using Dart. This feature’s announcement picture &lt;a href="https://gist.github.com/mit-mit/faec2bfc1d1cef7cd09df917e531c5c0" rel="noopener nofollow" dir="ltr"&gt;was implemented&lt;/a&gt; using the feature itself :-)&lt;/p&gt;&lt;figure&gt;&lt;img src="https://miro.medium.com/max/60/0*lY0iF-neazyL0aE-?q=20" width="437" height="185"&gt;&lt;/figure&gt;&lt;h1 data-selectable-paragraph=""&gt;Dart Native and the dart2native compiler&lt;/h1&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Dart has supported AOT (ahead-of-time) compilation to native machine code for several years, and &lt;a href="https://dart.dev/platforms" rel="noopener nofollow" dir="ltr"&gt;Dart Native&lt;/a&gt; is thus fairly mature technology. However, in the past we only exposed this capability on iOS and Android mobile devices, via &lt;a href="http://flutter.dev/" rel="noopener nofollow" dir="ltr"&gt;Flutter&lt;/a&gt;.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;With &lt;code dir="ltr"&gt;dart2native&lt;/code&gt;, we’re extending our native compilation support to support traditional desktop operating systems running macOS, Windows, and Linux. Because the executables created with &lt;code dir="ltr"&gt;dart2native&lt;/code&gt; are self-contained, they can run on machines that don’t have the Dart SDK installed. And because they’re compiled with Dart’s AOT compiler, the executables start running in just a few milliseconds. As with other Dart compilers and runtimes, the same set of rich and consistent &lt;a href="https://dart.dev/guides/libraries" rel="noopener nofollow" dir="ltr"&gt;core libraries&lt;/a&gt; are available in Dart when compiling to native code.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;We’ve heard many customers ask for AOT compilation for desktop operating systems — the &lt;a href="https://github.com/dart-lang/sdk/issues/36915" rel="noopener nofollow" dir="ltr"&gt;sixth highest-rated issue&lt;/a&gt; in our issue tracker — so we’re delighted to be able to make this feature available.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p data-selectable-paragraph=""&gt;If you used dart2aot before, then as of 2.6 you’ll use dart2native. It provides a superset of dart2aot’s functionality.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h1 data-selectable-paragraph=""&gt;Building command line apps with dart2native&lt;/h1&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;The &lt;code dir="ltr"&gt;dart2native&lt;/code&gt; compiler is a great choice for building and deploying &lt;a href="https://dart.dev/tutorials/server/cmdline" rel="noopener nofollow" dir="ltr"&gt;Dart-based apps for the command line&lt;/a&gt;. These apps often use libraries such as &lt;code dir="ltr"&gt;&lt;a href="https://api.dart.dev/stable/dart-io/dart-io-library.html" rel="noopener nofollow" dir="ltr"&gt;dart:io&lt;/a&gt;&lt;/code&gt; (basic I/O), &lt;code dir="ltr"&gt;package:&lt;a href="https://pub.dev/packages/http" rel="noopener nofollow" dir="ltr"&gt;http&lt;/a&gt;&lt;/code&gt; (networking), and &lt;code dir="ltr"&gt;package:&lt;a href="https://pub.dev/packages/args" rel="noopener nofollow" dir="ltr"&gt;args&lt;/a&gt;&lt;/code&gt; (argument parsing). Let’s review the basics of compiling a “hello, world” app to an executable:&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;The source code &lt;code dir="ltr"&gt;hello.dart&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph="" dir="ltr"&gt;main() {&lt;br dir="ltr"&gt;  print(‘Hello Dart developers’);&lt;br dir="ltr"&gt;}&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Compile &lt;code dir="ltr"&gt;hello.dart&lt;/code&gt; to a &lt;code dir="ltr"&gt;hello&lt;/code&gt; executable:&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph="" dir="ltr"&gt;$ dart2native src/hello.dart -o hello&lt;br dir="ltr"&gt;Generated: /Users/mit/hello&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Run &lt;code dir="ltr"&gt;hello&lt;/code&gt; measuring execution time:&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph="" dir="ltr"&gt;$ time ./hello&lt;br dir="ltr"&gt;Hello Dart developers&lt;/span&gt;&lt;span data-selectable-paragraph="" dir="ltr"&gt;real 0m0.049s&lt;br dir="ltr"&gt;user 0m0.018s&lt;br dir="ltr"&gt;sys 0m0.020s&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph=""&gt;Notice how the command starts, prints to stdout, and exits in a combined time of just 49 milliseconds!&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;We’ve seen a few Dart developers already experiment with &lt;code dir="ltr"&gt;dart2native&lt;/code&gt; for command-line tools:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Natalie from the &lt;a href="https://sass-lang.com/" rel="noopener nofollow" dir="ltr"&gt;SASS&lt;/a&gt; (a popular CSS extension tool) team &lt;a href="https://github.com/dart-lang/sdk/issues/32894#issuecomment-513975562" rel="noopener nofollow" dir="ltr"&gt;reports&lt;/a&gt; that after switching their Dart-based SASS implementation to compile with dart2native, it is now competitive in performance with LibSass, a C++ based implementation.&lt;/LI&gt;&lt;LI&gt;Filip from the Dart DevRel team recompiled his &lt;a href="https://github.com/filiph/linkcheck/" rel="noopener nofollow" dir="ltr"&gt;linkchecker&lt;/a&gt; tool with dart2native, and saw a &lt;a href="https://github.com/filiph/linkcheck/issues/7#issuecomment-496308288" rel="noopener nofollow" dir="ltr"&gt;27x speedup&lt;/a&gt; when checking small sites.&lt;/LI&gt;&lt;/UL&gt;&lt;h1 data-selectable-paragraph=""&gt;Interoperability with C code via dart:ffi&lt;/h1&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Native apps often need to access native functionality from the surrounding operating system. These system APIs are typically exposed in native C-based libraries, and Dart supports interoperability with these libraries via &lt;code dir="ltr"&gt;dart:ffi&lt;/code&gt;, our new mechanism for &lt;a href="https://dart.dev/guides/libraries/c-interop" rel="noopener nofollow" dir="ltr"&gt;C interop&lt;/a&gt;, which we launched in preview in &lt;a rel="noopener" href="https://medium.com/dartlang/announcing-dart-2-5-super-charged-development-328822024970" dir="ltr"&gt;Dart 2.5&lt;/a&gt;. The &lt;code dir="ltr"&gt;dart2native&lt;/code&gt; compiler is compatible with &lt;code dir="ltr"&gt;dart:ffi&lt;/code&gt;, so you can create and compile natively Dart apps that use it.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;One team member recently used &lt;code dir="ltr"&gt;dart:ffi&lt;/code&gt; to create a &lt;code dir="ltr"&gt;&lt;a href="https://pub.dev/packages/dart_console" rel="noopener nofollow" dir="ltr"&gt;dart_console&lt;/a&gt;&lt;/code&gt; library for console app development, which has functionality like getting window dimensions, reading and setting the cursor location, managing colors, and reading keys and control sequences. The ability to use &lt;code dir="ltr"&gt;dart:ffi&lt;/code&gt; makes Dart a very powerful language for console apps.&lt;/p&gt;&lt;h1 data-selectable-paragraph=""&gt;kilo: a 7MB code editor written in less than 500 lines of Dart code&lt;/h1&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Using Dart core libraries, &lt;code dir="ltr"&gt;dart:ffi&lt;/code&gt;, and the dart_console library, we can create pretty interesting console apps. The dart_console package includes a full demo of &lt;em dir="ltr"&gt;kilo&lt;/em&gt;, a console text editor written in just ~&lt;a href="https://github.com/timsneath/dart_console/blob/master/example/kilo.dart" rel="noopener nofollow" dir="ltr"&gt;500 lines of Dart code&lt;/a&gt;. The name kilo comes from its origin, &lt;code dir="ltr"&gt;&lt;a href="https://github.com/antirez/kilo/blob/master/kilo.c" rel="noopener nofollow" dir="ltr"&gt;kilo.c&lt;/a&gt;&lt;/code&gt;, which was a C implementation in roughly 1000 lines of code.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;With the new &lt;code dir="ltr"&gt;dart2native&lt;/code&gt; compiler we can easily package this, and we end up with a 7MB self-contained code editor. Here’s a demo of compiling the editor, and then using the compiled editor to edit its own source code to fix a bug:&lt;/p&gt;&lt;figure&gt;&lt;img src="https://miro.medium.com/max/60/0*f5pvUnbesO4mGZmW?q=20" width="437" height="285"&gt;&lt;figcaption dir="auto"&gt;The kilo editor written in Dart and compiled to an executable with dart2native editing it’s own source code&lt;/figcaption&gt;&lt;/figure&gt;&lt;h1 data-selectable-paragraph=""&gt;Building services with dart2native&lt;/h1&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Another potential use of the dart2native compiler is for small services — for example, a backend supporting a frontend app written using Flutter. In recent years, a growing trend has been the use of services running on &lt;a href="https://en.wikipedia.org/wiki/Serverless_computing" rel="noopener nofollow" dir="ltr"&gt;serverless computing&lt;/a&gt;. These are fully managed services that automatically scale, including scaling up from and down to zero (not running), providing the potential to greatly lower cost because they are billed only when actually running. Google Cloud makes serverless computing available via &lt;a href="https://cloud.google.com/run/" rel="noopener nofollow" dir="ltr"&gt;Cloud Run&lt;/a&gt;.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;For serverless backends it’s critical that the service starts quickly. Traditionally, Dart-based services have run with our JIT (just-in-time) compiler, but JIT-based execution has a high latency when starting as the code needs to be compiled and warmed up before it can start executing. By compiling your service’s code ahead-of-time to native code, you can avoid this latency and begin running right away. In addition, with native code you can create Dart services that have a small disk footprint and are self-contained, greatly reducing the size of the container in which the Dart service runs. Dart developer Paul Mundt recently &lt;a href="https://itnext.io/experiments-with-dart-microservices-fa117aa408c7" rel="noopener nofollow" dir="ltr"&gt;documented his experiences&lt;/a&gt; with using the dart2native compiler; he was able to reduce the size of his Docker image by 91% from 220MB using JIT-compiled code down to just 20MB by using native code! See our documentation for more details about &lt;a href="https://dart.dev/tutorials/server/httpserver" rel="noopener nofollow" dir="ltr"&gt;server-side apps&lt;/a&gt; and &lt;a href="https://dart.dev/server/libraries#server-packages" rel="noopener nofollow" dir="ltr"&gt;packages&lt;/a&gt;.&lt;/p&gt;&lt;h1 data-selectable-paragraph=""&gt;Availability&lt;/h1&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;The &lt;code dir="ltr"&gt;dart2native&lt;/code&gt; compiler is available in the Dart SDK starting with version 2.6, which is available starting today from &lt;a href="https://dart.dev/get-dart" rel="noopener nofollow" dir="ltr"&gt;dart.dev/get-dart&lt;/a&gt;. Once you’ve installed the SDK, you should see the new compiler inside the bin/ directory and in your &lt;code dir="ltr"&gt;PATH&lt;/code&gt;. Dart.dev has &lt;a href="https://dart.dev/tools/dart2native" rel="noopener nofollow" dir="ltr"&gt;more documentation&lt;/a&gt;.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;If you’re getting the Dart SDK via Flutter, note that current Flutter builds have incomplete dart2native support. We recommend you install the Dart 2.6 SDK from &lt;a href="https://dart.dev/get-dart" rel="noopener nofollow" dir="ltr"&gt;dart.dev/get-dart&lt;/a&gt;.&lt;/p&gt;&lt;h1 data-selectable-paragraph=""&gt;Known limitations&lt;/h1&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;This initial version of the &lt;code dir="ltr"&gt;dart2native&lt;/code&gt; compiler has a few known limitations, listed below. You can let us know which issues are important to you by adding a “thumbs up” to the issue in our GitHub issue tracker.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;No cross-compilation support (&lt;a href="https://github.com/dart-lang/sdk/issues/28617" rel="noopener nofollow" dir="ltr"&gt;issue 28617&lt;/a&gt;): The dart2native compiler supports creating machine code only for the operating system it’s running on. Thus, you’ll need to run the compiler three times — on macOS, Windows, and Linux — if you want to create executables for all three. One way of doing this is by using a CI (Continuous Integration) provider that supports all three operating systems.&lt;/LI&gt;&lt;LI&gt;No signing support (&lt;a href="https://github.com/dart-lang/sdk/issues/39106" rel="noopener nofollow" dir="ltr"&gt;issue 39106&lt;/a&gt;): The executables produced use a format that isn’t compatible with standard signing tools such as &lt;code dir="ltr"&gt;codesign&lt;/code&gt; and &lt;code dir="ltr"&gt;signtool&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;No support for &lt;code dir="ltr"&gt;dart:mirrors&lt;/code&gt; and &lt;code dir="ltr"&gt;dart:developer&lt;/code&gt; (see &lt;a href="https://dart.dev/guides/libraries" rel="noopener nofollow" dir="ltr"&gt;Dart core libraries&lt;/a&gt;).&lt;/LI&gt;&lt;/UL&gt;&lt;h1 data-selectable-paragraph=""&gt;Other changes in Dart 2.6&lt;/h1&gt;&lt;p data-selectable-paragraph=""&gt;Version 2.6 of the Dart SDK also has a few other changes.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;We launched a preview of &lt;code dir="ltr"&gt;dart:ffi&lt;/code&gt;, our new mechanism for &lt;a href="https://dart.dev/guides/libraries/c-interop" rel="noopener nofollow" dir="ltr"&gt;C interop&lt;/a&gt;, in &lt;a rel="noopener" href="https://medium.com/dartlang/announcing-dart-2-5-super-charged-development-328822024970" dir="ltr"&gt;Dart 2.5&lt;/a&gt;. Dart 2.6 has a new version of &lt;code dir="ltr"&gt;dart:ffi&lt;/code&gt;. This new version has a number of breaking API changes to make our APIs easier to use, provide more type safety, and to provide convenient access to memory. For additional details, see the &lt;a href="https://github.com/dart-lang/sdk/blob/master/CHANGELOG.md#foreign-function-interface-dartffi" rel="noopener nofollow" dir="ltr"&gt;Dart 2.6 changelog&lt;/a&gt;. With these changes &lt;code dir="ltr"&gt;dart:ffi&lt;/code&gt; graduates to the beta, and we expect API changes to be much less frequent going forward, and general stability is expected to be high. Please continue to give us feedback via the &lt;a href="https://github.com/dart-lang/sdk/issues" rel="noopener nofollow" dir="ltr"&gt;issue tracker&lt;/a&gt;.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Dart 2.6 also contains a preview of an exciting new language feature, &lt;a href="https://github.com/dart-lang/language/issues/41" rel="noopener nofollow" dir="ltr"&gt;extension methods&lt;/a&gt;. We still have a bit of polish and tools work left to complete this feature, but we hope to formally launch it in our next Dart SDK version. We’ll have much more to say about extension methods then; for now you can read about the &lt;a rel="noopener" href="https://medium.com/dartlang/extension-methods-2d466cd8b308" dir="ltr"&gt;design considerations behind the feature&lt;/a&gt;.&lt;/p&gt;&lt;h1 data-selectable-paragraph=""&gt;Next steps&lt;/h1&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Download the Dart 2.6 SDK (&lt;a href="https://dart.dev/get-dart" rel="noopener nofollow" dir="ltr"&gt;dart.dev/get-dart&lt;/a&gt;), build something cool with dart2native, and then tell us about it. If you’re willing to share the details, please leave a response at the bottom of this article. We’re excited to see what you build!&lt;/p&gt;</description><pubDate>Wed, 04 Dec 2019 18:38:00 -0600</pubDate></item><item><title>PJW's Face</title><link>https://lobste.rs/s/8bcjxs</link><description>&lt;img src="http://spinroot.com/pico/pjw.jpg" width="100" height="104"&gt;&lt;img src="http://spinroot.com/pico/pjw_logo.gif" width="105" height="105"&gt;&lt;font face="helvetica" dir="ltr"&gt;
 The fifth example from the digital darkroom
 &lt;a href="http://spinroot.com/pico/" dir="ltr"&gt;book&lt;/a&gt; (pages 42 and 43)
 uses the portrait of Peter J. Weinberger, then a department head
@@ -1495,7 +1495,7 @@ PJW's iconized face instead.
 &lt;/LI&gt;&lt;/UL&gt;&lt;font face="helvetica" dir="ltr"&gt;
 &lt;font size="2" dir="ltr"&gt;GJH Jan. 2003, last updated July 2018&lt;/font&gt;
 
-&lt;/font&gt;</description><pubDate>Wed, 04 Dec 2019 23:36:35 -0600</pubDate></item><item><title>The Beginnings of TECO (2009)</title><link>http://tenex.opost.com/anhc-31-4-anec.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/fwpuza/beginnings_teco_2009"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Thu, 05 Dec 2019 05:04:05 -0600</pubDate></item><item><title>Interoperability Issue of Google Mail and G Suite</title><link>https://lobste.rs/s/xxyw0x</link><description>&lt;div&gt;
+&lt;/font&gt;</description><pubDate>Wed, 04 Dec 2019 23:36:35 -0600</pubDate></item><item><title>Interoperability Issue of Google Mail and G Suite</title><link>https://lobste.rs/s/xxyw0x</link><description>&lt;div&gt;
 &lt;b dir="ltr"&gt;Constantine A. Murenin&lt;/b&gt;
 &lt;a href="mailto:nanog%40nanog.org?Subject=Re%3A%20Gmail%20email%20blocking%20is%20off%20the%20rails%20%28again%29&amp;amp;In-Reply-To=%3CCAPKkNb537O5C_FQjh7ucWsF_4USK3EuHcJdkDv-ZJLU8EK1Kmg%40mail.gmail.com%3E" title="Gmail email blocking is off the rails (again)" dir="ltr"&gt;mureninc at gmail.com
 &lt;/a&gt;&lt;br dir="ltr"&gt;
@@ -1546,7 +1546,7 @@ C.
 &lt;/i&gt;&amp;gt;&lt;i dir="ltr"&gt; &amp;gt; If anyone here has any pull with Gmail postmasters, could you please
 &lt;/i&gt;&amp;gt;&lt;i dir="ltr"&gt; &amp;gt; suggest to them that they whitelist messages that are as consistent
 &lt;/i&gt;&amp;gt;&lt;i dir="ltr"&gt; &amp;gt; and well-known as mailman's admin and moderator messages?
-&lt;/i&gt;&lt;/PRE&gt;</description><pubDate>Wed, 04 Dec 2019 15:13:15 -0600</pubDate></item><item><title>Ruby 2.7 adds shorthand syntax for arguments forwarding</title><link>https://lobste.rs/s/intpmr</link><description>&lt;p dir="ltr"&gt;Ruby 2.7 added a new shorthand syntax &lt;code dir="ltr"&gt;...&lt;/code&gt;
+&lt;/i&gt;&lt;/PRE&gt;</description><pubDate>Wed, 04 Dec 2019 15:13:15 -0600</pubDate></item><item><title>The Beginnings of TECO (2009)</title><link>http://tenex.opost.com/anhc-31-4-anec.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/fwpuza/beginnings_teco_2009"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Thu, 05 Dec 2019 05:04:05 -0600</pubDate></item><item><title>Ruby 2.7 adds shorthand syntax for arguments forwarding</title><link>https://lobste.rs/s/intpmr</link><description>&lt;p dir="ltr"&gt;Ruby 2.7 added a new shorthand syntax &lt;code dir="ltr"&gt;...&lt;/code&gt;
 for forwarding arguments to a method.&lt;/p&gt;&lt;h4&gt;Need for a new operator&lt;/h4&gt;&lt;p dir="ltr"&gt;Currently we do have &lt;code dir="ltr"&gt;*&lt;/code&gt; and &lt;code dir="ltr"&gt;**&lt;/code&gt; operators
 for single and keyword arguments. 
 These are used to specify any number of arguments or 
