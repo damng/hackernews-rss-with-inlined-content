@@ -75,7 +75,68 @@ FUSE, strace, and namespacing were all the mechanisms I found.
 Bazel uses separate wrapper program
 which you could reuse in other build systems,
 so there is no fundamental problem with adding a "hermetic builds" feature
-to other build systems like Meson or Cmake.&lt;/p&gt;&lt;p dir="ltr"&gt;© &lt;time datetime="2019-12-08" dir="ltr"&gt;2019-12-08&lt;/time&gt;&lt;/p&gt;</description><pubDate>Sun, 08 Dec 2019 07:32:05 -0600</pubDate></item><item><title>Doing Python Configuration Right</title><link>https://lobste.rs/s/zfc2c7</link><description>&lt;p dir="ltr"&gt;You can test this out on your own. Create a directory named &lt;code dir="ltr"&gt;foo&lt;/code&gt; and give it an empty &lt;code dir="ltr"&gt;__init__.py&lt;/code&gt; file.&lt;/p&gt;&lt;p dir="ltr"&gt;From a &lt;a href="https://docs.python.org/3/tutorial/interpreter.html" dir="ltr"&gt;Python &lt;abbr title="Read, Evaluate, Print, Loop" dir="ltr"&gt;REPL&lt;/abbr&gt;&lt;/a&gt; in the same directory:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&amp;gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;foo&lt;/span&gt;
+to other build systems like Meson or Cmake.&lt;/p&gt;&lt;p dir="ltr"&gt;© &lt;time datetime="2019-12-08" dir="ltr"&gt;2019-12-08&lt;/time&gt;&lt;/p&gt;</description><pubDate>Sun, 08 Dec 2019 07:32:05 -0600</pubDate></item><item><title>The Go runtime scheduler's clever way of dealing with system calls</title><link>https://lobste.rs/s/bukuh5</link><description>&lt;h2&gt;The Go runtime scheduler's clever way of dealing with system calls&lt;/h2&gt;&lt;div&gt;&lt;small&gt;December  8, 2019&lt;/small&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;One of Go's signature features is &lt;a href="https://tour.golang.org/concurrency/1" dir="ltr"&gt;goroutines&lt;/a&gt;, which are lightweight
+threads that are managed by the Go runtime. The Go runtime implements
+goroutines using &lt;a href="https://rakyll.org/scheduler/" dir="ltr"&gt;a M:N work stealing scheduler&lt;/a&gt; to multiplex goroutines on to
+operating system threads. The scheduler has special terminology for
+three important entities; a G is a goroutine, an M is an OS thread
+(a 'machine'), and a P is a 'processor', which at its core is a
+limited resource that must be claimed by an M in order to run Go
+code. Having a limited supply of Ps is how Go limits how many things
+it will do at once, so as to not overload the overall system;
+generally there is one P per actual CPU that the OS reports (the
+number of Ps is &lt;a href="https://golang.org/pkg/runtime/" dir="ltr"&gt;&lt;code dir="ltr"&gt;GOMAXPROCS&lt;/code&gt;&lt;/a&gt;).&lt;/p&gt;&lt;p dir="ltr"&gt;When a goroutine performs network IO or any system call operation
+that can definitely be done asynchronously, Go has an entire runtime
+subsystem, &lt;a href="https://morsmachine.dk/netpoller" dir="ltr"&gt;the netpoller&lt;/a&gt;, that
+converts what looks like multiple separate synchronous operations
+into a single wait (using operating system mechanisms like &lt;a href="https://medium.com/@copyconstruct/the-method-to-epolls-madness-d9d2d6378642" dir="ltr"&gt;&lt;code dir="ltr"&gt;epoll&lt;/code&gt;&lt;/a&gt;).
+Rather than actually making a blocking system call, your goroutine
+goes to sleep waiting for its network socket, just as if it was
+waiting for a channel to become ready. This is all conceptually
+straightforward, if tricky to implement efficiently.&lt;/p&gt;&lt;p&gt;However, network IO and similar things are far from the only system
+calls that Go programs can make, so Go has to deal with blocking system
+calls as well. The straightforward way to handle blocking system calls
+is for your goroutine's M to release its P just before it makes the
+system call and then try to re-acquire a P after the system call
+resumes. If there's no free P at that time, your goroutine gets parked
+in the scheduler along with everything else that's waiting to run.&lt;/p&gt;&lt;p dir="ltr"&gt;While all system calls are blocking in theory, not all are expected
+to be blocking in practice. For example, on modern systems the
+'system call' to get the current time may not even enter the kernel
+(see &lt;a href="http://man7.org/linux/man-pages/man7/vdso.7.html" dir="ltr"&gt;vdso(7)&lt;/a&gt;
+on Linux). Having goroutines go through the full work of releasing
+their current P and then re-acquiring one for these system calls
+has two problems. First, there's a bunch of overhead involved in
+locking (and releasing) all of the data structures involved. Second,
+if there's more runnable goroutines than Ps, a goroutine that makes
+this sort of system call won't be able to re-acquire a P and will
+have to park itself; the moment it released the P, something else
+was scheduled onto it. This is extra runtime overhead, is sort of
+unfair, and kind of defeats the purpose of having fast system calls
+(especially ones that don't go into the kernel).&lt;/p&gt;&lt;p&gt;So the Go runtime and scheduler actually have two ways of handling
+blocking system calls, a pessimistic way for system calls that are
+expected to be slow and an optimistic way for ones that are expected
+to be fast. The pessimistic system call path implements the
+straightforward approach where the runtime actively releases the P
+before the system call, attempts to get it back afterward, and parks
+itself if it can't. The optimistic system call path doesn't release
+the P; instead, it sets a special P state flag and just makes the
+system call. A special internal goroutine, the sysmon goroutine,
+then comes along periodically and looks for P's that have been
+sitting in this 'making a system call' state for too long and steals
+them away from the goroutine making the system call. When the system
+call returns, the runtime code checks to see if its P has been
+stolen out from underneath it, and if it hasn't it can just go on
+(if the P has been stolen, the runtime tries to get another P and
+then may have to park your goroutine).&lt;/p&gt;&lt;p dir="ltr"&gt;If everything works out, the optimistic system call path has very
+low overhead (mostly it requires a couple of &lt;a href="https://en.wikipedia.org/wiki/Compare-and-swap" dir="ltr"&gt;atomic compare and
+swap&lt;/a&gt; operations).
+If things don't work out and there's more runnable goroutines than
+there are Ps, then one P will be unnecessarily idle for what is
+probably generally a few tens of microseconds (the sysmon goroutine
+runs at most once every 20 microseconds, but can run less frequently
+if there seems to be no need for it). There are probably worst case
+scenarios possible, but in general this seems to be a worthwhile
+tradeoff on the part of the Go runtime.&lt;/p&gt;</description><pubDate>Sun, 08 Dec 2019 12:19:21 -0600</pubDate></item><item><title>Doing Python Configuration Right</title><link>https://lobste.rs/s/zfc2c7</link><description>&lt;p dir="ltr"&gt;You can test this out on your own. Create a directory named &lt;code dir="ltr"&gt;foo&lt;/code&gt; and give it an empty &lt;code dir="ltr"&gt;__init__.py&lt;/code&gt; file.&lt;/p&gt;&lt;p dir="ltr"&gt;From a &lt;a href="https://docs.python.org/3/tutorial/interpreter.html" dir="ltr"&gt;Python &lt;abbr title="Read, Evaluate, Print, Loop" dir="ltr"&gt;REPL&lt;/abbr&gt;&lt;/a&gt; in the same directory:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&amp;gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;foo&lt;/span&gt;
 &lt;span dir="ltr"&gt;&amp;gt;&amp;gt;&amp;gt;&lt;/span&gt;
 &lt;/PRE&gt;&lt;p&gt;Seeing no output here is good, it means the statement was successful.&lt;/p&gt;&lt;p dir="ltr"&gt;Now let's edit our &lt;code dir="ltr"&gt;__init__.py&lt;/code&gt; file to include the following code:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;sys&lt;/span&gt;
 &lt;span dir="ltr"&gt;sys&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;exit&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
@@ -261,68 +322,7 @@ Its only dependency is &lt;a href="https://adi.tilde.institute/pp" dir="ltr"&gt;
                 &lt;span dir="ltr"&gt;&lt;time datetime="2019-12-03" dir="ltr"&gt;03 Dec 2019&lt;/time&gt;&lt;/span&gt;           
                 
                 &lt;/small&gt;
-            &lt;/p&gt;</description><pubDate>Sat, 07 Dec 2019 21:17:16 -0600</pubDate></item><item><title>Better x86 Assembly Generation with Go</title><link>https://www.youtube.com/watch?v=6Y5CZ7_tyA4</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/upghu1/better_x86_assembly_generation_with_go"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 08 Dec 2019 10:15:49 -0600</pubDate></item><item><title>The Go runtime scheduler's clever way of dealing with system calls</title><link>https://lobste.rs/s/bukuh5</link><description>&lt;h2&gt;The Go runtime scheduler's clever way of dealing with system calls&lt;/h2&gt;&lt;div&gt;&lt;small&gt;December  8, 2019&lt;/small&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;One of Go's signature features is &lt;a href="https://tour.golang.org/concurrency/1" dir="ltr"&gt;goroutines&lt;/a&gt;, which are lightweight
-threads that are managed by the Go runtime. The Go runtime implements
-goroutines using &lt;a href="https://rakyll.org/scheduler/" dir="ltr"&gt;a M:N work stealing scheduler&lt;/a&gt; to multiplex goroutines on to
-operating system threads. The scheduler has special terminology for
-three important entities; a G is a goroutine, an M is an OS thread
-(a 'machine'), and a P is a 'processor', which at its core is a
-limited resource that must be claimed by an M in order to run Go
-code. Having a limited supply of Ps is how Go limits how many things
-it will do at once, so as to not overload the overall system;
-generally there is one P per actual CPU that the OS reports (the
-number of Ps is &lt;a href="https://golang.org/pkg/runtime/" dir="ltr"&gt;&lt;code dir="ltr"&gt;GOMAXPROCS&lt;/code&gt;&lt;/a&gt;).&lt;/p&gt;&lt;p dir="ltr"&gt;When a goroutine performs network IO or any system call operation
-that can definitely be done asynchronously, Go has an entire runtime
-subsystem, &lt;a href="https://morsmachine.dk/netpoller" dir="ltr"&gt;the netpoller&lt;/a&gt;, that
-converts what looks like multiple separate synchronous operations
-into a single wait (using operating system mechanisms like &lt;a href="https://medium.com/@copyconstruct/the-method-to-epolls-madness-d9d2d6378642" dir="ltr"&gt;&lt;code dir="ltr"&gt;epoll&lt;/code&gt;&lt;/a&gt;).
-Rather than actually making a blocking system call, your goroutine
-goes to sleep waiting for its network socket, just as if it was
-waiting for a channel to become ready. This is all conceptually
-straightforward, if tricky to implement efficiently.&lt;/p&gt;&lt;p&gt;However, network IO and similar things are far from the only system
-calls that Go programs can make, so Go has to deal with blocking system
-calls as well. The straightforward way to handle blocking system calls
-is for your goroutine's M to release its P just before it makes the
-system call and then try to re-acquire a P after the system call
-resumes. If there's no free P at that time, your goroutine gets parked
-in the scheduler along with everything else that's waiting to run.&lt;/p&gt;&lt;p dir="ltr"&gt;While all system calls are blocking in theory, not all are expected
-to be blocking in practice. For example, on modern systems the
-'system call' to get the current time may not even enter the kernel
-(see &lt;a href="http://man7.org/linux/man-pages/man7/vdso.7.html" dir="ltr"&gt;vdso(7)&lt;/a&gt;
-on Linux). Having goroutines go through the full work of releasing
-their current P and then re-acquiring one for these system calls
-has two problems. First, there's a bunch of overhead involved in
-locking (and releasing) all of the data structures involved. Second,
-if there's more runnable goroutines than Ps, a goroutine that makes
-this sort of system call won't be able to re-acquire a P and will
-have to park itself; the moment it released the P, something else
-was scheduled onto it. This is extra runtime overhead, is sort of
-unfair, and kind of defeats the purpose of having fast system calls
-(especially ones that don't go into the kernel).&lt;/p&gt;&lt;p&gt;So the Go runtime and scheduler actually have two ways of handling
-blocking system calls, a pessimistic way for system calls that are
-expected to be slow and an optimistic way for ones that are expected
-to be fast. The pessimistic system call path implements the
-straightforward approach where the runtime actively releases the P
-before the system call, attempts to get it back afterward, and parks
-itself if it can't. The optimistic system call path doesn't release
-the P; instead, it sets a special P state flag and just makes the
-system call. A special internal goroutine, the sysmon goroutine,
-then comes along periodically and looks for P's that have been
-sitting in this 'making a system call' state for too long and steals
-them away from the goroutine making the system call. When the system
-call returns, the runtime code checks to see if its P has been
-stolen out from underneath it, and if it hasn't it can just go on
-(if the P has been stolen, the runtime tries to get another P and
-then may have to park your goroutine).&lt;/p&gt;&lt;p dir="ltr"&gt;If everything works out, the optimistic system call path has very
-low overhead (mostly it requires a couple of &lt;a href="https://en.wikipedia.org/wiki/Compare-and-swap" dir="ltr"&gt;atomic compare and
-swap&lt;/a&gt; operations).
-If things don't work out and there's more runnable goroutines than
-there are Ps, then one P will be unnecessarily idle for what is
-probably generally a few tens of microseconds (the sysmon goroutine
-runs at most once every 20 microseconds, but can run less frequently
-if there seems to be no need for it). There are probably worst case
-scenarios possible, but in general this seems to be a worthwhile
-tradeoff on the part of the Go runtime.&lt;/p&gt;</description><pubDate>Sun, 08 Dec 2019 12:19:21 -0600</pubDate></item><item><title>NetBSD Advent Calendar 2019</title><link>https://lobste.rs/s/qbducl</link><description>&lt;p dir="ltr"&gt;今年も&lt;a href="https://www.netbsd.org/" dir="ltr"&gt;NetBSD&lt;/a&gt;に関するあれこれを気ままに書いてみます！&lt;br dir="ltr"&gt;
+            &lt;/p&gt;</description><pubDate>Sat, 07 Dec 2019 21:17:16 -0600</pubDate></item><item><title>Better x86 Assembly Generation with Go</title><link>https://www.youtube.com/watch?v=6Y5CZ7_tyA4</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/upghu1/better_x86_assembly_generation_with_go"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 08 Dec 2019 10:15:49 -0600</pubDate></item><item><title>NetBSD Advent Calendar 2019</title><link>https://lobste.rs/s/qbducl</link><description>&lt;p dir="ltr"&gt;今年も&lt;a href="https://www.netbsd.org/" dir="ltr"&gt;NetBSD&lt;/a&gt;に関するあれこれを気ままに書いてみます！&lt;br dir="ltr"&gt;
 過去の開催内容は以下をご参照ください。&lt;/p&gt;</description><pubDate>Sun, 08 Dec 2019 07:23:12 -0600</pubDate></item><item><title>Haskell vs OCaml</title><link>https://lobste.rs/s/frlmc2</link><description>&lt;p dir="ltr"&gt;
   &lt;em dir="ltr"&gt;
     Published on December 6, 2019
