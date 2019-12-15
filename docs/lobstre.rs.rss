@@ -849,7 +849,53 @@ own stylesheet with the specific overrides.&lt;/p&gt;</description><pubDate>Sat,
     &lt;/p&gt;&lt;p&gt;
    -         if (errno == ENOSPC) {
    +         if (errno == ENOSPC || errno == ERANGE) {
-    &lt;/p&gt;</description><pubDate>Sat, 14 Dec 2019 14:52:20 -0600</pubDate></item><item><title>The Four Stages of Objective-Smalltalk</title><link>https://lobste.rs/s/xyat0e</link><description>&lt;div itemprop="description articleBody" dir="ltr"&gt;
+    &lt;/p&gt;</description><pubDate>Sat, 14 Dec 2019 14:52:20 -0600</pubDate></item><item><title>Convert file I/O into pipe I/O with /dev/fd</title><link>https://lobste.rs/s/vpcgvx</link><description>&lt;p&gt;Some Unix commands read data from files or write data to files, without offering an obvious way to use them as part of a pipeline. How can you write a program to interact with such a command in a streaming fashion? This would allow your program and the command run concurrently, without the storage and I/O overhead of a temporary file. You could create and use a named pipe, but this is a clunky solution, requiring you to create and destroy a unique underlying file name. Here's a better approach.&lt;/p&gt;&lt;p dir="ltr"&gt;Modern Unix systems offer a virtual device directory named &lt;code dir="ltr"&gt;/dev/fd/&lt;/code&gt;. The files in it correspond to the file descriptors of each process. To refresh your memory, a file descriptor is a small integer representing an open file endpoint; processes can access the file using its file descriptor. Each time a process opens a new file, creates a network socket, or (crucially for us) sets up a pipe, new file descriptors will pop up in the &lt;code dir="ltr"&gt;/dev/fd&lt;/code&gt; directory.&lt;/p&gt;&lt;p dir="ltr"&gt;Moreover, open files are inherited through their descriptors every time one process executes another. This means that one process can execute another and use the &lt;code dir="ltr"&gt;/dev/fd&lt;/code&gt; files to pass some of its descriptors to the other process in the form of file names. For example, it can pass access to file descriptor 7 as &lt;code dir="ltr"&gt;/dev/fd/7&lt;/code&gt;. The &lt;em dir="ltr"&gt;Bash&lt;/em&gt; shell takes advantage of this facility to offer the &lt;code dir="ltr"&gt;&amp;lt;(...)&lt;/code&gt; and &lt;code dir="ltr"&gt;&amp;gt;(...)&lt;/code&gt; process redirection syntax.&lt;/p&gt;&lt;p dir="ltr"&gt;Returning to our original problem, in order to run a process from within our program, and communicate with one of the files it accesses through a pipe, all we need to do is to construct a pipe, and pass to the process as a &lt;code dir="ltr"&gt;/dev/fd/&lt;/code&gt;&lt;em dir="ltr"&gt;N&lt;/em&gt; filename the pipe endpoint to which we want the process to read or write. Again, as a refresher, each pipe is constructed as an array of two file descriptors: the first represents its read endpoint and the second its write endpoint.&lt;/p&gt;&lt;p dir="ltr"&gt;As a concrete example, consider the case where we want our program to read the output of the &lt;em dir="ltr"&gt;strace&lt;/em&gt; system call tracing command. By default, the output of &lt;em dir="ltr"&gt;strace&lt;/em&gt; appears in its standard error, which can make it co-mingle with the error output of the commands we want to trace. Thankfully, &lt;em dir="ltr"&gt;strace&lt;/em&gt; can write to a file specified with the &lt;code dir="ltr"&gt;-o&lt;/code&gt; option. We can therefore use this option to pass it the file descriptor to which we want it to write as a &lt;code dir="ltr"&gt;/dev/fd/&lt;/code&gt;&lt;em dir="ltr"&gt;N&lt;/em&gt; file name.&lt;/p&gt;&lt;p dir="ltr"&gt;The following small C program demonstrates this by running a specified command under &lt;em dir="ltr"&gt;strace&lt;/em&gt; and then (as a trivial use case) converting the &lt;em dir="ltr"&gt;strace&lt;/em&gt; output into uppercase characters.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;/*&lt;/span&gt;
+&lt;span dir="ltr"&gt; * Trace the specified command, outputing the results in upper case.&lt;/span&gt;
+&lt;span dir="ltr"&gt; * Demonstrates the use of /dev/fd&lt;/span&gt;
+&lt;span dir="ltr"&gt; *&lt;/span&gt;
+&lt;span dir="ltr"&gt; * Diomidis Spinellis, December 2019.&lt;/span&gt;
+&lt;span dir="ltr"&gt; */&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;#include &lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;ctype.h&amp;gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;#include &lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;err.h&amp;gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;#include &lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;stdio.h&amp;gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;#include &lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;stdlib.h&amp;gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;#include &lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;unistd.h&amp;gt;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;int&lt;/span&gt;
+main(&lt;span dir="ltr"&gt;int&lt;/span&gt; argc, &lt;span dir="ltr"&gt;char&lt;/span&gt; *argv[])
+{
+    &lt;span dir="ltr"&gt;int&lt;/span&gt; pipefd[&lt;span dir="ltr"&gt;2&lt;/span&gt;];
+    &lt;span dir="ltr"&gt;char&lt;/span&gt; buff[&lt;span dir="ltr"&gt;100&lt;/span&gt;];
+    FILE *fin;
+    &lt;span dir="ltr"&gt;int&lt;/span&gt; c;
+
+    &lt;span dir="ltr"&gt;if&lt;/span&gt; (argc != &lt;span dir="ltr"&gt;2&lt;/span&gt;) {
+        fprintf(stderr, &lt;span dir="ltr"&gt;"Usage: %s command&lt;/span&gt;&lt;span dir="ltr"&gt;\n&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;, argv[&lt;span dir="ltr"&gt;0&lt;/span&gt;]);
+        exit(EXIT_FAILURE);
+    }
+
+    &lt;span dir="ltr"&gt;/* Create the two file descriptors representing a pipe */&lt;/span&gt;
+    &lt;span dir="ltr"&gt;if&lt;/span&gt; (pipe(pipefd) != &lt;span dir="ltr"&gt;0&lt;/span&gt;)
+        err(EXIT_FAILURE, &lt;span dir="ltr"&gt;"pipe"&lt;/span&gt;);
+
+    &lt;span dir="ltr"&gt;/* Pass write-end of pipe to async execution of strace */&lt;/span&gt;
+    snprintf(buff, &lt;span dir="ltr"&gt;sizeof&lt;/span&gt;(buff), &lt;span dir="ltr"&gt;"strace -o /dev/fd/%d %s &amp;amp;"&lt;/span&gt;, pipefd[&lt;span dir="ltr"&gt;1&lt;/span&gt;],
+        argv[&lt;span dir="ltr"&gt;1&lt;/span&gt;]);
+    &lt;span dir="ltr"&gt;if&lt;/span&gt; (system(buff) != &lt;span dir="ltr"&gt;0&lt;/span&gt;)
+        err(EXIT_FAILURE, &lt;span dir="ltr"&gt;"system"&lt;/span&gt;);
+
+    &lt;span dir="ltr"&gt;/* Close pipe's write-end on our own side */&lt;/span&gt;
+    close(pipefd[&lt;span dir="ltr"&gt;1&lt;/span&gt;]);
+
+    &lt;span dir="ltr"&gt;/* Read strace output from pipe's read and converting it to uppercase */&lt;/span&gt;
+    &lt;span dir="ltr"&gt;if&lt;/span&gt; ((fin = fdopen(pipefd[&lt;span dir="ltr"&gt;0&lt;/span&gt;], &lt;span dir="ltr"&gt;"r"&lt;/span&gt;)) == NULL)
+        err(EXIT_FAILURE, &lt;span dir="ltr"&gt;"fdopen"&lt;/span&gt;);
+    &lt;span dir="ltr"&gt;while&lt;/span&gt; ((c = getc(fin)) != EOF)
+        putchar(toupper(c));
+
+    &lt;span dir="ltr"&gt;return&lt;/span&gt; (EXIT_SUCCESS);
+}&lt;/code&gt;&lt;/PRE&gt;</description><pubDate>Sat, 14 Dec 2019 10:08:38 -0600</pubDate></item><item><title>The Four Stages of Objective-Smalltalk</title><link>https://lobste.rs/s/xyat0e</link><description>&lt;div itemprop="description articleBody" dir="ltr"&gt;
 One of the features that can be confusing about &lt;a href="http://objective.st/" dir="ltr"&gt;Objective-Smalltalk&lt;/a&gt; is that it actually has several
 parts that are each significant on their own, so frequently will focus on just one of these (which is fine!), but without realising
 that the other parts also exist, which is unfortunate as they are all valuable and complement each other.  In fact, they can
@@ -1009,53 +1055,7 @@ let event = template
 
 console.log(event);
 ...
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The code would be even simpler if we didn’t need to fold the iCalendar file into lines of maximum 75 characters.&lt;/p&gt;&lt;p&gt;I think this was the most useful add-on I’ve built in less than 3 hours rsrsrs.&lt;/p&gt;&lt;img src="http://andregarzia.com/img/shots/remind-animation.gif" width="1156" height="859"&gt;</description><pubDate>Sat, 14 Dec 2019 15:14:50 -0600</pubDate></item><item><title>Convert file I/O into pipe I/O with /dev/fd</title><link>https://lobste.rs/s/vpcgvx</link><description>&lt;p&gt;Some Unix commands read data from files or write data to files, without offering an obvious way to use them as part of a pipeline. How can you write a program to interact with such a command in a streaming fashion? This would allow your program and the command run concurrently, without the storage and I/O overhead of a temporary file. You could create and use a named pipe, but this is a clunky solution, requiring you to create and destroy a unique underlying file name. Here's a better approach.&lt;/p&gt;&lt;p dir="ltr"&gt;Modern Unix systems offer a virtual device directory named &lt;code dir="ltr"&gt;/dev/fd/&lt;/code&gt;. The files in it correspond to the file descriptors of each process. To refresh your memory, a file descriptor is a small integer representing an open file endpoint; processes can access the file using its file descriptor. Each time a process opens a new file, creates a network socket, or (crucially for us) sets up a pipe, new file descriptors will pop up in the &lt;code dir="ltr"&gt;/dev/fd&lt;/code&gt; directory.&lt;/p&gt;&lt;p dir="ltr"&gt;Moreover, open files are inherited through their descriptors every time one process executes another. This means that one process can execute another and use the &lt;code dir="ltr"&gt;/dev/fd&lt;/code&gt; files to pass some of its descriptors to the other process in the form of file names. For example, it can pass access to file descriptor 7 as &lt;code dir="ltr"&gt;/dev/fd/7&lt;/code&gt;. The &lt;em dir="ltr"&gt;Bash&lt;/em&gt; shell takes advantage of this facility to offer the &lt;code dir="ltr"&gt;&amp;lt;(...)&lt;/code&gt; and &lt;code dir="ltr"&gt;&amp;gt;(...)&lt;/code&gt; process redirection syntax.&lt;/p&gt;&lt;p dir="ltr"&gt;Returning to our original problem, in order to run a process from within our program, and communicate with one of the files it accesses through a pipe, all we need to do is to construct a pipe, and pass to the process as a &lt;code dir="ltr"&gt;/dev/fd/&lt;/code&gt;&lt;em dir="ltr"&gt;N&lt;/em&gt; filename the pipe endpoint to which we want the process to read or write. Again, as a refresher, each pipe is constructed as an array of two file descriptors: the first represents its read endpoint and the second its write endpoint.&lt;/p&gt;&lt;p dir="ltr"&gt;As a concrete example, consider the case where we want our program to read the output of the &lt;em dir="ltr"&gt;strace&lt;/em&gt; system call tracing command. By default, the output of &lt;em dir="ltr"&gt;strace&lt;/em&gt; appears in its standard error, which can make it co-mingle with the error output of the commands we want to trace. Thankfully, &lt;em dir="ltr"&gt;strace&lt;/em&gt; can write to a file specified with the &lt;code dir="ltr"&gt;-o&lt;/code&gt; option. We can therefore use this option to pass it the file descriptor to which we want it to write as a &lt;code dir="ltr"&gt;/dev/fd/&lt;/code&gt;&lt;em dir="ltr"&gt;N&lt;/em&gt; file name.&lt;/p&gt;&lt;p dir="ltr"&gt;The following small C program demonstrates this by running a specified command under &lt;em dir="ltr"&gt;strace&lt;/em&gt; and then (as a trivial use case) converting the &lt;em dir="ltr"&gt;strace&lt;/em&gt; output into uppercase characters.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;/*&lt;/span&gt;
-&lt;span dir="ltr"&gt; * Trace the specified command, outputing the results in upper case.&lt;/span&gt;
-&lt;span dir="ltr"&gt; * Demonstrates the use of /dev/fd&lt;/span&gt;
-&lt;span dir="ltr"&gt; *&lt;/span&gt;
-&lt;span dir="ltr"&gt; * Diomidis Spinellis, December 2019.&lt;/span&gt;
-&lt;span dir="ltr"&gt; */&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;#include &lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;ctype.h&amp;gt;&lt;/span&gt;
-&lt;span dir="ltr"&gt;#include &lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;err.h&amp;gt;&lt;/span&gt;
-&lt;span dir="ltr"&gt;#include &lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;stdio.h&amp;gt;&lt;/span&gt;
-&lt;span dir="ltr"&gt;#include &lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;stdlib.h&amp;gt;&lt;/span&gt;
-&lt;span dir="ltr"&gt;#include &lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;unistd.h&amp;gt;&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;int&lt;/span&gt;
-main(&lt;span dir="ltr"&gt;int&lt;/span&gt; argc, &lt;span dir="ltr"&gt;char&lt;/span&gt; *argv[])
-{
-    &lt;span dir="ltr"&gt;int&lt;/span&gt; pipefd[&lt;span dir="ltr"&gt;2&lt;/span&gt;];
-    &lt;span dir="ltr"&gt;char&lt;/span&gt; buff[&lt;span dir="ltr"&gt;100&lt;/span&gt;];
-    FILE *fin;
-    &lt;span dir="ltr"&gt;int&lt;/span&gt; c;
-
-    &lt;span dir="ltr"&gt;if&lt;/span&gt; (argc != &lt;span dir="ltr"&gt;2&lt;/span&gt;) {
-        fprintf(stderr, &lt;span dir="ltr"&gt;"Usage: %s command&lt;/span&gt;&lt;span dir="ltr"&gt;\n&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;, argv[&lt;span dir="ltr"&gt;0&lt;/span&gt;]);
-        exit(EXIT_FAILURE);
-    }
-
-    &lt;span dir="ltr"&gt;/* Create the two file descriptors representing a pipe */&lt;/span&gt;
-    &lt;span dir="ltr"&gt;if&lt;/span&gt; (pipe(pipefd) != &lt;span dir="ltr"&gt;0&lt;/span&gt;)
-        err(EXIT_FAILURE, &lt;span dir="ltr"&gt;"pipe"&lt;/span&gt;);
-
-    &lt;span dir="ltr"&gt;/* Pass write-end of pipe to async execution of strace */&lt;/span&gt;
-    snprintf(buff, &lt;span dir="ltr"&gt;sizeof&lt;/span&gt;(buff), &lt;span dir="ltr"&gt;"strace -o /dev/fd/%d %s &amp;amp;"&lt;/span&gt;, pipefd[&lt;span dir="ltr"&gt;1&lt;/span&gt;],
-        argv[&lt;span dir="ltr"&gt;1&lt;/span&gt;]);
-    &lt;span dir="ltr"&gt;if&lt;/span&gt; (system(buff) != &lt;span dir="ltr"&gt;0&lt;/span&gt;)
-        err(EXIT_FAILURE, &lt;span dir="ltr"&gt;"system"&lt;/span&gt;);
-
-    &lt;span dir="ltr"&gt;/* Close pipe's write-end on our own side */&lt;/span&gt;
-    close(pipefd[&lt;span dir="ltr"&gt;1&lt;/span&gt;]);
-
-    &lt;span dir="ltr"&gt;/* Read strace output from pipe's read and converting it to uppercase */&lt;/span&gt;
-    &lt;span dir="ltr"&gt;if&lt;/span&gt; ((fin = fdopen(pipefd[&lt;span dir="ltr"&gt;0&lt;/span&gt;], &lt;span dir="ltr"&gt;"r"&lt;/span&gt;)) == NULL)
-        err(EXIT_FAILURE, &lt;span dir="ltr"&gt;"fdopen"&lt;/span&gt;);
-    &lt;span dir="ltr"&gt;while&lt;/span&gt; ((c = getc(fin)) != EOF)
-        putchar(toupper(c));
-
-    &lt;span dir="ltr"&gt;return&lt;/span&gt; (EXIT_SUCCESS);
-}&lt;/code&gt;&lt;/PRE&gt;</description><pubDate>Sat, 14 Dec 2019 10:08:38 -0600</pubDate></item><item><title>Open source solution for monitoring network device configuration?</title><link>https://lobste.rs/s/nwq3om</link><description>&lt;p&gt;I worked at company a few years ago that paid for something that does this; it kept a database of configs for network devices like routers and firewalls. If you set up syslog it would also listen for changes and pull the config whenever it changed.&lt;/p&gt;&lt;p&gt;Does anyone know of an open source solution for this?&lt;/p&gt;</description><pubDate>Sat, 14 Dec 2019 10:01:55 -0600</pubDate></item><item><title>How to Use Broadway in Your Elixir Application</title><link>https://lobste.rs/s/jeru17</link><description>&lt;img src="https://d33wubrfki0l68.cloudfront.net/ac39ab220993fa7f4cc022ada3a6eed21a65556b/df01c/images/authors/alex.jpg" alt="Alex" width="30" height="36"&gt;&lt;p dir="ltr"&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The code would be even simpler if we didn’t need to fold the iCalendar file into lines of maximum 75 characters.&lt;/p&gt;&lt;p&gt;I think this was the most useful add-on I’ve built in less than 3 hours rsrsrs.&lt;/p&gt;&lt;img src="http://andregarzia.com/img/shots/remind-animation.gif" width="1156" height="859"&gt;</description><pubDate>Sat, 14 Dec 2019 15:14:50 -0600</pubDate></item><item><title>Open source solution for monitoring network device configuration?</title><link>https://lobste.rs/s/nwq3om</link><description>&lt;p&gt;I worked at company a few years ago that paid for something that does this; it kept a database of configs for network devices like routers and firewalls. If you set up syslog it would also listen for changes and pull the config whenever it changed.&lt;/p&gt;&lt;p&gt;Does anyone know of an open source solution for this?&lt;/p&gt;</description><pubDate>Sat, 14 Dec 2019 10:01:55 -0600</pubDate></item><item><title>How to Use Broadway in Your Elixir Application</title><link>https://lobste.rs/s/jeru17</link><description>&lt;img src="https://d33wubrfki0l68.cloudfront.net/ac39ab220993fa7f4cc022ada3a6eed21a65556b/df01c/images/authors/alex.jpg" alt="Alex" width="30" height="36"&gt;&lt;p dir="ltr"&gt;
 Alex Koutmos
 on
 &lt;time datetime="2019-12-12" pubdate="pubdate" dir="ltr"&gt;Dec 12, 2019&lt;/time&gt;
