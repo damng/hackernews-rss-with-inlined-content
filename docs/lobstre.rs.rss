@@ -1245,7 +1245,47 @@ end)
 |&amp;gt; Enum.to_list()
 56
  
-  &lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Wed, 18 Dec 2019 11:07:00 -0600</pubDate></item><item><title>How tracking pixels work</title><link>https://lobste.rs/s/wivjg4</link><description>&lt;p&gt;I spent some time yesterday talking to a reporter yesterday about how
+  &lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Wed, 18 Dec 2019 11:07:00 -0600</pubDate></item><item><title>The Curious Case of the Table-Locking UPDATE Query</title><link>https://lobste.rs/s/89t2wr</link><description>&lt;img width="18" height="18" alt="Richard Schneeman" src="https://gravatar.com/avatar/614d10d53a6558d68d9ec3d51ed886ce?d=404&amp;amp;s=100"&gt;&lt;h4&gt;Listen to this article&lt;/h4&gt;&lt;p dir="ltr"&gt;I maintain an internal-facing service at Heroku that does metadata processing. It's not real-time, so there's plenty of slack for when things go wrong. Recently I discovered that the system was getting bogged down to the point where no jobs were being executed at all. After hours of debugging, I found the problem was an &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt; on a single row on a single table was causing the entire table to lock, which caused a lock queue and ground the whole process to a halt. This post is a story about how the problem was debugged and fixed and why such a seemingly simple query caused so much harm.&lt;/p&gt;&lt;h2 dir="ltr"&gt;
+  &lt;a name="no-jobs-processing" href="https://blog.heroku.com/curious-case-table-locking-update-query#no-jobs-processing" dir="ltr"&gt;No jobs processing&lt;/a&gt;
+&lt;/h2&gt;&lt;p&gt;I started debugging when the backlog on our system began to grow, and the number of jobs being processed fell to nearly zero. The system has been running in production for years, and while there have been occasional performance issues, nothing stood out as a huge problem. I checked our datastores, and they were well under their limits, I checked our error tracker and didn't see any smoking guns. My best guess was the database where the results were being stored was having problems.&lt;/p&gt;&lt;p dir="ltr"&gt;The first thing I did was run &lt;code dir="ltr"&gt;heroku pg:diagnose&lt;/code&gt;, which shows "red" (critical) and "yellow" (important but less critical) issues. It showed that I had queries that had been running for DAYS:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;68698   5 days 18:01:26.446979  UPDATE "table" SET &amp;lt;values&amp;gt; WHERE ("uuid" = '&amp;lt;uuid&amp;gt;')
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Which seemed odd. The query in question was a simple update, and it's not even on the most massive table in the DB. When I checked &lt;code dir="ltr"&gt;heroku pg:outliers&lt;/code&gt; from the &lt;a href="https://github.com/heroku/heroku-pg-extras" dir="ltr"&gt;pg extras CLI plugin&lt;/a&gt; I was surprised to see this update taking up 80%+ of the time even though it is smaller than the largest table in the database by a factor of 200. So what gives?&lt;/p&gt;&lt;p dir="ltr"&gt;Running the update statement manually didn't reproduce the issue, so I was fresh out of ideas. If it had, then I could have run with &lt;code dir="ltr"&gt;EXPLAIN ANALYZE&lt;/code&gt; to see why it was so slow. Luckily I work with some pretty fantastic database engineers, and I pinged them for possible ideas. They mentioned that there might be a locking issue with the database. The idea was strange to me since it had been running relatively unchanged for an extremely long time and only now started to see problems, but I decided to look into it.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;SELECT&lt;/span&gt;
+  S&lt;span dir="ltr"&gt;.&lt;/span&gt;pid&lt;span dir="ltr"&gt;,&lt;/span&gt;
+  age&lt;span dir="ltr"&gt;(&lt;/span&gt;clock_timestamp&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; query_start&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+  query&lt;span dir="ltr"&gt;,&lt;/span&gt;
+  L&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;mode&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+  L&lt;span dir="ltr"&gt;.&lt;/span&gt;locktype&lt;span dir="ltr"&gt;,&lt;/span&gt;
+  L&lt;span dir="ltr"&gt;.&lt;/span&gt;granted
+&lt;span dir="ltr"&gt;FROM&lt;/span&gt; pg_stat_activity S
+&lt;span dir="ltr"&gt;inner&lt;/span&gt; &lt;span dir="ltr"&gt;join&lt;/span&gt; pg_locks L &lt;span dir="ltr"&gt;on&lt;/span&gt; S&lt;span dir="ltr"&gt;.&lt;/span&gt;pid &lt;span dir="ltr"&gt;=&lt;/span&gt; L&lt;span dir="ltr"&gt;.&lt;/span&gt;pid
+&lt;span dir="ltr"&gt;order&lt;/span&gt; &lt;span dir="ltr"&gt;by&lt;/span&gt; L&lt;span dir="ltr"&gt;.&lt;/span&gt;granted&lt;span dir="ltr"&gt;,&lt;/span&gt; L&lt;span dir="ltr"&gt;.&lt;/span&gt;pid &lt;span dir="ltr"&gt;DESC&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;-----------------------------------&lt;/span&gt;
+pid      &lt;span dir="ltr"&gt;|&lt;/span&gt; &lt;span dir="ltr"&gt;127624&lt;/span&gt;
+age      &lt;span dir="ltr"&gt;|&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt; days &lt;span dir="ltr"&gt;01&lt;/span&gt;:&lt;span dir="ltr"&gt;45&lt;/span&gt;:&lt;span dir="ltr"&gt;00.416267&lt;/span&gt;
+query    &lt;span dir="ltr"&gt;|&lt;/span&gt; &lt;span dir="ltr"&gt;UPDATE&lt;/span&gt; &lt;span dir="ltr"&gt;"table"&lt;/span&gt; &lt;span dir="ltr"&gt;SET&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;&lt;span dir="ltr"&gt;values&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;WHERE&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"uuid"&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;'&amp;lt;uuid&amp;gt;'&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;span dir="ltr"&gt;mode&lt;/span&gt;     &lt;span dir="ltr"&gt;|&lt;/span&gt; AccessExclusiveLock
+locktype &lt;span dir="ltr"&gt;|&lt;/span&gt; tuple
+granted  &lt;span dir="ltr"&gt;|&lt;/span&gt; f
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;I saw a ton of queries that were hung for quite some time, and most of them pointed to my seemingly teeny &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt; statement.&lt;/p&gt;&lt;h2 dir="ltr"&gt;
+  &lt;a name="all-about-locks" href="https://blog.heroku.com/curious-case-table-locking-update-query#all-about-locks" dir="ltr"&gt;All about locks&lt;/a&gt;
+&lt;/h2&gt;&lt;p dir="ltr"&gt;Up until this point, I basically knew nothing about how PostgreSQL uses locking other than in an explicit advisory lock, which can be used via a gem like &lt;a href="https://github.com/heroku/pg_lock" dir="ltr"&gt;pg_lock&lt;/a&gt; (That I maintain). Luckily Postgres has excellent docs around locks, but it's a bit much if you're new to the field: &lt;a href="https://www.postgresql.org/docs/11/explicit-locking.html#LOCKING-TABLES" dir="ltr"&gt;Postgresql Lock documentation&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Looking up the name of the lock from before &lt;code dir="ltr"&gt;Access Exclusive Lock&lt;/code&gt; I saw that it locks the whole table:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;ACCESS EXCLUSIVE
+Conflicts with locks of all modes (ACCESS SHARE, ROW SHARE, ROW EXCLUSIVE, SHARE UPDATE EXCLUSIVE, SHARE, SHARE ROW EXCLUSIVE, EXCLUSIVE, and ACCESS EXCLUSIVE). This mode guarantees that the holder is the only transaction accessing the table in any way.
+Acquired by the DROP TABLE, TRUNCATE, REINDEX, CLUSTER, VACUUM FULL, and REFRESH MATERIALIZED VIEW (without CONCURRENTLY) commands. Many forms of ALTER TABLE also acquire a lock at this level (see ALTER TABLE). This is also the default lock mode for LOCK TABLE statements that do not specify a mode explicitly.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;From the docs, this lock is not typically triggered by an &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt;, so what gives? Grepping through the docs showed me that an &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt; should trigger a &lt;code dir="ltr"&gt;ROW SHARE&lt;/code&gt; lock:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;ROW EXCLUSIVE
+Conflicts with the SHARE, SHARE ROW EXCLUSIVE, EXCLUSIVE, and ACCESS EXCLUSIVE lock modes.
+
+The commands UPDATE, DELETE, and INSERT acquire this lock mode on the target table (in addition to ACCESS SHARE locks on any other referenced tables). In general, this lock mode will be acquired by any command that modifies data in a table.
+&lt;/code&gt;&lt;/PRE&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;A database engineer directly told me what kind of lock an &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt; should use, but you could find it in the docs if you don't have access to some excellent database professionals.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Mostly what happens when you try to &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt; is that Postgres will acquire a lock on the row that you want to change. If you have two update statements running at the same time on the same row, then the second must wait for the first to process. So why on earth, if an &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt; is supposed only to take out a row lock, was my query taking out a lock against the whole table?&lt;/p&gt;&lt;h2 dir="ltr"&gt;
+  &lt;a name="unmasking-a-locking-mystery" href="https://blog.heroku.com/curious-case-table-locking-update-query#unmasking-a-locking-mystery" dir="ltr"&gt;Unmasking a locking mystery&lt;/a&gt;
+&lt;/h2&gt;&lt;p dir="ltr"&gt;I would love to tell you that I have a really great debugging tool to tell you about here, but I mostly duck-duck-go-ed (searched) a ton and eventually found &lt;a href="https://grokbase.com/t/postgresql/pgsql-general/124s02j3jy/updates-sharelocks-rowexclusivelocks-and-deadlocks" dir="ltr"&gt;this forum post&lt;/a&gt;. In the post someone is complaining about a similar behavior, they're using an update but are seeing more aggressive lock being used sometimes.&lt;/p&gt;&lt;p dir="ltr"&gt;Based on the responses to the forum it sounded like if there is more than a few &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt; queries that are trying to modify the same row at the same time what happens is that one of the queries will try to acquire the lock, see it is taken then it will instead acquire a larger lock on the table. Postgres queues locks, so if this happens for multiple rows with similar contention, then multiple queries would be taking out locks on the whole table, which somewhat could explain the behavior I was seeing. It seemed plausible, but why was there such a problem?&lt;/p&gt;&lt;p&gt;I combed over my codebase and couldn't find anything. Then as I was laying down to go to bed that evening, I had a moment of inspiration where I remembered that we were updating the database in parallel for the same UUID using threads:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;@things&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;map &lt;span dir="ltr"&gt;do&lt;/span&gt; &lt;span dir="ltr"&gt;|&lt;/span&gt;thing&lt;span dir="ltr"&gt;|&lt;/span&gt;
+  &lt;span dir="ltr"&gt;Concurrent&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;Promise&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;execute&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;executor&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;:fast&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;do&lt;/span&gt;
+    store_results&lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;thing&lt;span dir="ltr"&gt;)&lt;/span&gt;
+  &lt;span dir="ltr"&gt;end&lt;/span&gt;
+&lt;span dir="ltr"&gt;end&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;each&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;:value!&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;In every loop, we were creating a promise that would concurrently update values (using a thread pool). Due to a design decision from years ago, each loop causes an &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt; to the same row in the database for each job being run. This programming pattern was never a problem before because, as I mentioned earlier, there's another table with more than 200x the number of records, so we've never had any issues with this scheme until recently.&lt;/p&gt;&lt;p dir="ltr"&gt;With this new theory, I removed the concurrency, which meant that each &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt; call would be sequential instead of in parallel:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;@things&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;map &lt;span dir="ltr"&gt;do&lt;/span&gt; &lt;span dir="ltr"&gt;|&lt;/span&gt;thing&lt;span dir="ltr"&gt;|&lt;/span&gt;
+  store_results&lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;thing&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;span dir="ltr"&gt;end&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;While the code is less efficiently in the use of IO on the Ruby program, it means that the chance that the same row will try to be updated at the same time is drastically decreased.&lt;/p&gt;&lt;p dir="ltr"&gt;I manually killed the long-running locked queries using &lt;code dir="ltr"&gt;SELECT pg_cancel_backend(&amp;lt;pid&amp;gt;);&lt;/code&gt; and I deployed this change (in the morning after a code review).&lt;/p&gt;&lt;p&gt;Once the old stuck queries were aborted, and the new code was in place, then the system promptly got back up and running, churning through plenty of backlog.&lt;/p&gt;&lt;h2 dir="ltr"&gt;
+  &lt;a name="locks-and-stuff" href="https://blog.heroku.com/curious-case-table-locking-update-query#locks-and-stuff" dir="ltr"&gt;Locks and stuff&lt;/a&gt;
+&lt;/h2&gt;&lt;p dir="ltr"&gt;While this somewhat obscure debugging story might not be directly relevant to your database, here are some things you can take away from this article. Your database has locks (think mutexes but with varying scope), and those locks can mess up your day if they're doing something different than you're expecting. You can see the locks that your database is currently using by running the &lt;code dir="ltr"&gt;heroku pg:locks&lt;/code&gt; command (may need to install the &lt;code dir="ltr"&gt;pg:extras&lt;/code&gt; plugin). You can also see which queries are taking out which locks using the SQL query I posted earlier.&lt;/p&gt;&lt;p dir="ltr"&gt;The next thing I want to cover is documentation. If it weren't for several very experienced Postgres experts and a seemingly random forum post about how multiple &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt; statements can trigger a more aggressive lock type, then I never would have figured this out. If you're familiar with the Postgres documentation, is this behavior written down anywhere? If so, then could we make it easier to find or understand somehow? If it's not written down, can you help me document it? I don't mind writing documentation, but I'm not totally sure what the expected behavior is. For instance, why does a lock queue for a row that goes above a specific threshold trigger a table lock? And what exactly is that threshold? I'm sure this behavior makes total sense from an implementation point of view, but as an end-user, I would like it to be spelled out and officially documented.&lt;/p&gt;&lt;p&gt;I hope you either learned a thing or two or at least got a kick out of my misery. This issue was a pain to debug, but in hindsight, a quirky bug to blog about. Thanks for reading!&lt;/p&gt;&lt;p dir="ltr"&gt;And to learn about another potential database issue, check out this other blog post by Heroku Engineer Ben Fritsch, &lt;a href="https://blog.heroku.com/know-your-database-types" dir="ltr"&gt;Know Your Database Types&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Special thanks to &lt;a href="https://github.com/mble" dir="ltr"&gt;Matthew Blewitt&lt;/a&gt; and &lt;a href="https://github.com/andscoop" dir="ltr"&gt;Andy Cooper&lt;/a&gt; for helping me debug this!&lt;/p&gt;</description><pubDate>Wed, 18 Dec 2019 13:18:16 -0600</pubDate></item><item><title>How tracking pixels work</title><link>https://lobste.rs/s/wivjg4</link><description>&lt;p&gt;I spent some time yesterday talking to a reporter yesterday about how
 advertisers track people on the internet. We had a really fun time looking at
 Firefox’s developer tools together (I’m not an internet privacy expert, but I
 do know how to use the network tab in developer tools!) and I learned a few
@@ -1339,47 +1379,7 @@ This work is licensed under a&amp;nbsp;
 &lt;a rel="license noopener noreferrer" href="https://creativecommons.org/licenses/by-nc-nd/4.0/" dir="ltr"&gt;
 Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International License
 &lt;/a&gt;.
-&lt;/div&gt;&lt;div&gt;The opinions expressed here are mine.&lt;/div&gt;</description><pubDate>Tue, 17 Dec 2019 10:37:01 -0600</pubDate></item><item><title>The Curious Case of the Table-Locking UPDATE Query</title><link>https://lobste.rs/s/89t2wr</link><description>&lt;img width="18" height="18" alt="Richard Schneeman" src="https://gravatar.com/avatar/614d10d53a6558d68d9ec3d51ed886ce?d=404&amp;amp;s=100"&gt;&lt;h4&gt;Listen to this article&lt;/h4&gt;&lt;p dir="ltr"&gt;I maintain an internal-facing service at Heroku that does metadata processing. It's not real-time, so there's plenty of slack for when things go wrong. Recently I discovered that the system was getting bogged down to the point where no jobs were being executed at all. After hours of debugging, I found the problem was an &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt; on a single row on a single table was causing the entire table to lock, which caused a lock queue and ground the whole process to a halt. This post is a story about how the problem was debugged and fixed and why such a seemingly simple query caused so much harm.&lt;/p&gt;&lt;h2 dir="ltr"&gt;
-  &lt;a name="no-jobs-processing" href="https://blog.heroku.com/curious-case-table-locking-update-query#no-jobs-processing" dir="ltr"&gt;No jobs processing&lt;/a&gt;
-&lt;/h2&gt;&lt;p&gt;I started debugging when the backlog on our system began to grow, and the number of jobs being processed fell to nearly zero. The system has been running in production for years, and while there have been occasional performance issues, nothing stood out as a huge problem. I checked our datastores, and they were well under their limits, I checked our error tracker and didn't see any smoking guns. My best guess was the database where the results were being stored was having problems.&lt;/p&gt;&lt;p dir="ltr"&gt;The first thing I did was run &lt;code dir="ltr"&gt;heroku pg:diagnose&lt;/code&gt;, which shows "red" (critical) and "yellow" (important but less critical) issues. It showed that I had queries that had been running for DAYS:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;68698   5 days 18:01:26.446979  UPDATE "table" SET &amp;lt;values&amp;gt; WHERE ("uuid" = '&amp;lt;uuid&amp;gt;')
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Which seemed odd. The query in question was a simple update, and it's not even on the most massive table in the DB. When I checked &lt;code dir="ltr"&gt;heroku pg:outliers&lt;/code&gt; from the &lt;a href="https://github.com/heroku/heroku-pg-extras" dir="ltr"&gt;pg extras CLI plugin&lt;/a&gt; I was surprised to see this update taking up 80%+ of the time even though it is smaller than the largest table in the database by a factor of 200. So what gives?&lt;/p&gt;&lt;p dir="ltr"&gt;Running the update statement manually didn't reproduce the issue, so I was fresh out of ideas. If it had, then I could have run with &lt;code dir="ltr"&gt;EXPLAIN ANALYZE&lt;/code&gt; to see why it was so slow. Luckily I work with some pretty fantastic database engineers, and I pinged them for possible ideas. They mentioned that there might be a locking issue with the database. The idea was strange to me since it had been running relatively unchanged for an extremely long time and only now started to see problems, but I decided to look into it.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;SELECT&lt;/span&gt;
-  S&lt;span dir="ltr"&gt;.&lt;/span&gt;pid&lt;span dir="ltr"&gt;,&lt;/span&gt;
-  age&lt;span dir="ltr"&gt;(&lt;/span&gt;clock_timestamp&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; query_start&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-  query&lt;span dir="ltr"&gt;,&lt;/span&gt;
-  L&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;mode&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-  L&lt;span dir="ltr"&gt;.&lt;/span&gt;locktype&lt;span dir="ltr"&gt;,&lt;/span&gt;
-  L&lt;span dir="ltr"&gt;.&lt;/span&gt;granted
-&lt;span dir="ltr"&gt;FROM&lt;/span&gt; pg_stat_activity S
-&lt;span dir="ltr"&gt;inner&lt;/span&gt; &lt;span dir="ltr"&gt;join&lt;/span&gt; pg_locks L &lt;span dir="ltr"&gt;on&lt;/span&gt; S&lt;span dir="ltr"&gt;.&lt;/span&gt;pid &lt;span dir="ltr"&gt;=&lt;/span&gt; L&lt;span dir="ltr"&gt;.&lt;/span&gt;pid
-&lt;span dir="ltr"&gt;order&lt;/span&gt; &lt;span dir="ltr"&gt;by&lt;/span&gt; L&lt;span dir="ltr"&gt;.&lt;/span&gt;granted&lt;span dir="ltr"&gt;,&lt;/span&gt; L&lt;span dir="ltr"&gt;.&lt;/span&gt;pid &lt;span dir="ltr"&gt;DESC&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;-----------------------------------&lt;/span&gt;
-pid      &lt;span dir="ltr"&gt;|&lt;/span&gt; &lt;span dir="ltr"&gt;127624&lt;/span&gt;
-age      &lt;span dir="ltr"&gt;|&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt; days &lt;span dir="ltr"&gt;01&lt;/span&gt;:&lt;span dir="ltr"&gt;45&lt;/span&gt;:&lt;span dir="ltr"&gt;00.416267&lt;/span&gt;
-query    &lt;span dir="ltr"&gt;|&lt;/span&gt; &lt;span dir="ltr"&gt;UPDATE&lt;/span&gt; &lt;span dir="ltr"&gt;"table"&lt;/span&gt; &lt;span dir="ltr"&gt;SET&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;&lt;span dir="ltr"&gt;values&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;WHERE&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"uuid"&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;'&amp;lt;uuid&amp;gt;'&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-&lt;span dir="ltr"&gt;mode&lt;/span&gt;     &lt;span dir="ltr"&gt;|&lt;/span&gt; AccessExclusiveLock
-locktype &lt;span dir="ltr"&gt;|&lt;/span&gt; tuple
-granted  &lt;span dir="ltr"&gt;|&lt;/span&gt; f
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;I saw a ton of queries that were hung for quite some time, and most of them pointed to my seemingly teeny &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt; statement.&lt;/p&gt;&lt;h2 dir="ltr"&gt;
-  &lt;a name="all-about-locks" href="https://blog.heroku.com/curious-case-table-locking-update-query#all-about-locks" dir="ltr"&gt;All about locks&lt;/a&gt;
-&lt;/h2&gt;&lt;p dir="ltr"&gt;Up until this point, I basically knew nothing about how PostgreSQL uses locking other than in an explicit advisory lock, which can be used via a gem like &lt;a href="https://github.com/heroku/pg_lock" dir="ltr"&gt;pg_lock&lt;/a&gt; (That I maintain). Luckily Postgres has excellent docs around locks, but it's a bit much if you're new to the field: &lt;a href="https://www.postgresql.org/docs/11/explicit-locking.html#LOCKING-TABLES" dir="ltr"&gt;Postgresql Lock documentation&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Looking up the name of the lock from before &lt;code dir="ltr"&gt;Access Exclusive Lock&lt;/code&gt; I saw that it locks the whole table:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;ACCESS EXCLUSIVE
-Conflicts with locks of all modes (ACCESS SHARE, ROW SHARE, ROW EXCLUSIVE, SHARE UPDATE EXCLUSIVE, SHARE, SHARE ROW EXCLUSIVE, EXCLUSIVE, and ACCESS EXCLUSIVE). This mode guarantees that the holder is the only transaction accessing the table in any way.
-Acquired by the DROP TABLE, TRUNCATE, REINDEX, CLUSTER, VACUUM FULL, and REFRESH MATERIALIZED VIEW (without CONCURRENTLY) commands. Many forms of ALTER TABLE also acquire a lock at this level (see ALTER TABLE). This is also the default lock mode for LOCK TABLE statements that do not specify a mode explicitly.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;From the docs, this lock is not typically triggered by an &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt;, so what gives? Grepping through the docs showed me that an &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt; should trigger a &lt;code dir="ltr"&gt;ROW SHARE&lt;/code&gt; lock:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;ROW EXCLUSIVE
-Conflicts with the SHARE, SHARE ROW EXCLUSIVE, EXCLUSIVE, and ACCESS EXCLUSIVE lock modes.
-
-The commands UPDATE, DELETE, and INSERT acquire this lock mode on the target table (in addition to ACCESS SHARE locks on any other referenced tables). In general, this lock mode will be acquired by any command that modifies data in a table.
-&lt;/code&gt;&lt;/PRE&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;A database engineer directly told me what kind of lock an &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt; should use, but you could find it in the docs if you don't have access to some excellent database professionals.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Mostly what happens when you try to &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt; is that Postgres will acquire a lock on the row that you want to change. If you have two update statements running at the same time on the same row, then the second must wait for the first to process. So why on earth, if an &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt; is supposed only to take out a row lock, was my query taking out a lock against the whole table?&lt;/p&gt;&lt;h2 dir="ltr"&gt;
-  &lt;a name="unmasking-a-locking-mystery" href="https://blog.heroku.com/curious-case-table-locking-update-query#unmasking-a-locking-mystery" dir="ltr"&gt;Unmasking a locking mystery&lt;/a&gt;
-&lt;/h2&gt;&lt;p dir="ltr"&gt;I would love to tell you that I have a really great debugging tool to tell you about here, but I mostly duck-duck-go-ed (searched) a ton and eventually found &lt;a href="https://grokbase.com/t/postgresql/pgsql-general/124s02j3jy/updates-sharelocks-rowexclusivelocks-and-deadlocks" dir="ltr"&gt;this forum post&lt;/a&gt;. In the post someone is complaining about a similar behavior, they're using an update but are seeing more aggressive lock being used sometimes.&lt;/p&gt;&lt;p dir="ltr"&gt;Based on the responses to the forum it sounded like if there is more than a few &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt; queries that are trying to modify the same row at the same time what happens is that one of the queries will try to acquire the lock, see it is taken then it will instead acquire a larger lock on the table. Postgres queues locks, so if this happens for multiple rows with similar contention, then multiple queries would be taking out locks on the whole table, which somewhat could explain the behavior I was seeing. It seemed plausible, but why was there such a problem?&lt;/p&gt;&lt;p&gt;I combed over my codebase and couldn't find anything. Then as I was laying down to go to bed that evening, I had a moment of inspiration where I remembered that we were updating the database in parallel for the same UUID using threads:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;@things&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;map &lt;span dir="ltr"&gt;do&lt;/span&gt; &lt;span dir="ltr"&gt;|&lt;/span&gt;thing&lt;span dir="ltr"&gt;|&lt;/span&gt;
-  &lt;span dir="ltr"&gt;Concurrent&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;Promise&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;execute&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;executor&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;:fast&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;do&lt;/span&gt;
-    store_results&lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;thing&lt;span dir="ltr"&gt;)&lt;/span&gt;
-  &lt;span dir="ltr"&gt;end&lt;/span&gt;
-&lt;span dir="ltr"&gt;end&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;each&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;:value!&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;In every loop, we were creating a promise that would concurrently update values (using a thread pool). Due to a design decision from years ago, each loop causes an &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt; to the same row in the database for each job being run. This programming pattern was never a problem before because, as I mentioned earlier, there's another table with more than 200x the number of records, so we've never had any issues with this scheme until recently.&lt;/p&gt;&lt;p dir="ltr"&gt;With this new theory, I removed the concurrency, which meant that each &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt; call would be sequential instead of in parallel:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;@things&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;map &lt;span dir="ltr"&gt;do&lt;/span&gt; &lt;span dir="ltr"&gt;|&lt;/span&gt;thing&lt;span dir="ltr"&gt;|&lt;/span&gt;
-  store_results&lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;thing&lt;span dir="ltr"&gt;)&lt;/span&gt;
-&lt;span dir="ltr"&gt;end&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;While the code is less efficiently in the use of IO on the Ruby program, it means that the chance that the same row will try to be updated at the same time is drastically decreased.&lt;/p&gt;&lt;p dir="ltr"&gt;I manually killed the long-running locked queries using &lt;code dir="ltr"&gt;SELECT pg_cancel_backend(&amp;lt;pid&amp;gt;);&lt;/code&gt; and I deployed this change (in the morning after a code review).&lt;/p&gt;&lt;p&gt;Once the old stuck queries were aborted, and the new code was in place, then the system promptly got back up and running, churning through plenty of backlog.&lt;/p&gt;&lt;h2 dir="ltr"&gt;
-  &lt;a name="locks-and-stuff" href="https://blog.heroku.com/curious-case-table-locking-update-query#locks-and-stuff" dir="ltr"&gt;Locks and stuff&lt;/a&gt;
-&lt;/h2&gt;&lt;p dir="ltr"&gt;While this somewhat obscure debugging story might not be directly relevant to your database, here are some things you can take away from this article. Your database has locks (think mutexes but with varying scope), and those locks can mess up your day if they're doing something different than you're expecting. You can see the locks that your database is currently using by running the &lt;code dir="ltr"&gt;heroku pg:locks&lt;/code&gt; command (may need to install the &lt;code dir="ltr"&gt;pg:extras&lt;/code&gt; plugin). You can also see which queries are taking out which locks using the SQL query I posted earlier.&lt;/p&gt;&lt;p dir="ltr"&gt;The next thing I want to cover is documentation. If it weren't for several very experienced Postgres experts and a seemingly random forum post about how multiple &lt;code dir="ltr"&gt;UPDATE&lt;/code&gt; statements can trigger a more aggressive lock type, then I never would have figured this out. If you're familiar with the Postgres documentation, is this behavior written down anywhere? If so, then could we make it easier to find or understand somehow? If it's not written down, can you help me document it? I don't mind writing documentation, but I'm not totally sure what the expected behavior is. For instance, why does a lock queue for a row that goes above a specific threshold trigger a table lock? And what exactly is that threshold? I'm sure this behavior makes total sense from an implementation point of view, but as an end-user, I would like it to be spelled out and officially documented.&lt;/p&gt;&lt;p&gt;I hope you either learned a thing or two or at least got a kick out of my misery. This issue was a pain to debug, but in hindsight, a quirky bug to blog about. Thanks for reading!&lt;/p&gt;&lt;p dir="ltr"&gt;And to learn about another potential database issue, check out this other blog post by Heroku Engineer Ben Fritsch, &lt;a href="https://blog.heroku.com/know-your-database-types" dir="ltr"&gt;Know Your Database Types&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Special thanks to &lt;a href="https://github.com/mble" dir="ltr"&gt;Matthew Blewitt&lt;/a&gt; and &lt;a href="https://github.com/andscoop" dir="ltr"&gt;Andy Cooper&lt;/a&gt; for helping me debug this!&lt;/p&gt;</description><pubDate>Wed, 18 Dec 2019 13:18:16 -0600</pubDate></item><item><title>Golang for Node.js Developers</title><link>https://lobste.rs/s/hke2co</link><description>&lt;img src="https://user-images.githubusercontent.com/168240/51193345-801fa380-189d-11e9-92ef-2101bf6a24ed.png" alt="logo" width="700" height="160"&gt;&lt;h1&gt;Golang for Node.js Developers&lt;/h1&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Examples of &lt;a href="https://golang.org/" rel="nofollow" dir="ltr"&gt;Golang&lt;/a&gt; examples compared to &lt;a href="https://nodejs.org/" rel="nofollow" dir="ltr"&gt;Node.js&lt;/a&gt; for learning&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;img src="https://camo.githubusercontent.com/e0d5267d60ee425acfe1a1f2d6e6d92a465dcd8f/687474703a2f2f696d672e736869656c64732e696f2f62616467652f6c6963656e73652d4d49542d626c75652e737667" alt="License" width="78" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/974d19bae442ae2c1657753f39651ade6bef3411/68747470733a2f2f617765736f6d652e72652f6d656e74696f6e65642d62616467652e737667" alt="Mentioned in Awesome Go" width="110" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/d4e0f63e9613ee474a7dfdc23c240b9795712c96/68747470733a2f2f696d672e736869656c64732e696f2f62616467652f5052732d77656c636f6d652d627269676874677265656e2e737667" alt="PRs Welcome" width="90" height="20"&gt;&lt;p dir="ltr"&gt;This guide full of examples is intended for people learning Go that are coming from Node.js, although the vice versa can work too. This is not meant to be a complete guide and it is assumed that you've gone through the &lt;a href="https://tour.golang.org/" rel="nofollow" dir="ltr"&gt;Tour of Go&lt;/a&gt; tutorial. This guide is meant to be barely good enough to help you at a high level understand how to do &lt;em dir="ltr"&gt;X&lt;/em&gt; in &lt;em dir="ltr"&gt;Y&lt;/em&gt; and doing further learning on your own is of course required.&lt;/p&gt;&lt;h2&gt;Examples&lt;/h2&gt;&lt;p dir="ltr"&gt;All sample code is available in &lt;a href="https://github.com/miguelmota/golang-for-nodejs-developers/blob/master/examples" dir="ltr"&gt;examples/&lt;/a&gt;&lt;/p&gt;&lt;h4&gt;Node.js&lt;/h4&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;//&lt;/span&gt; this is a line comment&lt;/span&gt;
+&lt;/div&gt;&lt;div&gt;The opinions expressed here are mine.&lt;/div&gt;</description><pubDate>Tue, 17 Dec 2019 10:37:01 -0600</pubDate></item><item><title>Golang for Node.js Developers</title><link>https://lobste.rs/s/hke2co</link><description>&lt;img src="https://user-images.githubusercontent.com/168240/51193345-801fa380-189d-11e9-92ef-2101bf6a24ed.png" alt="logo" width="700" height="160"&gt;&lt;h1&gt;Golang for Node.js Developers&lt;/h1&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Examples of &lt;a href="https://golang.org/" rel="nofollow" dir="ltr"&gt;Golang&lt;/a&gt; examples compared to &lt;a href="https://nodejs.org/" rel="nofollow" dir="ltr"&gt;Node.js&lt;/a&gt; for learning&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;img src="https://camo.githubusercontent.com/e0d5267d60ee425acfe1a1f2d6e6d92a465dcd8f/687474703a2f2f696d672e736869656c64732e696f2f62616467652f6c6963656e73652d4d49542d626c75652e737667" alt="License" width="78" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/974d19bae442ae2c1657753f39651ade6bef3411/68747470733a2f2f617765736f6d652e72652f6d656e74696f6e65642d62616467652e737667" alt="Mentioned in Awesome Go" width="110" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/d4e0f63e9613ee474a7dfdc23c240b9795712c96/68747470733a2f2f696d672e736869656c64732e696f2f62616467652f5052732d77656c636f6d652d627269676874677265656e2e737667" alt="PRs Welcome" width="90" height="20"&gt;&lt;p dir="ltr"&gt;This guide full of examples is intended for people learning Go that are coming from Node.js, although the vice versa can work too. This is not meant to be a complete guide and it is assumed that you've gone through the &lt;a href="https://tour.golang.org/" rel="nofollow" dir="ltr"&gt;Tour of Go&lt;/a&gt; tutorial. This guide is meant to be barely good enough to help you at a high level understand how to do &lt;em dir="ltr"&gt;X&lt;/em&gt; in &lt;em dir="ltr"&gt;Y&lt;/em&gt; and doing further learning on your own is of course required.&lt;/p&gt;&lt;h2&gt;Examples&lt;/h2&gt;&lt;p dir="ltr"&gt;All sample code is available in &lt;a href="https://github.com/miguelmota/golang-for-nodejs-developers/blob/master/examples" dir="ltr"&gt;examples/&lt;/a&gt;&lt;/p&gt;&lt;h4&gt;Node.js&lt;/h4&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;//&lt;/span&gt; this is a line comment&lt;/span&gt;
 
 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;/*&lt;/span&gt;&lt;/span&gt;
 &lt;span dir="ltr"&gt; this is a block comment&lt;/span&gt;
@@ -4043,7 +4043,261 @@ ok      command-line-arguments  3.502s&lt;/PRE&gt;&lt;h3&gt;documentation&lt;/h3
 	person.&lt;span dir="ltr"&gt;SetName&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;bob&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;)
 }&lt;/PRE&gt;&lt;h2&gt;Contributing&lt;/h2&gt;&lt;p&gt;Pull requests are welcome!&lt;/p&gt;&lt;p&gt;Please submit a pull request for new interesting additions or for general content fixes.&lt;/p&gt;&lt;p dir="ltr"&gt;If updating code, update both the README and the code in the &lt;a href="https://github.com/miguelmota/golang-for-nodejs-developers/blob/master/examples" dir="ltr"&gt;examples&lt;/a&gt; folder.&lt;/p&gt;</description><pubDate>Wed, 18 Dec 2019 15:11:03 -0600</pubDate></item><item><title>Still Why No HTTPS?</title><link>https://lobste.rs/s/kef3rc</link><description>&lt;header dir="ltr"&gt;
             &lt;span dir="ltr"&gt;17 December 2019&lt;/span&gt;
-        &lt;/header&gt;&lt;p dir="ltr"&gt;Back in July last year, &lt;a href="https://www.troyhunt.com/why-no-https-heres-the-worlds-largest-websites-not-redirecting-insecure-requests/" dir="ltr"&gt;Scott Helme and I shipped a little pet project that tracked the world's largest websites not implementing HTTPS by default&lt;/a&gt;. We called it &lt;a href="https://whynohttps.com/" dir="ltr"&gt;Why No HTTPS?&lt;/a&gt; and it gave people a way to see the largest websites not taking transport layer security seriously. We also broke the list down on a country-by-country basis and it quickly became a means of highlighting security gaps and serving as a "list of shame". I've had many organisations reach out and ask to be removed once they'd done their TLS things properly so clearly, the site is driving the right behaviour. Today, we're happy to share the first update since November last year.&lt;/p&gt;&lt;h3&gt;The Web is More Secure More of the Time&lt;/h3&gt;&lt;p dir="ltr"&gt;Let's start with the good news: since the first release of this little project, &lt;a href="https://letsencrypt.org/stats/" dir="ltr"&gt;HTTPS adoption has steadily trended upwards&lt;/a&gt;:&lt;/p&gt;&lt;img src="https://www.troyhunt.com/content/images/2019/12/HTTPS-Adoption.png" alt="" width="437" height="209"&gt;&lt;p&gt;We've gone from 70% of all HTTP requests being over the secure scheme to 80% which is a pretty good effort in a relatively short amount of time. But, of course, it's the websites serving that remaining 20% of traffic that I want to focus on here. Let's being with where we source the list of top sites from and that's something we've changed for this release.&lt;/p&gt;&lt;h3&gt;Bye Bye Alexa, Hello Tranco&lt;/h3&gt;&lt;p dir="ltr"&gt;When we launched the site, the list was based on the Alexa Top 1M. However, this list was becoming somewhat tricky to use reliably &lt;a href="https://scotthelme.co.uk/top-1-million-analysis-september-2019/" dir="ltr"&gt;as Scott explained in October&lt;/a&gt;:&lt;/p&gt;&lt;BLOCKQUOTE&gt;I used to use the Alexa Top 1 Million for this research but I've been having issues with the list. They tried to remove access at one point and while I managed to have it restored, there are other issues too. The accuracy of the data has been called into question and also the list itself has been having weird issues recently like not returning 1 million entries... Yep, that's right, the Alexa Top 1 Million list has been returning, in some cases, only ~650,000 entries recently, which is of course a problem.&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Consequently, there are some differences in the way sites are ranked and as a result, there are some unexpected appearances. For example, the 21st largest site on the global list is &lt;a href="http://googletagmanager.com/" rel="nofollow" dir="ltr"&gt;googletagmanager.com&lt;/a&gt;. Now obviously this isn't a website in the sense that folks go there looking for useful content (many would argue quite the contrary), but based on the Tranco data it's one of the most traffic'd websites in the world so it's within scope of this project.&lt;/p&gt;&lt;p&gt;So that's our starting point in terms of identifying which sites we assess, let's move onto the methodology around how a site ultimately makes our list. &lt;/p&gt;&lt;h3&gt;Methodology and False-Positives&lt;/h3&gt;&lt;p dir="ltr"&gt;A quick recap on our methodology first: Scott runs a service which indexes a whole bunch of security things on the world's top million websites each day. He publishes the results of that effort &lt;a href="https://crawler.ninja/files/json/" dir="ltr"&gt;via his free crawler.ninja website&lt;/a&gt; (really Scott, .ninja?!) and I then roll the HTTP sites and HTTPS sites list into the Why No HTTPS? website. In that regard, it's quite simple. Except it's not really...&lt;/p&gt;&lt;p dir="ltr"&gt;As I explained in &lt;a href="https://www.troyhunt.com/why-no-https-questions-answered-new-data-path-forward/" dir="ltr"&gt;this Q&amp;amp;A blog post last year&lt;/a&gt;, there are a whole bunch of reasons why a site that &lt;em dir="ltr"&gt;you&lt;/em&gt; see apparently doing things right might still be on our list. If you're going to chime in here with a bit of "But [blah].com loads over HTTPS by default for me", do please start by reading that blog post.&lt;/p&gt;&lt;p dir="ltr"&gt;Read the post? Good! What we're left with pretty much boils down to an expectation that a site responds to an HTTP request over the insecure scheme with either a 301 or 302 (ideally the former so it's a &lt;em dir="ltr"&gt;permanent &lt;/em&gt;redirect) to a secure URL (multi-hop is also ok: a 301 to an HTTP address that then 301s to an HTTPS address is fine). If I make an insecure curl request from here in Australia, for example, and I get an HTTP 401 then the site goes onto the list. There has been some dissatisfaction over this methodology due to how much website behaviour can vary from location to location, so in this update we've added a means of getting a "free pass" that will automatically exclude a site from the list.&lt;/p&gt;&lt;h3&gt;HSTS Preload Gives You an Immediate "Free Pass"&lt;/h3&gt;&lt;p dir="ltr"&gt;Preloaded HSTS is awesome (&lt;a href="https://www.troyhunt.com/understanding-http-strict-transport/" dir="ltr"&gt;here's an old blog post that explains why&lt;/a&gt;). Once a site is pinned into the browser's static list of HSTS sites, insecure requests will &lt;em dir="ltr"&gt;always&lt;/em&gt; be upgraded and the 301 / 302 done by the website becomes redundant. Further, check out &lt;a href="https://hstspreload.org/" dir="ltr"&gt;the requirements to be preloaded in the first place&lt;/a&gt;, in particular, this one:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;strong dir="ltr"&gt;Redirect&lt;/strong&gt; from HTTP to HTTPS on the same host, if you are listening on port 80.&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;What this means is that if a site is in &lt;a href="https://cs.chromium.org/codesearch/f/chromium/src/net/http/transport_security_state_static.json" dir="ltr"&gt;the preload list&lt;/a&gt;, we're comfortable excluding it from our list of shame. A great example of this is the domain I mentioned earlier - &lt;a href="http://googletagmanager.com/" rel="nofollow" dir="ltr"&gt;googletagmanager.com&lt;/a&gt;. When I curl that address insecurely, here's what happens:&lt;/p&gt;&lt;figure&gt;&lt;img src="https://www.troyhunt.com/content/images/2019/12/image-5.png" width="437" height="147"&gt;&lt;/figure&gt;&lt;p&gt;Arguably, this should keep the site in scope of being on our list but because it's been successfully preloaded and the browser simply won't allow an insecure request, it gets a free pass. Other notable "free pass" sites include hyatt.com (a curl for me just 301s to a www prefixed address served insecurely) and... haveibeenpwned.com:&lt;/p&gt;&lt;figure&gt;&lt;img src="https://www.troyhunt.com/content/images/2019/12/image-6.png" width="437" height="257"&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;Over many years I've carefully honed a bunch of Cloudflare firewall rules to identify non-browser traffic that doesn't adhere to expected norms. The response above serves a body containing anti-automation (CAPTCHA) over the same scheme the request was made to (a Cloudflare behaviour). You &lt;em dir="ltr"&gt;shouldn't&lt;/em&gt; ever get that response in an actual browser but if you did, the fact that HSTS has been preloaded for the domain for years means the request would automatically be upgraded hence HIBP is really a false positive.&lt;/p&gt;&lt;p dir="ltr"&gt;This practice of giving HSTS preloaded sites a free pass is something we hope will drive &lt;em dir="ltr"&gt;more &lt;/em&gt;websites in this direction. The next time someone reaches out and claims their site is incorrectly categorised that's going to be my first response - preload your domain then the next update to the site will keep you excluded.&lt;/p&gt;&lt;h3&gt;Check the Diffs on GitHub&lt;/h3&gt;&lt;p dir="ltr"&gt;Lastly, if you'd like to see exactly what's changed in the data set, &lt;a href="https://github.com/troyhunt/Why-No-HTTPS-Data" dir="ltr"&gt;check out the public GitHub repository&lt;/a&gt;. You'll see all the input data and all the output data, the latter being precisely the files that drive the Why No HTTPS? website. I personally find it interesting to look at diffs on files such as the &lt;a href="https://github.com/troyhunt/Why-No-HTTPS-Data/blob/master/Output%20Files/top50-au.json" dir="ltr"&gt;top50-au.json&lt;/a&gt; one as it gives me a really good sense of what's changed. I've ordered these files by domain name rather than rank to make things a little easier, but of course with ranks regularly changing anyway then the move from Alexa to Tranco there's going to be a heap of changes from last time even if the HTTPS status hasn't changed. At the very least though, it makes it super easy to see which sites have now dropped off the list altogether.&lt;/p&gt;&lt;p dir="ltr"&gt;There's always a bunch of feedback on these releases and people often find really interesting things in the data. Do chime in below, keeping in mind the earlier point about reading &lt;a href="https://www.troyhunt.com/why-no-https-questions-answered-new-data-path-forward/" dir="ltr"&gt;the Q&amp;amp;A blog post&lt;/a&gt; first. And, of course, please continue to use this site as leverage to move more organisations in the "secure by default" direction.&lt;/p&gt;</description><pubDate>Wed, 18 Dec 2019 11:13:17 -0600</pubDate></item><item><title>Why Functional Programming</title><link>https://lobste.rs/s/ba3ib5</link><description>&lt;h6&gt;
+        &lt;/header&gt;&lt;p dir="ltr"&gt;Back in July last year, &lt;a href="https://www.troyhunt.com/why-no-https-heres-the-worlds-largest-websites-not-redirecting-insecure-requests/" dir="ltr"&gt;Scott Helme and I shipped a little pet project that tracked the world's largest websites not implementing HTTPS by default&lt;/a&gt;. We called it &lt;a href="https://whynohttps.com/" dir="ltr"&gt;Why No HTTPS?&lt;/a&gt; and it gave people a way to see the largest websites not taking transport layer security seriously. We also broke the list down on a country-by-country basis and it quickly became a means of highlighting security gaps and serving as a "list of shame". I've had many organisations reach out and ask to be removed once they'd done their TLS things properly so clearly, the site is driving the right behaviour. Today, we're happy to share the first update since November last year.&lt;/p&gt;&lt;h3&gt;The Web is More Secure More of the Time&lt;/h3&gt;&lt;p dir="ltr"&gt;Let's start with the good news: since the first release of this little project, &lt;a href="https://letsencrypt.org/stats/" dir="ltr"&gt;HTTPS adoption has steadily trended upwards&lt;/a&gt;:&lt;/p&gt;&lt;img src="https://www.troyhunt.com/content/images/2019/12/HTTPS-Adoption.png" alt="" width="437" height="209"&gt;&lt;p&gt;We've gone from 70% of all HTTP requests being over the secure scheme to 80% which is a pretty good effort in a relatively short amount of time. But, of course, it's the websites serving that remaining 20% of traffic that I want to focus on here. Let's being with where we source the list of top sites from and that's something we've changed for this release.&lt;/p&gt;&lt;h3&gt;Bye Bye Alexa, Hello Tranco&lt;/h3&gt;&lt;p dir="ltr"&gt;When we launched the site, the list was based on the Alexa Top 1M. However, this list was becoming somewhat tricky to use reliably &lt;a href="https://scotthelme.co.uk/top-1-million-analysis-september-2019/" dir="ltr"&gt;as Scott explained in October&lt;/a&gt;:&lt;/p&gt;&lt;BLOCKQUOTE&gt;I used to use the Alexa Top 1 Million for this research but I've been having issues with the list. They tried to remove access at one point and while I managed to have it restored, there are other issues too. The accuracy of the data has been called into question and also the list itself has been having weird issues recently like not returning 1 million entries... Yep, that's right, the Alexa Top 1 Million list has been returning, in some cases, only ~650,000 entries recently, which is of course a problem.&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Consequently, there are some differences in the way sites are ranked and as a result, there are some unexpected appearances. For example, the 21st largest site on the global list is &lt;a href="http://googletagmanager.com/" rel="nofollow" dir="ltr"&gt;googletagmanager.com&lt;/a&gt;. Now obviously this isn't a website in the sense that folks go there looking for useful content (many would argue quite the contrary), but based on the Tranco data it's one of the most traffic'd websites in the world so it's within scope of this project.&lt;/p&gt;&lt;p&gt;So that's our starting point in terms of identifying which sites we assess, let's move onto the methodology around how a site ultimately makes our list. &lt;/p&gt;&lt;h3&gt;Methodology and False-Positives&lt;/h3&gt;&lt;p dir="ltr"&gt;A quick recap on our methodology first: Scott runs a service which indexes a whole bunch of security things on the world's top million websites each day. He publishes the results of that effort &lt;a href="https://crawler.ninja/files/json/" dir="ltr"&gt;via his free crawler.ninja website&lt;/a&gt; (really Scott, .ninja?!) and I then roll the HTTP sites and HTTPS sites list into the Why No HTTPS? website. In that regard, it's quite simple. Except it's not really...&lt;/p&gt;&lt;p dir="ltr"&gt;As I explained in &lt;a href="https://www.troyhunt.com/why-no-https-questions-answered-new-data-path-forward/" dir="ltr"&gt;this Q&amp;amp;A blog post last year&lt;/a&gt;, there are a whole bunch of reasons why a site that &lt;em dir="ltr"&gt;you&lt;/em&gt; see apparently doing things right might still be on our list. If you're going to chime in here with a bit of "But [blah].com loads over HTTPS by default for me", do please start by reading that blog post.&lt;/p&gt;&lt;p dir="ltr"&gt;Read the post? Good! What we're left with pretty much boils down to an expectation that a site responds to an HTTP request over the insecure scheme with either a 301 or 302 (ideally the former so it's a &lt;em dir="ltr"&gt;permanent &lt;/em&gt;redirect) to a secure URL (multi-hop is also ok: a 301 to an HTTP address that then 301s to an HTTPS address is fine). If I make an insecure curl request from here in Australia, for example, and I get an HTTP 401 then the site goes onto the list. There has been some dissatisfaction over this methodology due to how much website behaviour can vary from location to location, so in this update we've added a means of getting a "free pass" that will automatically exclude a site from the list.&lt;/p&gt;&lt;h3&gt;HSTS Preload Gives You an Immediate "Free Pass"&lt;/h3&gt;&lt;p dir="ltr"&gt;Preloaded HSTS is awesome (&lt;a href="https://www.troyhunt.com/understanding-http-strict-transport/" dir="ltr"&gt;here's an old blog post that explains why&lt;/a&gt;). Once a site is pinned into the browser's static list of HSTS sites, insecure requests will &lt;em dir="ltr"&gt;always&lt;/em&gt; be upgraded and the 301 / 302 done by the website becomes redundant. Further, check out &lt;a href="https://hstspreload.org/" dir="ltr"&gt;the requirements to be preloaded in the first place&lt;/a&gt;, in particular, this one:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;strong dir="ltr"&gt;Redirect&lt;/strong&gt; from HTTP to HTTPS on the same host, if you are listening on port 80.&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;What this means is that if a site is in &lt;a href="https://cs.chromium.org/codesearch/f/chromium/src/net/http/transport_security_state_static.json" dir="ltr"&gt;the preload list&lt;/a&gt;, we're comfortable excluding it from our list of shame. A great example of this is the domain I mentioned earlier - &lt;a href="http://googletagmanager.com/" rel="nofollow" dir="ltr"&gt;googletagmanager.com&lt;/a&gt;. When I curl that address insecurely, here's what happens:&lt;/p&gt;&lt;figure&gt;&lt;img src="https://www.troyhunt.com/content/images/2019/12/image-5.png" width="437" height="147"&gt;&lt;/figure&gt;&lt;p&gt;Arguably, this should keep the site in scope of being on our list but because it's been successfully preloaded and the browser simply won't allow an insecure request, it gets a free pass. Other notable "free pass" sites include hyatt.com (a curl for me just 301s to a www prefixed address served insecurely) and... haveibeenpwned.com:&lt;/p&gt;&lt;figure&gt;&lt;img src="https://www.troyhunt.com/content/images/2019/12/image-6.png" width="437" height="257"&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;Over many years I've carefully honed a bunch of Cloudflare firewall rules to identify non-browser traffic that doesn't adhere to expected norms. The response above serves a body containing anti-automation (CAPTCHA) over the same scheme the request was made to (a Cloudflare behaviour). You &lt;em dir="ltr"&gt;shouldn't&lt;/em&gt; ever get that response in an actual browser but if you did, the fact that HSTS has been preloaded for the domain for years means the request would automatically be upgraded hence HIBP is really a false positive.&lt;/p&gt;&lt;p dir="ltr"&gt;This practice of giving HSTS preloaded sites a free pass is something we hope will drive &lt;em dir="ltr"&gt;more &lt;/em&gt;websites in this direction. The next time someone reaches out and claims their site is incorrectly categorised that's going to be my first response - preload your domain then the next update to the site will keep you excluded.&lt;/p&gt;&lt;h3&gt;Check the Diffs on GitHub&lt;/h3&gt;&lt;p dir="ltr"&gt;Lastly, if you'd like to see exactly what's changed in the data set, &lt;a href="https://github.com/troyhunt/Why-No-HTTPS-Data" dir="ltr"&gt;check out the public GitHub repository&lt;/a&gt;. You'll see all the input data and all the output data, the latter being precisely the files that drive the Why No HTTPS? website. I personally find it interesting to look at diffs on files such as the &lt;a href="https://github.com/troyhunt/Why-No-HTTPS-Data/blob/master/Output%20Files/top50-au.json" dir="ltr"&gt;top50-au.json&lt;/a&gt; one as it gives me a really good sense of what's changed. I've ordered these files by domain name rather than rank to make things a little easier, but of course with ranks regularly changing anyway then the move from Alexa to Tranco there's going to be a heap of changes from last time even if the HTTPS status hasn't changed. At the very least though, it makes it super easy to see which sites have now dropped off the list altogether.&lt;/p&gt;&lt;p dir="ltr"&gt;There's always a bunch of feedback on these releases and people often find really interesting things in the data. Do chime in below, keeping in mind the earlier point about reading &lt;a href="https://www.troyhunt.com/why-no-https-questions-answered-new-data-path-forward/" dir="ltr"&gt;the Q&amp;amp;A blog post&lt;/a&gt; first. And, of course, please continue to use this site as leverage to move more organisations in the "secure by default" direction.&lt;/p&gt;</description><pubDate>Wed, 18 Dec 2019 11:13:17 -0600</pubDate></item><item><title>A Failed SaaS Postmortem ·</title><link>https://lobste.rs/s/gs9mwh</link><description>&lt;UL&gt;&lt;LI&gt;&lt;a href="https://www.drip.com/" dir="ltr"&gt;Drip&lt;/a&gt; for marketing email campaigns.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://jekyllrb.com/" dir="ltr"&gt;Jekyll&lt;/a&gt; for the marketing site.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://jsonapi.org/" dir="ltr"&gt;JSON API&lt;/a&gt; as a communication protocol.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://letsencrypt.org/" dir="ltr"&gt;Let's Encrypt&lt;/a&gt; for TLS certificates.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://www.mailgun.com/" dir="ltr"&gt;Mailgun&lt;/a&gt; for transactional emails.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://mixpanel.com/" dir="ltr"&gt;Mixpanel&lt;/a&gt; for behavior analysis.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://rollbar.com/" dir="ltr"&gt;Rollbar&lt;/a&gt; for error tracking.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://segment.com/" dir="ltr"&gt;Segment&lt;/a&gt; for data aggregation.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://stripe.com/" dir="ltr"&gt;Stripe&lt;/a&gt; for recurring payments.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/wal-e/wal-e" dir="ltr"&gt;wal-e&lt;/a&gt; for database backups.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://webpack.js.org/" dir="ltr"&gt;webpack&lt;/a&gt; for JavaScript asset bundling.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;For some of those tools,
+I had some experience,
+but the depth of my knowledge was lacking
+since I am a company of one.
+Theses were all technologies
+that I had to learn
+and configure myself.
+While I succeeded
+at integrating each
+of these things,
+I did so at the cost of &lt;em dir="ltr"&gt;a lot&lt;/em&gt; of time.&lt;/p&gt;&lt;p&gt;So, here’s a first lesson:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;When starting out, keep your technology stack to a bare minimum
+and follow the &lt;strong dir="ltr"&gt;YAGNI&lt;/strong&gt; (You Ain’t Gonna Need It) principle.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h2&gt;The upgrade treadmill&lt;/h2&gt;&lt;p&gt;After assembling all of these tools together,
+I finally felt like I had a base
+to work from.
+My project was moving
+and I began to build the critical features needed
+to make a minimum viable product.
+Then I fell into a trap.&lt;/p&gt;&lt;p&gt;The trap looks like this:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Time is ultra-limited
+because this is a nights and weekends side project.&lt;/LI&gt;&lt;LI&gt;Software moves fast
+and new versions of tools constantly release
+(this is especially true in the JavaScript ecosystem).&lt;/LI&gt;&lt;LI&gt;I’m eager to keep the software up-to-date
+to ensure that the large base I built stays “modern.”&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;With these three conditions in place,
+I spent way too much time piddling
+with package upgrades.
+I’m guessing you can see
+how this might happen.
+I’d spend a long day working
+at my day job
+and doing a lot of software development there.
+Then I wouldn’t have the energy
+to make &lt;strong dir="ltr"&gt;real&lt;/strong&gt; progress
+on my app,
+so I’d tell myself
+that upgrading one of the packages
+that was out-of-date was a good use
+of my time.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Wrong.
+Again,
+I was so wrong.&lt;/em&gt;
+I wasted so many nights updating small packages
+for zero benefit.
+To make the issue worse,
+some of these minor updates would break things
+(because &lt;a href="https://twitter.com/dhh/status/1015206151384952834" dir="ltr"&gt;SemVer is a lie&lt;/a&gt;).
+Upgrading these packages was a treadmill
+that got me nowhere.
+That brings me to lesson two:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Software package upgrades suck the wind out of your sail.
+Until you have a minimum viable product
+with customers,
+pick a package version and stick with it.
+Only upgrade &lt;strong dir="ltr"&gt;when you have to.&lt;/strong&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h2&gt;Switching horses mid-race… twice!&lt;/h2&gt;&lt;p dir="ltr"&gt;Remember how I mentioned picking Semantic UI and Ember?
+Check out the &lt;a href="https://github.com/mblayman/conductor" dir="ltr"&gt;College Conductor repo&lt;/a&gt;
+and you’ll be hard pressed
+to find either of them.&lt;/p&gt;&lt;p&gt;At some point during development,
+I realized how hard I was fighting
+with my tool choices.
+Semantic UI wouldn’t play nicely
+with Ember’s build system,
+and the components and extensibility
+of Semantic were not working
+for me.
+This friction affected my ability
+to make UI elements that I needed
+for features.&lt;/p&gt;&lt;p dir="ltr"&gt;I won’t blame Semantic
+because it was more likely my deep inexperience
+with the toolkit
+that was the problem.
+With Semantic troubling me
+and me having do all the other parts
+of the system development too,
+I pulled the ripcord
+and switched to &lt;a href="https://getbootstrap.com/" dir="ltr"&gt;Bootstrap&lt;/a&gt;.
+I sacrificed more novel styling
+for a system I knew.
+And, guess what?
+I saw the immediate productivity boost
+from using a tool
+from my toolbox!&lt;/p&gt;&lt;p dir="ltr"&gt;Eventually,
+I made a similar choice
+to remove Ember.
+I tried to use Ember
+for nearly two years.
+I read a large amount
+of the documentation,
+wrote articles
+about what I learned
+on my journey,
+and stayed up-to-date
+with all the EmberConf content
+and news coming out
+of that community.
+I &lt;em dir="ltr"&gt;really&lt;/em&gt; like Ember.
+So why would I cut it loose?&lt;/p&gt;&lt;p&gt;&lt;strong&gt;Development velocity&lt;/strong&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;As a one person team,
+I had to develop the backend logic,
+database models,
+and everything that comes
+with backend development.
+I &lt;em dir="ltr"&gt;also&lt;/em&gt; had to develop
+the entire user interface.
+I discovered that creating a backend API
+and rich client side single page app (SPA)
+came with a ton of overhead.&lt;/p&gt;&lt;p&gt;My flow with Ember was like:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Figure out the data model for the next feature.&lt;/LI&gt;&lt;LI&gt;Create models in Django.&lt;/LI&gt;&lt;LI&gt;Create JSON APIs in Django.&lt;/LI&gt;&lt;LI&gt;Create models &lt;em dir="ltr"&gt;again&lt;/em&gt; on the client side
+with &lt;a href="https://guides.emberjs.com/release/models/" dir="ltr"&gt;Ember Data&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;Decide on the routes and controllers
+to finish the user interface for the feature.&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;Between step three and four,
+I would lose most of my motivation
+and jump back on the upgrade treadmill.
+As a team of one,
+it felt like drudgery
+to recreate models
+for a client side representation.&lt;/p&gt;&lt;p dir="ltr"&gt;The decision to remove Ember was really tough.
+The &lt;a href="https://en.wikipedia.org/wiki/Sunk_cost" dir="ltr"&gt;sunk cost fallacy&lt;/a&gt; hit me hard.
+I delayed removing Ember
+for many months
+because I convinced myself
+that it would take a long time
+to redo all the work
+that I finished so far.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Then I removed it.&lt;/em&gt;
+What do you think happened?
+I removed so much extra stuff
+and simplified my technology stack so tremendously
+that I implemented &lt;em dir="ltr"&gt;all&lt;/em&gt;
+of my original features
+within &lt;em dir="ltr"&gt;two weeks.&lt;/em&gt;
+Two weeks of effort
+to replicate two years
+of previous development.&lt;/p&gt;&lt;p dir="ltr"&gt;Does this mean that Ember is bad and you shouldn’t use it?
+&lt;strong dir="ltr"&gt;No!&lt;/strong&gt;&lt;/p&gt;&lt;p&gt;Ember was a bad fit
+for me,
+at that time,
+with my level of experience with it,
+and no support
+from other team members.
+Also,
+I switched to using Django
+for the user interface
+with server side rendering,
+and I was extremely comfortable
+with that
+because I use Django daily
+in my day job.&lt;/p&gt;&lt;p&gt;Lesson three:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Use the tools that are already in your toolbox!&lt;/strong&gt;
+You’ll need all your extra brain capacity
+for solving the business problem.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h2&gt;Ignoring customer development&lt;/h2&gt;&lt;p dir="ltr"&gt;If you look back
+at the vision
+that I wanted for the project,
+you’ll see
+that I hoped to make something useful
+for my wife.
+Up to this point,
+I’ve written about the technical failings
+of the project.
+This is an emblematic example
+of why the project failed.
+&lt;em dir="ltr"&gt;I didn’t help my customers
+and was too focused on the technology.&lt;/em&gt;&lt;/p&gt;&lt;p&gt;At the start of the effort,
+I asked my wife questions
+about what she needed
+and what would help her
+and other educational consultants
+like her.
+She told me the things
+that she was looking for directly.
+But it took forever
+to have something tangible
+to show her.&lt;/p&gt;&lt;p&gt;If someone shows up to a restaurant,
+expresses what they want,
+then the chef takes four hours
+to prepare the meal,
+will that customer be happy?
+I think not.&lt;/p&gt;&lt;p dir="ltr"&gt;I was the slow chef.
+All the time I invested
+in building the “right” thing was wasted
+because I didn’t do customer development.
+&lt;strong dir="ltr"&gt;I didn’t produce the simplest version
+of the product
+that would provide value.&lt;/strong&gt;
+It did not take long
+before I completely lost my wife’s interest.
+To stick with the four hour meal analogy,
+my patient customer left
+after the meal wasn’t ready
+in the first hour.&lt;/p&gt;&lt;p&gt;As developers and technologists,
+many of us enjoy steeping
+in the technology
+purely for the sake of it.
+There is so much to learn
+and so many ways to apply software
+that it is easy to lose yourself
+in that tinkering.
+While that’s personally useful,
+especially if you need to grow your skills,
+staying in that space
+is not helping others.&lt;/p&gt;&lt;p&gt;So,
+what did I take away from that?
+That would be the next lesson:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Get your product to be something useful for others
+&lt;strong dir="ltr"&gt;as fast as possible&lt;/strong&gt;.
+Until you deliver something valuable,
+you only have a hobby.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;Without serious interest from my first customer
+(and no other strong ties to her industry),
+I was missing a good voice to drive the product forward.
+Because she was disinterested,
+there was no external pressure on me
+to deliver something.
+My project got nowhere fast.&lt;/p&gt;&lt;h2&gt;The end&lt;/h2&gt;&lt;p dir="ltr"&gt;If there is anything redeeming about College Conductor,
+it was as a teaching tool.
+I’ve done a lot of Django code
+for work,
+and I brought that same thoroughness
+to this project.
+After listening to an episode
+of The Changelog
+about &lt;a href="https://changelog.com/podcast/288" dir="ltr"&gt;live streaming software development on Twitch&lt;/a&gt;,
+I started to share my efforts
+on College Conductor live.&lt;/p&gt;&lt;p dir="ltr"&gt;Over a year later,
+I have &lt;a href="https://www.mattlayman.com/building-saas/" dir="ltr"&gt;streamed nearly 40 lessons&lt;/a&gt;
+in an episodic format
+to teach people about Django
+and building real projects.
+My service may have had no real customers,
+but the techniques I apply
+to building things are very much the techniques
+that I use at work.&lt;/p&gt;&lt;p&gt;Where does that leave me?&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;I’ve learned a lot.&lt;/LI&gt;&lt;LI&gt;I’ve taught a lot.&lt;/LI&gt;&lt;LI&gt;College Conductor was a financial failure.&lt;/LI&gt;&lt;LI&gt;College Conductor was a successful teaching tool.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;I hope you’re able to learn a bit
+from my experience
+with building my first SaaS project.&lt;/p&gt;&lt;p&gt;For those jumping straight to the end,
+here are the lessons
+that I learned.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;When starting out, keep your technology stack to a bare minimum
+and follow the &lt;strong dir="ltr"&gt;YAGNI&lt;/strong&gt; (You Ain’t Gonna Need It) principle.&lt;/LI&gt;&lt;LI&gt;Software package upgrades suck the wind out of your sail.
+Until you have a minimum viable product
+with customers,
+pick a package version and stick with it.
+Only upgrade &lt;strong dir="ltr"&gt;when you have to.&lt;/strong&gt;&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Use the tools that are already in your toolbox!&lt;/strong&gt;
+You’ll need all your extra brain capacity
+for solving the business problem.&lt;/LI&gt;&lt;LI&gt;Get your product to be something useful for others
+&lt;strong dir="ltr"&gt;as fast as possible&lt;/strong&gt;.
+Until you deliver something valuable,
+you only have a hobby.&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;If you want to watch me build my second SaaS,
+please join me
+on &lt;a href="https://www.twitch.tv/mblayman" dir="ltr"&gt;Twitch&lt;/a&gt;
+on Wednesdays
+at 9pm ET.
+Hopefully, I’ll make fewer mistakes this time around.&lt;/p&gt;&lt;p dir="ltr"&gt;If you have questions
+or enjoyed this article,
+please feel free to message me on Twitter
+at &lt;a href="https://twitter.com/mblayman" dir="ltr"&gt;@mblayman&lt;/a&gt;
+or share if others might be interested too.&lt;/p&gt;&lt;h2&gt;Learn more about Python!&lt;/h2&gt;&lt;p&gt;
+  You can join my newsletter
+  along with hundreds of other developers
+  and get access
+  to useful topics
+  to help you learn more about Python and software development.
+  &lt;/p&gt;&lt;p&gt;
+  I’ll get you started
+  with my Pythonic code email course.
+  I hope you'll join up!
+  &lt;/p&gt;&lt;div&gt;* indicates required&lt;/div&gt;&lt;div&gt;&lt;label for="mce-EMAIL" dir="ltr"&gt;Email Address  &lt;span dir="ltr"&gt;*&lt;/span&gt;
+          &lt;/label&gt;&lt;/div&gt;&lt;div&gt;&lt;label for="mce-FNAME" dir="ltr"&gt;First Name  &lt;span dir="ltr"&gt;*&lt;/span&gt;
+          &lt;/label&gt;&lt;/div&gt;&lt;img src="https://www.mattlayman.com/img/2019/mass-spec.png" width="451" height="192"&gt;</description><pubDate>Wed, 18 Dec 2019 15:13:56 -0600</pubDate></item><item><title>Why Functional Programming</title><link>https://lobste.rs/s/ba3ib5</link><description>&lt;h6&gt;
 			12/8/2019 | The perfect web framework
 		&lt;/h6&gt;&lt;p&gt;
 			In essence, a web framework does one thing - transform text based on a request and some state. So where does complexity arise?
@@ -4433,261 +4687,7 @@ out/image-id: tmp/.packed.sentinel
 &amp;gt; docker build --tag="$${image_id}
 &amp;gt; echo "$${image_id}" &amp;gt; out/image-id
 &lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;This is not dogma&lt;/h2&gt;&lt;p&gt;One of the virtues of Make, to me, is that it is pragmatic.
-Counterintuitively, I think part of the reason Make has managed to maintain simplicity is precisely because it has allowed some hacks to accumulate in the tool itself.&lt;/p&gt;&lt;p&gt;The alternative is to expand the model to be more generic, to incorporate new concepts, making the core model more complex.&lt;/p&gt;&lt;p&gt;In the end, the hacks have allowed the exceptional beauty of the core model - a way to describe file construction pipelines tightly connected with the file system tree - to remain simple.&lt;/p&gt;</description><pubDate>Tue, 17 Dec 2019 04:01:43 -0600</pubDate></item><item><title>A Failed SaaS Postmortem ·</title><link>https://lobste.rs/s/gs9mwh</link><description>&lt;UL&gt;&lt;LI&gt;&lt;a href="https://www.drip.com/" dir="ltr"&gt;Drip&lt;/a&gt; for marketing email campaigns.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://jekyllrb.com/" dir="ltr"&gt;Jekyll&lt;/a&gt; for the marketing site.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://jsonapi.org/" dir="ltr"&gt;JSON API&lt;/a&gt; as a communication protocol.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://letsencrypt.org/" dir="ltr"&gt;Let's Encrypt&lt;/a&gt; for TLS certificates.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://www.mailgun.com/" dir="ltr"&gt;Mailgun&lt;/a&gt; for transactional emails.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://mixpanel.com/" dir="ltr"&gt;Mixpanel&lt;/a&gt; for behavior analysis.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://rollbar.com/" dir="ltr"&gt;Rollbar&lt;/a&gt; for error tracking.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://segment.com/" dir="ltr"&gt;Segment&lt;/a&gt; for data aggregation.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://stripe.com/" dir="ltr"&gt;Stripe&lt;/a&gt; for recurring payments.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/wal-e/wal-e" dir="ltr"&gt;wal-e&lt;/a&gt; for database backups.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://webpack.js.org/" dir="ltr"&gt;webpack&lt;/a&gt; for JavaScript asset bundling.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;For some of those tools,
-I had some experience,
-but the depth of my knowledge was lacking
-since I am a company of one.
-Theses were all technologies
-that I had to learn
-and configure myself.
-While I succeeded
-at integrating each
-of these things,
-I did so at the cost of &lt;em dir="ltr"&gt;a lot&lt;/em&gt; of time.&lt;/p&gt;&lt;p&gt;So, here’s a first lesson:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;When starting out, keep your technology stack to a bare minimum
-and follow the &lt;strong dir="ltr"&gt;YAGNI&lt;/strong&gt; (You Ain’t Gonna Need It) principle.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h2&gt;The upgrade treadmill&lt;/h2&gt;&lt;p&gt;After assembling all of these tools together,
-I finally felt like I had a base
-to work from.
-My project was moving
-and I began to build the critical features needed
-to make a minimum viable product.
-Then I fell into a trap.&lt;/p&gt;&lt;p&gt;The trap looks like this:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Time is ultra-limited
-because this is a nights and weekends side project.&lt;/LI&gt;&lt;LI&gt;Software moves fast
-and new versions of tools constantly release
-(this is especially true in the JavaScript ecosystem).&lt;/LI&gt;&lt;LI&gt;I’m eager to keep the software up-to-date
-to ensure that the large base I built stays “modern.”&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;With these three conditions in place,
-I spent way too much time piddling
-with package upgrades.
-I’m guessing you can see
-how this might happen.
-I’d spend a long day working
-at my day job
-and doing a lot of software development there.
-Then I wouldn’t have the energy
-to make &lt;strong dir="ltr"&gt;real&lt;/strong&gt; progress
-on my app,
-so I’d tell myself
-that upgrading one of the packages
-that was out-of-date was a good use
-of my time.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Wrong.
-Again,
-I was so wrong.&lt;/em&gt;
-I wasted so many nights updating small packages
-for zero benefit.
-To make the issue worse,
-some of these minor updates would break things
-(because &lt;a href="https://twitter.com/dhh/status/1015206151384952834" dir="ltr"&gt;SemVer is a lie&lt;/a&gt;).
-Upgrading these packages was a treadmill
-that got me nowhere.
-That brings me to lesson two:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Software package upgrades suck the wind out of your sail.
-Until you have a minimum viable product
-with customers,
-pick a package version and stick with it.
-Only upgrade &lt;strong dir="ltr"&gt;when you have to.&lt;/strong&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h2&gt;Switching horses mid-race… twice!&lt;/h2&gt;&lt;p dir="ltr"&gt;Remember how I mentioned picking Semantic UI and Ember?
-Check out the &lt;a href="https://github.com/mblayman/conductor" dir="ltr"&gt;College Conductor repo&lt;/a&gt;
-and you’ll be hard pressed
-to find either of them.&lt;/p&gt;&lt;p&gt;At some point during development,
-I realized how hard I was fighting
-with my tool choices.
-Semantic UI wouldn’t play nicely
-with Ember’s build system,
-and the components and extensibility
-of Semantic were not working
-for me.
-This friction affected my ability
-to make UI elements that I needed
-for features.&lt;/p&gt;&lt;p dir="ltr"&gt;I won’t blame Semantic
-because it was more likely my deep inexperience
-with the toolkit
-that was the problem.
-With Semantic troubling me
-and me having do all the other parts
-of the system development too,
-I pulled the ripcord
-and switched to &lt;a href="https://getbootstrap.com/" dir="ltr"&gt;Bootstrap&lt;/a&gt;.
-I sacrificed more novel styling
-for a system I knew.
-And, guess what?
-I saw the immediate productivity boost
-from using a tool
-from my toolbox!&lt;/p&gt;&lt;p dir="ltr"&gt;Eventually,
-I made a similar choice
-to remove Ember.
-I tried to use Ember
-for nearly two years.
-I read a large amount
-of the documentation,
-wrote articles
-about what I learned
-on my journey,
-and stayed up-to-date
-with all the EmberConf content
-and news coming out
-of that community.
-I &lt;em dir="ltr"&gt;really&lt;/em&gt; like Ember.
-So why would I cut it loose?&lt;/p&gt;&lt;p&gt;&lt;strong&gt;Development velocity&lt;/strong&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;As a one person team,
-I had to develop the backend logic,
-database models,
-and everything that comes
-with backend development.
-I &lt;em dir="ltr"&gt;also&lt;/em&gt; had to develop
-the entire user interface.
-I discovered that creating a backend API
-and rich client side single page app (SPA)
-came with a ton of overhead.&lt;/p&gt;&lt;p&gt;My flow with Ember was like:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Figure out the data model for the next feature.&lt;/LI&gt;&lt;LI&gt;Create models in Django.&lt;/LI&gt;&lt;LI&gt;Create JSON APIs in Django.&lt;/LI&gt;&lt;LI&gt;Create models &lt;em dir="ltr"&gt;again&lt;/em&gt; on the client side
-with &lt;a href="https://guides.emberjs.com/release/models/" dir="ltr"&gt;Ember Data&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;Decide on the routes and controllers
-to finish the user interface for the feature.&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;Between step three and four,
-I would lose most of my motivation
-and jump back on the upgrade treadmill.
-As a team of one,
-it felt like drudgery
-to recreate models
-for a client side representation.&lt;/p&gt;&lt;p dir="ltr"&gt;The decision to remove Ember was really tough.
-The &lt;a href="https://en.wikipedia.org/wiki/Sunk_cost" dir="ltr"&gt;sunk cost fallacy&lt;/a&gt; hit me hard.
-I delayed removing Ember
-for many months
-because I convinced myself
-that it would take a long time
-to redo all the work
-that I finished so far.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Then I removed it.&lt;/em&gt;
-What do you think happened?
-I removed so much extra stuff
-and simplified my technology stack so tremendously
-that I implemented &lt;em dir="ltr"&gt;all&lt;/em&gt;
-of my original features
-within &lt;em dir="ltr"&gt;two weeks.&lt;/em&gt;
-Two weeks of effort
-to replicate two years
-of previous development.&lt;/p&gt;&lt;p dir="ltr"&gt;Does this mean that Ember is bad and you shouldn’t use it?
-&lt;strong dir="ltr"&gt;No!&lt;/strong&gt;&lt;/p&gt;&lt;p&gt;Ember was a bad fit
-for me,
-at that time,
-with my level of experience with it,
-and no support
-from other team members.
-Also,
-I switched to using Django
-for the user interface
-with server side rendering,
-and I was extremely comfortable
-with that
-because I use Django daily
-in my day job.&lt;/p&gt;&lt;p&gt;Lesson three:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Use the tools that are already in your toolbox!&lt;/strong&gt;
-You’ll need all your extra brain capacity
-for solving the business problem.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h2&gt;Ignoring customer development&lt;/h2&gt;&lt;p dir="ltr"&gt;If you look back
-at the vision
-that I wanted for the project,
-you’ll see
-that I hoped to make something useful
-for my wife.
-Up to this point,
-I’ve written about the technical failings
-of the project.
-This is an emblematic example
-of why the project failed.
-&lt;em dir="ltr"&gt;I didn’t help my customers
-and was too focused on the technology.&lt;/em&gt;&lt;/p&gt;&lt;p&gt;At the start of the effort,
-I asked my wife questions
-about what she needed
-and what would help her
-and other educational consultants
-like her.
-She told me the things
-that she was looking for directly.
-But it took forever
-to have something tangible
-to show her.&lt;/p&gt;&lt;p&gt;If someone shows up to a restaurant,
-expresses what they want,
-then the chef takes four hours
-to prepare the meal,
-will that customer be happy?
-I think not.&lt;/p&gt;&lt;p dir="ltr"&gt;I was the slow chef.
-All the time I invested
-in building the “right” thing was wasted
-because I didn’t do customer development.
-&lt;strong dir="ltr"&gt;I didn’t produce the simplest version
-of the product
-that would provide value.&lt;/strong&gt;
-It did not take long
-before I completely lost my wife’s interest.
-To stick with the four hour meal analogy,
-my patient customer left
-after the meal wasn’t ready
-in the first hour.&lt;/p&gt;&lt;p&gt;As developers and technologists,
-many of us enjoy steeping
-in the technology
-purely for the sake of it.
-There is so much to learn
-and so many ways to apply software
-that it is easy to lose yourself
-in that tinkering.
-While that’s personally useful,
-especially if you need to grow your skills,
-staying in that space
-is not helping others.&lt;/p&gt;&lt;p&gt;So,
-what did I take away from that?
-That would be the next lesson:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Get your product to be something useful for others
-&lt;strong dir="ltr"&gt;as fast as possible&lt;/strong&gt;.
-Until you deliver something valuable,
-you only have a hobby.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;Without serious interest from my first customer
-(and no other strong ties to her industry),
-I was missing a good voice to drive the product forward.
-Because she was disinterested,
-there was no external pressure on me
-to deliver something.
-My project got nowhere fast.&lt;/p&gt;&lt;h2&gt;The end&lt;/h2&gt;&lt;p dir="ltr"&gt;If there is anything redeeming about College Conductor,
-it was as a teaching tool.
-I’ve done a lot of Django code
-for work,
-and I brought that same thoroughness
-to this project.
-After listening to an episode
-of The Changelog
-about &lt;a href="https://changelog.com/podcast/288" dir="ltr"&gt;live streaming software development on Twitch&lt;/a&gt;,
-I started to share my efforts
-on College Conductor live.&lt;/p&gt;&lt;p dir="ltr"&gt;Over a year later,
-I have &lt;a href="https://www.mattlayman.com/building-saas/" dir="ltr"&gt;streamed nearly 40 lessons&lt;/a&gt;
-in an episodic format
-to teach people about Django
-and building real projects.
-My service may have had no real customers,
-but the techniques I apply
-to building things are very much the techniques
-that I use at work.&lt;/p&gt;&lt;p&gt;Where does that leave me?&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;I’ve learned a lot.&lt;/LI&gt;&lt;LI&gt;I’ve taught a lot.&lt;/LI&gt;&lt;LI&gt;College Conductor was a financial failure.&lt;/LI&gt;&lt;LI&gt;College Conductor was a successful teaching tool.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;I hope you’re able to learn a bit
-from my experience
-with building my first SaaS project.&lt;/p&gt;&lt;p&gt;For those jumping straight to the end,
-here are the lessons
-that I learned.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;When starting out, keep your technology stack to a bare minimum
-and follow the &lt;strong dir="ltr"&gt;YAGNI&lt;/strong&gt; (You Ain’t Gonna Need It) principle.&lt;/LI&gt;&lt;LI&gt;Software package upgrades suck the wind out of your sail.
-Until you have a minimum viable product
-with customers,
-pick a package version and stick with it.
-Only upgrade &lt;strong dir="ltr"&gt;when you have to.&lt;/strong&gt;&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Use the tools that are already in your toolbox!&lt;/strong&gt;
-You’ll need all your extra brain capacity
-for solving the business problem.&lt;/LI&gt;&lt;LI&gt;Get your product to be something useful for others
-&lt;strong dir="ltr"&gt;as fast as possible&lt;/strong&gt;.
-Until you deliver something valuable,
-you only have a hobby.&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;If you want to watch me build my second SaaS,
-please join me
-on &lt;a href="https://www.twitch.tv/mblayman" dir="ltr"&gt;Twitch&lt;/a&gt;
-on Wednesdays
-at 9pm ET.
-Hopefully, I’ll make fewer mistakes this time around.&lt;/p&gt;&lt;p dir="ltr"&gt;If you have questions
-or enjoyed this article,
-please feel free to message me on Twitter
-at &lt;a href="https://twitter.com/mblayman" dir="ltr"&gt;@mblayman&lt;/a&gt;
-or share if others might be interested too.&lt;/p&gt;&lt;h2&gt;Learn more about Python!&lt;/h2&gt;&lt;p&gt;
-  You can join my newsletter
-  along with hundreds of other developers
-  and get access
-  to useful topics
-  to help you learn more about Python and software development.
-  &lt;/p&gt;&lt;p&gt;
-  I’ll get you started
-  with my Pythonic code email course.
-  I hope you'll join up!
-  &lt;/p&gt;&lt;div&gt;* indicates required&lt;/div&gt;&lt;div&gt;&lt;label for="mce-EMAIL" dir="ltr"&gt;Email Address  &lt;span dir="ltr"&gt;*&lt;/span&gt;
-          &lt;/label&gt;&lt;/div&gt;&lt;div&gt;&lt;label for="mce-FNAME" dir="ltr"&gt;First Name  &lt;span dir="ltr"&gt;*&lt;/span&gt;
-          &lt;/label&gt;&lt;/div&gt;&lt;img src="https://www.mattlayman.com/img/2019/mass-spec.png" width="451" height="192"&gt;</description><pubDate>Wed, 18 Dec 2019 15:13:56 -0600</pubDate></item><item><title>A DSL For Seccomp Rules</title><link>https://lobste.rs/s/euywy4</link><description>&lt;img src="https://res.cloudinary.com/practicaldev/image/fetch/s--yByU-7jo--/c_fill,f_auto,fl_progressive,h_50,q_auto,w_50/https://thepracticaldev.s3.amazonaws.com/uploads/user/profile_image/187705/a5981056-5a4e-4aee-8705-81ecb0b19cd1.jpeg" alt="rkeene profile image" width="28" height="28"&gt;&lt;p dir="ltr"&gt;Recently I started to improve my package building system.  It's a pretty simple build system that downloads source files from the Internet, verifies their SHA-2 against known values for that version of the package, extracts, and compiles them.  Something like:&lt;br dir="ltr"&gt;
+Counterintuitively, I think part of the reason Make has managed to maintain simplicity is precisely because it has allowed some hacks to accumulate in the tool itself.&lt;/p&gt;&lt;p&gt;The alternative is to expand the model to be more generic, to incorporate new concepts, making the core model more complex.&lt;/p&gt;&lt;p&gt;In the end, the hacks have allowed the exceptional beauty of the core model - a way to describe file construction pipelines tightly connected with the file system tree - to remain simple.&lt;/p&gt;</description><pubDate>Tue, 17 Dec 2019 04:01:43 -0600</pubDate></item><item><title>A DSL For Seccomp Rules</title><link>https://lobste.rs/s/euywy4</link><description>&lt;img src="https://res.cloudinary.com/practicaldev/image/fetch/s--yByU-7jo--/c_fill,f_auto,fl_progressive,h_50,q_auto,w_50/https://thepracticaldev.s3.amazonaws.com/uploads/user/profile_image/187705/a5981056-5a4e-4aee-8705-81ecb0b19cd1.jpeg" alt="rkeene profile image" width="28" height="28"&gt;&lt;p dir="ltr"&gt;Recently I started to improve my package building system.  It's a pretty simple build system that downloads source files from the Internet, verifies their SHA-2 against known values for that version of the package, extracts, and compiles them.  Something like:&lt;br dir="ltr"&gt;
 &lt;/p&gt;&lt;PRE&gt;&lt;code&gt;url='...'
 sha256='...'
 destdir='...'
