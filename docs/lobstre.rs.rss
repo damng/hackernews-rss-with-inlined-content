@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0"><channel><title>lobstre.rs rss with inlined content</title><link>http://n-gate.com</link><description>webshit condom</description><lastBuildDate>Tue, 24 Mar 2020 15:49:05 -0500</lastBuildDate><item><title>An SRE's guide to Memcached for building scalable applications</title><link>https://lobste.rs/s/aa6jyc</link><description>&lt;img src="https://opensource.com/sites/default/files/styles/image-full-size/public/lead-images/osdc_520x292_opendata_0613mm.png?itok=UIjD_jhK" width="485" height="272" alt="Open data brain" title="Open data brain"&gt;&lt;div&gt;Image by :&amp;nbsp;&lt;/div&gt;&lt;div&gt;Opensource.com &lt;/div&gt;&lt;div&gt;x&lt;/div&gt;&lt;h2&gt;
+<rss version="2.0"><channel><title>lobstre.rs rss with inlined content</title><link>http://n-gate.com</link><description>webshit condom</description><lastBuildDate>Tue, 24 Mar 2020 16:14:26 -0500</lastBuildDate><item><title>An SRE's guide to Memcached for building scalable applications</title><link>https://lobste.rs/s/aa6jyc</link><description>&lt;img src="https://opensource.com/sites/default/files/styles/image-full-size/public/lead-images/osdc_520x292_opendata_0613mm.png?itok=UIjD_jhK" width="485" height="272" alt="Open data brain" title="Open data brain"&gt;&lt;div&gt;Image by :&amp;nbsp;&lt;/div&gt;&lt;div&gt;Opensource.com &lt;/div&gt;&lt;div&gt;x&lt;/div&gt;&lt;h2&gt;
       Subscribe now    &lt;/h2&gt;&lt;p&gt;Get the highlights in your inbox every week.&lt;/p&gt;&lt;p dir="ltr"&gt;Memcached is a general-purpose memory-caching system. This means it is designed to save (or cache) answers to questions that take a &lt;em dir="ltr"&gt;long time to compute or retrieve&lt;/em&gt; and are &lt;em dir="ltr"&gt;likely to be asked again&lt;/em&gt;. A common use case is to accelerate the use of a database: for example, if we expect to need the list of "names of all people who are on team X" repeatedly, we might put this data in Memcached rather than run a SQL query each time. (Note: Memcached is occasionally referred to as "memcache." We will stick to the full name throughout this article.)&lt;/p&gt;&lt;p dir="ltr"&gt;Caches are helpful for building scalable applications and infrastructure, which is at the core of being a&amp;nbsp;&lt;a href="https://opensource.com/article/19/7/sysadmins-vs-sres" dir="ltr"&gt;site reliability engineer&lt;/a&gt; (SRE). This article looks at what it takes to operate Memcached effectively.&lt;/p&gt;&lt;h2&gt;Memory recommendations and daemonizing Memcached&lt;/h2&gt;&lt;p dir="ltr"&gt;Memcached works best when it is limited to the amount of memory the system has available: it will&amp;nbsp;&lt;em dir="ltr"&gt;evict&lt;/em&gt; data when it takes more space than the memory limit. Some memory space will be needed for what we can call "overhead"—memory needed for Memcached's administrative operations, the operating system, and ancillary processes.&lt;/p&gt;&lt;div&gt;
       More Great Content    &lt;/div&gt;&lt;div property="schema:articleBody content:encoded" dir="ltr"&gt;This is set via the &lt;strong dir="ltr"&gt;-m&lt;/strong&gt; command-line flag, which is likely the only flag you will need to run Memcached. The &lt;strong dir="ltr"&gt;-d&lt;/strong&gt; (daemonize) flag is usually not useful: on modern &lt;a href="https://www.redhat.com/sysadmin/love-systemd" dir="ltr"&gt;systemd&lt;/a&gt;- based operating systems, Memcached should not daemonize itself. Likewise, if you run it under Docker, it also should not daemonize itself.&lt;/div&gt;&lt;p&gt;Running Memcached in a container is fine, but it is important to consider what else is running on the host and carefully tune memory requirements.&lt;/p&gt;&lt;h2&gt;Looking at Memcached data with stats&lt;/h2&gt;&lt;p&gt;When you're running Memcached, it is often a good idea to directly connect and play around to see what is going on. It is reasonably safe, even with production instances, as long as you take a bit of care.&lt;/p&gt;&lt;p dir="ltr"&gt;The safest command to run is &lt;strong dir="ltr"&gt;stats&lt;/strong&gt;. It will cause Memcached to spit out a large number of statistics and details that are often useful:&lt;/p&gt;&lt;PRE&gt;&lt;div dir="ltr"&gt;$ &lt;span dir="ltr"&gt;echo&lt;/span&gt; stats &lt;span dir="ltr"&gt;|&lt;/span&gt; nc localhost &lt;span dir="ltr"&gt;11211&lt;/span&gt;&lt;br dir="ltr"&gt;
 ...&lt;br dir="ltr"&gt;
@@ -25,7 +25,868 @@ END&lt;/div&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;After typing &lt;strong dir="ltr"&
 STAT items:&lt;span dir="ltr"&gt;1&lt;/span&gt;:number &lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;/div&gt;&lt;/PRE&gt;&lt;p&gt;This command will show all the "slab" IDs. Memcache stores similarly sized keys in slabs; this example has only one slab:&lt;/p&gt;&lt;PRE&gt;&lt;div dir="ltr"&gt;$ &lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;'stats cachedump 1 1000'&lt;/span&gt; &lt;span dir="ltr"&gt;|&lt;/span&gt; nc &lt;span dir="ltr"&gt;-w&lt;/span&gt; &lt;span dir="ltr"&gt;1&lt;/span&gt; localhost &lt;span dir="ltr"&gt;11211&lt;/span&gt;&lt;br dir="ltr"&gt;
 ITEM my_key &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;8&lt;/span&gt; b; &lt;span dir="ltr"&gt;0&lt;/span&gt; s&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;br dir="ltr"&gt;
 ITEM foo &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;5&lt;/span&gt; b; &lt;span dir="ltr"&gt;0&lt;/span&gt; s&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;br dir="ltr"&gt;
-END&lt;/div&gt;&lt;/PRE&gt;&lt;p&gt;Here, there are two keys: one with an 8-byte value and one with a 5-byte value.&lt;/p&gt;&lt;p dir="ltr"&gt;In a more realistic scenario with many keys, you might want to process this data with &lt;a href="https://opensource.com/article/19/10/intro-awk" dir="ltr"&gt;&lt;strong dir="ltr"&gt;awk&lt;/strong&gt;&lt;/a&gt; or a script and, by using a local convention, figure out how much space each service is using.&lt;/p&gt;&lt;p dir="ltr"&gt;This can be integrated into a monitoring system, like &lt;a href="https://opensource.com/article/19/11/introduction-monitoring-prometheus" dir="ltr"&gt;Prometheus&lt;/a&gt;, to track behavior over time.&lt;/p&gt;&lt;p dir="ltr"&gt;Additionally, since many teams share the same service, it is a useful guideline to suggest that services encrypt and authenticate the data they are caching. Symmetric encryption on modern CPUs is performant, and this allows much simpler security models. One example of a library that supports this is &lt;a href="https://cryptography.io/en/latest/fernet/" dir="ltr"&gt;cryptography's Fernet&lt;/a&gt;. (Let me know in the comments if you want to read more about this.)&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p dir="ltr"&gt;Memcached is a common &lt;a href="https://github.com/memcached/memcached" dir="ltr"&gt;open source technology&lt;/a&gt; for an SRE to support. In this article, I looked at how to query common statistics about it, offered some configuration advice, and showed how to help multiple teams share a single Memcached cluster in an easily monitored and secure way. Do you have other questions on how to manage Memcached? Ask in the comments, and I will happily share more tips.&lt;/p&gt;&lt;img src="https://opensource.com/sites/default/files/styles/teaser-wide/public/lead-images/rh_003499_01_linux11x_cc.png?itok=iRU4wlcp" width="249" height="140" alt="People work on a computer server with devices" title="People work on a computer server with devices"&gt;&lt;p dir="ltr"&gt;For more discussion on open source and the role of the CIO in the enterprise, join us at &lt;a href="https://enterprisersproject.com/" dir="ltr"&gt;The EnterprisersProject.com&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;The opinions expressed on this website are those of each author, not of the author's employer or of Red Hat.&lt;/p&gt;&lt;p dir="ltr"&gt;Opensource.com aspires to publish all content under a &lt;a href="http://creativecommons.org/licenses/" dir="ltr"&gt;Creative Commons license&lt;/a&gt; but may not be able to do so in all cases. You are responsible for ensuring that you have the necessary permission to reuse any work on this site. Red Hat and the Red Hat logo are trademarks of Red Hat, Inc., registered in the United States and other countries.&lt;/p&gt;&lt;p&gt;Copyright ©2019 Red Hat, Inc.&lt;/p&gt;</description><pubDate>Tue, 24 Mar 2020 08:53:24 -0500</pubDate></item><item><title>Concurrent programming, with examples</title><link>https://lobste.rs/s/iqq501</link><description>&lt;div dir="ltr"&gt;
+END&lt;/div&gt;&lt;/PRE&gt;&lt;p&gt;Here, there are two keys: one with an 8-byte value and one with a 5-byte value.&lt;/p&gt;&lt;p dir="ltr"&gt;In a more realistic scenario with many keys, you might want to process this data with &lt;a href="https://opensource.com/article/19/10/intro-awk" dir="ltr"&gt;&lt;strong dir="ltr"&gt;awk&lt;/strong&gt;&lt;/a&gt; or a script and, by using a local convention, figure out how much space each service is using.&lt;/p&gt;&lt;p dir="ltr"&gt;This can be integrated into a monitoring system, like &lt;a href="https://opensource.com/article/19/11/introduction-monitoring-prometheus" dir="ltr"&gt;Prometheus&lt;/a&gt;, to track behavior over time.&lt;/p&gt;&lt;p dir="ltr"&gt;Additionally, since many teams share the same service, it is a useful guideline to suggest that services encrypt and authenticate the data they are caching. Symmetric encryption on modern CPUs is performant, and this allows much simpler security models. One example of a library that supports this is &lt;a href="https://cryptography.io/en/latest/fernet/" dir="ltr"&gt;cryptography's Fernet&lt;/a&gt;. (Let me know in the comments if you want to read more about this.)&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p dir="ltr"&gt;Memcached is a common &lt;a href="https://github.com/memcached/memcached" dir="ltr"&gt;open source technology&lt;/a&gt; for an SRE to support. In this article, I looked at how to query common statistics about it, offered some configuration advice, and showed how to help multiple teams share a single Memcached cluster in an easily monitored and secure way. Do you have other questions on how to manage Memcached? Ask in the comments, and I will happily share more tips.&lt;/p&gt;&lt;img src="https://opensource.com/sites/default/files/styles/teaser-wide/public/lead-images/rh_003499_01_linux11x_cc.png?itok=iRU4wlcp" width="249" height="140" alt="People work on a computer server with devices" title="People work on a computer server with devices"&gt;&lt;p dir="ltr"&gt;For more discussion on open source and the role of the CIO in the enterprise, join us at &lt;a href="https://enterprisersproject.com/" dir="ltr"&gt;The EnterprisersProject.com&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;The opinions expressed on this website are those of each author, not of the author's employer or of Red Hat.&lt;/p&gt;&lt;p dir="ltr"&gt;Opensource.com aspires to publish all content under a &lt;a href="http://creativecommons.org/licenses/" dir="ltr"&gt;Creative Commons license&lt;/a&gt; but may not be able to do so in all cases. You are responsible for ensuring that you have the necessary permission to reuse any work on this site. Red Hat and the Red Hat logo are trademarks of Red Hat, Inc., registered in the United States and other countries.&lt;/p&gt;&lt;p&gt;Copyright ©2019 Red Hat, Inc.&lt;/p&gt;</description><pubDate>Tue, 24 Mar 2020 08:53:24 -0500</pubDate></item><item><title>`zig cc`: a Powerful Drop-In Replacement for GCC/Clang - Andrew Kelley</title><link>https://lobste.rs/s/dw9qyv</link><description>&lt;p dir="ltr"&gt;
+If you have heard of &lt;a href="https://ziglang.org/" dir="ltr"&gt;Zig&lt;/a&gt; before, you may know it as
+a promising new programming language which is ambitiously trying to overthrow C as the
+de-facto systems language. But did you know that it also can straight up compile C code?
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+This has been possible for a while, and you can see some
+&lt;a href="https://ziglang.org/#Zig-is-also-a-C-compiler" dir="ltr"&gt;examples of this on the home page&lt;/a&gt;.
+What's new is that the &lt;code dir="ltr"&gt;zig cc&lt;/code&gt; sub-command is available, and it supports
+the same options as &lt;a href="https://clang.llvm.org/" dir="ltr"&gt;Clang&lt;/a&gt;, which, in turn, supports
+the same options as &lt;a href="https://gcc.gnu.org/" dir="ltr"&gt;GCC&lt;/a&gt;.
+&lt;/p&gt;&lt;p&gt;
+Now, I'm sure you're feeling pretty skeptical right about now, so let me hook you real
+quick before I get into the juicy details.
+&lt;/p&gt;&lt;h2&gt;Clang and GCC cannot do this:&lt;/h2&gt;&lt;PRE&gt;&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; cat hello.c&lt;/strong&gt;
+#include &amp;lt;stdio.h&amp;gt;
+
+int main(int argc, char **argv) {
+    fprintf(stderr, "Hello, World!\n");
+    return 0;
+}
+&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; clang -o hello.exe hello.c -target x86_64-windows-gnu&lt;/strong&gt;
+clang-7: warning: argument unused during compilation: '--gcc-toolchain=/nix/store/ificps9si1nvz85f9xa7gjd9h6r5lzg6-gcc-9.2.0' [-Wunused-command-line-argument]
+/nix/store/7bhi29ainf5rjrk7k7wyhndyskzyhsxh-binutils-2.31.1/bin/ld: unrecognised emulation mode: i386pep
+Supported emulations: elf_x86_64 elf32_x86_64 elf_i386 elf_iamcu elf_l1om elf_k1om
+clang-7: &lt;span dir="ltr"&gt;error&lt;/span&gt;: linker command failed with exit code 1 (use -v to see invocation)
+&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; clang -o hello hello.c -target mipsel-linux-musl&lt;/strong&gt;
+In file included from hello.c:1:
+In file included from /nix/store/8pp3i3hcp7bv0f8jllzqq7gcp9dbzvp9-glibc-2.27-dev/include/stdio.h:27:
+In file included from /nix/store/8pp3i3hcp7bv0f8jllzqq7gcp9dbzvp9-glibc-2.27-dev/include/bits/libc-header-start.h:33:
+In file included from /nix/store/8pp3i3hcp7bv0f8jllzqq7gcp9dbzvp9-glibc-2.27-dev/include/features.h:452:
+/nix/store/8pp3i3hcp7bv0f8jllzqq7gcp9dbzvp9-glibc-2.27-dev/include/gnu/stubs.h:7:11: &lt;span dir="ltr"&gt;fatal error&lt;/span&gt;: 
+      'gnu/stubs-32.h' file not found
+# include &amp;lt;gnu/stubs-32.h&amp;gt;
+          ^~~~~~~~~~~~~~~~
+1 error generated.
+&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; clang -o hello hello.c -target aarch64-linux-gnu&lt;/strong&gt;
+In file included from hello.c:1:
+In file included from /nix/store/8pp3i3hcp7bv0f8jllzqq7gcp9dbzvp9-glibc-2.27-dev/include/stdio.h:27:
+In file included from /nix/store/8pp3i3hcp7bv0f8jllzqq7gcp9dbzvp9-glibc-2.27-dev/include/bits/libc-header-start.h:33:
+In file included from /nix/store/8pp3i3hcp7bv0f8jllzqq7gcp9dbzvp9-glibc-2.27-dev/include/features.h:452:
+/nix/store/8pp3i3hcp7bv0f8jllzqq7gcp9dbzvp9-glibc-2.27-dev/include/gnu/stubs.h:7:11: &lt;span dir="ltr"&gt;fatal error&lt;/span&gt;: 
+      'gnu/stubs-32.h' file not found
+# include &amp;lt;gnu/stubs-32.h&amp;gt;
+          ^~~~~~~~~~~~~~~~
+1 error generated.
+&lt;/PRE&gt;&lt;h2&gt;`zig cc` can:&lt;/h2&gt;&lt;PRE&gt;&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; zig cc -o hello.exe hello.c -target x86_64-windows-gnu&lt;/strong&gt;
+&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; wine64 hello.exe&lt;/strong&gt;
+Hello, World!
+&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; zig cc -o hello hello.c -target mipsel-linux-musl&lt;/strong&gt;
+&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; qemu-mipsel ./hello&lt;/strong&gt;
+Hello, World!
+&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; zig cc -o hello hello.c -target aarch64-linux-gnu&lt;/strong&gt;
+&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; qemu-aarch64 -L ~/Downloads/glibc/multi-2.31/install/glibcs/aarch64-linux-gnu ./hello&lt;/strong&gt;
+Hello, World!
+&lt;/PRE&gt;&lt;h2&gt;Features of `zig cc`&lt;/h2&gt;&lt;p dir="ltr"&gt;
+&lt;code dir="ltr"&gt;zig cc&lt;/code&gt; is &lt;em dir="ltr"&gt;not the main purpose of the Zig project&lt;/em&gt;. It merely
+exposes the already-existing capabilities of the Zig compiler via a small frontend layer
+that parses C compiler options.
+&lt;/p&gt;&lt;h3&gt;Install simply by unzipping a tarball&lt;/h3&gt;&lt;p dir="ltr"&gt;
+Zig is an open source project, and of course can be
+&lt;a href="https://github.com/ziglang/zig/#building-from-source" dir="ltr"&gt;built and installed from source the usual way&lt;/a&gt;. However, the Zig project also has tarballs available on
+&lt;a href="https://ziglang.org/download/" dir="ltr"&gt;the download page&lt;/a&gt;.
+You can download a 45 MiB tarball, unpack it, and you're done.
+You can even have multiple versions at the same time, no problem.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Here, rather than downloading the x86_64-linux version, which matches the computer I am
+currently using, I'll download the Windows version and run it in
+&lt;a href="https://www.winehq.org/" dir="ltr"&gt;Wine&lt;/a&gt; to show how simple installation is:
+&lt;/p&gt;&lt;PRE&gt;&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; wget --quiet https://ziglang.org/builds/zig-windows-x86_64-0.5.0+13d04f996.zip&lt;/strong&gt;
+&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; unzip -q zig-windows-x86_64-0.5.0+13d04f996.zip &lt;/strong&gt;
+&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; wine64 ./zig-windows-x86_64-0.5.0+13d04f996/zig.exe cc -o hello hello.c -target x86_64-linux&lt;/strong&gt;
+&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; ./hello&lt;/strong&gt;
+Hello, World!
+&lt;/PRE&gt;&lt;p&gt;
+Take a moment to appreciate what just happened here - I downloaded a Windows build of Zig,
+ran it in Wine, using it to cross compile for Linux, and then ran the binary natively.
+Computers are fun!
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Compare this to
+&lt;a href="https://github.com/llvm/llvm-project/releases/tag/llvmorg-9.0.1" dir="ltr"&gt;downloading Clang&lt;/a&gt;,
+which has 380 MiB Linux-distribution-specific tarballs. Zig's Linux tarballs are fully statically
+linked, and therefore work correctly on all Linux distributions. The size difference here
+comes because the Clang tarball ships with more utilities than a C compiler, as well as
+pre-compiled static libraries for both LLVM and Clang. Zig does not ship with any pre-compiled
+libraries; instead it ships with source code, and builds what it needs on-the-fly.
+&lt;/p&gt;&lt;h3&gt;Caching System&lt;/h3&gt;&lt;p dir="ltr"&gt;
+The Zig compiler uses a sophisticated caching system to avoid needlessly rebuilding
+artifacts. I carefully designed this caching system to
+make optimal use of the file system while maintaining correct semantics - which is
+&lt;a href="https://apenwarr.ca/log/20181113" dir="ltr"&gt;trickier than you might think&lt;/a&gt;!
+&lt;/p&gt;&lt;p&gt;
+The caching system uses a combination of hashing inputs and checking the fstat values
+of file paths, while being mindful of mtime granularity. This makes it avoid
+needlessly hashing files, while at the same time detecting when a modified file has
+the same contents. It always has correct behavior, whether the file system has nanosecond
+mtime granularity, second granularity, always sets mtime to zero, or anything in between.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+&lt;code dir="ltr"&gt;zig cc&lt;/code&gt; makes this caching system available when compiling C code. For simple
+enough projects, this obviates the need for a Makefile or other build system.
+&lt;/p&gt;&lt;PRE&gt;&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; cat foo.c&lt;/strong&gt;
+#include &amp;lt;stdio.h&amp;gt;
+
+#include "another_file.c"
+
+int main(int argc, char **argv) {
+#include "printf_many_times.c"
+}
+&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; cat another_file.c &lt;/strong&gt;
+void another(void) {}
+&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; time zig cc -c foo.c&lt;/strong&gt;
+0.12
+&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; time zig cc -c foo.c&lt;/strong&gt;
+0.01
+&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; touch another_file.c &lt;/strong&gt;
+&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; time zig cc -c foo.c&lt;/strong&gt;
+0.01
+&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; echo "/* add a comment */" &amp;gt;&amp;gt;another_file.c&lt;/strong&gt;
+&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; time zig cc -c foo.c&lt;/strong&gt;
+0.12
+&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; time zig cc -c foo.c&lt;/strong&gt;
+0.01
+&lt;/PRE&gt;&lt;p&gt;
+Here you can see the caching system is smart enough to find dependencies that are
+included with the preprocessor, and smart enough to avoid a full rebuild when the
+mtime of another_file.c was updated.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+One last thing before I move on. I want to point out that this caching system is not
+some fluffy bloated feature - rather it is an absolutely critical component to making
+cross-compiling work in a usable manner. As we'll see below, other compilers ship with 
+pre-compiled, target-specific binaries, while Zig ships with &lt;em dir="ltr"&gt;source code only&lt;/em&gt;
+and cross-compiles on-the-fly, caching the result.
+&lt;/p&gt;&lt;h3&gt;Cross Compiling&lt;/h3&gt;&lt;p dir="ltr"&gt;I have carefully designed Zig since the very beginning to treat cross compilation
+as a first class use case. Now that the &lt;code dir="ltr"&gt;zig cc&lt;/code&gt; frontend is available,
+it brings these capabilities to C code.
+&lt;/p&gt;&lt;p&gt;
+I showed you above cross-compiling some simple "Hello, World!" programs. But now let's
+try a real-world C project.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Let's try &lt;a href="https://luajit.org/" dir="ltr"&gt;LuaJIT&lt;/a&gt;!
+&lt;/p&gt;&lt;PRE&gt;[~/Downloads]$ &lt;strong dir="ltr"&gt;git clone https://github.com/LuaJIT/LuaJIT&lt;/strong&gt;
+[~/Downloads]$ &lt;strong dir="ltr"&gt;cd LuaJIT&lt;/strong&gt;
+[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;ls&lt;/strong&gt;
+COPYRIGHT  doc  dynasm  etc  Makefile  README  src
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+OK so it uses standard Makefiles. Here we go, first let's make sure it works natively
+with &lt;code dir="ltr"&gt;zig cc&lt;/code&gt;.
+&lt;/p&gt;&lt;PRE&gt;[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;export CC="zig cc"&lt;/strong&gt;
+[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;make CC="$CC"&lt;/strong&gt;
+==== Building LuaJIT 2.1.0-beta3 ====
+make -C src
+make[1]: Entering directory '/home/andy/Downloads/LuaJIT/src'
+HOSTCC    host/minilua.o
+HOSTLINK  host/minilua
+DYNASM    host/buildvm_arch.h
+HOSTCC    host/buildvm.o
+HOSTCC    host/buildvm_asm.o
+HOSTCC    host/buildvm_peobj.o
+HOSTCC    host/buildvm_lib.o
+HOSTCC    host/buildvm_fold.o
+HOSTLINK  host/buildvm
+BUILDVM   lj_vm.S
+ASM       lj_vm.o
+CC        lj_gc.o
+BUILDVM   lj_ffdef.h
+CC        lj_err.o
+CC        lj_char.o
+BUILDVM   lj_bcdef.h
+CC        lj_bc.o
+CC        lj_obj.o
+CC        lj_buf.o
+CC        lj_str.o
+CC        lj_tab.o
+CC        lj_func.o
+CC        lj_udata.o
+CC        lj_meta.o
+CC        lj_debug.o
+CC        lj_state.o
+CC        lj_dispatch.o
+CC        lj_vmevent.o
+CC        lj_vmmath.o
+CC        lj_strscan.o
+CC        lj_strfmt.o
+CC        lj_strfmt_num.o
+CC        lj_api.o
+CC        lj_profile.o
+CC        lj_lex.o
+CC        lj_parse.o
+CC        lj_bcread.o
+CC        lj_bcwrite.o
+CC        lj_load.o
+CC        lj_ir.o
+CC        lj_opt_mem.o
+BUILDVM   lj_folddef.h
+CC        lj_opt_fold.o
+CC        lj_opt_narrow.o
+CC        lj_opt_dce.o
+CC        lj_opt_loop.o
+CC        lj_opt_split.o
+CC        lj_opt_sink.o
+CC        lj_mcode.o
+CC        lj_snap.o
+CC        lj_record.o
+CC        lj_crecord.o
+BUILDVM   lj_recdef.h
+CC        lj_ffrecord.o
+CC        lj_asm.o
+CC        lj_trace.o
+CC        lj_gdbjit.o
+CC        lj_ctype.o
+CC        lj_cdata.o
+CC        lj_cconv.o
+CC        lj_ccall.o
+CC        lj_ccallback.o
+CC        lj_carith.o
+CC        lj_clib.o
+CC        lj_cparse.o
+CC        lj_lib.o
+CC        lj_alloc.o
+CC        lib_aux.o
+BUILDVM   lj_libdef.h
+CC        lib_base.o
+CC        lib_math.o
+CC        lib_bit.o
+CC        lib_string.o
+CC        lib_table.o
+CC        lib_io.o
+CC        lib_os.o
+CC        lib_package.o
+CC        lib_debug.o
+CC        lib_jit.o
+CC        lib_ffi.o
+CC        lib_init.o
+AR        libluajit.a
+CC        luajit.o
+BUILDVM   jit/vmdef.lua
+DYNLINK   libluajit.so
+LINK      luajit
+warning: unsupported linker arg: -E
+OK        Successfully built LuaJIT
+make[1]: Leaving directory '/home/andy/Downloads/LuaJIT/src'
+==== Successfully built LuaJIT 2.1.0-beta3 ====
+
+[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;ls&lt;/strong&gt;
+COPYRIGHT  doc  dynasm  etc  Makefile  README  src
+
+[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;./src/&lt;/strong&gt;
+host/         jit/          libluajit.so  luajit        zig-cache/    
+
+[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;./src/luajit &lt;/strong&gt;
+LuaJIT 2.1.0-beta3 -- Copyright (C) 2005-2020 Mike Pall. http://luajit.org/
+JIT: ON SSE2 SSE3 SSE4.1 BMI2 fold cse dce fwd dse narrow loop abc sink fuse
+&amp;gt; &lt;strong dir="ltr"&gt;print(3 + 4)&lt;/strong&gt;
+7
+&amp;gt; 
+&lt;/PRE&gt;&lt;p&gt;
+OK so that worked. Now for the real test - can we make it cross compile?
+&lt;/p&gt;&lt;PRE&gt;[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;git clean -xfdq&lt;/strong&gt;
+[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;export CC="zig cc -target aarch64-linux-gnu"&lt;/strong&gt;
+[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;export HOST_CC="zig cc"&lt;/strong&gt;
+[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;make CC="$CC" HOST_CC="$HOST_CC" TARGET_STRIP="echo"&lt;/strong&gt;
+==== Building LuaJIT 2.1.0-beta3 ====
+make -C src
+make[1]: Entering directory '/home/andy/Downloads/LuaJIT/src'
+HOSTCC    host/minilua.o
+HOSTLINK  host/minilua
+DYNASM    host/buildvm_arch.h
+HOSTCC    host/buildvm.o
+HOSTCC    host/buildvm_asm.o
+HOSTCC    host/buildvm_peobj.o
+HOSTCC    host/buildvm_lib.o
+HOSTCC    host/buildvm_fold.o
+HOSTLINK  host/buildvm
+BUILDVM   lj_vm.S
+ASM       lj_vm.o
+CC        lj_gc.o
+BUILDVM   lj_ffdef.h
+CC        lj_err.o
+CC        lj_char.o
+BUILDVM   lj_bcdef.h
+CC        lj_bc.o
+CC        lj_obj.o
+CC        lj_buf.o
+CC        lj_str.o
+CC        lj_tab.o
+CC        lj_func.o
+CC        lj_udata.o
+CC        lj_meta.o
+CC        lj_debug.o
+CC        lj_state.o
+CC        lj_dispatch.o
+CC        lj_vmevent.o
+CC        lj_vmmath.o
+CC        lj_strscan.o
+CC        lj_strfmt.o
+CC        lj_strfmt_num.o
+CC        lj_api.o
+CC        lj_profile.o
+CC        lj_lex.o
+CC        lj_parse.o
+CC        lj_bcread.o
+CC        lj_bcwrite.o
+CC        lj_load.o
+CC        lj_ir.o
+CC        lj_opt_mem.o
+BUILDVM   lj_folddef.h
+CC        lj_opt_fold.o
+CC        lj_opt_narrow.o
+CC        lj_opt_dce.o
+CC        lj_opt_loop.o
+CC        lj_opt_split.o
+CC        lj_opt_sink.o
+CC        lj_mcode.o
+CC        lj_snap.o
+CC        lj_record.o
+CC        lj_crecord.o
+BUILDVM   lj_recdef.h
+CC        lj_ffrecord.o
+CC        lj_asm.o
+CC        lj_trace.o
+CC        lj_gdbjit.o
+CC        lj_ctype.o
+CC        lj_cdata.o
+CC        lj_cconv.o
+CC        lj_ccall.o
+CC        lj_ccallback.o
+CC        lj_carith.o
+CC        lj_clib.o
+CC        lj_cparse.o
+CC        lj_lib.o
+CC        lj_alloc.o
+CC        lib_aux.o
+BUILDVM   lj_libdef.h
+CC        lib_base.o
+CC        lib_math.o
+CC        lib_bit.o
+CC        lib_string.o
+CC        lib_table.o
+CC        lib_io.o
+CC        lib_os.o
+CC        lib_package.o
+CC        lib_debug.o
+CC        lib_jit.o
+CC        lib_ffi.o
+CC        lib_init.o
+AR        libluajit.a
+CC        luajit.o
+BUILDVM   jit/vmdef.lua
+DYNLINK   libluajit.so
+libluajit.so
+LINK      luajit
+warning: unsupported linker arg: -E
+luajit
+OK        Successfully built LuaJIT
+make[1]: Leaving directory '/home/andy/Downloads/LuaJIT/src'
+==== Successfully built LuaJIT 2.1.0-beta3 ====
+
+[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;file ./src/luajit &lt;/strong&gt;
+./src/luajit: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, for GNU/Linux 2.0.0, with debug_info, not stripped
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+It worked! Will it run in &lt;a href="https://www.qemu.org/" dir="ltr"&gt;QEMU&lt;/a&gt; though?
+&lt;/p&gt;&lt;PRE&gt;[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;qemu-aarch64 -L ~/Downloads/glibc/multi-2.31/install/glibcs/aarch64-linux-gnu ./src/luajit&lt;/strong&gt;
+LuaJIT 2.1.0-beta3 -- Copyright (C) 2005-2020 Mike Pall. http://luajit.org/
+JIT: ON fold cse dce fwd dse narrow loop abc sink fuse
+&amp;gt; &lt;strong dir="ltr"&gt;print(4 + 3)&lt;/strong&gt;
+7
+&amp;gt; 
+&lt;/PRE&gt;&lt;p&gt;
+Amazing. QEMU never fails to impress me.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Before we move on, I want to show one more thing. You can see above, in order to run the
+foreign-architecture binary, I had to pass
+&lt;code dir="ltr"&gt;-L ~/Downloads/glibc/multi-2.31/install/glibcs/aarch64-linux-gnu&lt;/code&gt;. This is
+due to the binary being dynamically linked. You can confirm this with the output from
+&lt;code dir="ltr"&gt;file&lt;/code&gt; above where it says: &lt;code dir="ltr"&gt;dynamically linked, interpreter /lib/ld-linux-aarch64.so.1&lt;/code&gt;
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Often, when cross-compiling, it is useful to make a &lt;em dir="ltr"&gt;static&lt;/em&gt; binary.
+In the case of Linux, for example, this will make the resulting binary able to run on
+any Linux distribution, rather than only ones with a hard-coded glibc dynamic linker path
+of &lt;code dir="ltr"&gt;/lib/ld-linux-aarch64.so.1&lt;/code&gt;.
+&lt;/p&gt;&lt;p&gt;
+We can accomplish this by targeting musl rather than glibc:
+&lt;/p&gt;&lt;PRE&gt;[~/Downloads/LuaJIT]$ git clean -qxfd
+[~/Downloads/LuaJIT]$ export CC="zig cc -target aarch64-linux-musl"
+[~/Downloads/LuaJIT]$ make CC="$CC" CXX="$CXX" HOST_CC="$HOST_CC" TARGET_STRIP="echo"
+==== Building LuaJIT 2.1.0-beta3 ====
+(same output)
+==== Successfully built LuaJIT 2.1.0-beta3 ====
+[~/Downloads/LuaJIT]$ file src/luajit
+src/luajit: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, not stripped
+[~/Downloads/LuaJIT]$ qemu-aarch64 ./src/luajit
+LuaJIT 2.1.0-beta3 -- Copyright (C) 2005-2020 Mike Pall. http://luajit.org/
+JIT: ON fold cse dce fwd dse narrow loop abc sink fuse
+&amp;gt; print(11 + 22)
+33
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+Here you can see the &lt;code dir="ltr"&gt;file&lt;/code&gt; command reported &lt;em dir="ltr"&gt;statically linked&lt;/em&gt;,
+and in the qemu command, the &lt;code dir="ltr"&gt;-L&lt;/code&gt; parameter was not needed.
+&lt;/p&gt;&lt;h2&gt;Use Cases of `zig cc`&lt;/h2&gt;&lt;p dir="ltr"&gt;
+Alright, so I've given you a taste of what &lt;code dir="ltr"&gt;zig cc&lt;/code&gt; can do, but now I will
+list explicitly what I consider to be the use cases:
+&lt;/p&gt;&lt;h3&gt;Experimentation&lt;/h3&gt;&lt;p dir="ltr"&gt;
+Sometimes you just want a tool that you can use to try out different things. It can quickly
+answer questions such as "What assembly does this code generate on MIPS vs ARM?". The widely
+popular &lt;a href="https://godbolt.org/" dir="ltr"&gt;Compiler Explorer&lt;/a&gt; serves this purpose.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+&lt;code dir="ltr"&gt;zig cc&lt;/code&gt; provides a lightweight tool which can also answer questions such as,
+"What happens if I swap out glibc for &lt;a href="https://musl.libc.org/" dir="ltr"&gt;musl&lt;/a&gt;?" and
+"How big is this executable when cross-compiled for Windows?".
+&lt;a href="https://twitter.com/andy_kelley/status/1242183564512366595" dir="ltr"&gt;Here's me using Zig to
+quickly find out what the maximum UDP packet size is on Linux&lt;/a&gt;.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Since Zig is so easy to install - and it actually works everywhere without patches,
+even Linux distributions such as &lt;a href="https://nixos.org/" dir="ltr"&gt;NixOS&lt;/a&gt; -
+it can often be a more convenient tool for running quick C test programs on your computer.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+At the time of this writing, LLVM 10 was just released two hours ago.
+It will take days or weeks for it to become available in various system package managers.
+But you can already
+&lt;a href="https://ziglang.org/download/" dir="ltr"&gt;download a master branch build of Zig&lt;/a&gt;
+and play with the new features of Clang/LLVM 10. For example, improved RISC-V support!
+&lt;/p&gt;&lt;PRE&gt;andy@ark ~/tmp&amp;gt; &lt;strong dir="ltr"&gt;zig cc -o hello hello.c -target riscv64-linux-musl&lt;/strong&gt;
+andy@ark ~/tmp&amp;gt; &lt;strong dir="ltr"&gt;qemu-riscv64 ./hello&lt;/strong&gt;
+Hello, World!
+&lt;/PRE&gt;&lt;h3&gt;Bundling a C compiler as part of a larger project&lt;/h3&gt;&lt;p&gt;
+With Zig tarballs weighing in at under 45 MiB, zero system dependencies, no configuration,
+and MIT license, it makes for an ideal candidate when you need to bundle a C compiler along
+with another project.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+For example, maybe you have
+&lt;a href="https://nim-lang.org/" dir="ltr"&gt;a programming language that compiles to C&lt;/a&gt;.
+Zig is an obvious choice for what C compiler to ship with your language.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Or maybe you want to make a batteries-included
+&lt;a href="https://en.wikipedia.org/wiki/Integrated_development_environment" dir="ltr"&gt;IDE&lt;/a&gt;
+that ships with a compiler.
+&lt;/p&gt;&lt;h3&gt;Lightweight alternative to a cross compilation environment&lt;/h3&gt;&lt;p dir="ltr"&gt;
+If you're trying to build something with a large dependency tree, you'll probably want to
+use a full cross compilation environment, such as &lt;a href="https://mxe.cc/" dir="ltr"&gt;mxe.cc&lt;/a&gt;
+or &lt;a href="http://musl.cc/" dir="ltr"&gt;musl.cc&lt;/a&gt;.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+But if you don't need such a sledgehammer, &lt;code dir="ltr"&gt;zig cc&lt;/code&gt; could be a useful alternative,
+especially if your goal is to compile for N different targets. Consider that musl.cc lists different
+tarballs for each architecture, each weighing in at roughly 85 MiB. Meanwhile Zig weighs in at 45 MiB
+and it supports all those architectures, plus glibc and Windows.
+&lt;/p&gt;&lt;h3&gt;An alternative to installing MSVC on Windows&lt;/h3&gt;&lt;p dir="ltr"&gt;
+You could spend days - literally! - waiting for Microsoft Visual Studio to install,
+or you could install Zig and
+&lt;a href="https://code.visualstudio.com/" dir="ltr"&gt;VS Code&lt;/a&gt; in a matter of minutes.
+&lt;/p&gt;&lt;h2&gt;Under the Hood&lt;/h2&gt;&lt;p dir="ltr"&gt;If &lt;code dir="ltr"&gt;zig cc&lt;/code&gt; is built on top of Clang, why doesn't Clang just do this?
+What exactly is Zig doing on top of Clang to make this work?&lt;/p&gt;&lt;p dir="ltr"&gt;
+The answer is, &lt;em dir="ltr"&gt;a lot&lt;/em&gt;, actually. I'll go over how it works here.
+&lt;/p&gt;&lt;h3&gt;compiler-rt&lt;/h3&gt;&lt;p dir="ltr"&gt;
+compiler-rt is a library that provides "polyfill" implementations of language-supported features
+when the target does not have machine code instructions for it. For example, compiler-rt has
+the function &lt;code dir="ltr"&gt;__muldi3&lt;/code&gt; to perform signed 64-bit integer multiplication on architectures
+that do not have a 64-bit wide integer multiplication instruction.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+In the GNU world, compiler-rt is named &lt;strong dir="ltr"&gt;libgcc&lt;/strong&gt;.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Most C compilers ship with this library pre-built for the target.
+For example, on an Ubuntu (Bionic) system, with the &lt;code dir="ltr"&gt;build-essential&lt;/code&gt; package installed,
+you can find this at &lt;code dir="ltr"&gt;/lib/x86_64-linux-gnu/libgcc_s.so.1&lt;/code&gt;.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+If you download &lt;a href="https://github.com/llvm/llvm-project/releases/download/llvmorg-9.0.1/clang+llvm-9.0.1-x86_64-linux-gnu-ubuntu-16.04.tar.xz" dir="ltr"&gt;clang+llvm-9.0.1-x86_64-linux-gnu-ubuntu-16.04.tar.xz&lt;/a&gt; and take a look
+around, clang actually does not even ship with compiler-rt. Instead, it relies on the system libgcc
+noted above. This is one reason that this tarball is Ubuntu-specific and does not work on other
+Linux distributions, 
+&lt;a href="https://www.leidinger.net/blog/2010/09/28/the-freebsd-linuxulator-explained-for-users/" dir="ltr"&gt;FreeBSD's Linuxulator&lt;/a&gt;,
+or &lt;a href="https://en.wikipedia.org/wiki/Windows_Subsystem_for_Linux" dir="ltr"&gt;WSL&lt;/a&gt;,
+which have system files in different locations.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Zig's strategy with compiler-rt is that we have
+&lt;a href="https://github.com/ziglang/zig/blob/0.5.0/lib/std/special/compiler_rt.zig" dir="ltr"&gt;our own implementation of this library&lt;/a&gt;,
+written in Zig. Most of it is ported from
+&lt;a href="https://github.com/llvm/llvm-project/tree/llvmorg-10.0.0-rc6/compiler-rt" dir="ltr"&gt;LLVM's compiler-rt project&lt;/a&gt;,
+but we also have some of our own improvements on top of this.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Anyway, rather than depending on system compiler-rt being installed, or shipping a pre-compiled
+library, Zig ships its compiler-rt &lt;em dir="ltr"&gt;in source form&lt;/em&gt;, and lazily builds compiler-rt 
+for the compilation target, and then caches the result using
+&lt;a href="https://andrewkelley.me/post/zig-cc-powerful-drop-in-replacement-gcc-clang.html#caching-system" dir="ltr"&gt;the caching system discussed above&lt;/a&gt;.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Zig's compiler-rt is &lt;a href="https://github.com/ziglang/zig/issues/1290" dir="ltr"&gt;not yet complete&lt;/a&gt;.
+However, completing it is a prerequisite for releasing Zig version 1.0.0.
+&lt;/p&gt;&lt;h3&gt;libc&lt;/h3&gt;&lt;p dir="ltr"&gt;
+When C code calls &lt;code dir="ltr"&gt;printf&lt;/code&gt;, &lt;code dir="ltr"&gt;printf&lt;/code&gt; has to be implemented &lt;em dir="ltr"&gt;somewhere&lt;/em&gt;,
+and that somewhere is libc.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Some operating systems, such as &lt;a href="https://www.freebsd.org/" dir="ltr"&gt;FreeBSD&lt;/a&gt; and macOS, have an
+designated system libc, and it is the kernel syscall interface. On others, such as
+Windows and Linux, libc is optional, and therefore there are multiple options of which
+libc to use, if any.
+&lt;/p&gt;&lt;p&gt;
+As of the time of this writing, Zig can provide libcs for the following targets:
+&lt;/p&gt;&lt;PRE&gt;andy@ark ~&amp;gt; zig targets | jq .libc
+[
+  "aarch64_be-linux-gnu",
+  "aarch64_be-linux-musl",
+  "aarch64_be-windows-gnu",
+  "aarch64-linux-gnu",
+  "aarch64-linux-musl",
+  "aarch64-windows-gnu",
+  "armeb-linux-gnueabi",
+  "armeb-linux-gnueabihf",
+  "armeb-linux-musleabi",
+  "armeb-linux-musleabihf",
+  "armeb-windows-gnu",
+  "arm-linux-gnueabi",
+  "arm-linux-gnueabihf",
+  "arm-linux-musleabi",
+  "arm-linux-musleabihf",
+  "arm-windows-gnu",
+  "i386-linux-gnu",
+  "i386-linux-musl",
+  "i386-windows-gnu",
+  "mips64el-linux-gnuabi64",
+  "mips64el-linux-gnuabin32",
+  "mips64el-linux-musl",
+  "mips64-linux-gnuabi64",
+  "mips64-linux-gnuabin32",
+  "mips64-linux-musl",
+  "mipsel-linux-gnu",
+  "mipsel-linux-musl",
+  "mips-linux-gnu",
+  "mips-linux-musl",
+  "powerpc64le-linux-gnu",
+  "powerpc64le-linux-musl",
+  "powerpc64-linux-gnu",
+  "powerpc64-linux-musl",
+  "powerpc-linux-gnu",
+  "powerpc-linux-musl",
+  "riscv64-linux-gnu",
+  "riscv64-linux-musl",
+  "s390x-linux-gnu",
+  "s390x-linux-musl",
+  "sparc-linux-gnu",
+  "sparcv9-linux-gnu",
+  "wasm32-freestanding-musl",
+  "x86_64-linux-gnu",
+  "x86_64-linux-gnux32",
+  "x86_64-linux-musl",
+  "x86_64-windows-gnu"
+]
+&lt;/PRE&gt;&lt;p&gt;
+In order to provide libc on these targets, Zig ships with a subset of the source files
+for these projects:
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;musl v1.2.0&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://mingw-w64.org/" dir="ltr"&gt;mingw-w64&lt;/a&gt; v7.0.0&lt;/LI&gt;&lt;LI&gt;glibc 2.31&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
+For each libc, there is a
+&lt;a href="https://github.com/ziglang/zig/wiki/Updating-libc" dir="ltr"&gt;process for upgrading to a new release&lt;/a&gt;.
+This process is a sort of pre-processing step. We still end up with source files, but we
+de-duplicate non-multi-arch source files into multi-arch source files.
+&lt;/p&gt;&lt;h4&gt;glibc&lt;/h4&gt;&lt;p&gt;
+glibc is the most involved. The first step is building glibc for every target that it supports,
+which takes upwards of 24 hours and 74 GiB of disk space.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+From here, the
+&lt;a href="https://github.com/ziglang/zig/blob/dc44fe053c609f389e375f6857f96b6bb3794897/tools/process_headers.zig" dir="ltr"&gt;process_headers tool&lt;/a&gt;
+inspects all the header files from all the targets, and identifies which files are the same across
+all targets, and which header files are target-specific. They are then sorted into the
+corresponding directories in Zig's source tree, in:
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;lib/libc/include/generic-glibc/&lt;/LI&gt;&lt;LI&gt;lib/libc/include/$ARCH-linux-$ABI/ (there are multiple of these directories)&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
+Additionally, Linux header files are not included in glibc, and so the same process is applied to
+Linux header files, with the directories:
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;lib/libc/include/any-linux-any/&lt;/LI&gt;&lt;LI&gt;lib/libc/include/$ARCH-linux-any/&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
+That takes care of the header files, but now we have the problem of dynamic linking against
+glibc, without touching any system files.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+For this, we have the
+&lt;a href="https://github.com/ziglang/zig/blob/dc44fe053c609f389e375f6857f96b6bb3794897/tools/update_glibc.zig" dir="ltr"&gt;update_glibc tool&lt;/a&gt;.
+Given the path to the glibc source directory, it finds all the &lt;code dir="ltr"&gt;.abilist&lt;/code&gt; text files
+and uses them to produce 3 simple but crucial files:
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;a href="https://github.com/ziglang/zig/blob/master/lib/libc/glibc/vers.txt" dir="ltr"&gt;vers.txt&lt;/a&gt;
+    - the list of all glibc versions.
+  &lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/ziglang/zig/blob/master/lib/libc/glibc/fns.txt" dir="ltr"&gt;fns.txt&lt;/a&gt;
+    - the list of all symbols that glibc provides, followed by the library it appears in
+    (for example libm, libpthread, libc, librt).
+  &lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/ziglang/zig/blob/master/lib/libc/glibc/abi.txt" dir="ltr"&gt;abi.txt&lt;/a&gt;
+    - for each target, for each function, tells which versions of glibc, if any, it appears in.
+  &lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
+Together, these files amount to only 192 KB (27 KB gzipped), and they allow Zig to target any
+version of glibc.
+&lt;/p&gt;&lt;p&gt;
+Yes, I did not make a typo there. Zig can target any of the 42 versions of glibc for any of the
+architectures listed above. I'll show you:
+&lt;/p&gt;&lt;PRE&gt;andy@ark ~/tmp&amp;gt; &lt;strong dir="ltr"&gt;cat rand.zig &lt;/strong&gt;
+const std = @import("std");
+
+pub fn main() anyerror!void {
+    var buf: [10]u8 = undefined;
+    _ = std.c.getrandom(&amp;amp;buf, buf.len, 0);
+    std.debug.warn("random bytes: {x}\n", .{buf});
+}
+andy@ark ~/tmp&amp;gt; &lt;strong dir="ltr"&gt;zig build-exe rand.zig -lc -target native-native-gnu.2.25&lt;/strong&gt;
+andy@ark ~/tmp&amp;gt; &lt;strong dir="ltr"&gt;./rand&lt;/strong&gt;
+random bytes: e2059382afb599ea6d29
+andy@ark ~/tmp&amp;gt; &lt;strong dir="ltr"&gt;zig build-exe rand.zig -lc -target native-native-gnu.2.24&lt;/strong&gt;
+lld: error: undefined symbol: getrandom
+&amp;gt;&amp;gt;&amp;gt; referenced by rand.zig:5 (/home/andy/tmp/rand.zig:5)
+&amp;gt;&amp;gt;&amp;gt;               ./rand.o:(main.0)
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+Sure enough, if you look at the
+&lt;a href="http://man7.org/linux/man-pages/man2/getrandom.2.html" dir="ltr"&gt;man page for getrandom&lt;/a&gt;,
+it says:
+&lt;/p&gt;&lt;BLOCKQUOTE&gt;
+Support was added to glibc in version 2.25.
+&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
+When no explicit glibc version is requested, and the target OS is the native (host) OS,
+Zig detects the native glibc version by inspecting the Zig executable's own dynamically
+linked libraries, looking for glibc, and checking the version. It turns out you can look for
+&lt;code dir="ltr"&gt;libc.so.6&lt;/code&gt; and then &lt;code dir="ltr"&gt;readlink&lt;/code&gt; on that, and it will look something
+like &lt;code dir="ltr"&gt;libc-2.27.so&lt;/code&gt;. When this strategy does not work, Zig looks at
+&lt;code dir="ltr"&gt;/usr/bin/env&lt;/code&gt;, looking for the same thing. Since this file path is hard-coded
+into countless shebang lines, it's a pretty safe bet to find out the dynamic linker path and
+glibc version (if any) of the native system!
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+&lt;code dir="ltr"&gt;zig cc&lt;/code&gt; currently does not provide a way to choose a specific glibc version
+(because C compilers do not provide a way), and so Zig chooses the native version for
+compiling natively, and the default (2.17) for cross-compiling.
+However, I'm sure this problem can be solved, even when using &lt;code dir="ltr"&gt;zig cc&lt;/code&gt;. For example,
+maybe it could support an environment variable, or simply introduce an extra command line
+option that does not conflict with any Clang options.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+When you request a certain version of glibc, Zig uses those text files noted above to
+create dummy &lt;code dir="ltr"&gt;.so&lt;/code&gt; files to link against, which contain exactly the correct
+set of symbols (with appropriate name mangling) based on the requested version.
+The symbols will be resolved at runtime, by the dynamic linker on the target platform.
+&lt;/p&gt;&lt;p&gt;
+In this way, most of libc in the glibc case resides on the target file system. But not all of it!
+There are still the "C runtime start files":
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Scrt1.o&lt;/LI&gt;&lt;LI&gt;crti.o&lt;/LI&gt;&lt;LI&gt;crtn.o&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
+These are statically compiled into every binary that dynamically links glibc, and their
+&lt;a href="https://en.wikipedia.org/wiki/Application_binary_interface" dir="ltr"&gt;ABI&lt;/a&gt; is therefore
+Very Very Stable.
+&lt;/p&gt;&lt;p&gt;
+And so, Zig bundles a small subset of glibc's source files needed to build these object
+files from source for every target. The total size of this comes out to 1.4 MiB (252 KB gzipped).
+I do think there is some room for improvement here, but I digress.
+&lt;/p&gt;&lt;p&gt;
+There are a couple of patches to this small subset of glibc source files, which simplify them
+to avoid including too many .h files, since the end result that we need is some bare bones object
+files, and not all of glibc.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+And finally, we certainly do not ship the build system of glibc with Zig! I manually inspected,
+audited, and analyzed glibc's build system, and then by hand wrote code in the Zig
+compiler which hooks into Zig's &lt;a href="https://andrewkelley.me/post/zig-cc-powerful-drop-in-replacement-gcc-clang.html#caching-system" dir="ltr"&gt;caching system&lt;/a&gt; and performs a minimal
+build of only these start files, as needed.
+&lt;/p&gt;&lt;h4&gt;musl&lt;/h4&gt;&lt;p&gt;
+The process for preparing musl to ship with Zig is much simpler by comparison.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+It still involves building musl for every target architecture that it supports,
+but in this case only the &lt;code dir="ltr"&gt;install-headers&lt;/code&gt; target has to be run,
+and it takes less than a minute, even to do it for all targets.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+The same
+&lt;a href="https://github.com/ziglang/zig/blob/dc44fe053c609f389e375f6857f96b6bb3794897/tools/process_headers.zig" dir="ltr"&gt;process_headers tool&lt;/a&gt;
+tool used for glibc headers is used on the musl headers:
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;lib/libc/include/generic-musl/&lt;/LI&gt;&lt;LI&gt;lib/libc/include/$ARCH-linux-$ABI/ (there are multiple of these directories)&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
+Unlike glibc, musl supports building statically. Zig currently assumes a static libc
+when musl is chosen, and does not support dynamically linking against musl, although
+that could potentially be added in the future.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+And so for musl, zig actually bundles most - but still not all - of musl's source files.
+Everything in &lt;code dir="ltr"&gt;arch&lt;/code&gt;, &lt;code dir="ltr"&gt;crt&lt;/code&gt;, &lt;code dir="ltr"&gt;compat&lt;/code&gt;, &lt;code dir="ltr"&gt;src&lt;/code&gt;, and &lt;code dir="ltr"&gt;include&lt;/code&gt; gets copied in.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Again much like glibc, I carefully studied musl's build system, and then hand-coded logic
+in the Zig compiler to build these source files. In musl's case it is simpler - just a bit
+of logic having to do with the file extension, and whether to override files with an
+architecture-specific file. The only file that needs to be patched (by hand) is
+&lt;code dir="ltr"&gt;version.h&lt;/code&gt;, which is normally generated during the configure phase in musl's build
+system.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+I really appreciate Rich Felker's efforts to make musl simple to utilize in this way,
+and he has been incredibly helpful in the &lt;code dir="ltr"&gt;#musl&lt;/code&gt; IRC channel when I ask
+questions.
+&lt;a href="https://andrewkelley.me/post/why-donating-to-musl-libc-project.html" dir="ltr"&gt;I proudly sponsor Rich Felker for $150/month&lt;/a&gt;.
+&lt;/p&gt;&lt;h4&gt;mingw-w64&lt;/h4&gt;&lt;p dir="ltr"&gt;
+mingw-w64 was an absolute joy to support in Zig. The beautiful thing about this project is that
+they have already been transitioning into having one set of header files that applies to all
+architectures (using &lt;code dir="ltr"&gt;#ifdefs&lt;/code&gt; only where needed). One set of header files
+is sufficient to support all four architectures: arm, aarch64, x86, and x86_64. 
+&lt;/p&gt;&lt;p&gt;
+So for updating headers, all we have to do is build mingw-w64, then:
+&lt;/p&gt;&lt;PRE&gt;mv $INSTALLPREFIX/include $ZIGSRC/lib/libc/include/any-windows-any
+&lt;/PRE&gt;&lt;p&gt;
+After doing this for all 3 libcs, the libc/include directory looks like this:
+&lt;/p&gt;&lt;PRE&gt;aarch64_be-linux-any   i386-linux-musl           powerpc-linux-any
+aarch64_be-linux-gnu   mips64el-linux-any        powerpc-linux-gnu
+aarch64-linux-any      mips64el-linux-gnuabi64   powerpc-linux-musl
+aarch64-linux-gnu      mips64el-linux-gnuabin32  riscv32-linux-any
+aarch64-linux-musl     mips64-linux-any          riscv64-linux-any
+any-linux-any          mips64-linux-gnuabi64     riscv64-linux-gnu
+any-windows-any        mips64-linux-gnuabin32    riscv64-linux-musl
+armeb-linux-any        mips64-linux-musl         s390x-linux-any
+armeb-linux-gnueabi    mipsel-linux-any          s390x-linux-gnu
+armeb-linux-gnueabihf  mipsel-linux-gnu          s390x-linux-musl
+arm-linux-any          mips-linux-any            sparc-linux-gnu
+arm-linux-gnueabi      mips-linux-gnu            sparcv9-linux-gnu
+arm-linux-gnueabihf    mips-linux-musl           x86_64-linux-any
+arm-linux-musl         powerpc64le-linux-any     x86_64-linux-gnu
+generic-glibc          powerpc64le-linux-gnu     x86_64-linux-gnux32
+generic-musl           powerpc64-linux-any       x86_64-linux-musl
+i386-linux-any         powerpc64-linux-gnu
+i386-linux-gnu         powerpc64-linux-musl
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+When Zig generates a C command line to send to clang, it puts the appropriate
+include paths using &lt;code dir="ltr"&gt;-I&lt;/code&gt; depending on the target. For example, if the
+target is &lt;code dir="ltr"&gt;aarch64-linux-musl&lt;/code&gt;, then the following command line parameters
+are appended:
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;code&gt;-I$LIB/libc/include/aarch64-linux-musl&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;&lt;code&gt;-I$LIB/libc/include/aarch64-linux-any&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;&lt;code&gt;-I$LIB/libc/include/generic-musl&lt;/code&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
+Anyway back to mingw-w64.
+&lt;/p&gt;&lt;p&gt;
+Again, Zig includes a subset of source files from mingw-w64 with a few patches applied
+to make things compile successfully.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+The Zig compiler code that builds mingw-w64 from source files emulates only the parts of
+the build system that are needed for this subset. This includes preprocessing &lt;code dir="ltr"&gt;.def.in&lt;/code&gt;
+files to get &lt;code dir="ltr"&gt;.def&lt;/code&gt; files, and then in-turn using LLD to generate &lt;code dir="ltr"&gt;.lib&lt;/code&gt; files
+from the &lt;code dir="ltr"&gt;.def&lt;/code&gt; files, which allows Zig to provide &lt;code dir="ltr"&gt;.lib&lt;/code&gt; files for
+any Windows DLL, such as kernel32.dll or even opengl32.dll.
+&lt;/p&gt;&lt;h3&gt;Invoking Clang Without a System Dependency&lt;/h3&gt;&lt;p dir="ltr"&gt;
+Since Zig already links against Clang libraries for the
+&lt;a href="https://ziglang.org/#Integration-with-C-libraries-without-FFIbindings" dir="ltr"&gt;translate-c feature&lt;/a&gt;,
+it was not much more cost to expose the &lt;code dir="ltr"&gt;main()&lt;/code&gt; entry point from Zig.
+So that's exactly what we do:
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;llvm-project/clang/tools/driver/driver.cpp&lt;/code&gt; is copied to &lt;code dir="ltr"&gt;$ZIGGIT/src/zig_clang_driver.cpp&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;llvm-project/clang/tools/driver/cc1_main.cpp&lt;/code&gt; is copied to &lt;code dir="ltr"&gt;$ZIGGIT/src/zig_clang_cc1_main.cpp&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;llvm-project/clang/tools/driver/cc1as_main.cpp&lt;/code&gt; is copied to &lt;code dir="ltr"&gt;$ZIGGIT/src/zig_clang_cc1as_main.cpp&lt;/code&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
+The following patch is applied:
+&lt;/p&gt;&lt;PRE&gt;--- a/src/zig_clang_driver.cpp
++++ b/src/zig_clang_driver.cpp
+@@ -206,8 +205,6 @@
+                     void *MainAddr);
+ extern int cc1as_main(ArrayRef&amp;lt;const char *&amp;gt; Argv, const char *Argv0,
+                       void *MainAddr);
+&lt;span dir="ltr"&gt;-extern int cc1gen_reproducer_main(ArrayRef&amp;lt;const char *&amp;gt; Argv,&lt;/span&gt;
+&lt;span dir="ltr"&gt;-                                  const char *Argv0, void *MainAddr);&lt;/span&gt;
+ 
+ static void insertTargetAndModeArgs(const ParsedClangName &amp;amp;NameParts,
+                                     SmallVectorImpl&amp;lt;const char *&amp;gt; &amp;amp;ArgVector,
+@@ -330,19 +327,18 @@
+   if (Tool == "-cc1as")
+     return cc1as_main(makeArrayRef(ArgV).slice(2), ArgV[0],
+                       GetExecutablePathVP);
+&lt;span dir="ltr"&gt;-  if (Tool == "-cc1gen-reproducer")&lt;/span&gt;
+&lt;span dir="ltr"&gt;-    return cc1gen_reproducer_main(makeArrayRef(ArgV).slice(2), ArgV[0],&lt;/span&gt;
+&lt;span dir="ltr"&gt;-                                  GetExecutablePathVP);&lt;/span&gt;
+   // Reject unknown tools.
+   llvm::errs() &amp;lt;&amp;lt; "error: unknown integrated tool '" &amp;lt;&amp;lt; Tool &amp;lt;&amp;lt; "'. "
+                &amp;lt;&amp;lt; "Valid tools include '-cc1' and '-cc1as'.\n";
+   return 1;
+ }
+ 
+&lt;span dir="ltr"&gt;-int main(int argc_, const char **argv_) {&lt;/span&gt;
+&lt;span dir="ltr"&gt;+extern "C" int ZigClang_main(int argc_, const char **argv_);&lt;/span&gt;
+&lt;span dir="ltr"&gt;+int ZigClang_main(int argc_, const char **argv_) {&lt;/span&gt;
+   noteBottomOfStack();
+   llvm::InitLLVM X(argc_, argv_);
+&lt;span dir="ltr"&gt;-  SmallVector&amp;lt;const char *, 256&amp;gt; argv(argv_, argv_ + argc_);&lt;/span&gt;
+&lt;span dir="ltr"&gt;+  size_t argv_offset = (strcmp(argv_[1], "-cc1") == 0 || strcmp(argv_[1], "-cc1as") == 0) ? 0 : 1;&lt;/span&gt;
+&lt;span dir="ltr"&gt;+  SmallVector&amp;lt;const char *, 256&amp;gt; argv(argv_ + argv_offset, argv_ + argc_);&lt;/span&gt;
+ 
+   if (llvm::sys::Process::FixupStandardFileDescriptors())
+     return 1;
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+This disables some cruft, and then renames &lt;code dir="ltr"&gt;main&lt;/code&gt; to &lt;code dir="ltr"&gt;ZigClang_main&lt;/code&gt; so that
+it can be called like any other function. Next, in Zig's actual &lt;code dir="ltr"&gt;main&lt;/code&gt;, it looks
+for &lt;code dir="ltr"&gt;clang&lt;/code&gt; as the first parameter, and calls it.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+So, &lt;code dir="ltr"&gt;zig clang&lt;/code&gt; is low-level undocumented API that Zig exposes for directly invoking Clang.
+But &lt;code dir="ltr"&gt;zig cc&lt;/code&gt; is much higher level than that. When Zig needs to compile C code,
+it invokes itself as a child process, taking advantage of &lt;code dir="ltr"&gt;zig clang&lt;/code&gt;. &lt;code dir="ltr"&gt;zig cc&lt;/code&gt;
+on the other hand, has a more difficult job: it must parse Clang's command line options and
+map those to the Zig compiler's settings, so that ultimately &lt;code dir="ltr"&gt;zig clang&lt;/code&gt; can be invoked
+as a child process.
+&lt;/p&gt;&lt;h3&gt;Parsing Clang Command Line Options&lt;/h3&gt;&lt;p dir="ltr"&gt;
+When using &lt;code dir="ltr"&gt;zig cc&lt;/code&gt;, Zig acts as a proxy between the user and Clang. It does not need
+to understand all the parameters, but it does need to understand some of them, such as
+the target. This means that Zig must understand when a C command line parameter expects
+to "consume" the next parameter on the command line.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+For example, &lt;code dir="ltr"&gt;-z -target&lt;/code&gt; would mean to pass &lt;code dir="ltr"&gt;-target&lt;/code&gt; to the linker,
+whereas &lt;code dir="ltr"&gt;-E -target&lt;/code&gt; would mean that the next parameter specifies the target.
+&lt;/p&gt;&lt;p dir="ltr"&gt;Clang has a
+&lt;a href="https://clang.llvm.org/docs/ClangCommandLineReference.html" dir="ltr"&gt;long list of command line options&lt;/a&gt; and so it would be foolish to try to hard-code all of them.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Fortunately, LLVM has a file "options.td" which describes all of its command line parameter options
+in some obscure format. But fortunately again, LLVM comes with the &lt;code dir="ltr"&gt;llvm-tblgen&lt;/code&gt; tool
+that can dump it as JSON format.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Zig has an
+&lt;a href="https://github.com/ziglang/zig/blob/dc44fe053c609f389e375f6857f96b6bb3794897/tools/update_clang_options.zig" dir="ltr"&gt;update_clang_options tool&lt;/a&gt;
+which processes this JSON dump and produces a
+&lt;a href="https://github.com/ziglang/zig/blob/dc44fe053c609f389e375f6857f96b6bb3794897/src-self-hosted/clang_options_data.zig" dir="ltr"&gt;big sorted list of Clang's command line options&lt;/a&gt;.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Combined with a list of "known options" which correspond to Zig compiler options,
+this is used to make an iterator API that &lt;code dir="ltr"&gt;zig cc&lt;/code&gt; uses to parse command line
+parameters and instantiate a Zig compiler instance. Any Clang options that Zig is not
+aware of are forwarded to Clang directly. Some parameters are handled specially.
+&lt;/p&gt;&lt;h3&gt;Linking&lt;/h3&gt;&lt;p&gt;
+This part is pretty straightforward. Zig depends on LLD for linking rather than
+shelling out to the system linker, like GCC and Clang do.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+When you use &lt;code dir="ltr"&gt;-o&lt;/code&gt; with &lt;code dir="ltr"&gt;zig cc&lt;/code&gt;, Clang is not actually acting as
+a linker driver here. Zig is still the linker driver.
+&lt;/p&gt;&lt;h2&gt;Everybody Wins&lt;/h2&gt;&lt;p&gt;
+Now that I've spent this entire blog article comparing Zig and Clang as if they are
+competitors, let me make it absolutely clear that both of these are harmonious,
+mutually beneficial open-source projects. It's pretty obvious how Clang and the entire
+LLVM project are massively beneficial to the Zig project, since Zig builds on top of them.
+&lt;/p&gt;&lt;p&gt;
+But it works the other way, too.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+With Zig's focus on cross-compiling, its test suite has been expanding rapidly to cover
+a large number of architectures and operating systems, leading to
+&lt;a href="https://github.com/ziglang/zig/issues?q=is%3Aissue+label%3Aupstream+is%3Aclosed" dir="ltr"&gt;dozens of bugs reported upstream and patches sent&lt;/a&gt;, including, for example:
+&lt;/p&gt;&lt;p&gt;Everybody wins.&lt;/p&gt;&lt;h2&gt;This is still experimental!&lt;/h2&gt;&lt;p dir="ltr"&gt;
+I have only recently landed &lt;code dir="ltr"&gt;zig cc&lt;/code&gt; support last week, and it is still experimental.
+Please do not expect it to be production quality yet.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Zig's 0.6.0 release is right around the corner, scheduled for April 13th. I will be sure to provide
+an update on the release notes on how stable and robust you can expect &lt;code dir="ltr"&gt;zig cc&lt;/code&gt; to be
+in the 0.6.0 release.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+There are some follow-up issues related to &lt;code dir="ltr"&gt;zig cc&lt;/code&gt; which are still open:
+&lt;/p&gt;&lt;p&gt;
+If you're reading this and you already sponsor me, thank you so much! I wake up every day
+absolutely thrilled that I get to do this for my full time job.
+&lt;/p&gt;&lt;p&gt;
+As Zig has been gaining popularity, demands for my time have been growing faster than
+funds to hire another full-time programmer. Every recurring donation helps, and if the funds keep
+growing then soon enough the Zig project will have two full-time programmers.
+&lt;/p&gt;&lt;p&gt;
+That's all folks. I hope you and your loved ones are well.
+&lt;/p&gt;</description><pubDate>Tue, 24 Mar 2020 15:44:07 -0500</pubDate></item><item><title>Resilience: An Ad Blocker Without Compromises</title><link>https://lobste.rs/s/uguuus</link><description>&lt;h1&gt;Resilience&lt;/h1&gt;&lt;h2&gt;An Ad Blocker Without Compromises.&lt;/h2&gt;&lt;p dir="ltr"&gt;
+			Resilience is an ad blocker for your computer that works with
+			&lt;strong dir="ltr"&gt;any browser&lt;/strong&gt; on &lt;strong dir="ltr"&gt;any operating
+				system&lt;/strong&gt;.
+			&lt;/p&gt;&lt;img src="https://resilienceblocker.info/img/macOS.png" alt="Resilience on macOS." width="256" height="167"&gt;&lt;p dir="ltr"&gt;
+			Resilience doesn't sell out your privacy with &lt;em dir="ltr"&gt;"acceptable
+				ads"&lt;/em&gt;. Resilience won't be blocked by your web browser's
+			developers. Resilience won't ever stop defending your privacy and
+			your right to block ads on your goddamn computer.
+		&lt;/p&gt;&lt;p dir="ltr"&gt;
+			&lt;strong dir="ltr"&gt;Chrome executives:&lt;/strong&gt; I know you think this won't get
+			traction because it'll never be as easy to install as uBlock. Watch
+			me as I make it every bit as easy by the time you finish switching
+			to &lt;code dir="ltr"&gt;declarativeNetRequest&lt;/code&gt;.
+		&lt;/p&gt;&lt;h3&gt;Features&lt;/h3&gt;&lt;UL&gt;&lt;LI&gt;Built-in support for EasyList and EasyPrivacy.&lt;/LI&gt;&lt;LI&gt;Transparent HTTP/HTTPS proxy for Windows, Linux and macOS.
+				&lt;/LI&gt;&lt;LI&gt;Launches at startup and shows a system tray icon.&lt;/LI&gt;&lt;LI&gt;Automatically updates block lists every 24 hours.&lt;/LI&gt;&lt;LI&gt;Checks for Resilience client updates automatically.&lt;/LI&gt;&lt;/UL&gt;&lt;h2 name="download"&gt;Get Some Resilience&lt;/h2&gt;&lt;p dir="ltr"&gt;
+			Resilience is currently &lt;span dir="ltr"&gt;early alpha
+				software&lt;/span&gt; with an end-user release coming very soon.&lt;br dir="ltr"&gt;
+			Experimenters are welcome to &lt;a href="https://github.com/kaepora/resilience" dir="ltr"&gt;compile from
+				source&lt;/a&gt;.
+		&lt;/p&gt;&lt;h2 name="help"&gt;Getting Started with Resilience&lt;/h2&gt;&lt;p dir="ltr"&gt;
+			In order to use Resilience, you must configure it as your system's
+			HTTP and HTTPS proxy by setting them both to
+			&lt;code dir="ltr"&gt;localhost:7341&lt;/code&gt;. People testing an early alpha already
+			know how to do this, but better help instructions will come in due
+			course.
+		&lt;/p&gt;&lt;div dir="ltr"&gt;
+			Copyright © &lt;span dir="ltr"&gt;2020&lt;/span&gt; Nadim Kobeissi. All Rights
+			Reserved. &lt;a href="https://github.com/kaepora/resilience" dir="ltr"&gt;Source
+				Code&lt;/a&gt;
+		&lt;/div&gt;</description><pubDate>Tue, 24 Mar 2020 07:19:00 -0500</pubDate></item><item><title>Concurrent programming, with examples</title><link>https://lobste.rs/s/iqq501</link><description>&lt;div dir="ltr"&gt;
       &lt;h5 dir="ltr"&gt;March 23, 2020&lt;/h5&gt;
       &lt;h5 dir="ltr"&gt;
         &lt;a href="https://begriffs.com/posts/2020-03-23-concurrent-programming.html#newsletter" dir="ltr"&gt;Newsletter ↳&lt;/a&gt;
@@ -1306,37 +2167,7 @@ mutrace: Results for SMP with 4 processors.&lt;/code&gt;&lt;/PRE&gt;&lt;h4&gt;Of
       5 at,__pthread_mutex_unlock_usercnt,disburse,start_thread,clone
       1 at,__pthread_mutex_unlock_usercnt,stats_change,disburse,start_thread,clone
       1 at,__GI___pthread_mutex_lock,stats_change,disburse,start_thread,clone
-      1 __random,rand,rand_range,disburse,start_thread,clone&lt;/code&gt;&lt;/PRE&gt;&lt;h4&gt;macOS Instruments&lt;/h4&gt;&lt;p&gt;Although Mac’s POSIX thread support is pretty weak, its XCode tooling does include a nice profiler. From the Instruments application, choose the profiling template called “System Trace.” It adds a GUI on top of DTrace to display thread states (among other things). I modified our banker program to use only five threads and recorded its run. The Instruments app visualizes every event that happens, including threads blocking and being interrupted:&lt;/p&gt;&lt;img src="https://begriffs.com/images/thread-states.png" alt="thread states" width="455" height="312"&gt;&lt;p&gt;Within the program you can zoom into the history and hover over events for info.&lt;/p&gt;&lt;h4&gt;perf c2c&lt;/h4&gt;&lt;p dir="ltr"&gt;Perf is a Linux tool to measure hardware performance counters during the execution of a program. Joe Mario created a Perf feature called &lt;a href="https://joemario.github.io/blog/2016/09/01/c2c-blog/" dir="ltr"&gt;c2c&lt;/a&gt; which detects &lt;strong dir="ltr"&gt;false sharing&lt;/strong&gt; of variables between CPUs.&lt;/p&gt;&lt;p dir="ltr"&gt;In a NUMA multi-core computer, each CPU has its own set of caches, and all CPUs share main memory. Memory is divided into fixed size blocks (often 64 bytes) called &lt;strong dir="ltr"&gt;cache lines&lt;/strong&gt;. Any time a CPU reads or writes memory, it must fetch or store the entire cache line surrounding the desired address. If one CPU has already cached a line, and another CPU writes to that area in memory, the system has to perform an expensive operation to make the caches coherent.&lt;/p&gt;&lt;p&gt;When two unrelated variables in a program are stored close enough together in memory to be in the same cache line, it can cause a performance problem in multi-threaded programs. If threads running on separate CPUs access the unrelated variables, it can cause a tug of war between their underlying cache line, which is called false sharing.&lt;/p&gt;&lt;p&gt;For instance, our Game of Life simulator could potentially have false sharing at the edges of each section of board accessed by each thread. To verify this, I attempted to run perf c2c on an Amazon EC2 instance (since I lack a physical computer running Linux), but got an error that memory events are not supported on the virtual machine. I was running kernel 4.19.0 on Intel Xeon Platinum 8124M CPUs, so I assume this was a security restriction from Amazon.&lt;/p&gt;&lt;p dir="ltr"&gt;If you are able to run c2c, and detect false sharing in a multi-threaded program, the solution is to align the variables more aggressively. POSIX provides the &lt;a href="https://pubs.opengroup.org/onlinepubs/9699919799/functions/posix_memalign.html" dir="ltr"&gt;posix_memalign()&lt;/a&gt; function to allocate bytes aligned on a desired boundary. In our Life example, we could have used an array of pointers to dynamically allocated rows rather than a contiguous two-dimensional array.&lt;/p&gt;&lt;h4&gt;Intel VTune Profiler&lt;/h4&gt;&lt;p dir="ltr"&gt;The VTune Profiler is available for free (with registration) on Linux, macOS, and Windows. It works on x86 hardware only of course. I haven’t used it, but their &lt;a href="https://software.intel.com/en-us/vtune/features/multithreaded" dir="ltr"&gt;marketing page&lt;/a&gt; shows some nice pictures. The tool can visually identify the granularity of locks, present a prioritized list of synchronization objects that hurt performance, and visualize lock contention.&lt;/p&gt;&lt;h3&gt;Further reading&lt;/h3&gt;&lt;UL&gt;&lt;LI&gt;&lt;a href="https://www.goodreads.com/book/show/987956.Programming_with_Posix_Threads" dir="ltr"&gt;Programming with Posix Threads&lt;/a&gt; by David R. Butenhof&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://www.goodreads.com/book/show/828272.Pthreads_Programming" dir="ltr"&gt;Pthreads Programming&lt;/a&gt; by Bradford Nichols, Dick Buttlar, Jacqueline Farrell&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Tue, 24 Mar 2020 06:50:31 -0500</pubDate></item><item><title>Resilience: An Ad Blocker Without Compromises</title><link>https://lobste.rs/s/uguuus</link><description>&lt;h1&gt;Resilience&lt;/h1&gt;&lt;h2&gt;An Ad Blocker Without Compromises.&lt;/h2&gt;&lt;p dir="ltr"&gt;
-			Resilience is an ad blocker for your computer that works with
-			&lt;strong dir="ltr"&gt;any browser&lt;/strong&gt; on &lt;strong dir="ltr"&gt;any operating
-				system&lt;/strong&gt;.
-			&lt;/p&gt;&lt;img src="https://resilienceblocker.info/img/macOS.png" alt="Resilience on macOS." width="256" height="167"&gt;&lt;p dir="ltr"&gt;
-			Resilience doesn't sell out your privacy with &lt;em dir="ltr"&gt;"acceptable
-				ads"&lt;/em&gt;. Resilience won't be blocked by your web browser's
-			developers. Resilience won't ever stop defending your privacy and
-			your right to block ads on your goddamn computer.
-		&lt;/p&gt;&lt;p dir="ltr"&gt;
-			&lt;strong dir="ltr"&gt;Chrome executives:&lt;/strong&gt; I know you think this won't get
-			traction because it'll never be as easy to install as uBlock. Watch
-			me as I make it every bit as easy by the time you finish switching
-			to &lt;code dir="ltr"&gt;declarativeNetRequest&lt;/code&gt;.
-		&lt;/p&gt;&lt;h3&gt;Features&lt;/h3&gt;&lt;UL&gt;&lt;LI&gt;Built-in support for EasyList and EasyPrivacy.&lt;/LI&gt;&lt;LI&gt;Transparent HTTP/HTTPS proxy for Windows, Linux and macOS.
-				&lt;/LI&gt;&lt;LI&gt;Launches at startup and shows a system tray icon.&lt;/LI&gt;&lt;LI&gt;Automatically updates block lists every 24 hours.&lt;/LI&gt;&lt;LI&gt;Checks for Resilience client updates automatically.&lt;/LI&gt;&lt;/UL&gt;&lt;h2 name="download"&gt;Get Some Resilience&lt;/h2&gt;&lt;p dir="ltr"&gt;
-			Resilience is currently &lt;span dir="ltr"&gt;early alpha
-				software&lt;/span&gt; with an end-user release coming very soon.&lt;br dir="ltr"&gt;
-			Experimenters are welcome to &lt;a href="https://github.com/kaepora/resilience" dir="ltr"&gt;compile from
-				source&lt;/a&gt;.
-		&lt;/p&gt;&lt;h2 name="help"&gt;Getting Started with Resilience&lt;/h2&gt;&lt;p dir="ltr"&gt;
-			In order to use Resilience, you must configure it as your system's
-			HTTP and HTTPS proxy by setting them both to
-			&lt;code dir="ltr"&gt;localhost:7341&lt;/code&gt;. People testing an early alpha already
-			know how to do this, but better help instructions will come in due
-			course.
-		&lt;/p&gt;&lt;div dir="ltr"&gt;
-			Copyright © &lt;span dir="ltr"&gt;2020&lt;/span&gt; Nadim Kobeissi. All Rights
-			Reserved. &lt;a href="https://github.com/kaepora/resilience" dir="ltr"&gt;Source
-				Code&lt;/a&gt;
-		&lt;/div&gt;</description><pubDate>Tue, 24 Mar 2020 07:19:00 -0500</pubDate></item><item><title>Svelte is unappealing</title><link>https://lobste.rs/s/d6yta7</link><description>&lt;p&gt;
+      1 __random,rand,rand_range,disburse,start_thread,clone&lt;/code&gt;&lt;/PRE&gt;&lt;h4&gt;macOS Instruments&lt;/h4&gt;&lt;p&gt;Although Mac’s POSIX thread support is pretty weak, its XCode tooling does include a nice profiler. From the Instruments application, choose the profiling template called “System Trace.” It adds a GUI on top of DTrace to display thread states (among other things). I modified our banker program to use only five threads and recorded its run. The Instruments app visualizes every event that happens, including threads blocking and being interrupted:&lt;/p&gt;&lt;img src="https://begriffs.com/images/thread-states.png" alt="thread states" width="455" height="312"&gt;&lt;p&gt;Within the program you can zoom into the history and hover over events for info.&lt;/p&gt;&lt;h4&gt;perf c2c&lt;/h4&gt;&lt;p dir="ltr"&gt;Perf is a Linux tool to measure hardware performance counters during the execution of a program. Joe Mario created a Perf feature called &lt;a href="https://joemario.github.io/blog/2016/09/01/c2c-blog/" dir="ltr"&gt;c2c&lt;/a&gt; which detects &lt;strong dir="ltr"&gt;false sharing&lt;/strong&gt; of variables between CPUs.&lt;/p&gt;&lt;p dir="ltr"&gt;In a NUMA multi-core computer, each CPU has its own set of caches, and all CPUs share main memory. Memory is divided into fixed size blocks (often 64 bytes) called &lt;strong dir="ltr"&gt;cache lines&lt;/strong&gt;. Any time a CPU reads or writes memory, it must fetch or store the entire cache line surrounding the desired address. If one CPU has already cached a line, and another CPU writes to that area in memory, the system has to perform an expensive operation to make the caches coherent.&lt;/p&gt;&lt;p&gt;When two unrelated variables in a program are stored close enough together in memory to be in the same cache line, it can cause a performance problem in multi-threaded programs. If threads running on separate CPUs access the unrelated variables, it can cause a tug of war between their underlying cache line, which is called false sharing.&lt;/p&gt;&lt;p&gt;For instance, our Game of Life simulator could potentially have false sharing at the edges of each section of board accessed by each thread. To verify this, I attempted to run perf c2c on an Amazon EC2 instance (since I lack a physical computer running Linux), but got an error that memory events are not supported on the virtual machine. I was running kernel 4.19.0 on Intel Xeon Platinum 8124M CPUs, so I assume this was a security restriction from Amazon.&lt;/p&gt;&lt;p dir="ltr"&gt;If you are able to run c2c, and detect false sharing in a multi-threaded program, the solution is to align the variables more aggressively. POSIX provides the &lt;a href="https://pubs.opengroup.org/onlinepubs/9699919799/functions/posix_memalign.html" dir="ltr"&gt;posix_memalign()&lt;/a&gt; function to allocate bytes aligned on a desired boundary. In our Life example, we could have used an array of pointers to dynamically allocated rows rather than a contiguous two-dimensional array.&lt;/p&gt;&lt;h4&gt;Intel VTune Profiler&lt;/h4&gt;&lt;p dir="ltr"&gt;The VTune Profiler is available for free (with registration) on Linux, macOS, and Windows. It works on x86 hardware only of course. I haven’t used it, but their &lt;a href="https://software.intel.com/en-us/vtune/features/multithreaded" dir="ltr"&gt;marketing page&lt;/a&gt; shows some nice pictures. The tool can visually identify the granularity of locks, present a prioritized list of synchronization objects that hurt performance, and visualize lock contention.&lt;/p&gt;&lt;h3&gt;Further reading&lt;/h3&gt;&lt;UL&gt;&lt;LI&gt;&lt;a href="https://www.goodreads.com/book/show/987956.Programming_with_Posix_Threads" dir="ltr"&gt;Programming with Posix Threads&lt;/a&gt; by David R. Butenhof&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://www.goodreads.com/book/show/828272.Pthreads_Programming" dir="ltr"&gt;Pthreads Programming&lt;/a&gt; by Bradford Nichols, Dick Buttlar, Jacqueline Farrell&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Tue, 24 Mar 2020 06:50:31 -0500</pubDate></item><item><title>Svelte is unappealing</title><link>https://lobste.rs/s/d6yta7</link><description>&lt;p&gt;
 I find these claims to be misleading &amp;amp; there are a couple of things that make
 the whole approach unappealing to me. Neither are absolutely disqualifying, but
 they make me hesitate to recommend Svelte to people starting new projects to
@@ -1411,838 +2242,7 @@ headaches.
 &lt;/p&gt;&lt;h3&gt;Thank you for reading!&lt;/h3&gt;&lt;div dir="ltr"&gt;
               I welcome your feedback:
               &amp;nbsp;  &amp;nbsp;&amp;nbsp;  &amp;nbsp;&amp;nbsp;  &amp;nbsp;&amp;nbsp;  &amp;nbsp;&amp;nbsp;  &amp;nbsp;
-            &lt;/div&gt;</description><pubDate>Mon, 23 Mar 2020 22:46:44 -0500</pubDate></item><item><title>`zig cc`: a Powerful Drop-In Replacement for GCC/Clang - Andrew Kelley</title><link>https://lobste.rs/s/dw9qyv</link><description>&lt;p dir="ltr"&gt;
-If you have heard of &lt;a href="https://ziglang.org/" dir="ltr"&gt;Zig&lt;/a&gt; before, you may know it as
-a promising new programming language which is ambitiously trying to overthrow C as the
-de-facto systems language. But did you know that it also can straight up compile C code?
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-This has been possible for a while, and you can see some
-&lt;a href="https://ziglang.org/#Zig-is-also-a-C-compiler" dir="ltr"&gt;examples of this on the home page&lt;/a&gt;.
-What's new is that the &lt;code dir="ltr"&gt;zig cc&lt;/code&gt; sub-command is available, and it supports
-the same options as &lt;a href="https://clang.llvm.org/" dir="ltr"&gt;Clang&lt;/a&gt;, which, in turn, supports
-the same options as &lt;a href="https://gcc.gnu.org/" dir="ltr"&gt;GCC&lt;/a&gt;.
-&lt;/p&gt;&lt;p&gt;
-Now, I'm sure you're feeling pretty skeptical right about now, so let me hook you real
-quick before I get into the juicy details.
-&lt;/p&gt;&lt;h2&gt;Clang and GCC cannot do this:&lt;/h2&gt;&lt;PRE&gt;&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; cat hello.c&lt;/strong&gt;
-#include &amp;lt;stdio.h&amp;gt;
-
-int main(int argc, char **argv) {
-    fprintf(stderr, "Hello, World!\n");
-    return 0;
-}
-&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; clang -o hello.exe hello.c -target x86_64-windows-gnu&lt;/strong&gt;
-clang-7: warning: argument unused during compilation: '--gcc-toolchain=/nix/store/ificps9si1nvz85f9xa7gjd9h6r5lzg6-gcc-9.2.0' [-Wunused-command-line-argument]
-/nix/store/7bhi29ainf5rjrk7k7wyhndyskzyhsxh-binutils-2.31.1/bin/ld: unrecognised emulation mode: i386pep
-Supported emulations: elf_x86_64 elf32_x86_64 elf_i386 elf_iamcu elf_l1om elf_k1om
-clang-7: &lt;span dir="ltr"&gt;error&lt;/span&gt;: linker command failed with exit code 1 (use -v to see invocation)
-&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; clang -o hello hello.c -target mipsel-linux-musl&lt;/strong&gt;
-In file included from hello.c:1:
-In file included from /nix/store/8pp3i3hcp7bv0f8jllzqq7gcp9dbzvp9-glibc-2.27-dev/include/stdio.h:27:
-In file included from /nix/store/8pp3i3hcp7bv0f8jllzqq7gcp9dbzvp9-glibc-2.27-dev/include/bits/libc-header-start.h:33:
-In file included from /nix/store/8pp3i3hcp7bv0f8jllzqq7gcp9dbzvp9-glibc-2.27-dev/include/features.h:452:
-/nix/store/8pp3i3hcp7bv0f8jllzqq7gcp9dbzvp9-glibc-2.27-dev/include/gnu/stubs.h:7:11: &lt;span dir="ltr"&gt;fatal error&lt;/span&gt;: 
-      'gnu/stubs-32.h' file not found
-# include &amp;lt;gnu/stubs-32.h&amp;gt;
-          ^~~~~~~~~~~~~~~~
-1 error generated.
-&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; clang -o hello hello.c -target aarch64-linux-gnu&lt;/strong&gt;
-In file included from hello.c:1:
-In file included from /nix/store/8pp3i3hcp7bv0f8jllzqq7gcp9dbzvp9-glibc-2.27-dev/include/stdio.h:27:
-In file included from /nix/store/8pp3i3hcp7bv0f8jllzqq7gcp9dbzvp9-glibc-2.27-dev/include/bits/libc-header-start.h:33:
-In file included from /nix/store/8pp3i3hcp7bv0f8jllzqq7gcp9dbzvp9-glibc-2.27-dev/include/features.h:452:
-/nix/store/8pp3i3hcp7bv0f8jllzqq7gcp9dbzvp9-glibc-2.27-dev/include/gnu/stubs.h:7:11: &lt;span dir="ltr"&gt;fatal error&lt;/span&gt;: 
-      'gnu/stubs-32.h' file not found
-# include &amp;lt;gnu/stubs-32.h&amp;gt;
-          ^~~~~~~~~~~~~~~~
-1 error generated.
-&lt;/PRE&gt;&lt;h2&gt;`zig cc` can:&lt;/h2&gt;&lt;PRE&gt;&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; zig cc -o hello.exe hello.c -target x86_64-windows-gnu&lt;/strong&gt;
-&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; wine64 hello.exe&lt;/strong&gt;
-Hello, World!
-&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; zig cc -o hello hello.c -target mipsel-linux-musl&lt;/strong&gt;
-&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; qemu-mipsel ./hello&lt;/strong&gt;
-Hello, World!
-&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; zig cc -o hello hello.c -target aarch64-linux-gnu&lt;/strong&gt;
-&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; qemu-aarch64 -L ~/Downloads/glibc/multi-2.31/install/glibcs/aarch64-linux-gnu ./hello&lt;/strong&gt;
-Hello, World!
-&lt;/PRE&gt;&lt;h2&gt;Features of `zig cc`&lt;/h2&gt;&lt;p dir="ltr"&gt;
-&lt;code dir="ltr"&gt;zig cc&lt;/code&gt; is &lt;em dir="ltr"&gt;not the main purpose of the Zig project&lt;/em&gt;. It merely
-exposes the already-existing capabilities of the Zig compiler via a small frontend layer
-that parses C compiler options.
-&lt;/p&gt;&lt;h3&gt;Install simply by unzipping a tarball&lt;/h3&gt;&lt;p dir="ltr"&gt;
-Zig is an open source project, and of course can be
-&lt;a href="https://github.com/ziglang/zig/#building-from-source" dir="ltr"&gt;built and installed from source the usual way&lt;/a&gt;. However, the Zig project also has tarballs available on
-&lt;a href="https://ziglang.org/download/" dir="ltr"&gt;the download page&lt;/a&gt;.
-You can download a 45 MiB tarball, unpack it, and you're done.
-You can even have multiple versions at the same time, no problem.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Here, rather than downloading the x86_64-linux version, which matches the computer I am
-currently using, I'll download the Windows version and run it in
-&lt;a href="https://www.winehq.org/" dir="ltr"&gt;Wine&lt;/a&gt; to show how simple installation is:
-&lt;/p&gt;&lt;PRE&gt;&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; wget --quiet https://ziglang.org/builds/zig-windows-x86_64-0.5.0+13d04f996.zip&lt;/strong&gt;
-&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; unzip -q zig-windows-x86_64-0.5.0+13d04f996.zip &lt;/strong&gt;
-&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; wine64 ./zig-windows-x86_64-0.5.0+13d04f996/zig.exe cc -o hello hello.c -target x86_64-linux&lt;/strong&gt;
-&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; ./hello&lt;/strong&gt;
-Hello, World!
-&lt;/PRE&gt;&lt;p&gt;
-Take a moment to appreciate what just happened here - I downloaded a Windows build of Zig,
-ran it in Wine, using it to cross compile for Linux, and then ran the binary natively.
-Computers are fun!
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Compare this to
-&lt;a href="https://github.com/llvm/llvm-project/releases/tag/llvmorg-9.0.1" dir="ltr"&gt;downloading Clang&lt;/a&gt;,
-which has 380 MiB Linux-distribution-specific tarballs. Zig's Linux tarballs are fully statically
-linked, and therefore work correctly on all Linux distributions. The size difference here
-comes because the Clang tarball ships with more utilities than a C compiler, as well as
-pre-compiled static libraries for both LLVM and Clang. Zig does not ship with any pre-compiled
-libraries; instead it ships with source code, and builds what it needs on-the-fly.
-&lt;/p&gt;&lt;h3&gt;Caching System&lt;/h3&gt;&lt;p dir="ltr"&gt;
-The Zig compiler uses a sophisticated caching system to avoid needlessly rebuilding
-artifacts. I carefully designed this caching system to
-make optimal use of the file system while maintaining correct semantics - which is
-&lt;a href="https://apenwarr.ca/log/20181113" dir="ltr"&gt;trickier than you might think&lt;/a&gt;!
-&lt;/p&gt;&lt;p&gt;
-The caching system uses a combination of hashing inputs and checking the fstat values
-of file paths, while being mindful of mtime granularity. This makes it avoid
-needlessly hashing files, while at the same time detecting when a modified file has
-the same contents. It always has correct behavior, whether the file system has nanosecond
-mtime granularity, second granularity, always sets mtime to zero, or anything in between.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-&lt;code dir="ltr"&gt;zig cc&lt;/code&gt; makes this caching system available when compiling C code. For simple
-enough projects, this obviates the need for a Makefile or other build system.
-&lt;/p&gt;&lt;PRE&gt;&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; cat foo.c&lt;/strong&gt;
-#include &amp;lt;stdio.h&amp;gt;
-
-#include "another_file.c"
-
-int main(int argc, char **argv) {
-#include "printf_many_times.c"
-}
-&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; cat another_file.c &lt;/strong&gt;
-void another(void) {}
-&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; time zig cc -c foo.c&lt;/strong&gt;
-0.12
-&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; time zig cc -c foo.c&lt;/strong&gt;
-0.01
-&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; touch another_file.c &lt;/strong&gt;
-&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; time zig cc -c foo.c&lt;/strong&gt;
-0.01
-&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; echo "/* add a comment */" &amp;gt;&amp;gt;another_file.c&lt;/strong&gt;
-&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; time zig cc -c foo.c&lt;/strong&gt;
-0.12
-&lt;strong dir="ltr"&gt;andy@ark ~/tmp&amp;gt; time zig cc -c foo.c&lt;/strong&gt;
-0.01
-&lt;/PRE&gt;&lt;p&gt;
-Here you can see the caching system is smart enough to find dependencies that are
-included with the preprocessor, and smart enough to avoid a full rebuild when the
-mtime of another_file.c was updated.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-One last thing before I move on. I want to point out that this caching system is not
-some fluffy bloated feature - rather it is an absolutely critical component to making
-cross-compiling work in a usable manner. As we'll see below, other compilers ship with 
-pre-compiled, target-specific binaries, while Zig ships with &lt;em dir="ltr"&gt;source code only&lt;/em&gt;
-and cross-compiles on-the-fly, caching the result.
-&lt;/p&gt;&lt;h3&gt;Cross Compiling&lt;/h3&gt;&lt;p dir="ltr"&gt;I have carefully designed Zig since the very beginning to treat cross compilation
-as a first class use case. Now that the &lt;code dir="ltr"&gt;zig cc&lt;/code&gt; frontend is available,
-it brings these capabilities to C code.
-&lt;/p&gt;&lt;p&gt;
-I showed you above cross-compiling some simple "Hello, World!" programs. But now let's
-try a real-world C project.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Let's try &lt;a href="https://luajit.org/" dir="ltr"&gt;LuaJIT&lt;/a&gt;!
-&lt;/p&gt;&lt;PRE&gt;[~/Downloads]$ &lt;strong dir="ltr"&gt;git clone https://github.com/LuaJIT/LuaJIT&lt;/strong&gt;
-[~/Downloads]$ &lt;strong dir="ltr"&gt;cd LuaJIT&lt;/strong&gt;
-[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;ls&lt;/strong&gt;
-COPYRIGHT  doc  dynasm  etc  Makefile  README  src
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-OK so it uses standard Makefiles. Here we go, first let's make sure it works natively
-with &lt;code dir="ltr"&gt;zig cc&lt;/code&gt;.
-&lt;/p&gt;&lt;PRE&gt;[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;export CC="zig cc"&lt;/strong&gt;
-[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;make CC="$CC"&lt;/strong&gt;
-==== Building LuaJIT 2.1.0-beta3 ====
-make -C src
-make[1]: Entering directory '/home/andy/Downloads/LuaJIT/src'
-HOSTCC    host/minilua.o
-HOSTLINK  host/minilua
-DYNASM    host/buildvm_arch.h
-HOSTCC    host/buildvm.o
-HOSTCC    host/buildvm_asm.o
-HOSTCC    host/buildvm_peobj.o
-HOSTCC    host/buildvm_lib.o
-HOSTCC    host/buildvm_fold.o
-HOSTLINK  host/buildvm
-BUILDVM   lj_vm.S
-ASM       lj_vm.o
-CC        lj_gc.o
-BUILDVM   lj_ffdef.h
-CC        lj_err.o
-CC        lj_char.o
-BUILDVM   lj_bcdef.h
-CC        lj_bc.o
-CC        lj_obj.o
-CC        lj_buf.o
-CC        lj_str.o
-CC        lj_tab.o
-CC        lj_func.o
-CC        lj_udata.o
-CC        lj_meta.o
-CC        lj_debug.o
-CC        lj_state.o
-CC        lj_dispatch.o
-CC        lj_vmevent.o
-CC        lj_vmmath.o
-CC        lj_strscan.o
-CC        lj_strfmt.o
-CC        lj_strfmt_num.o
-CC        lj_api.o
-CC        lj_profile.o
-CC        lj_lex.o
-CC        lj_parse.o
-CC        lj_bcread.o
-CC        lj_bcwrite.o
-CC        lj_load.o
-CC        lj_ir.o
-CC        lj_opt_mem.o
-BUILDVM   lj_folddef.h
-CC        lj_opt_fold.o
-CC        lj_opt_narrow.o
-CC        lj_opt_dce.o
-CC        lj_opt_loop.o
-CC        lj_opt_split.o
-CC        lj_opt_sink.o
-CC        lj_mcode.o
-CC        lj_snap.o
-CC        lj_record.o
-CC        lj_crecord.o
-BUILDVM   lj_recdef.h
-CC        lj_ffrecord.o
-CC        lj_asm.o
-CC        lj_trace.o
-CC        lj_gdbjit.o
-CC        lj_ctype.o
-CC        lj_cdata.o
-CC        lj_cconv.o
-CC        lj_ccall.o
-CC        lj_ccallback.o
-CC        lj_carith.o
-CC        lj_clib.o
-CC        lj_cparse.o
-CC        lj_lib.o
-CC        lj_alloc.o
-CC        lib_aux.o
-BUILDVM   lj_libdef.h
-CC        lib_base.o
-CC        lib_math.o
-CC        lib_bit.o
-CC        lib_string.o
-CC        lib_table.o
-CC        lib_io.o
-CC        lib_os.o
-CC        lib_package.o
-CC        lib_debug.o
-CC        lib_jit.o
-CC        lib_ffi.o
-CC        lib_init.o
-AR        libluajit.a
-CC        luajit.o
-BUILDVM   jit/vmdef.lua
-DYNLINK   libluajit.so
-LINK      luajit
-warning: unsupported linker arg: -E
-OK        Successfully built LuaJIT
-make[1]: Leaving directory '/home/andy/Downloads/LuaJIT/src'
-==== Successfully built LuaJIT 2.1.0-beta3 ====
-
-[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;ls&lt;/strong&gt;
-COPYRIGHT  doc  dynasm  etc  Makefile  README  src
-
-[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;./src/&lt;/strong&gt;
-host/         jit/          libluajit.so  luajit        zig-cache/    
-
-[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;./src/luajit &lt;/strong&gt;
-LuaJIT 2.1.0-beta3 -- Copyright (C) 2005-2020 Mike Pall. http://luajit.org/
-JIT: ON SSE2 SSE3 SSE4.1 BMI2 fold cse dce fwd dse narrow loop abc sink fuse
-&amp;gt; &lt;strong dir="ltr"&gt;print(3 + 4)&lt;/strong&gt;
-7
-&amp;gt; 
-&lt;/PRE&gt;&lt;p&gt;
-OK so that worked. Now for the real test - can we make it cross compile?
-&lt;/p&gt;&lt;PRE&gt;[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;git clean -xfdq&lt;/strong&gt;
-[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;export CC="zig cc -target aarch64-linux-gnu"&lt;/strong&gt;
-[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;export HOST_CC="zig cc"&lt;/strong&gt;
-[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;make CC="$CC" HOST_CC="$HOST_CC" TARGET_STRIP="echo"&lt;/strong&gt;
-==== Building LuaJIT 2.1.0-beta3 ====
-make -C src
-make[1]: Entering directory '/home/andy/Downloads/LuaJIT/src'
-HOSTCC    host/minilua.o
-HOSTLINK  host/minilua
-DYNASM    host/buildvm_arch.h
-HOSTCC    host/buildvm.o
-HOSTCC    host/buildvm_asm.o
-HOSTCC    host/buildvm_peobj.o
-HOSTCC    host/buildvm_lib.o
-HOSTCC    host/buildvm_fold.o
-HOSTLINK  host/buildvm
-BUILDVM   lj_vm.S
-ASM       lj_vm.o
-CC        lj_gc.o
-BUILDVM   lj_ffdef.h
-CC        lj_err.o
-CC        lj_char.o
-BUILDVM   lj_bcdef.h
-CC        lj_bc.o
-CC        lj_obj.o
-CC        lj_buf.o
-CC        lj_str.o
-CC        lj_tab.o
-CC        lj_func.o
-CC        lj_udata.o
-CC        lj_meta.o
-CC        lj_debug.o
-CC        lj_state.o
-CC        lj_dispatch.o
-CC        lj_vmevent.o
-CC        lj_vmmath.o
-CC        lj_strscan.o
-CC        lj_strfmt.o
-CC        lj_strfmt_num.o
-CC        lj_api.o
-CC        lj_profile.o
-CC        lj_lex.o
-CC        lj_parse.o
-CC        lj_bcread.o
-CC        lj_bcwrite.o
-CC        lj_load.o
-CC        lj_ir.o
-CC        lj_opt_mem.o
-BUILDVM   lj_folddef.h
-CC        lj_opt_fold.o
-CC        lj_opt_narrow.o
-CC        lj_opt_dce.o
-CC        lj_opt_loop.o
-CC        lj_opt_split.o
-CC        lj_opt_sink.o
-CC        lj_mcode.o
-CC        lj_snap.o
-CC        lj_record.o
-CC        lj_crecord.o
-BUILDVM   lj_recdef.h
-CC        lj_ffrecord.o
-CC        lj_asm.o
-CC        lj_trace.o
-CC        lj_gdbjit.o
-CC        lj_ctype.o
-CC        lj_cdata.o
-CC        lj_cconv.o
-CC        lj_ccall.o
-CC        lj_ccallback.o
-CC        lj_carith.o
-CC        lj_clib.o
-CC        lj_cparse.o
-CC        lj_lib.o
-CC        lj_alloc.o
-CC        lib_aux.o
-BUILDVM   lj_libdef.h
-CC        lib_base.o
-CC        lib_math.o
-CC        lib_bit.o
-CC        lib_string.o
-CC        lib_table.o
-CC        lib_io.o
-CC        lib_os.o
-CC        lib_package.o
-CC        lib_debug.o
-CC        lib_jit.o
-CC        lib_ffi.o
-CC        lib_init.o
-AR        libluajit.a
-CC        luajit.o
-BUILDVM   jit/vmdef.lua
-DYNLINK   libluajit.so
-libluajit.so
-LINK      luajit
-warning: unsupported linker arg: -E
-luajit
-OK        Successfully built LuaJIT
-make[1]: Leaving directory '/home/andy/Downloads/LuaJIT/src'
-==== Successfully built LuaJIT 2.1.0-beta3 ====
-
-[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;file ./src/luajit &lt;/strong&gt;
-./src/luajit: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, for GNU/Linux 2.0.0, with debug_info, not stripped
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-It worked! Will it run in &lt;a href="https://www.qemu.org/" dir="ltr"&gt;QEMU&lt;/a&gt; though?
-&lt;/p&gt;&lt;PRE&gt;[~/Downloads/LuaJIT]$ &lt;strong dir="ltr"&gt;qemu-aarch64 -L ~/Downloads/glibc/multi-2.31/install/glibcs/aarch64-linux-gnu ./src/luajit&lt;/strong&gt;
-LuaJIT 2.1.0-beta3 -- Copyright (C) 2005-2020 Mike Pall. http://luajit.org/
-JIT: ON fold cse dce fwd dse narrow loop abc sink fuse
-&amp;gt; &lt;strong dir="ltr"&gt;print(4 + 3)&lt;/strong&gt;
-7
-&amp;gt; 
-&lt;/PRE&gt;&lt;p&gt;
-Amazing. QEMU never fails to impress me.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Before we move on, I want to show one more thing. You can see above, in order to run the
-foreign-architecture binary, I had to pass
-&lt;code dir="ltr"&gt;-L ~/Downloads/glibc/multi-2.31/install/glibcs/aarch64-linux-gnu&lt;/code&gt;. This is
-due to the binary being dynamically linked. You can confirm this with the output from
-&lt;code dir="ltr"&gt;file&lt;/code&gt; above where it says: &lt;code dir="ltr"&gt;dynamically linked, interpreter /lib/ld-linux-aarch64.so.1&lt;/code&gt;
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Often, when cross-compiling, it is useful to make a &lt;em dir="ltr"&gt;static&lt;/em&gt; binary.
-In the case of Linux, for example, this will make the resulting binary able to run on
-any Linux distribution, rather than only ones with a hard-coded glibc dynamic linker path
-of &lt;code dir="ltr"&gt;/lib/ld-linux-aarch64.so.1&lt;/code&gt;.
-&lt;/p&gt;&lt;p&gt;
-We can accomplish this by targeting musl rather than glibc:
-&lt;/p&gt;&lt;PRE&gt;[~/Downloads/LuaJIT]$ git clean -qxfd
-[~/Downloads/LuaJIT]$ export CC="zig cc -target aarch64-linux-musl"
-[~/Downloads/LuaJIT]$ make CC="$CC" CXX="$CXX" HOST_CC="$HOST_CC" TARGET_STRIP="echo"
-==== Building LuaJIT 2.1.0-beta3 ====
-(same output)
-==== Successfully built LuaJIT 2.1.0-beta3 ====
-[~/Downloads/LuaJIT]$ file src/luajit
-src/luajit: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, not stripped
-[~/Downloads/LuaJIT]$ qemu-aarch64 ./src/luajit
-LuaJIT 2.1.0-beta3 -- Copyright (C) 2005-2020 Mike Pall. http://luajit.org/
-JIT: ON fold cse dce fwd dse narrow loop abc sink fuse
-&amp;gt; print(11 + 22)
-33
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-Here you can see the &lt;code dir="ltr"&gt;file&lt;/code&gt; command reported &lt;em dir="ltr"&gt;statically linked&lt;/em&gt;,
-and in the qemu command, the &lt;code dir="ltr"&gt;-L&lt;/code&gt; parameter was not needed.
-&lt;/p&gt;&lt;h2&gt;Use Cases of `zig cc`&lt;/h2&gt;&lt;p dir="ltr"&gt;
-Alright, so I've given you a taste of what &lt;code dir="ltr"&gt;zig cc&lt;/code&gt; can do, but now I will
-list explicitly what I consider to be the use cases:
-&lt;/p&gt;&lt;h3&gt;Experimentation&lt;/h3&gt;&lt;p dir="ltr"&gt;
-Sometimes you just want a tool that you can use to try out different things. It can quickly
-answer questions such as "What assembly does this code generate on MIPS vs ARM?". The widely
-popular &lt;a href="https://godbolt.org/" dir="ltr"&gt;Compiler Explorer&lt;/a&gt; serves this purpose.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-&lt;code dir="ltr"&gt;zig cc&lt;/code&gt; provides a lightweight tool which can also answer questions such as,
-"What happens if I swap out glibc for &lt;a href="https://musl.libc.org/" dir="ltr"&gt;musl&lt;/a&gt;?" and
-"How big is this executable when cross-compiled for Windows?".
-&lt;a href="https://twitter.com/andy_kelley/status/1242183564512366595" dir="ltr"&gt;Here's me using Zig to
-quickly find out what the maximum UDP packet size is on Linux&lt;/a&gt;.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Since Zig is so easy to install - and it actually works everywhere without patches,
-even Linux distributions such as &lt;a href="https://nixos.org/" dir="ltr"&gt;NixOS&lt;/a&gt; -
-it can often be a more convenient tool for running quick C test programs on your computer.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-At the time of this writing, LLVM 10 was just released two hours ago.
-It will take days or weeks for it to become available in various system package managers.
-But you can already
-&lt;a href="https://ziglang.org/download/" dir="ltr"&gt;download a master branch build of Zig&lt;/a&gt;
-and play with the new features of Clang/LLVM 10. For example, improved RISC-V support!
-&lt;/p&gt;&lt;PRE&gt;andy@ark ~/tmp&amp;gt; &lt;strong dir="ltr"&gt;zig cc -o hello hello.c -target riscv64-linux-musl&lt;/strong&gt;
-andy@ark ~/tmp&amp;gt; &lt;strong dir="ltr"&gt;qemu-riscv64 ./hello&lt;/strong&gt;
-Hello, World!
-&lt;/PRE&gt;&lt;h3&gt;Bundling a C compiler as part of a larger project&lt;/h3&gt;&lt;p&gt;
-With Zig tarballs weighing in at under 45 MiB, zero system dependencies, no configuration,
-and MIT license, it makes for an ideal candidate when you need to bundle a C compiler along
-with another project.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-For example, maybe you have
-&lt;a href="https://nim-lang.org/" dir="ltr"&gt;a programming language that compiles to C&lt;/a&gt;.
-Zig is an obvious choice for what C compiler to ship with your language.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Or maybe you want to make a batteries-included
-&lt;a href="https://en.wikipedia.org/wiki/Integrated_development_environment" dir="ltr"&gt;IDE&lt;/a&gt;
-that ships with a compiler.
-&lt;/p&gt;&lt;h3&gt;Lightweight alternative to a cross compilation environment&lt;/h3&gt;&lt;p dir="ltr"&gt;
-If you're trying to build something with a large dependency tree, you'll probably want to
-use a full cross compilation environment, such as &lt;a href="https://mxe.cc/" dir="ltr"&gt;mxe.cc&lt;/a&gt;
-or &lt;a href="http://musl.cc/" dir="ltr"&gt;musl.cc&lt;/a&gt;.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-But if you don't need such a sledgehammer, &lt;code dir="ltr"&gt;zig cc&lt;/code&gt; could be a useful alternative,
-especially if your goal is to compile for N different targets. Consider that musl.cc lists different
-tarballs for each architecture, each weighing in at roughly 85 MiB. Meanwhile Zig weighs in at 45 MiB
-and it supports all those architectures, plus glibc and Windows.
-&lt;/p&gt;&lt;h3&gt;An alternative to installing MSVC on Windows&lt;/h3&gt;&lt;p dir="ltr"&gt;
-You could spend days - literally! - waiting for Microsoft Visual Studio to install,
-or you could install Zig and
-&lt;a href="https://code.visualstudio.com/" dir="ltr"&gt;VS Code&lt;/a&gt; in a matter of minutes.
-&lt;/p&gt;&lt;h2&gt;Under the Hood&lt;/h2&gt;&lt;p dir="ltr"&gt;If &lt;code dir="ltr"&gt;zig cc&lt;/code&gt; is built on top of Clang, why doesn't Clang just do this?
-What exactly is Zig doing on top of Clang to make this work?&lt;/p&gt;&lt;p dir="ltr"&gt;
-The answer is, &lt;em dir="ltr"&gt;a lot&lt;/em&gt;, actually. I'll go over how it works here.
-&lt;/p&gt;&lt;h3&gt;compiler-rt&lt;/h3&gt;&lt;p dir="ltr"&gt;
-compiler-rt is a library that provides "polyfill" implementations of language-supported features
-when the target does not have machine code instructions for it. For example, compiler-rt has
-the function &lt;code dir="ltr"&gt;__muldi3&lt;/code&gt; to perform signed 64-bit integer multiplication on architectures
-that do not have a 64-bit wide integer multiplication instruction.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-In the GNU world, compiler-rt is named &lt;strong dir="ltr"&gt;libgcc&lt;/strong&gt;.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Most C compilers ship with this library pre-built for the target.
-For example, on an Ubuntu (Bionic) system, with the &lt;code dir="ltr"&gt;build-essential&lt;/code&gt; package installed,
-you can find this at &lt;code dir="ltr"&gt;/lib/x86_64-linux-gnu/libgcc_s.so.1&lt;/code&gt;.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-If you download &lt;a href="https://github.com/llvm/llvm-project/releases/download/llvmorg-9.0.1/clang+llvm-9.0.1-x86_64-linux-gnu-ubuntu-16.04.tar.xz" dir="ltr"&gt;clang+llvm-9.0.1-x86_64-linux-gnu-ubuntu-16.04.tar.xz&lt;/a&gt; and take a look
-around, clang actually does not even ship with compiler-rt. Instead, it relies on the system libgcc
-noted above. This is one reason that this tarball is Ubuntu-specific and does not work on other
-Linux distributions, 
-&lt;a href="https://www.leidinger.net/blog/2010/09/28/the-freebsd-linuxulator-explained-for-users/" dir="ltr"&gt;FreeBSD's Linuxulator&lt;/a&gt;,
-or &lt;a href="https://en.wikipedia.org/wiki/Windows_Subsystem_for_Linux" dir="ltr"&gt;WSL&lt;/a&gt;,
-which have system files in different locations.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Zig's strategy with compiler-rt is that we have
-&lt;a href="https://github.com/ziglang/zig/blob/0.5.0/lib/std/special/compiler_rt.zig" dir="ltr"&gt;our own implementation of this library&lt;/a&gt;,
-written in Zig. Most of it is ported from
-&lt;a href="https://github.com/llvm/llvm-project/tree/llvmorg-10.0.0-rc6/compiler-rt" dir="ltr"&gt;LLVM's compiler-rt project&lt;/a&gt;,
-but we also have some of our own improvements on top of this.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Anyway, rather than depending on system compiler-rt being installed, or shipping a pre-compiled
-library, Zig ships its compiler-rt &lt;em dir="ltr"&gt;in source form&lt;/em&gt;, and lazily builds compiler-rt 
-for the compilation target, and then caches the result using
-&lt;a href="https://andrewkelley.me/post/zig-cc-powerful-drop-in-replacement-gcc-clang.html#caching-system" dir="ltr"&gt;the caching system discussed above&lt;/a&gt;.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Zig's compiler-rt is &lt;a href="https://github.com/ziglang/zig/issues/1290" dir="ltr"&gt;not yet complete&lt;/a&gt;.
-However, completing it is a prerequisite for releasing Zig version 1.0.0.
-&lt;/p&gt;&lt;h3&gt;libc&lt;/h3&gt;&lt;p dir="ltr"&gt;
-When C code calls &lt;code dir="ltr"&gt;printf&lt;/code&gt;, &lt;code dir="ltr"&gt;printf&lt;/code&gt; has to be implemented &lt;em dir="ltr"&gt;somewhere&lt;/em&gt;,
-and that somewhere is libc.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Some operating systems, such as &lt;a href="https://www.freebsd.org/" dir="ltr"&gt;FreeBSD&lt;/a&gt; and macOS, have an
-designated system libc, and it is the kernel syscall interface. On others, such as
-Windows and Linux, libc is optional, and therefore there are multiple options of which
-libc to use, if any.
-&lt;/p&gt;&lt;p&gt;
-As of the time of this writing, Zig can provide libcs for the following targets:
-&lt;/p&gt;&lt;PRE&gt;andy@ark ~&amp;gt; zig targets | jq .libc
-[
-  "aarch64_be-linux-gnu",
-  "aarch64_be-linux-musl",
-  "aarch64_be-windows-gnu",
-  "aarch64-linux-gnu",
-  "aarch64-linux-musl",
-  "aarch64-windows-gnu",
-  "armeb-linux-gnueabi",
-  "armeb-linux-gnueabihf",
-  "armeb-linux-musleabi",
-  "armeb-linux-musleabihf",
-  "armeb-windows-gnu",
-  "arm-linux-gnueabi",
-  "arm-linux-gnueabihf",
-  "arm-linux-musleabi",
-  "arm-linux-musleabihf",
-  "arm-windows-gnu",
-  "i386-linux-gnu",
-  "i386-linux-musl",
-  "i386-windows-gnu",
-  "mips64el-linux-gnuabi64",
-  "mips64el-linux-gnuabin32",
-  "mips64el-linux-musl",
-  "mips64-linux-gnuabi64",
-  "mips64-linux-gnuabin32",
-  "mips64-linux-musl",
-  "mipsel-linux-gnu",
-  "mipsel-linux-musl",
-  "mips-linux-gnu",
-  "mips-linux-musl",
-  "powerpc64le-linux-gnu",
-  "powerpc64le-linux-musl",
-  "powerpc64-linux-gnu",
-  "powerpc64-linux-musl",
-  "powerpc-linux-gnu",
-  "powerpc-linux-musl",
-  "riscv64-linux-gnu",
-  "riscv64-linux-musl",
-  "s390x-linux-gnu",
-  "s390x-linux-musl",
-  "sparc-linux-gnu",
-  "sparcv9-linux-gnu",
-  "wasm32-freestanding-musl",
-  "x86_64-linux-gnu",
-  "x86_64-linux-gnux32",
-  "x86_64-linux-musl",
-  "x86_64-windows-gnu"
-]
-&lt;/PRE&gt;&lt;p&gt;
-In order to provide libc on these targets, Zig ships with a subset of the source files
-for these projects:
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;musl v1.2.0&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://mingw-w64.org/" dir="ltr"&gt;mingw-w64&lt;/a&gt; v7.0.0&lt;/LI&gt;&lt;LI&gt;glibc 2.31&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
-For each libc, there is a
-&lt;a href="https://github.com/ziglang/zig/wiki/Updating-libc" dir="ltr"&gt;process for upgrading to a new release&lt;/a&gt;.
-This process is a sort of pre-processing step. We still end up with source files, but we
-de-duplicate non-multi-arch source files into multi-arch source files.
-&lt;/p&gt;&lt;h4&gt;glibc&lt;/h4&gt;&lt;p&gt;
-glibc is the most involved. The first step is building glibc for every target that it supports,
-which takes upwards of 24 hours and 74 GiB of disk space.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-From here, the
-&lt;a href="https://github.com/ziglang/zig/blob/dc44fe053c609f389e375f6857f96b6bb3794897/tools/process_headers.zig" dir="ltr"&gt;process_headers tool&lt;/a&gt;
-inspects all the header files from all the targets, and identifies which files are the same across
-all targets, and which header files are target-specific. They are then sorted into the
-corresponding directories in Zig's source tree, in:
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;lib/libc/include/generic-glibc/&lt;/LI&gt;&lt;LI&gt;lib/libc/include/$ARCH-linux-$ABI/ (there are multiple of these directories)&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
-Additionally, Linux header files are not included in glibc, and so the same process is applied to
-Linux header files, with the directories:
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;lib/libc/include/any-linux-any/&lt;/LI&gt;&lt;LI&gt;lib/libc/include/$ARCH-linux-any/&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
-That takes care of the header files, but now we have the problem of dynamic linking against
-glibc, without touching any system files.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-For this, we have the
-&lt;a href="https://github.com/ziglang/zig/blob/dc44fe053c609f389e375f6857f96b6bb3794897/tools/update_glibc.zig" dir="ltr"&gt;update_glibc tool&lt;/a&gt;.
-Given the path to the glibc source directory, it finds all the &lt;code dir="ltr"&gt;.abilist&lt;/code&gt; text files
-and uses them to produce 3 simple but crucial files:
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;a href="https://github.com/ziglang/zig/blob/master/lib/libc/glibc/vers.txt" dir="ltr"&gt;vers.txt&lt;/a&gt;
-    - the list of all glibc versions.
-  &lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/ziglang/zig/blob/master/lib/libc/glibc/fns.txt" dir="ltr"&gt;fns.txt&lt;/a&gt;
-    - the list of all symbols that glibc provides, followed by the library it appears in
-    (for example libm, libpthread, libc, librt).
-  &lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/ziglang/zig/blob/master/lib/libc/glibc/abi.txt" dir="ltr"&gt;abi.txt&lt;/a&gt;
-    - for each target, for each function, tells which versions of glibc, if any, it appears in.
-  &lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
-Together, these files amount to only 192 KB (27 KB gzipped), and they allow Zig to target any
-version of glibc.
-&lt;/p&gt;&lt;p&gt;
-Yes, I did not make a typo there. Zig can target any of the 42 versions of glibc for any of the
-architectures listed above. I'll show you:
-&lt;/p&gt;&lt;PRE&gt;andy@ark ~/tmp&amp;gt; &lt;strong dir="ltr"&gt;cat rand.zig &lt;/strong&gt;
-const std = @import("std");
-
-pub fn main() anyerror!void {
-    var buf: [10]u8 = undefined;
-    _ = std.c.getrandom(&amp;amp;buf, buf.len, 0);
-    std.debug.warn("random bytes: {x}\n", .{buf});
-}
-andy@ark ~/tmp&amp;gt; &lt;strong dir="ltr"&gt;zig build-exe rand.zig -lc -target native-native-gnu.2.25&lt;/strong&gt;
-andy@ark ~/tmp&amp;gt; &lt;strong dir="ltr"&gt;./rand&lt;/strong&gt;
-random bytes: e2059382afb599ea6d29
-andy@ark ~/tmp&amp;gt; &lt;strong dir="ltr"&gt;zig build-exe rand.zig -lc -target native-native-gnu.2.24&lt;/strong&gt;
-lld: error: undefined symbol: getrandom
-&amp;gt;&amp;gt;&amp;gt; referenced by rand.zig:5 (/home/andy/tmp/rand.zig:5)
-&amp;gt;&amp;gt;&amp;gt;               ./rand.o:(main.0)
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-Sure enough, if you look at the
-&lt;a href="http://man7.org/linux/man-pages/man2/getrandom.2.html" dir="ltr"&gt;man page for getrandom&lt;/a&gt;,
-it says:
-&lt;/p&gt;&lt;BLOCKQUOTE&gt;
-Support was added to glibc in version 2.25.
-&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
-When no explicit glibc version is requested, and the target OS is the native (host) OS,
-Zig detects the native glibc version by inspecting the Zig executable's own dynamically
-linked libraries, looking for glibc, and checking the version. It turns out you can look for
-&lt;code dir="ltr"&gt;libc.so.6&lt;/code&gt; and then &lt;code dir="ltr"&gt;readlink&lt;/code&gt; on that, and it will look something
-like &lt;code dir="ltr"&gt;libc-2.27.so&lt;/code&gt;. When this strategy does not work, Zig looks at
-&lt;code dir="ltr"&gt;/usr/bin/env&lt;/code&gt;, looking for the same thing. Since this file path is hard-coded
-into countless shebang lines, it's a pretty safe bet to find out the dynamic linker path and
-glibc version (if any) of the native system!
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-&lt;code dir="ltr"&gt;zig cc&lt;/code&gt; currently does not provide a way to choose a specific glibc version
-(because C compilers do not provide a way), and so Zig chooses the native version for
-compiling natively, and the default (2.17) for cross-compiling.
-However, I'm sure this problem can be solved, even when using &lt;code dir="ltr"&gt;zig cc&lt;/code&gt;. For example,
-maybe it could support an environment variable, or simply introduce an extra command line
-option that does not conflict with any Clang options.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-When you request a certain version of glibc, Zig uses those text files noted above to
-create dummy &lt;code dir="ltr"&gt;.so&lt;/code&gt; files to link against, which contain exactly the correct
-set of symbols (with appropriate name mangling) based on the requested version.
-The symbols will be resolved at runtime, by the dynamic linker on the target platform.
-&lt;/p&gt;&lt;p&gt;
-In this way, most of libc in the glibc case resides on the target file system. But not all of it!
-There are still the "C runtime start files":
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Scrt1.o&lt;/LI&gt;&lt;LI&gt;crti.o&lt;/LI&gt;&lt;LI&gt;crtn.o&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
-These are statically compiled into every binary that dynamically links glibc, and their
-&lt;a href="https://en.wikipedia.org/wiki/Application_binary_interface" dir="ltr"&gt;ABI&lt;/a&gt; is therefore
-Very Very Stable.
-&lt;/p&gt;&lt;p&gt;
-And so, Zig bundles a small subset of glibc's source files needed to build these object
-files from source for every target. The total size of this comes out to 1.4 MiB (252 KB gzipped).
-I do think there is some room for improvement here, but I digress.
-&lt;/p&gt;&lt;p&gt;
-There are a couple of patches to this small subset of glibc source files, which simplify them
-to avoid including too many .h files, since the end result that we need is some bare bones object
-files, and not all of glibc.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-And finally, we certainly do not ship the build system of glibc with Zig! I manually inspected,
-audited, and analyzed glibc's build system, and then by hand wrote code in the Zig
-compiler which hooks into Zig's &lt;a href="https://andrewkelley.me/post/zig-cc-powerful-drop-in-replacement-gcc-clang.html#caching-system" dir="ltr"&gt;caching system&lt;/a&gt; and performs a minimal
-build of only these start files, as needed.
-&lt;/p&gt;&lt;h4&gt;musl&lt;/h4&gt;&lt;p&gt;
-The process for preparing musl to ship with Zig is much simpler by comparison.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-It still involves building musl for every target architecture that it supports,
-but in this case only the &lt;code dir="ltr"&gt;install-headers&lt;/code&gt; target has to be run,
-and it takes less than a minute, even to do it for all targets.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-The same
-&lt;a href="https://github.com/ziglang/zig/blob/dc44fe053c609f389e375f6857f96b6bb3794897/tools/process_headers.zig" dir="ltr"&gt;process_headers tool&lt;/a&gt;
-tool used for glibc headers is used on the musl headers:
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;lib/libc/include/generic-musl/&lt;/LI&gt;&lt;LI&gt;lib/libc/include/$ARCH-linux-$ABI/ (there are multiple of these directories)&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
-Unlike glibc, musl supports building statically. Zig currently assumes a static libc
-when musl is chosen, and does not support dynamically linking against musl, although
-that could potentially be added in the future.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-And so for musl, zig actually bundles most - but still not all - of musl's source files.
-Everything in &lt;code dir="ltr"&gt;arch&lt;/code&gt;, &lt;code dir="ltr"&gt;crt&lt;/code&gt;, &lt;code dir="ltr"&gt;compat&lt;/code&gt;, &lt;code dir="ltr"&gt;src&lt;/code&gt;, and &lt;code dir="ltr"&gt;include&lt;/code&gt; gets copied in.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Again much like glibc, I carefully studied musl's build system, and then hand-coded logic
-in the Zig compiler to build these source files. In musl's case it is simpler - just a bit
-of logic having to do with the file extension, and whether to override files with an
-architecture-specific file. The only file that needs to be patched (by hand) is
-&lt;code dir="ltr"&gt;version.h&lt;/code&gt;, which is normally generated during the configure phase in musl's build
-system.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-I really appreciate Rich Felker's efforts to make musl simple to utilize in this way,
-and he has been incredibly helpful in the &lt;code dir="ltr"&gt;#musl&lt;/code&gt; IRC channel when I ask
-questions.
-&lt;a href="https://andrewkelley.me/post/why-donating-to-musl-libc-project.html" dir="ltr"&gt;I proudly sponsor Rich Felker for $150/month&lt;/a&gt;.
-&lt;/p&gt;&lt;h4&gt;mingw-w64&lt;/h4&gt;&lt;p dir="ltr"&gt;
-mingw-w64 was an absolute joy to support in Zig. The beautiful thing about this project is that
-they have already been transitioning into having one set of header files that applies to all
-architectures (using &lt;code dir="ltr"&gt;#ifdefs&lt;/code&gt; only where needed). One set of header files
-is sufficient to support all four architectures: arm, aarch64, x86, and x86_64. 
-&lt;/p&gt;&lt;p&gt;
-So for updating headers, all we have to do is build mingw-w64, then:
-&lt;/p&gt;&lt;PRE&gt;mv $INSTALLPREFIX/include $ZIGSRC/lib/libc/include/any-windows-any
-&lt;/PRE&gt;&lt;p&gt;
-After doing this for all 3 libcs, the libc/include directory looks like this:
-&lt;/p&gt;&lt;PRE&gt;aarch64_be-linux-any   i386-linux-musl           powerpc-linux-any
-aarch64_be-linux-gnu   mips64el-linux-any        powerpc-linux-gnu
-aarch64-linux-any      mips64el-linux-gnuabi64   powerpc-linux-musl
-aarch64-linux-gnu      mips64el-linux-gnuabin32  riscv32-linux-any
-aarch64-linux-musl     mips64-linux-any          riscv64-linux-any
-any-linux-any          mips64-linux-gnuabi64     riscv64-linux-gnu
-any-windows-any        mips64-linux-gnuabin32    riscv64-linux-musl
-armeb-linux-any        mips64-linux-musl         s390x-linux-any
-armeb-linux-gnueabi    mipsel-linux-any          s390x-linux-gnu
-armeb-linux-gnueabihf  mipsel-linux-gnu          s390x-linux-musl
-arm-linux-any          mips-linux-any            sparc-linux-gnu
-arm-linux-gnueabi      mips-linux-gnu            sparcv9-linux-gnu
-arm-linux-gnueabihf    mips-linux-musl           x86_64-linux-any
-arm-linux-musl         powerpc64le-linux-any     x86_64-linux-gnu
-generic-glibc          powerpc64le-linux-gnu     x86_64-linux-gnux32
-generic-musl           powerpc64-linux-any       x86_64-linux-musl
-i386-linux-any         powerpc64-linux-gnu
-i386-linux-gnu         powerpc64-linux-musl
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-When Zig generates a C command line to send to clang, it puts the appropriate
-include paths using &lt;code dir="ltr"&gt;-I&lt;/code&gt; depending on the target. For example, if the
-target is &lt;code dir="ltr"&gt;aarch64-linux-musl&lt;/code&gt;, then the following command line parameters
-are appended:
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;code&gt;-I$LIB/libc/include/aarch64-linux-musl&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;&lt;code&gt;-I$LIB/libc/include/aarch64-linux-any&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;&lt;code&gt;-I$LIB/libc/include/generic-musl&lt;/code&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
-Anyway back to mingw-w64.
-&lt;/p&gt;&lt;p&gt;
-Again, Zig includes a subset of source files from mingw-w64 with a few patches applied
-to make things compile successfully.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-The Zig compiler code that builds mingw-w64 from source files emulates only the parts of
-the build system that are needed for this subset. This includes preprocessing &lt;code dir="ltr"&gt;.def.in&lt;/code&gt;
-files to get &lt;code dir="ltr"&gt;.def&lt;/code&gt; files, and then in-turn using LLD to generate &lt;code dir="ltr"&gt;.lib&lt;/code&gt; files
-from the &lt;code dir="ltr"&gt;.def&lt;/code&gt; files, which allows Zig to provide &lt;code dir="ltr"&gt;.lib&lt;/code&gt; files for
-any Windows DLL, such as kernel32.dll or even opengl32.dll.
-&lt;/p&gt;&lt;h3&gt;Invoking Clang Without a System Dependency&lt;/h3&gt;&lt;p dir="ltr"&gt;
-Since Zig already links against Clang libraries for the
-&lt;a href="https://ziglang.org/#Integration-with-C-libraries-without-FFIbindings" dir="ltr"&gt;translate-c feature&lt;/a&gt;,
-it was not much more cost to expose the &lt;code dir="ltr"&gt;main()&lt;/code&gt; entry point from Zig.
-So that's exactly what we do:
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;llvm-project/clang/tools/driver/driver.cpp&lt;/code&gt; is copied to &lt;code dir="ltr"&gt;$ZIGGIT/src/zig_clang_driver.cpp&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;llvm-project/clang/tools/driver/cc1_main.cpp&lt;/code&gt; is copied to &lt;code dir="ltr"&gt;$ZIGGIT/src/zig_clang_cc1_main.cpp&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;llvm-project/clang/tools/driver/cc1as_main.cpp&lt;/code&gt; is copied to &lt;code dir="ltr"&gt;$ZIGGIT/src/zig_clang_cc1as_main.cpp&lt;/code&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
-The following patch is applied:
-&lt;/p&gt;&lt;PRE&gt;--- a/src/zig_clang_driver.cpp
-+++ b/src/zig_clang_driver.cpp
-@@ -206,8 +205,6 @@
-                     void *MainAddr);
- extern int cc1as_main(ArrayRef&amp;lt;const char *&amp;gt; Argv, const char *Argv0,
-                       void *MainAddr);
-&lt;span dir="ltr"&gt;-extern int cc1gen_reproducer_main(ArrayRef&amp;lt;const char *&amp;gt; Argv,&lt;/span&gt;
-&lt;span dir="ltr"&gt;-                                  const char *Argv0, void *MainAddr);&lt;/span&gt;
- 
- static void insertTargetAndModeArgs(const ParsedClangName &amp;amp;NameParts,
-                                     SmallVectorImpl&amp;lt;const char *&amp;gt; &amp;amp;ArgVector,
-@@ -330,19 +327,18 @@
-   if (Tool == "-cc1as")
-     return cc1as_main(makeArrayRef(ArgV).slice(2), ArgV[0],
-                       GetExecutablePathVP);
-&lt;span dir="ltr"&gt;-  if (Tool == "-cc1gen-reproducer")&lt;/span&gt;
-&lt;span dir="ltr"&gt;-    return cc1gen_reproducer_main(makeArrayRef(ArgV).slice(2), ArgV[0],&lt;/span&gt;
-&lt;span dir="ltr"&gt;-                                  GetExecutablePathVP);&lt;/span&gt;
-   // Reject unknown tools.
-   llvm::errs() &amp;lt;&amp;lt; "error: unknown integrated tool '" &amp;lt;&amp;lt; Tool &amp;lt;&amp;lt; "'. "
-                &amp;lt;&amp;lt; "Valid tools include '-cc1' and '-cc1as'.\n";
-   return 1;
- }
- 
-&lt;span dir="ltr"&gt;-int main(int argc_, const char **argv_) {&lt;/span&gt;
-&lt;span dir="ltr"&gt;+extern "C" int ZigClang_main(int argc_, const char **argv_);&lt;/span&gt;
-&lt;span dir="ltr"&gt;+int ZigClang_main(int argc_, const char **argv_) {&lt;/span&gt;
-   noteBottomOfStack();
-   llvm::InitLLVM X(argc_, argv_);
-&lt;span dir="ltr"&gt;-  SmallVector&amp;lt;const char *, 256&amp;gt; argv(argv_, argv_ + argc_);&lt;/span&gt;
-&lt;span dir="ltr"&gt;+  size_t argv_offset = (strcmp(argv_[1], "-cc1") == 0 || strcmp(argv_[1], "-cc1as") == 0) ? 0 : 1;&lt;/span&gt;
-&lt;span dir="ltr"&gt;+  SmallVector&amp;lt;const char *, 256&amp;gt; argv(argv_ + argv_offset, argv_ + argc_);&lt;/span&gt;
- 
-   if (llvm::sys::Process::FixupStandardFileDescriptors())
-     return 1;
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-This disables some cruft, and then renames &lt;code dir="ltr"&gt;main&lt;/code&gt; to &lt;code dir="ltr"&gt;ZigClang_main&lt;/code&gt; so that
-it can be called like any other function. Next, in Zig's actual &lt;code dir="ltr"&gt;main&lt;/code&gt;, it looks
-for &lt;code dir="ltr"&gt;clang&lt;/code&gt; as the first parameter, and calls it.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-So, &lt;code dir="ltr"&gt;zig clang&lt;/code&gt; is low-level undocumented API that Zig exposes for directly invoking Clang.
-But &lt;code dir="ltr"&gt;zig cc&lt;/code&gt; is much higher level than that. When Zig needs to compile C code,
-it invokes itself as a child process, taking advantage of &lt;code dir="ltr"&gt;zig clang&lt;/code&gt;. &lt;code dir="ltr"&gt;zig cc&lt;/code&gt;
-on the other hand, has a more difficult job: it must parse Clang's command line options and
-map those to the Zig compiler's settings, so that ultimately &lt;code dir="ltr"&gt;zig clang&lt;/code&gt; can be invoked
-as a child process.
-&lt;/p&gt;&lt;h3&gt;Parsing Clang Command Line Options&lt;/h3&gt;&lt;p dir="ltr"&gt;
-When using &lt;code dir="ltr"&gt;zig cc&lt;/code&gt;, Zig acts as a proxy between the user and Clang. It does not need
-to understand all the parameters, but it does need to understand some of them, such as
-the target. This means that Zig must understand when a C command line parameter expects
-to "consume" the next parameter on the command line.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-For example, &lt;code dir="ltr"&gt;-z -target&lt;/code&gt; would mean to pass &lt;code dir="ltr"&gt;-target&lt;/code&gt; to the linker,
-whereas &lt;code dir="ltr"&gt;-E -target&lt;/code&gt; would mean that the next parameter specifies the target.
-&lt;/p&gt;&lt;p dir="ltr"&gt;Clang has a
-&lt;a href="https://clang.llvm.org/docs/ClangCommandLineReference.html" dir="ltr"&gt;long list of command line options&lt;/a&gt; and so it would be foolish to try to hard-code all of them.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Fortunately, LLVM has a file "options.td" which describes all of its command line parameter options
-in some obscure format. But fortunately again, LLVM comes with the &lt;code dir="ltr"&gt;llvm-tblgen&lt;/code&gt; tool
-that can dump it as JSON format.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Zig has an
-&lt;a href="https://github.com/ziglang/zig/blob/dc44fe053c609f389e375f6857f96b6bb3794897/tools/update_clang_options.zig" dir="ltr"&gt;update_clang_options tool&lt;/a&gt;
-which processes this JSON dump and produces a
-&lt;a href="https://github.com/ziglang/zig/blob/dc44fe053c609f389e375f6857f96b6bb3794897/src-self-hosted/clang_options_data.zig" dir="ltr"&gt;big sorted list of Clang's command line options&lt;/a&gt;.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Combined with a list of "known options" which correspond to Zig compiler options,
-this is used to make an iterator API that &lt;code dir="ltr"&gt;zig cc&lt;/code&gt; uses to parse command line
-parameters and instantiate a Zig compiler instance. Any Clang options that Zig is not
-aware of are forwarded to Clang directly. Some parameters are handled specially.
-&lt;/p&gt;&lt;h3&gt;Linking&lt;/h3&gt;&lt;p&gt;
-This part is pretty straightforward. Zig depends on LLD for linking rather than
-shelling out to the system linker, like GCC and Clang do.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-When you use &lt;code dir="ltr"&gt;-o&lt;/code&gt; with &lt;code dir="ltr"&gt;zig cc&lt;/code&gt;, Clang is not actually acting as
-a linker driver here. Zig is still the linker driver.
-&lt;/p&gt;&lt;h2&gt;Everybody Wins&lt;/h2&gt;&lt;p&gt;
-Now that I've spent this entire blog article comparing Zig and Clang as if they are
-competitors, let me make it absolutely clear that both of these are harmonious,
-mutually beneficial open-source projects. It's pretty obvious how Clang and the entire
-LLVM project are massively beneficial to the Zig project, since Zig builds on top of them.
-&lt;/p&gt;&lt;p&gt;
-But it works the other way, too.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-With Zig's focus on cross-compiling, its test suite has been expanding rapidly to cover
-a large number of architectures and operating systems, leading to
-&lt;a href="https://github.com/ziglang/zig/issues?q=is%3Aissue+label%3Aupstream+is%3Aclosed" dir="ltr"&gt;dozens of bugs reported upstream and patches sent&lt;/a&gt;, including, for example:
-&lt;/p&gt;&lt;p&gt;Everybody wins.&lt;/p&gt;&lt;h2&gt;This is still experimental!&lt;/h2&gt;&lt;p dir="ltr"&gt;
-I have only recently landed &lt;code dir="ltr"&gt;zig cc&lt;/code&gt; support last week, and it is still experimental.
-Please do not expect it to be production quality yet.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Zig's 0.6.0 release is right around the corner, scheduled for April 13th. I will be sure to provide
-an update on the release notes on how stable and robust you can expect &lt;code dir="ltr"&gt;zig cc&lt;/code&gt; to be
-in the 0.6.0 release.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-There are some follow-up issues related to &lt;code dir="ltr"&gt;zig cc&lt;/code&gt; which are still open:
-&lt;/p&gt;&lt;p&gt;
-If you're reading this and you already sponsor me, thank you so much! I wake up every day
-absolutely thrilled that I get to do this for my full time job.
-&lt;/p&gt;&lt;p&gt;
-As Zig has been gaining popularity, demands for my time have been growing faster than
-funds to hire another full-time programmer. Every recurring donation helps, and if the funds keep
-growing then soon enough the Zig project will have two full-time programmers.
-&lt;/p&gt;&lt;p&gt;
-That's all folks. I hope you and your loved ones are well.
-&lt;/p&gt;</description><pubDate>Tue, 24 Mar 2020 15:44:07 -0500</pubDate></item><item><title>GHC 8.10.1 release notes</title><link>https://lobste.rs/s/f1wvwr</link><description>&lt;h3&gt;Quick search&lt;/h3&gt;&lt;h1&gt;3. Release notes for version 8.10.1&lt;/h1&gt;&lt;p&gt;The significant changes to the various parts of the compiler are listed in the
+            &lt;/div&gt;</description><pubDate>Mon, 23 Mar 2020 22:46:44 -0500</pubDate></item><item><title>GHC 8.10.1 release notes</title><link>https://lobste.rs/s/f1wvwr</link><description>&lt;h3&gt;Quick search&lt;/h3&gt;&lt;h1&gt;3. Release notes for version 8.10.1&lt;/h1&gt;&lt;p&gt;The significant changes to the various parts of the compiler are listed in the
 following sections.&lt;/p&gt;&lt;h2&gt;3.1. Highlights&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;The &lt;a href="https://downloads.haskell.org/~ghc/8.10.1/docs/html/users_guide/glasgow_exts.html#extension-UnliftedNewtypes" dir="ltr"&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;UnliftedNewtypes&lt;/span&gt;&lt;/code&gt;&lt;/a&gt; extension, allowing &lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;newtype&lt;/span&gt;&lt;/code&gt;s to be
 wrap types of kind other than &lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;Type&lt;/span&gt;&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;The &lt;a href="https://downloads.haskell.org/~ghc/8.10.1/docs/html/users_guide/glasgow_exts.html#extension-StandaloneKindSignatures" dir="ltr"&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;StandaloneKindSignatures&lt;/span&gt;&lt;/code&gt;&lt;/a&gt; extension, allowing explicit
 signatures on type constructors.&lt;/LI&gt;&lt;LI&gt;A new, &lt;a href="https://downloads.haskell.org/~ghc/8.10.1/docs/html/users_guide/runtime_control.html#rts-flag--xn" dir="ltr"&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;low-latency&lt;/span&gt; &lt;span dir="ltr"&gt;garbage&lt;/span&gt; &lt;span dir="ltr"&gt;collector&lt;/span&gt;&lt;/code&gt;&lt;/a&gt; for the oldest generation.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;3.2. Full details&lt;/h2&gt;&lt;h3&gt;3.2.1. Language&lt;/h3&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Kind variables are no longer implicitly quantified when an explicit &lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;forall&lt;/span&gt;&lt;/code&gt; is used, see
@@ -2918,7 +2918,84 @@ fatal: this operation must be run in a work tree
 &lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;And if I forget (like I often do), I can always change the name of the remote later using &lt;code dir="ltr"&gt;git remote rename&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;git clone ~/Git/my-project.git my-project
 cd my-project
 git remote rename origin syncthing
-&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;Caveats&lt;/h2&gt;&lt;p&gt;My tiny git remote works great for small projects I don’t intend to share with anyone. But I think it’s important to highlight the caveats:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;If my syncing software fails (on the server &lt;em dir="ltr"&gt;or&lt;/em&gt; a client), I risk losing work.&lt;/LI&gt;&lt;LI&gt;If this is my only git remote, I risk losing work. I must use multiple git remotes.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;If my syncing software does fail, but I’ve already cloned my project on multiple workstations, I &lt;em dir="ltr"&gt;may&lt;/em&gt; be able to recover. That said, I do need to be conscious of the state of my syncing software if I want to successfully use my tiny remote.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p&gt;I could technically work out of a project directory that’s actively being synced. But there are lots of files I don’t want to or need to sync.&lt;/p&gt;&lt;p dir="ltr"&gt;Syncing would occur more slowly if I had to sync 200MB of NodeJS modules between workstations. And if I accidentally leave a process running on &lt;em dir="ltr"&gt;Computer A&lt;/em&gt; and then start work from &lt;em dir="ltr"&gt;Computer B&lt;/em&gt;, I could cause some weird problems for myself.&amp;nbsp;&lt;a href="https://benjaminwil.info/weblog/self-hosted-git-remote/#fnref:1" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;I don’t have to add &lt;code dir="ltr"&gt;.git&lt;/code&gt; to the end of a bare git repo, but it’s a nice convention.&amp;nbsp;&lt;a href="https://benjaminwil.info/weblog/self-hosted-git-remote/#fnref:2" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Mon, 23 Mar 2020 12:13:34 -0500</pubDate></item><item><title>Microsoft discloses new Windows vulnerability that’s being actively exploited</title><link>https://lobste.rs/s/g4m4va</link><description>&lt;figure&gt;&lt;picture class="c-picture" data-cid="site/picture_element-1585083607_5238_10628" data-cdata="{&amp;quot;image_id&amp;quot;:66544086,&amp;quot;ratio&amp;quot;:&amp;quot;*&amp;quot;}"&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;Caveats&lt;/h2&gt;&lt;p&gt;My tiny git remote works great for small projects I don’t intend to share with anyone. But I think it’s important to highlight the caveats:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;If my syncing software fails (on the server &lt;em dir="ltr"&gt;or&lt;/em&gt; a client), I risk losing work.&lt;/LI&gt;&lt;LI&gt;If this is my only git remote, I risk losing work. I must use multiple git remotes.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;If my syncing software does fail, but I’ve already cloned my project on multiple workstations, I &lt;em dir="ltr"&gt;may&lt;/em&gt; be able to recover. That said, I do need to be conscious of the state of my syncing software if I want to successfully use my tiny remote.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p&gt;I could technically work out of a project directory that’s actively being synced. But there are lots of files I don’t want to or need to sync.&lt;/p&gt;&lt;p dir="ltr"&gt;Syncing would occur more slowly if I had to sync 200MB of NodeJS modules between workstations. And if I accidentally leave a process running on &lt;em dir="ltr"&gt;Computer A&lt;/em&gt; and then start work from &lt;em dir="ltr"&gt;Computer B&lt;/em&gt;, I could cause some weird problems for myself.&amp;nbsp;&lt;a href="https://benjaminwil.info/weblog/self-hosted-git-remote/#fnref:1" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;I don’t have to add &lt;code dir="ltr"&gt;.git&lt;/code&gt; to the end of a bare git repo, but it’s a nice convention.&amp;nbsp;&lt;a href="https://benjaminwil.info/weblog/self-hosted-git-remote/#fnref:2" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Mon, 23 Mar 2020 12:13:34 -0500</pubDate></item><item><title>Mixing Gleam &amp; Elixir</title><link>https://lobste.rs/s/4czm7s</link><description>&lt;img src="https://res.cloudinary.com/practicaldev/image/fetch/s--e-y8O24x--/c_fill,f_auto,fl_progressive,h_50,q_auto,w_50/https://dev-to-uploads.s3.amazonaws.com/uploads/user/profile_image/19434/be309366-17e1-4e9b-9a5d-ad6524c55aca.jpeg" alt="michaeljones profile image" width="28" height="28"&gt;&lt;p dir="ltr"&gt;At &lt;a href="https://www.contact-stack.com/" dir="ltr"&gt;Contact Stack&lt;/a&gt;, we've chosen Elixir &amp;amp; Phoenix as the core of our tech stack and we're happy with the choice. But... we do miss having a really good type system and a helpful compiler (like with &lt;a href="https://elm-lang.org/" dir="ltr"&gt;Elm&lt;/a&gt;) to guide us through development.&lt;/p&gt;&lt;p dir="ltr"&gt;Elixir targets the BEAM virtual machine and there are few statically typed languages that target the BEAM as well. Here we're going to look into a simple set up for integrating &lt;a href="https://gleam.run/" dir="ltr"&gt;Gleam&lt;/a&gt; into your Elixir project using a &lt;a href="https://hexdocs.pm/mix/1.10.2/Mix.Task.Compiler.html" dir="ltr"&gt;Mix Compiler Task&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;Gleam is a statically typed functional programming language which uses a syntax that is more approachable to, say, Javascript, C or Java programmers than some ML flavoured languages. The Gleam compiler is written in Rust and outputs Erlang source files which can then be compiled to BEAM by the Erlang compiler.&lt;/p&gt;&lt;p&gt;Mix is a multi-functional build tool for Elixir projects. It can manage dependencies, run tests, execute tasks and compile your Elixir code. It also supports compiling erlang files by default and can be extended with Mix Compiler Tasks to compile other languages. We're going to create a Mix Compiler Task for Gleam so that Mix can use the Gleam compiler to build Gleam files.&lt;/p&gt;&lt;p dir="ltr"&gt;You can try the steps below yourself and check out the demonstration repository: &lt;a href="https://github.com/michaeljones/gleam-phoenix-mix" dir="ltr"&gt;https://github.com/michaeljones/gleam-phoenix-mix&lt;/a&gt;. &lt;/p&gt;&lt;p&gt;Here we go!&lt;/p&gt;&lt;p dir="ltr"&gt;We're assuming you have the &lt;code dir="ltr"&gt;gleam&lt;/code&gt; compiler available in your environment to execute. Run this to check.&lt;br dir="ltr"&gt;
+&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;gleam --version
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;If you don't, then you can follow the &lt;a href="https://gleam.run/getting-started/installing-gleam.html" dir="ltr"&gt;installation instructions&lt;/a&gt; over in the Gleam docs.&lt;br dir="ltr"&gt;
+Now we're going to go through setting up a &lt;a href="http://www.phoenixframework.org/" dir="ltr"&gt;Phoenix&lt;/a&gt; project from scratch. We won't go into the details but just so we have a clear base to work with.&lt;/p&gt;&lt;p dir="ltr"&gt;Run the following commands to set up an empty phoenix project:&lt;br dir="ltr"&gt;
+&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;mkdir gleam-phoenix-mix
+cd gleam-phoenix-mix
+mix phx.new . --app my_app
+mix ecto.create
+cd assets 
+npm install
+cd ..
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Now we need to create our mix compiler task. We put this in a &lt;code dir="ltr"&gt;lib/mix/tasks/compile&lt;/code&gt; directory to reflect the module name that we need to give it which is &lt;code dir="ltr"&gt;Mix.Tasks.Compile.Gleam&lt;/code&gt;. So we create our new directory:&lt;br dir="ltr"&gt;
+&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;mkdir -p lib/mix/tasks/compile/
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;And add the follow code in a file called &lt;code dir="ltr"&gt;lib/mix/tasks/compile/gleam.ex&lt;/code&gt;.&lt;br dir="ltr"&gt;
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;defmodule&lt;/span&gt; &lt;span dir="ltr"&gt;Mix&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;Tasks&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;Compile&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;Gleam&lt;/span&gt; &lt;span dir="ltr"&gt;do&lt;/span&gt;
+  &lt;span dir="ltr"&gt;use&lt;/span&gt; &lt;span dir="ltr"&gt;Mix&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;Task&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;Compiler&lt;/span&gt;
+
+  &lt;span dir="ltr"&gt;def&lt;/span&gt; &lt;span dir="ltr"&gt;run&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;_args&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;do&lt;/span&gt;
+    &lt;span dir="ltr"&gt;System&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;cmd&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"gleam"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;"build"&lt;/span&gt;&lt;span dir="ltr"&gt;])&lt;/span&gt;
+    &lt;span dir="ltr"&gt;:ok&lt;/span&gt;
+  &lt;span dir="ltr"&gt;end&lt;/span&gt;
+&lt;span dir="ltr"&gt;end&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;All this is really doing is running the gleam compiler directly with the 'build' argument to get it to build all the gleam files it can find. &lt;/p&gt;&lt;p dir="ltr"&gt;Run the elixir compiler so that we compile that mix task before we try to use it.&lt;br dir="ltr"&gt;
+&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;mix compile.elixir
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Now to make gleam happy we need to set up a &lt;code dir="ltr"&gt;.toml&lt;/code&gt; config file for it. So we create a file called &lt;code dir="ltr"&gt;gleam.toml&lt;/code&gt; in the root of the project with the follow content.&lt;br dir="ltr"&gt;
+&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;name = "my_app"
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Then we create a &lt;code dir="ltr"&gt;src&lt;/code&gt; directory for the gleam files. The Gleam compiler expects the gleam files to be in a &lt;code dir="ltr"&gt;src&lt;/code&gt; directory. This is different to elixir/mix which expects them in the &lt;code dir="ltr"&gt;lib&lt;/code&gt; directory by default. Elixir/mix can be configured by Gleam can't at the time of writing.&lt;br dir="ltr"&gt;
+&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;mkdir src
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;We then create our Gleam module by making a file called &lt;code dir="ltr"&gt;src/hello_world.gleam&lt;/code&gt; with the following code in it:&lt;br dir="ltr"&gt;
+&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;pub fn hello() {
+  "Hello, from gleam!"
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Next we make the following change to the &lt;code dir="ltr"&gt;mix.exs&lt;/code&gt; file to add our compiler task to the list of compilers being run when you do &lt;code dir="ltr"&gt;mix compile&lt;/code&gt; and to make sure mix's erlang compiler looks in the &lt;code dir="ltr"&gt;gen&lt;/code&gt; folder&lt;br dir="ltr"&gt;
+for erlang files. The &lt;code dir="ltr"&gt;gleam&lt;/code&gt; compiler compiles &lt;code dir="ltr"&gt;.gleam&lt;/code&gt; files from the &lt;code dir="ltr"&gt;src&lt;/code&gt; folder into &lt;code dir="ltr"&gt;.erl&lt;/code&gt; files in the &lt;code dir="ltr"&gt;gen&lt;/code&gt; folder so we need the erlang compiler to find them there.&lt;br dir="ltr"&gt;
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;       elixir: "~&amp;gt; 1.5",
+       elixirc_paths: elixirc_paths(Mix.env()),
+&lt;span dir="ltr"&gt;+      erlc_paths: ["src", "gen"],
+&lt;/span&gt;&lt;span dir="ltr"&gt;-      compilers: [:phoenix, :gettext] ++ Mix.compilers(),
+&lt;/span&gt;&lt;span dir="ltr"&gt;+      compilers: [:phoenix, :gettext, :gleam] ++ Mix.compilers(),
+&lt;/span&gt;       start_permanent: Mix.env() == :prod,
+       aliases: aliases(),
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;I assume that Mix runs the compilers from the start to the end of the list. So we want the &lt;code dir="ltr"&gt;:gleam&lt;/code&gt; entry to be before the &lt;code dir="ltr"&gt;:erlang&lt;/code&gt; entry that's in &lt;code dir="ltr"&gt;Mix.compilers()&lt;/code&gt; so that the Erlang compiler will run after the Gleam compile and compile the Erlang files that the Gleam compiler creates.&lt;/p&gt;&lt;p dir="ltr"&gt;As a simple demonstration of interop between Elixir &amp;amp; the compiled gleam files, make the following change to &lt;code dir="ltr"&gt;lib/my_app_web/controllers/page_controller.ex&lt;/code&gt;:&lt;br dir="ltr"&gt;
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt; defmodule MyAppWeb.PageController do
+   use MyAppWeb, :controller
+
+   def index(conn, _params) do
+&lt;span dir="ltr"&gt;-    render(conn, "index.html")
+&lt;/span&gt;&lt;span dir="ltr"&gt;+    render(conn, "index.html", title: :hello_world.hello())
+&lt;/span&gt;   end
+ end
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This works because Gleam modules are compiled to Erlang modules and, in Elixir, Erlang modules are accessible via the atom that is their name.&lt;/p&gt;&lt;p dir="ltr"&gt;And then we make the following change to &lt;code dir="ltr"&gt;lib/my_app_web/templates/page/index.html.eex&lt;/code&gt;:&lt;br dir="ltr"&gt;
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt; &amp;lt;section class="phx-hero"&amp;gt;
+&lt;span dir="ltr"&gt;-  &amp;lt;h1&amp;gt;&amp;lt;%= gettext "Welcome to %{name}!", name: "Phoenix" %&amp;gt;&amp;lt;/h1&amp;gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;+  &amp;lt;h1&amp;gt;&amp;lt;%= @title %&amp;gt;&amp;lt;/h1&amp;gt;
+&lt;/span&gt;   &amp;lt;p&amp;gt;A productive web framework that&amp;lt;br/&amp;gt;does not compromise speed or maintainability.&amp;lt;/p&amp;gt;
+ &amp;lt;/section&amp;gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Finally we can run:&lt;br dir="ltr"&gt;
+&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;mix compile
+mix phx.server
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;And load &lt;code dir="ltr"&gt;http://localhost:4000&lt;/code&gt; in our browser to see "Hello, from gleam!" in the centre of the standard Phoenix welcome page.&lt;/p&gt;&lt;p dir="ltr"&gt;Remember, if you're curious you can check out the final result at this demonstration repo on Github: &lt;a href="https://github.com/michaeljones/gleam-phoenix-mix" dir="ltr"&gt;https://github.com/michaeljones/gleam-phoenix-mix&lt;/a&gt;&lt;/p&gt;&lt;h2 dir="ltr"&gt;
+  
+  Final Thoughts
+&lt;/h2&gt;&lt;p&gt;It is exciting to see that it isn't too hard to incorporate Gleam code into an Elixir project using Mix. It is great that Mix is built with this kind of extensibility in mind. There are definitely more questions to answer and rough edges to smooth out but it is exciting to have an avenue to using a strongly typed language on the BEAM.  &lt;/p&gt;&lt;img alt="heart" src="https://practicaldev-herokuapp-com.freetls.fastly.net/assets/emoji/emoji-one-heart-855b5a6263042e4c9448cf2cb0dd2e201598b77b1e3f1dc041492bc0128d9fb8.png" width="26" height="26"&gt;&lt;div dir="ltr"&gt;&lt;button data-category="like" alt="heart-emoji" title="heart" dir="ltr"&gt;&lt;span dir="ltr"&gt;5&lt;/span&gt;
+    &lt;/button&gt;
+    &lt;button data-category="unicorn" alt="unicorn-emoji" title="unicorn" dir="ltr"&gt;
+      &lt;/button&gt;&lt;/div&gt;&lt;img alt="unicorn" src="https://practicaldev-herokuapp-com.freetls.fastly.net/assets/emoji/emoji-one-unicorn-695106da1194513bfa0092f1a75943f59089be7d6addbc7459bdfab80f5709e6.png" width="26" height="26"&gt;&lt;div dir="ltr"&gt;&lt;button data-category="unicorn" alt="unicorn-emoji" title="unicorn" dir="ltr"&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;
+    &lt;/button&gt;
+    &lt;button data-category="readinglist" alt="unicorn-emoji" title="reading list" dir="ltr"&gt;
+      &lt;/button&gt;&lt;/div&gt;&lt;img alt="reading list" src="https://practicaldev-herokuapp-com.freetls.fastly.net/assets/emoji/emoji-one-bookmark-040f92162fa88c379d9d4e04bc5c192b1eb0b080d109dfaf3c9b1a60a1aeef0a.png" width="26" height="26"&gt;&lt;div dir="ltr"&gt;&lt;button data-category="readinglist" alt="unicorn-emoji" title="reading list" dir="ltr"&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
+    &lt;/button&gt;
+    &lt;a rel="noopener" href="https://twitter.com/intent/tweet?text=%22Mixing%20Gleam%20%26%20Elixir%22%20by%20@michaelpjones%20%23DEVcommunity%20https://dev.to/contact-stack/mixing-gleam-elixir-3fe3" dir="ltr"&gt;
+      &lt;/a&gt;&lt;/div&gt;&lt;img src="https://practicaldev-herokuapp-com.freetls.fastly.net/assets/twitter-251b99172e08383dcd8979d4111222a843cd7ae1bb2260064db131e003f5724b.svg" alt="twitter logo" width="23" height="23"&gt;&lt;img src="https://practicaldev-herokuapp-com.freetls.fastly.net/assets/three-dots-943ace87a6e3393984e260d09db4d12e3793f6658c33197e93c01ba552c165ba.svg" alt="dropdown menu icon" width="26" height="26"&gt;&lt;img src="https://i.giphy.com/media/tHpaQSfGp0C1rwhxAa/giphy.gif" width="290" height="163"&gt;&lt;p dir="ltr"&gt;
+   &lt;b dir="ltr"&gt;Sore eyes?&lt;/b&gt;
+  &lt;/p&gt;&lt;p dir="ltr"&gt;
+   &lt;b dir="ltr"&gt;&lt;a href="https://dev.to/enter" dir="ltr"&gt;dev.to&lt;/a&gt;&lt;/b&gt; now has dark mode.
+  &lt;/p&gt;&lt;p dir="ltr"&gt;
+    Select &lt;b dir="ltr"&gt;night theme&lt;/b&gt; in the "misc" section of &lt;b dir="ltr"&gt;&lt;a href="https://dev.to/enter" dir="ltr"&gt;your settings&lt;/a&gt;&lt;/b&gt;  ❤️
+  &lt;/p&gt;</description><pubDate>Tue, 24 Mar 2020 16:14:26 -0500</pubDate></item><item><title>Microsoft discloses new Windows vulnerability that’s being actively exploited</title><link>https://lobste.rs/s/g4m4va</link><description>&lt;figure&gt;&lt;picture class="c-picture" data-cid="site/picture_element-1585083607_5238_10628" data-cdata="{&amp;quot;image_id&amp;quot;:66544086,&amp;quot;ratio&amp;quot;:&amp;quot;*&amp;quot;}"&gt;
   
 
 
@@ -3800,4 +3877,4 @@ There are also some things I don't particularly like about Rust. Some of those a
             &lt;/p&gt;</description><pubDate>Sun, 22 Mar 2020 16:58:37 -0500</pubDate></item><item><title>Windows code-execution zeroday is under active exploit, Microsoft warns</title><link>https://lobste.rs/s/ytvg2z</link><description>&lt;h2 itemprop="description"&gt;There's no patch available now. Here's what to do until Microsoft issues one.&lt;/h2&gt;&lt;p itemprop="author creator" itemscope="" itemtype="http://schema.org/Person" dir="ltr"&gt;
   by     &lt;a itemprop="url" href="https://arstechnica.com/author/dan-goodin/" rel="author" dir="ltr"&gt;&lt;span itemprop="name" dir="ltr"&gt;Dan Goodin&lt;/span&gt;&lt;/a&gt;
     -  &lt;span data-time="1584992400" title="Mon Mar 23 2020 15:40:00 GMT-0400 (Eastern Daylight Time)" dir="ltr"&gt;Mar 23, 2020 3:40pm EDT&lt;/span&gt;
-  &lt;/p&gt;&lt;figure&gt;&lt;img src="https://cdn.arstechnica.net/wp-content/uploads/2019/07/windows-10-s-wallpaper-800x450.jpg" width="330" height="165"&gt;&lt;figcaption class="caption" dir="ltr"&gt;&lt;div class="caption-credit" dir="ltr"&gt;&lt;a rel="nofollow" class="caption-link" href="https://www.microsoft.com/en-us/windows" dir="ltr"&gt;Windows&lt;/a&gt;&lt;/div&gt;&lt;/figcaption&gt;&lt;/figure&gt;&lt;p&gt;Attackers are actively exploiting a Windows zero-day vulnerability that can execute malicious code on fully updated systems, Microsoft warned on Monday.&lt;/p&gt;&lt;p dir="ltr"&gt;The font-parsing remote code-execution vulnerability is being used in “limited targeted attacks,” the software maker said in an &lt;a href="https://portal.msrc.microsoft.com/en-us/security-guidance/advisory/adv200006#ID0EMGAC" dir="ltr"&gt;advisory published on Monday morning&lt;/a&gt;. The security flaw exists in the Adobe Type Manager Library, a Windows DLL file that a wide variety of apps use to manage and render fonts available from Adobe Systems. The vulnerability consists of two code-execution flaws that can be triggered by the improper handling of maliciously crafted master fonts in the Adobe Type 1 Postscript format. Attackers can exploit them by convincing a target to open a booby-trapped document or viewing it in the Windows preview pane.&lt;/p&gt;&lt;p&gt;“Microsoft is aware of limited, targeted attacks that attempt to leverage this vulnerability,” Monday’s advisory warned. Elsewhere the advisory said: “For systems running supported versions of Windows 10 a successful attack could only result in code execution within an AppContainer sandbox context with limited privileges and capabilities.”&lt;/p&gt;&lt;p&gt;Microsoft didn’t say if the exploits are successfully executing malicious payloads or simply attempting it. Frequently, security defenses built into Windows prevent exploits from working as hackers intended. The advisory also made no reference to the volume or geographic locations of exploits. A fix is not yet available, and Monday’s advisory provided no indication when one would ship.&lt;/p&gt;&lt;h2&gt;What to do now?&lt;/h2&gt;&lt;p&gt;Until a patch becomes available, Microsoft is suggesting users use one or more of the following workarounds:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Disabling the Preview Pane and Details Pane in Windows Explorer&lt;/LI&gt;&lt;LI&gt;Disabling the WebClient service&lt;/LI&gt;&lt;LI&gt;Rename ATMFD.DLL, or alternatively, disable the file from the registry&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;The first measure will prevent Windows Explorer, a tool that provides a graphical user interface for displaying and managing Windows resources, from automatically displaying Open Type Fonts. While this stopgap fix will prevent some types of attacks, it won’t stop a local, authenticated user from running a specially crafted program to exploit the vulnerability.&lt;/p&gt;&lt;p&gt;The second workaround—disabling the WebClient service—blocks the vector attackers would most likely use to wage remote exploits. Even with this measure in place, it’s still possible for remote attackers to run programs located on the targeted user’s computer or local network. Still, the workaround will cause users to be prompted for confirmation before opening arbitrary programs from the Internet.&lt;/p&gt;&lt;p&gt;Microsoft said that disabling the WebClient will prevent Web Distributed Authoring and Versioning from being transmitted. It also stops any services that explicity depend on the WebClient from starting and logs error messages in the System log.&lt;/p&gt;&lt;p&gt;Renaming ATMFD.DLL, the last recommended stopgap, will cause display problems for applications that rely on embedded fonts and could cause some apps to stop working if they use OpenType fonts. Microsoft also cautioned that mistakes in making registry changes to Windows—as required in one variation of the third workaround—can cause serious problems that may require Windows to be completely reinstalled.&lt;/p&gt;&lt;p&gt;Monday’s advisory provides detailed instructions for both turning on and turning off all three workarounds. Enhanced Security Configuration, which is on by default on Windows Servers, doesn’t mitigate the vulnerability, the advisory added.&lt;/p&gt;&lt;h2&gt;Targeted... for now&lt;/h2&gt;&lt;p&gt;The phrase “limited targeted attacks” is frequently shorthand for exploits carried out by hackers carrying out espionage operations on behalf of governments. These types of attacks are usually limited to a small number of targets—in some cases, fewer than a dozen—who work in a specific environment that’s of interest to the government sponsoring the hackers.&lt;/p&gt;&lt;p&gt;While Windows users at large may not be targeted initially, new campaigns sometimes sweep larger and larger numbers of targets once awareness of the underlying vulnerabilities becomes more widespread. At a minimum, all Windows users should monitor this advisory, be on the lookout for suspicious requests to view untrusted documents, and install a patch once it becomes available. Windows users may also want to follow one or more of the workarounds but only after considering the potential risks and benefits of doing so.&lt;/p&gt;</description><pubDate>Mon, 23 Mar 2020 23:42:45 -0500</pubDate></item><item><title>Observations on ARM64 &amp; AWS’s Amazon EC2 M6g Instances</title><link>https://lobste.rs/s/ynt2mm</link><description>&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;At re:Invent in December, Amazon &lt;/span&gt;&lt;a href="https://aws.amazon.com/about-aws/whats-new/2019/12/announcing-new-amazon-ec2-m6g-c6g-and-r6g-instances-powered-by-next-generation-arm-based-aws-graviton2-processors/" rel="noopener noreferrer" dir="ltr"&gt;&lt;span dir="ltr"&gt;announced the AWS Graviton2 processor&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt; and its forthcoming availability powering Amazon EC2 M6g instances. While the first-generation Graviton processor that powered A1 instances was better suited to less compute-intensive workloads, this processor is intended to offer AWS customers a compelling alternative to conventional x86-powered instances on &lt;/span&gt;&lt;a href="https://www.anandtech.com/show/15578/cloud-clash-amazon-graviton2-arm-against-intel-and-amd/9" rel="noopener noreferrer" dir="ltr"&gt;&lt;span dir="ltr"&gt;both performance &lt;/span&gt;&lt;i dir="ltr"&gt;&lt;span dir="ltr"&gt;and&lt;/span&gt;&lt;/i&gt;&lt;span dir="ltr"&gt; cost&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt;. The Graviton2 processor uses the aarch64 (“arm64”) architecture rather than x86_64 (“amd64”), so workloads reliant upon native x86, and their toolchains, do require being recompiled to function. In this blog, we’ll address how much work is involved in changing architectures, and whether it’s worth it. I spent a few spare afternoons over the past few weeks experimenting, and am pleased to share our observations confirming the improved performance &lt;/span&gt;&lt;i dir="ltr"&gt;&lt;span dir="ltr"&gt;and&lt;/span&gt;&lt;/i&gt;&lt;span dir="ltr"&gt; lower cost of M6g instances as compared to the C5 instances we currently use, despite M6g not being a C-family instance that’s tuned for raw compute!&lt;/span&gt;&lt;/p&gt;&lt;h2&gt;&lt;span&gt;Some architectural context&lt;/span&gt;&lt;/h2&gt;&lt;p&gt;&lt;span&gt;Honeycomb consists of our ingest workers (called “shepherd”), Kafka, query workers (“retriever”), and frontends (“poodle”). All of these (except Kafka, of course) are written in Golang, which supports cross-compiling for aarch64 out of the box. For our initial test, we chose to trial migrating a subset of the shepherd workload as it’s stateless, performance-critical, and scales out horizontally.&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;Shepherd’s core task is parsing &lt;/span&gt;&lt;a href="https://docs.honeycomb.io/api/events/#batched-events" rel="noopener noreferrer" dir="ltr"&gt;&lt;span dir="ltr"&gt;incoming telemetry&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt; in JSON or msgp format, performing validation and access control, then serializing the data to Kafka. It sits behind a load balancer that round-robins traffic to each healthy serving task. Thus, it’s a perfect performance and cost test for JSON parsing and compressed Kafka production on M6g, performed head-to-head against the &lt;/span&gt;&lt;a href="https://www.honeycomb.io/blog/treading-in-haunted-graveyards/" rel="noopener noreferrer" dir="ltr"&gt;&lt;span dir="ltr"&gt;spot purchase&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt; and savings plan C5 &amp;amp; C5n instance families we run Shepherd on today.&lt;/span&gt;&lt;/p&gt;&lt;p&gt;&lt;span&gt;We run three environments: production for our customers’ telemetry, dogfood for analyzing production’s telemetry, and kibble for observing dogfood in turn. Which environment was most appropriate for this test? We didn’t want to risk degrading or dropping customer data, so that ruled out production, and kibble has nothing that observes it. Thus, the choice was clear to deploy a few instances of M6g in our dogfood environment, and observe the results using kibble.&lt;/span&gt;&lt;/p&gt;&lt;h2&gt;&lt;span&gt;Setting up the experiment [gory details]&lt;/span&gt;&lt;/h2&gt;&lt;p&gt;&lt;span&gt;The first challenge was to run a local Golang build with `cd shepherd; GOARCH=arm64 go install .`. That completed without incident, as did compiling all our application binaries with GOARCH=arm64 and integrating the cross-compilation into our continuous builds &amp;amp; artifact storage. Next, we swept our codebase and transitive dependencies to identify any code dependencies on either cgo native compilation or x86_64 inline assembly without an alternative pure golang implementation. Having discovered nothing that would outright break, only at worst degrade performance, we could proceed to bootstrapping an m6g.xlarge canary instance.&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;We don’t use Kubernetes or container orchestration for workload serving. Thus, every machine bootstraps from a Packer-prepared AMI, runs pre-flight scripts, converges with Chef, and then unpacks and runs application binaries. So, the first task was to run Packer to customize the latest Ubuntu Bionic Beaver 18.04 arm64 AMI with our firstboot scripts using a special Chef recipe. Unfortunately, Chef’s official builds for Ubuntu (and indeed, &lt;/span&gt;&lt;a href="https://docs.chef.io/install_server/" rel="noopener noreferrer" dir="ltr"&gt;&lt;span dir="ltr"&gt;for all OS flavors&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt;), are only available for amd64. And Bionic’s package repo ships with extremely crufty Chef (12.14). I had to do a quick &lt;/span&gt;&lt;a href="https://launchpad.net/~honeycomb.io/+archive/ubuntu/chef-backports" rel="noopener noreferrer" dir="ltr"&gt;&lt;span dir="ltr"&gt;backport of Chef 13.8&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt; from Focal to Bionic, compiling both for amd64 and arm64, in order to get our Chef recipes to work correctly. Packer succeeded finally, and we had an AMI we could use to provision arm64 instances into the Shepherd serving pool.&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;Next step: booting one server, inside an ASG. Unfortunately, while AWS will allow &lt;/span&gt;&lt;a href="https://www.honeycomb.io/blog/a-culture-of-observability-helps-engineers-hit-the-spot-instance/" rel="noopener noreferrer" dir="ltr"&gt;&lt;span dir="ltr"&gt;Spot instance type mixing&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt; for ASG scale-up, it won’t allow the AMI to be varied or permit precise control over how many instances of each type are created. Thus, I had to create a special ASG in Terraform just for arm64 instance types and corresponding boot AMI, with a target ASG instance count of 1 for testing. I did not yet add it to the target group, as I wasn’t yet ready to serve real dogfood traffic off it. The machine booted and I could ssh in!&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;But then the firstboot script emitted a litany of failures as it ran the full Chef cookbooks for the first time. Several of the recipes’ dependent gems such as xmlrpc refused to native compile during rubygems dependency fetching, but had readily available substitutes that could be installed system-wide from the Ubuntu package repositories. The gem we use for zookeeper locking during code releases failed to compile on aarch64, so I had to both port and &lt;/span&gt;&lt;a href="https://launchpad.net/~honeycomb.io/+archive/ubuntu/ruby-extras" rel="noopener noreferrer" dir="ltr"&gt;&lt;span dir="ltr"&gt;backport&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt; it. Our open source telemetry-forwarding utilities such as &lt;/span&gt;&lt;a href="https://github.com/honeycombio/honeyvent/releases" rel="noopener noreferrer" dir="ltr"&gt;&lt;span dir="ltr"&gt;honeyvent&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt; and &lt;/span&gt;&lt;a href="https://github.com/honeycombio/honeytail/releases" rel="noopener noreferrer" dir="ltr"&gt;&lt;span dir="ltr"&gt;honeytail&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt; were compiled for amd64 only, so I had to apply a quick GOARCH switcher to our CircleCI configs to build, tag, and upload them. Wavefront’s install recipes only know about amd64, not arm64, versions of InfluxDB’s telegraf binaries, so I had to patch the recipe to install &lt;/span&gt;&lt;a href="https://docs.influxdata.com/telegraf/v1.13/introduction/installation/" rel="noopener noreferrer" dir="ltr"&gt;&lt;span dir="ltr"&gt;InfluxDB’s version&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt; prior to configuring Wavefront. Amazon’s &lt;/span&gt;&lt;a href="https://aws.amazon.com/inspector/" rel="noopener noreferrer" dir="ltr"&gt;&lt;span dir="ltr"&gt;Inspector Agent&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt; worked out of the box once I found the correct s3 path for their arm64 package. But the biggest stumbling block was the security/auditing tool &lt;/span&gt;&lt;a href="https://github.com/osquery/osquery/issues/6285" rel="noopener noreferrer" dir="ltr"&gt;&lt;span dir="ltr"&gt;osquery&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt;, which I had to skip and come back for later with the help of &lt;/span&gt;&lt;a href="https://artem.ist/about/" rel="noopener noreferrer" dir="ltr"&gt;&lt;span dir="ltr"&gt;my friend Artemis&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;/p&gt;&lt;p&gt;&lt;span&gt;Finally, once enough things were replaced or temporarily commented out of the Chef recipes, we had a fully functioning server that could fetch our application binaries and run them. With trepidation, I ran `sudo service shepherd start` and the service came to life. After quickly testing its health endpoints, I added it to the target group, and it began serving live dogfood traffic, and transmitting its own telemetry in turn to kibble so I could compare its performance to its peer instances. This whole process (except osquery) took about two weeks of wall time, and about 15 hours of work from me, an experienced generalist systems engineer/SRE. And you can benefit from the backporting and compatibility work we did, if you follow in our footsteps!&lt;/span&gt;&lt;/p&gt;&lt;h2&gt;&lt;span&gt;Show me the numbers and charts!&lt;/span&gt;&lt;/h2&gt;&lt;figure&gt;&lt;img width="387" height="100" src="https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.54.20-PM-1.png" alt="" srcset="https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.54.20-PM-1.png 1189w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.54.20-PM-1-1024x264.png 1024w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.54.20-PM-1-768x198.png 768w"&gt;&lt;/figure&gt;&lt;figure&gt;&lt;img width="387" height="151" src="https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.52.35-PM-1.png" alt="" srcset="https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.52.35-PM-1.png 2058w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.52.35-PM-1-1024x401.png 1024w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.52.35-PM-1-768x300.png 768w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.52.35-PM-1-1536x601.png 1536w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.52.35-PM-1-2048x801.png 2048w"&gt;&lt;/figure&gt;&lt;figure&gt;&lt;img width="387" height="228" src="https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.45.05-PM-1.png" alt="" srcset="https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.45.05-PM-1.png 2102w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.45.05-PM-1-1024x604.png 1024w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.45.05-PM-1-768x453.png 768w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.45.05-PM-1-1536x905.png 1536w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.45.05-PM-1-2048x1207.png 2048w"&gt;&lt;/figure&gt;&lt;figure&gt;&lt;img width="387" height="230" src="https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.45.32-PM-1.png" alt="" srcset="https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.45.32-PM-1.png 2078w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.45.32-PM-1-1024x611.png 1024w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.45.32-PM-1-768x458.png 768w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.45.32-PM-1-1536x916.png 1536w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.45.32-PM-1-2048x1221.png 2048w"&gt;&lt;/figure&gt;&lt;figure&gt;&lt;img width="387" height="225" src="https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.45.49-PM-1.png" alt="" srcset="https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.45.49-PM-1.png 2087w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.45.49-PM-1-1024x597.png 1024w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.45.49-PM-1-768x447.png 768w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.45.49-PM-1-1536x895.png 1536w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.45.49-PM-1-2048x1193.png 2048w"&gt;&lt;/figure&gt;&lt;figure&gt;&lt;img width="387" height="289" src="https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.50.59-PM-1.png" alt="" srcset="https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.50.59-PM-1.png 2086w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.50.59-PM-1-1024x767.png 1024w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.50.59-PM-1-768x575.png 768w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.50.59-PM-1-1536x1150.png 1536w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.50.59-PM-1-2048x1534.png 2048w"&gt;&lt;/figure&gt;&lt;figure&gt;&lt;img width="387" height="246" src="https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.49.53-PM-1.png" alt="" srcset="https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.49.53-PM-1.png 2133w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.49.53-PM-1-1024x652.png 1024w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.49.53-PM-1-768x489.png 768w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.49.53-PM-1-1536x978.png 1536w, https://www.honeycomb.io/wp-content/uploads/2020/03/Screenshot-2020-03-11-at-12.49.53-PM-1-2048x1304.png 2048w"&gt;&lt;/figure&gt;&lt;p&gt;We’ve been running m6g.xlarge for several weeks as 20% of our dogfood shepherd fleet, head to head against c5.xlarge and c5n.xlarge. It is a well-integrated equal citizen in our workflows, with every hourly release being automatically built for and deployed to both amd64 and arm64. arm64 behaves like any other instance from an operability standpoint, the only difference being the text `My architecture is: aarch64` scrolling by as the deploy script finds its artifacts. As of today, we’ve shifted 100% of our dogfood shepherd workload to run on M6g, using 30% fewer instances than we used with C5.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;For our use case, M6g is superior in every aspect to C5: it costs less on-demand, has more RAM, exhibits lower median and significantly narrower tail latency, and runs cooler with the same proportional workload per host. As demonstrated in our dogfood shepherd environment, if M6g were the only instance type in our fleet of Shepherds, we could run 30% fewer instances in total, and each instance would cost 10% less on-demand versus C5. Was it worth it to port? I personally approached it as an idle experiment with a few spare afternoons, and was surprised by how compelling the results were. Saving 40% on the EC2 instance bill for this service once we’re able to fully convert our instances to Graviton2 is well worth the investment, especially in this &lt;/span&gt;&lt;a href="https://medium.com/sequoia-capital/coronavirus-the-black-swan-of-2020-7c72bdeb9753" rel="noopener noreferrer" dir="ltr"&gt;&lt;span dir="ltr"&gt;new economic climate&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;/p&gt;&lt;p&gt;&lt;span&gt;However, M6g is not yet available to customers in production quantities, and cannot yet be bought off the spot market, so we expect to continue to use C5 instances for the foreseeable future in production. But we look forward to fully making the switch to M6g or C6g once they’re out of early access and commercially available!&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;i dir="ltr"&gt;&lt;span dir="ltr"&gt;Liz Fong-Jones is a Principal Developer Advocate at Honeycomb.io, provider of observability tooling &lt;/span&gt;&lt;/i&gt;&lt;i dir="ltr"&gt;&lt;span dir="ltr"&gt;designed for modern engineering teams to observe, debug, and improve their production systems so that business-critical apps maintain resilience. &lt;/span&gt;&lt;/i&gt;&lt;i dir="ltr"&gt;&lt;span dir="ltr"&gt;Teams &lt;/span&gt;&lt;/i&gt;&lt;i dir="ltr"&gt;&lt;span dir="ltr"&gt;reduce toil, ship code faster and keep customers happy.&lt;/span&gt;&lt;/i&gt;&lt;/p&gt;</description><pubDate>Mon, 23 Mar 2020 19:15:19 -0500</pubDate></item></channel></rss>
+  &lt;/p&gt;&lt;figure&gt;&lt;img src="https://cdn.arstechnica.net/wp-content/uploads/2019/07/windows-10-s-wallpaper-800x450.jpg" width="330" height="165"&gt;&lt;figcaption class="caption" dir="ltr"&gt;&lt;div class="caption-credit" dir="ltr"&gt;&lt;a rel="nofollow" class="caption-link" href="https://www.microsoft.com/en-us/windows" dir="ltr"&gt;Windows&lt;/a&gt;&lt;/div&gt;&lt;/figcaption&gt;&lt;/figure&gt;&lt;p&gt;Attackers are actively exploiting a Windows zero-day vulnerability that can execute malicious code on fully updated systems, Microsoft warned on Monday.&lt;/p&gt;&lt;p dir="ltr"&gt;The font-parsing remote code-execution vulnerability is being used in “limited targeted attacks,” the software maker said in an &lt;a href="https://portal.msrc.microsoft.com/en-us/security-guidance/advisory/adv200006#ID0EMGAC" dir="ltr"&gt;advisory published on Monday morning&lt;/a&gt;. The security flaw exists in the Adobe Type Manager Library, a Windows DLL file that a wide variety of apps use to manage and render fonts available from Adobe Systems. The vulnerability consists of two code-execution flaws that can be triggered by the improper handling of maliciously crafted master fonts in the Adobe Type 1 Postscript format. Attackers can exploit them by convincing a target to open a booby-trapped document or viewing it in the Windows preview pane.&lt;/p&gt;&lt;p&gt;“Microsoft is aware of limited, targeted attacks that attempt to leverage this vulnerability,” Monday’s advisory warned. Elsewhere the advisory said: “For systems running supported versions of Windows 10 a successful attack could only result in code execution within an AppContainer sandbox context with limited privileges and capabilities.”&lt;/p&gt;&lt;p&gt;Microsoft didn’t say if the exploits are successfully executing malicious payloads or simply attempting it. Frequently, security defenses built into Windows prevent exploits from working as hackers intended. The advisory also made no reference to the volume or geographic locations of exploits. A fix is not yet available, and Monday’s advisory provided no indication when one would ship.&lt;/p&gt;&lt;h2&gt;What to do now?&lt;/h2&gt;&lt;p&gt;Until a patch becomes available, Microsoft is suggesting users use one or more of the following workarounds:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Disabling the Preview Pane and Details Pane in Windows Explorer&lt;/LI&gt;&lt;LI&gt;Disabling the WebClient service&lt;/LI&gt;&lt;LI&gt;Rename ATMFD.DLL, or alternatively, disable the file from the registry&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;The first measure will prevent Windows Explorer, a tool that provides a graphical user interface for displaying and managing Windows resources, from automatically displaying Open Type Fonts. While this stopgap fix will prevent some types of attacks, it won’t stop a local, authenticated user from running a specially crafted program to exploit the vulnerability.&lt;/p&gt;&lt;p&gt;The second workaround—disabling the WebClient service—blocks the vector attackers would most likely use to wage remote exploits. Even with this measure in place, it’s still possible for remote attackers to run programs located on the targeted user’s computer or local network. Still, the workaround will cause users to be prompted for confirmation before opening arbitrary programs from the Internet.&lt;/p&gt;&lt;p&gt;Microsoft said that disabling the WebClient will prevent Web Distributed Authoring and Versioning from being transmitted. It also stops any services that explicity depend on the WebClient from starting and logs error messages in the System log.&lt;/p&gt;&lt;p&gt;Renaming ATMFD.DLL, the last recommended stopgap, will cause display problems for applications that rely on embedded fonts and could cause some apps to stop working if they use OpenType fonts. Microsoft also cautioned that mistakes in making registry changes to Windows—as required in one variation of the third workaround—can cause serious problems that may require Windows to be completely reinstalled.&lt;/p&gt;&lt;p&gt;Monday’s advisory provides detailed instructions for both turning on and turning off all three workarounds. Enhanced Security Configuration, which is on by default on Windows Servers, doesn’t mitigate the vulnerability, the advisory added.&lt;/p&gt;&lt;h2&gt;Targeted... for now&lt;/h2&gt;&lt;p&gt;The phrase “limited targeted attacks” is frequently shorthand for exploits carried out by hackers carrying out espionage operations on behalf of governments. These types of attacks are usually limited to a small number of targets—in some cases, fewer than a dozen—who work in a specific environment that’s of interest to the government sponsoring the hackers.&lt;/p&gt;&lt;p&gt;While Windows users at large may not be targeted initially, new campaigns sometimes sweep larger and larger numbers of targets once awareness of the underlying vulnerabilities becomes more widespread. At a minimum, all Windows users should monitor this advisory, be on the lookout for suspicious requests to view untrusted documents, and install a patch once it becomes available. Windows users may also want to follow one or more of the workarounds but only after considering the potential risks and benefits of doing so.&lt;/p&gt;</description><pubDate>Mon, 23 Mar 2020 23:42:45 -0500</pubDate></item></channel></rss>
