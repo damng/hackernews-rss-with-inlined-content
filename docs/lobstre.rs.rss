@@ -92,379 +92,7 @@ make  # quick start to build swiftc and the stripped-down stdlib
     -integrated-as \
     -fpascal-strings
 % mpw PPCLink test.o ${PPC_LIBRARIES} -o Test
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;That should work with just top-of-master-branch LLVM/Clang (and a very simple test.c). I did end up needing to change LLVM in a few ways in the end, but it’s really fairly minimal, so much thanks to the IBM folks for doing the hard part of the work for me!&lt;/p&gt;&lt;h3&gt;Now do Swift&lt;/h3&gt;&lt;p&gt;Being able to compile a simple test program was a great milestone, but I had to do a fair bit of work before I could get swiftc to compile a whole BitPaint. Here are some of the highlights:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Teach Swift about the PPC/AIX target.&lt;/strong&gt; This mostly involved adding &lt;code dir="ltr"&gt;ppc&lt;/code&gt; and &lt;code dir="ltr"&gt;AIX&lt;/code&gt; cases to switch statements across the Swift compiler, but also involved making a simple description of the Swift calling conventions for Clang (which I cribbed from the 32-bit ARM implementation) and then assuring the PPC/AIX backend that this was an okay calling convention to be using. I got lucky in the amount of work I had to do here because Swift already supports 32-bit ARM, little-endian 64-bit PowerPC (when running Linux), and big-endian 64-bit s390x (another IBM architecture); all the pieces were already in place.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Add support for Pascal strings.&lt;/strong&gt; The Mac’s first high-level programming language was Pascal, not C! As such, the default format for strings throughout the Toolbox APIs was &lt;em dir="ltr"&gt;Pascal strings&lt;/em&gt; (a length byte followed by string data) rather than &lt;em dir="ltr"&gt;C strings&lt;/em&gt; (string data followed by a null byte). With the &lt;code dir="ltr"&gt;-fpascal-strings&lt;/code&gt; command-line flag, Clang supports static Pascal strings with the syntax &lt;code dir="ltr"&gt;"\pHello World"&lt;/code&gt;. The &lt;code dir="ltr"&gt;\p&lt;/code&gt; would be replaced by the length of the string (which must be no more than 255 bytes) so that you didn’t have to count it yourself. &lt;a href="https://belkadan.com/source/swift/commitdiff/293d4b39ab9bbfd3f0762b6883da860e3601d373" dir="ltr"&gt;I&amp;nbsp;hacked this into Swift as well&lt;/a&gt;, and while my implementation probably has problems&lt;sup dir="ltr"&gt;&lt;a href="https://belkadan.com/blog/2020/04/Swift-on-Mac-OS-9/#fn:utf-8" dir="ltr"&gt;10&lt;/a&gt;&lt;/sup&gt;, it was enough to get simple things working.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Turn off reflection support and nearly all runtime metadata.&lt;/strong&gt; The Swift runtime is very powerful, but I didn’t want to write much of a runtime for this project, which was primarily about calling a bunch of C functions. Beyond that, though, the default format for Swift metadata makes heavy use of &lt;em dir="ltr"&gt;relative addressing&lt;/em&gt; (mainly to reduce startup time, but &lt;a href="https://youtu.be/G3bpj-4tWVU" dir="ltr"&gt;learn more here&lt;/a&gt;) as well as symbols pointing inside of a global, and the LLVM XCOFF implementation doesn’t (yet?) support either. So to get to a working proof-of-concept, I aggressively commented out parts of IRGen that made use of either feature. I’d like to get some of the static metadata back at some point, but reflection’s not something I’m ever interested in. Probably.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Make a smol stdlib.&lt;/strong&gt; The full Swift standard library has a &lt;em dir="ltr"&gt;lot&lt;/em&gt; of things in it I don’t need, and some that I wouldn’t even know &lt;em dir="ltr"&gt;how&lt;/em&gt; to implement. (What’s a String in a world that can’t assume Unicode?) But all the logic to integrate with C code is based on having some basic types in the standard library (like Int16 and UnsafeMutablePointer). What I ended up doing was taking a subset of the standard library sources, and then adding additional files and commenting things out until it worked.&lt;/p&gt;&lt;p dir="ltr"&gt;…haha, nope, even that wasn’t good enough. My early attempts at this compiled okay, but they managed to crash PPCLink when I tried to write a test program, presumably because there’s just &lt;em dir="ltr"&gt;too many symbols&lt;/em&gt; in the standard library. So I cut things down to an even &lt;em dir="ltr"&gt;smaller&lt;/em&gt; subset, and that (eventually) worked. Of course, I was working on this at the same time as I was modifying the compiler to get to a working proof-of-concept, so I think I ultimately went further than I needed to. (A bunch of symbols are only used for runtime metadata purposes.) As mentioned above, non-optimized builds of non-trivial programs don’t work yet, so I don’t know if I’m in the danger zone or not, but I might try to add a few more things back in.&lt;/p&gt;&lt;p dir="ltr"&gt;Rather than modify the actual Swift repo for this, I decided to keep my stripped-down standard library separate, so you can find it in the &lt;a href="https://belkadan.com/source/ppc-swift-project" dir="ltr"&gt;ppc-swift-project&lt;/a&gt; repo. &lt;strong dir="ltr"&gt;This might be a good reference for someone looking for a C-compatible, runtime-less subset of Swift&lt;/strong&gt;, perhaps for an embedded or other resource-constrained environment.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Disable jump tables.&lt;/strong&gt; LLVM optimizes switch statements into &lt;em dir="ltr"&gt;&lt;a href="https://en.wikipedia.org/wiki/Branch_table" dir="ltr"&gt;jump tables&lt;/a&gt;&lt;/em&gt; when it looks like it’ll help performance and/or code size, but its default implementations of jump tables also weren’t supported in the LLVM XCOFF implementation. I imagine the AIX folks will get around to implementing this sooner or later, but for now I just disabled jump tables entirely, forcing the compiler to emit switches as a series of &lt;code dir="ltr"&gt;if&lt;/code&gt;s instead.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;You can check out all the changes in the &lt;a href="https://belkadan.com/source/swift/shortlog/refs/heads/ppc-swift" dir="ltr"&gt;swift&lt;/a&gt; and &lt;a href="https://belkadan.com/source/llvm-project/shortlog/refs/heads/ppc-swift" dir="ltr"&gt;llvm-project&lt;/a&gt; repos, if you’re curious. Very few are appropriate for upstreaming to their respective projects, but I’ll try to get the ones that &lt;em dir="ltr"&gt;are&lt;/em&gt; relevant upstreamed at some point.&lt;/p&gt;&lt;h3&gt;A week of mysterious failures&lt;/h3&gt;&lt;p&gt;Having made all the changes above, I had an app that worked! In Swift!&lt;/p&gt;&lt;p dir="ltr"&gt;…except, it only worked some of the time. I’d change something arbitrary and suddenly events wouldn’t register any more. It got so bad that I added a counter: after &lt;em dir="ltr"&gt;any&lt;/em&gt; ten events, exit the app. Without that, I’d get trapped, unable to even quit without restarting the (virtual) machine. Even in a seemingly working version, my friend Nadine reported that trying to use the Reset command caused the app to crash. What was going on?&lt;/p&gt;&lt;p dir="ltr"&gt;I decided I had to get to the bottom of something strange I’d seen earlier: even the &lt;em dir="ltr"&gt;Clang&lt;/em&gt; version of the program didn’t work correctly when I turned on optimizations. It’s possible that that was a bug in IBM’s newly-added AIX support, or 32-bit PowerPC support since it’s not such a common platform, or even LLVM’s optimizations. It could be that AIX and Classic Mac OS really weren’t as similar as I thought they were, and so my code wasn’t agreeing with the system code on how things were supposed to work. And it could be that the optimized code was using an instruction that SheepShaver didn’t support, though that didn’t really seem to match the symptoms.&lt;/p&gt;&lt;p&gt;And the symptoms were weird. Some local variables were getting corrupted, but others weren’t. So I started testing everything I could think of:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;was the stack aligned properly?&lt;/LI&gt;&lt;LI&gt;was the stack pointer somehow not getting restored properly?&lt;/LI&gt;&lt;LI&gt;was the glue code for cross-library calls trashing other data?&lt;sup dir="ltr"&gt;&lt;a href="https://belkadan.com/blog/2020/04/Swift-on-Mac-OS-9/#fn:indirect" dir="ltr"&gt;11&lt;/a&gt;&lt;/sup&gt; (see the &lt;a href="https://developer.apple.com/library/archive/documentation/mac/pdf/MacOS_RT_Architectures.pdf" dir="ltr"&gt;Mac OS Runtime Architectures&lt;/a&gt; guide)&lt;/LI&gt;&lt;LI&gt;was there something causing the Code Fragment Manager (dynamic linker) to put the wrong address in for cross-library calls?&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Without being able to rely on logging, I made the simplest textual debug output facility I could: modifying the title of a menu. I wrote C functions that tracked the current stack pointer to make sure it was getting restored properly; I made good use of the &lt;code dir="ltr"&gt;DumpXCOFF&lt;/code&gt; and &lt;code dir="ltr"&gt;DumpPEF&lt;/code&gt; tools that came with MPW; I learned how PEF “pidata” (“pattern-initialized data”) worked and tried to step through CFM relocations by hand (again, see the &lt;a href="https://developer.apple.com/library/archive/documentation/mac/pdf/MacOS_RT_Architectures.pdf" dir="ltr"&gt;Mac OS Runtime Architectures&lt;/a&gt; guide). I even started trying to decompile some of the actual system libraries to see if they were doing anything suspicious, even though a bug in the actual Mac OS&amp;nbsp;9 seemed incredibly unlikely. This led all the way to learning about the “toolbox ROM”, which isn’t actually ROM at all: it’s a boot script and a compressed set of system libraries. (It’s called that because it’s content that &lt;em dir="ltr"&gt;used&lt;/em&gt; to be in ROM.) Fortunately &lt;a href="https://github.com/cebix/macemu/blob/2e302d60a337daa252c6992335e6365a9beac83f/SheepShaver/src/rom_patches.cpp#L148" dir="ltr"&gt;SheepShaver already knows how to load it&lt;/a&gt;, which meant that I could do the same decompression and then manually split out the individual libraries.&lt;/p&gt;&lt;p&gt;Yeah, I got way off in the weeds. I learned a lot, though!&lt;/p&gt;&lt;p&gt;Finally, I looked at the decompiled optimized code—the C version, not the Swift version. I observed that the variable getting corrupted was in general-purpose register 13. That’s supposed to be an okay place to put data in Classic Mac OS (and in 32-bit AIX, and in 32-bit Mac OS X), but I decided I didn’t trust that, particularly because that register had been used to track thread-local storage in 64-bit AIX. So I marked r13 as reserved…&lt;/p&gt;&lt;p dir="ltr"&gt;…and the problems went away. Optimized, non-optimized, even with &lt;a href="https://clang.llvm.org/docs/ClangCommandLineReference.html#cmdoption-clang-fstack-protector" dir="ltr"&gt;&lt;code dir="ltr"&gt;-fstack-protector-all&lt;/code&gt;&lt;/a&gt; on. And Swift.&lt;/p&gt;&lt;p&gt;(Debugging this took about a week, unfortunately, which led to this project being a little less ambitious than I originally wanted.)&lt;/p&gt;&lt;h3&gt;“Future directions”&lt;/h3&gt;&lt;p&gt;What didn’t I get to? An awful lot, actually.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;There’s no runtime at all, which means no dynamic allocation (among other things).&lt;/LI&gt;&lt;LI&gt;There’s no type metadata, which means no generics (that aren’t optimized away).&lt;/LI&gt;&lt;LI&gt;There’s no field metadata, which means no key paths (that aren’t optimized away).&lt;/LI&gt;&lt;LI&gt;There’s no Unicode support, so no Strings. Arguably I could make a String without Characters, or a String using &lt;a href="https://en.wikipedia.org/wiki/Mac_OS_Roman" dir="ltr"&gt;MacRoman&lt;/a&gt; as the native encoding, but it wouldn’t necessarily look much like today’s Swift.String.&lt;/LI&gt;&lt;LI&gt;There are a bunch of other standard library things missing because I wanted to get the proof-of-concept working, but also because &lt;code dir="ltr"&gt;PPCLink&lt;/code&gt; was choking on large object files. If I do get more standard library stuff working, I’ll probably split it out of the ‘Swift’ module somehow.&lt;/LI&gt;&lt;LI&gt;I had to mess with &lt;a href="https://en.wikipedia.org/wiki/Linkage_(software)" dir="ltr"&gt;linkage&lt;/a&gt; in a number of ways to make the LLVM XCOFF backend happy, so I’m not sure multi-file builds would work. I didn’t even test it.&lt;/LI&gt;&lt;LI&gt;I’m using Carbon, which means that my program &lt;em dir="ltr"&gt;ought&lt;/em&gt; to work on older versions of Mac OS X as well, but my friend Nadine tried and it didn’t, and it wasn’t a priority to figure out.&lt;/LI&gt;&lt;LI&gt;I wanted to try making nice abstractions on top of the some of the Toolbox APIs.&lt;/LI&gt;&lt;LI&gt;I wanted to make more complicated example apps!&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Maybe I’ll follow up on some of these, but I’ve been putting a lot of effort into making sure I could finish this by April 1, so I should probably get to some of the things I’ve been neglecting in favor of this project instead.&lt;/p&gt;&lt;h3&gt;Summary&lt;/h3&gt;&lt;p&gt;This project took a lot of time, even though I (1) know a lot about compilers and (2) hacked my way to success instead of being careful and maintaining proper software development practices. But I learned a lot, and I accomplished a goal I’ve had in the back of my mind for a long time.&lt;/p&gt;&lt;p&gt;If you made it all the way to the end of the article, here’s a reward: BitPaint running under Classic on Mac OS X 10.2 (also courtesy of Nadine).&lt;/p&gt;&lt;img src="https://belkadan.com/blog/2020/04/Swift-on-Mac-OS-9/classic.jpg" alt="You can see BitPaint running in the middle, and the Classic version of Apple System Profiler...but also the Mac OS X &amp;quot;About This Computer&amp;quot; box showing 10.2.8." width="665" height="499"&gt;&lt;p&gt;Stay safe, everyone, and help the people around you when you can. And if anybody makes something with this project, I want to hear about it!&lt;/p&gt;</description><pubDate>Thu, 02 Apr 2020 05:59:35 -0500</pubDate></item><item><title>How many warnings should your JavaScript app have?</title><link>https://lobste.rs/s/kup4nk</link><description>&lt;h1&gt;How many warnings should your JavaScript app have?&lt;/h1&gt;&lt;p&gt;JavaScript warnings are these messages being displayed in yellow or red in your JavaScript console or terminal. They make no sense at all in general but they are a good indication of the health of your app. The points below will give you a general idea of how many warnings you should expect in your app:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;0 warnings&lt;/strong&gt;: the app is not working at all&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;5 warnings&lt;/strong&gt;: app is probably starting but crashing soon after - try to find why it crashes. You'd think you could read the warnings to learn why it doesn't work, but that's not what warnings are for.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;50 warnings&lt;/strong&gt;: That's the soft spot - most likely everything's running smoothly&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;200+ warnings&lt;/strong&gt;: It might be an indication of a problem, but it could just be that a package developer decided to print pages of warnings for something they thought was very important. Everything still works the same, and the developer has moved on to more important stuff so get used to see these warnings all the time.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;20,000+ warnings&lt;/strong&gt;: you need to do something. The app still works fine of course, but the amount of warnings being printed is starting to slow everything down. This is usually when it makes sense to throw away the whole app and start a new one (╯°□°）╯︵ ┻━┻ New apps have less warnings and are more fun to work on anyway.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;img src="https://camo.githubusercontent.com/1100f4d9f86e4c4de99c8821fb971cb7aeaca1b7/68747470733a2f2f692e696d6775722e636f6d2f726d43523168642e706e67" width="330" height="201"&gt;&lt;p&gt;&lt;em&gt;An example of a well working app. All tests are passing with flying colours.&lt;/em&gt;&lt;/p&gt;</description><pubDate>Wed, 01 Apr 2020 10:24:14 -0500</pubDate></item><item><title>Open reimplementation of Might and Magic 6 7 8 game engine</title><link>https://lobste.rs/s/e8fwaf</link><description>&lt;h1&gt;Might and Magic Trilogy &lt;/h1&gt;&lt;img src="https://camo.githubusercontent.com/1e9a96069c85dacb60da8e2c92dd6c08988ad779/68747470733a2f2f696d672e736869656c64732e696f2f62616467652f636861742d6f6e253230646973636f72642d677265656e2e737667" alt="" width="100" height="20"&gt;&lt;p&gt;Might and Magic VI-VIII engine remake using original data &amp;amp; code&lt;/p&gt;&lt;img src="https://raw.githubusercontent.com/SourceCodeDeleted/world-of-might-and-magic/master/install_images/gamestart.PNG" alt="alt text" width="914" height="728"&gt;&lt;h2&gt;Getting Started&lt;/h2&gt;&lt;OL&gt;&lt;LI&gt;You will require a GoG or any older version of Might and Magic 7 installed for engine to guess game assets folder. You can override  assets/game path in launcher.&lt;/LI&gt;&lt;LI&gt;Use any IDE with CMake integration (Visual Studio is good).&lt;/LI&gt;&lt;LI&gt;Build &amp;amp; run game directly, or via launcher.&lt;/LI&gt;&lt;/OL&gt;&lt;h2&gt;Getting Started (With IMAGES!)&lt;/h2&gt;&lt;summary&gt;Images&lt;/summary&gt;&lt;h2&gt;Development&lt;/h2&gt;&lt;p&gt;See the HACKING document in the source code root for information on how to compile.&lt;/p&gt;&lt;h2&gt;GamePlay&lt;/h2&gt;&lt;img src="https://raw.githubusercontent.com/SourceCodeDeleted/world-of-might-and-magic/master/install_images/gameplay.PNG" alt="alt text" width="914" height="711"&gt;&lt;h2&gt;Current build status&lt;/h2&gt;&lt;p&gt;Master: &lt;/p&gt;&lt;img src="https://camo.githubusercontent.com/f67bdb6c780eb7347bb9e2b072591a7ff1225a0b/68747470733a2f2f63692e6170707665796f722e636f6d2f6170692f70726f6a656374732f7374617475732f6e6c6e6f35766f37346a6636726e74332f6272616e63682f6d61737465723f7376673d74727565" alt="Build Status" width="106" height="20"&gt;&lt;p&gt;Code analysis: &lt;/p&gt;&lt;img src="https://camo.githubusercontent.com/7e7484914fbb77ca21a374e5e238e8ceae568fd4/68747470733a2f2f7363616e2e636f7665726974792e636f6d2f70726f6a656374732f31363433342f62616467652e737667" alt="Coverity Status" width="114" height="20"&gt;</description><pubDate>Thu, 02 Apr 2020 10:06:52 -0500</pubDate></item><item><title>Software Distributions And Their Roles Today</title><link>https://lobste.rs/s/2ezol9</link><description>&lt;img src="https://venam.nixers.net/blog/assets/mailroom.jpg" alt="Mailroom" width="416" height="428"&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;NB&lt;/em&gt;: This is a repost on this blog of a post made on &lt;a href="https://nixers.net/showthread.php?tid=2192" dir="ltr"&gt;nixers.net&lt;/a&gt;&lt;/p&gt;&lt;h2&gt;What is a distribution&lt;/h2&gt;&lt;p&gt;What are software distributions? You may think you know everything there
-is to know about the term software distribution, but take a moment to
-think about it, take a step back and try to see the big picture.&lt;/p&gt;&lt;p&gt;We often have in mind the thousands of Linux distributions when we hear
-it, however, this is far from limited to Linux, BSD, Berkeley Software
-Distribution, has software distribution right in the name. Android,
-and iOS are software distributions too.&lt;/p&gt;&lt;p dir="ltr"&gt;Actually, it’s so prevalent, we may have stopped paying attention to
-the concept. We find it hard to put a definition together.&lt;br dir="ltr"&gt;
-There’s definitely the part about distributing software in it. Software
-that may be commercial or not, open source or not.&lt;br dir="ltr"&gt;
-To understand it better maybe investigating what problems software
-distributions address would clear things up.&lt;/p&gt;&lt;p dir="ltr"&gt;Let’s imagine a world before software distributions, does that world
-exist? A world where software stays within boundaries, not shared with anyone
-outside of it.&lt;br dir="ltr"&gt;
-Once we break these boundaries and we want to share it, we’ll find that we
-have to package all the software together in a meaningful way, configure
-them so that they work well together, adding some glue in between when
-necessary, find the appropriate medium to distribute the bundle, get
-it all from one end to another safely, make sure it installs properly,
-and follow up on it.&lt;/p&gt;&lt;p&gt;Thus, software distribution is about the mechanism and the community
-that takes the burden and decisions to build an assemblage of coherent
-software that can be shipped.&lt;/p&gt;&lt;p&gt;The operating system, or kernel if you like, could be, and is often,
-part of the collage offered, a software just like others.&lt;/p&gt;&lt;p dir="ltr"&gt;The people behind it are called distribution maintainers, or package
-maintainers. Their role vary widely, they could write the software that
-stores all the packages called the repository, maintain a package manager
-with its format, maintain a full operating system installer, package and
-upload software they built or that someone else built on a specific time
-frame/life cycle, make sure there aren’t any malicious code uploaded on
-the repository, follow up on the latest security issues and bug reports,
-fix third party software to fit the distribution philosophical choices
-and configurations, and most importantly test, plan, and make sure
-everything holds up together.&lt;br dir="ltr"&gt;
-These maintainers are the source of trust of the distribution, they
-take responsibility for it. In fact, I think it’s more accurate to call
-them distributors.&lt;/p&gt;&lt;h2&gt;Different ways to approach it&lt;/h2&gt;&lt;p dir="ltr"&gt;There’s so many distributions it can make your head spin. The software
-world is booming, especially the open source one. For instance, we can
-find bifurcations of distributions that get copied by new maintainers
-and divert. This creates a tree like aspect, a genealogy of both common
-ancestors and/or influences in technical and philosophical choices.&lt;br dir="ltr"&gt;
-Overall, we now have a vibrant ecosystem where a thing learned on a
-branch can help a completely unrelated leaf on another tree. There’s
-something for everyone.&lt;/p&gt;&lt;h3&gt;Target and speciality&lt;/h3&gt;&lt;p&gt;So what could be so different between all those software distributions,
-why not have a single platform that everyone can build on.&lt;/p&gt;&lt;p&gt;One thing is specialization and differentiation. Each distro caters to
-a different audience and is built by a community with its philosophy.&lt;/p&gt;&lt;p&gt;Let’s go over some of them:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;A distribution can support specific sets and combinations of hardware:
-from CPU ISA to peripherals drivers&lt;/LI&gt;&lt;LI&gt;A distribution may be specifically optimized for a type of environment:
-Be it desktop, portable mobile device, servers, warehouse size computers,
-embedded devices, virtualised environment, etc..&lt;/LI&gt;&lt;LI&gt;A distribution can be commercially backed or not&lt;/LI&gt;&lt;LI&gt;A distribution can be designed for different levels of knowledge in a
-domain, professional or not. For instance, security research, scientific
-computing, music production, multimedia box, HUD in cars, mobile device
-interface, etc..&lt;/LI&gt;&lt;LI&gt;A distribution might have been certified to follow certain standards
-that need to be adhere to in professional settings, for example security
-standards and hardening&lt;/LI&gt;&lt;LI&gt;A distribution may have a single purpose in a commodity machine,
-specific machine functionalities such as firewall, a computer cluster,
-a router, etc..&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;That all comes to the raison d’être, the philosophy of the distribution,
-it guides every decision the maintainers have to make. It guides how they
-configure every software, how they think about security, portability,
-comprehensiveness.&lt;/p&gt;&lt;p dir="ltr"&gt;For example, if a distribution cares about free software, it’s going to
-be strict about what software it includes and what licenses it allows
-in its repository, having software to check the consistency of licenses
-in the core.&lt;br dir="ltr"&gt;
-Another example is if their goal is to target a desktop audience then
-internationalization, ease of use, user friendliness, having a large
-number of packages, is going to be prioritized. While, again, if the
-target is a real time embedded device, the size of the kernel is going
-to be small, configured and optimized for this purpose, and limiting and
-choosing the appropriate packages that work in this environment. Or if
-it’s targeted at advanced users that love having control of their machine,
-the maintainers will choose to let the users make most of the decisions,
-providing as many packages as possible with the latest version possible,
-with a loosely way to install the distribution, having a lot of libraries
-and software development tools.&lt;/p&gt;&lt;p&gt;What this means is that a distribution does anything it can to provide
-sane defaults that fit its mindset. It composes and configures a layer
-of components, a stack of software.&lt;/p&gt;&lt;h3&gt;The layering&lt;/h3&gt;&lt;p dir="ltr"&gt;Distribution maintainers often have at their disposition different blocks
-and the ability to choose them, stacking them to create a unit we call a
-software distribution. There’s a range of approaches to this, they could
-choose to have more, or less, included in what they consider the &lt;em dir="ltr"&gt;core&lt;/em&gt; of
-the distribution and what is externally less important to it.&lt;br dir="ltr"&gt;
-Moreover, sometimes they might even leave the core very small and loose,
-instead providing the glue software that makes it easy for the users
-to choose and swap the blocks at specific stages in time: installation,
-run time, maintenance mode, etc..&lt;/p&gt;&lt;p&gt;So what are those blocks of interdependent components.&lt;/p&gt;&lt;p&gt;The first part is the method of installation, this is what everything
-hinges on, the starting point.&lt;/p&gt;&lt;p&gt;The second part is the kernel, the real core of all operating systems
-today. But that doesn’t mean that the distribution has to enforce
-it. Some distributions may go as far as to provide multiple kernels
-specialised in different things or none at all.&lt;/p&gt;&lt;p&gt;The third part is the filesystem and file hierarchy, the component that
-manages where and how files are spread out on the physical or virtual
-hardware. This could be a mix and match where sections of the file system
-tree are stored on separate filesystems.&lt;/p&gt;&lt;p&gt;The fourth part is the init system, PID 1. This choice has generated
-a lot of contention these days. PID 1 being the mother process of all
-other processes on the system. What role it has and what functionalities
-it should include is a subject of debate.&lt;/p&gt;&lt;p&gt;The fifth part is composed of the shell utilities, what we sometimes
-refer to as the userland or user space, as its the first layer the user
-can directly interface with to have control of the operating system, the
-place where processes run. The userland implementations on Unix-based
-systems usually tries to follow the POSIX standard. There are many such
-implementations, also subject of contention.&lt;/p&gt;&lt;p&gt;The sixth part is made up of services and their management. The daemons,
-long running processes that keep the system in order. Many argue if the
-management functionality should be part of the init system or not.&lt;/p&gt;&lt;p&gt;The seventh part is documentation. Often it is forgotten but it is still
-very important.&lt;/p&gt;&lt;p&gt;The last part is about everything else, all the user interfaces and
-utilities a user can have and ways to manage them on the system.&lt;/p&gt;&lt;h3&gt;Stable releases vs Rolling&lt;/h3&gt;&lt;p dir="ltr"&gt;There exists a spectrum on which distributions place themselves when
-it comes to keeping up to date with the versions of the software they
-provide. This most often applies to external third party open source
-software.&lt;br dir="ltr"&gt;
-The spectrum is the following: Do we allow the users to always have the
-latest version of every software while running the risk of accidentally
-breaking their system, what we call bleeding edge or rolling distro, or
-do we take a more conservative approach and take the time to test every
-software properly before allowing it in the repository, while not having
-all the latest updates, features, and optimizations of those software,
-what we call release based distro.&lt;/p&gt;&lt;p&gt;The extreme of the first scenario would be to let users directly download
-from the software vendor/creator source code repository, or the opposite,
-let the software vendor/creator push directly to the distribution
-repository. Which could easily break or conflict with the user’s system
-or lead to security vulnerability. We’ll come back to this later, as
-this could be avoided if the software runs in a containerized environment.&lt;/p&gt;&lt;p dir="ltr"&gt;When it comes to release distributions, it usually involves having a long
-term support stable version that keeps receiving and syncing with the
-necessary security updates and bug fixes on the long run while having
-another version running a bit ahead testing the future changes. On
-specific time frames, users can jump to the latest release of the
-distribution, which may involve a lot of changes in both configuration
-and software.&lt;br dir="ltr"&gt;
-Some distributions decide they may want to break ABI or API of the kernel
-upon major releases, that means that everything in the system needs to
-be rebuilt and reinstalled.&lt;/p&gt;&lt;p&gt;The release cycle, and the rate of updates is really a spectrum.&lt;/p&gt;&lt;p dir="ltr"&gt;When it comes to updates, in both cases, the distribution maintainers
-have to decide how to communicate and handle them. How to let the users
-know what changes. If a user configuration was swapped for a new one or
-merged with the new one, or copied aside.&lt;br dir="ltr"&gt;
-Communication is essential, be it through official channels, logging,
-mails, etc.. Communication needs to be bi-directional, users report bugs
-and maintainers posts what their decisions are and if users need to be
-involved in them. This creates the community around the distribution.&lt;/p&gt;&lt;p&gt;Rolling releases require intensive efforts from package maintainers as
-they constantly have to keep up with software developers. Especially
-when it comes to the thousands of newest libraries that are part of
-recent programming languages and that keep on increasing.&lt;/p&gt;&lt;p&gt;Various users will want precise things out of a system. Enterprise
-environments and mission critical tasks will prefer stable releases,
-and software developers or normal end users may prefer to have the
-ability to use the latest current software.&lt;/p&gt;&lt;h3&gt;Interdistribution standard&lt;/h3&gt;&lt;p&gt;With all this, can’t there be an interdistribution standard that creates
-order, and would we want such standard.&lt;/p&gt;&lt;p dir="ltr"&gt;At the user level, the differences are not always noticeable, most
-of the time everything seems to work as Unix systems are expected to
-work.&lt;br dir="ltr"&gt;
-There’s no real standard between distributions other than that they are
-more or less following the POSIX standards.&lt;/p&gt;&lt;p&gt;Within the Linux ecosystem, the Free Standards Group tries to improve
-interoperability of software by fixing a common Linux ABI, file system
-hierarchy, naming conventions, and more. But that’s just the tip of the
-iceberg when it comes to having something that works interdistributions.&lt;/p&gt;&lt;p&gt;Furthermore, each part of the layering we’ve seen before could be said
-to have its own standards: There are desktop interoperability standards,
-filesystem standards, networking standards, security standards, etc..&lt;/p&gt;&lt;p&gt;The biggest player right now when it comes to this is systemd in
-association with the free desktop group, it tries to create (force)
-an interdistribution standard for Linux distribution.&lt;/p&gt;&lt;p&gt;But again, the big Question: Do we actually want such inter-distribution
-standards, can’t we be happy with the mix and match we currently
-have. Would we profit from such thing?&lt;/p&gt;&lt;h2&gt;The package manager and packaging&lt;/h2&gt;&lt;p&gt;Let’s now pay attention to the package themselves, how we store them, how
-we give secure access to them, how we are able to search amongst them,
-download them, install them, remove them, and anything related to their
-local management, versioning, and configuration.&lt;/p&gt;&lt;h3&gt;Method of distribution&lt;/h3&gt;&lt;p&gt;How do we distribute software, share them, what’s the front-end to
-this process.&lt;/p&gt;&lt;p&gt;First of all, where do we store this software.&lt;/p&gt;&lt;p dir="ltr"&gt;Historically and still today, software can be shared via physical
-medium such as CD-ROM, DVD, USBs, etc.. This is common when it comes
-to proprietary vendors to have the distribution come with a piece of
-hardware they are selling, it’s also common for the procurement of the
-initial installation image.&lt;br dir="ltr"&gt;
-However, with today’s hectic software growth, using a physical medium
-isn’t flexible. Sharing over the internet is more convenient, be it via
-FTP, HTTP, HTTPS, a publicly available svn or git repo, via central
-website hubs such as Github or appliation stores such the ones Apple
-and Google provide.&lt;/p&gt;&lt;p&gt;A requirement is that the storage and the communication to it should be
-secure, reliable against failures, and accessible from anywhere. Thus,
-replication is often done to avoid failures but also to have a sort of
-edge network speeding effect across the world, load balancing. Replication
-could be done in multiple ways, it could be a P2P distributed system
-for instance.&lt;/p&gt;&lt;p&gt;How we store it and in what format is up to the repository
-maintainers. Usually, this is a file system with a software API users
-can interact with over the wire. Two main format strategies exist:
-source based repositories and binary repositories.&lt;/p&gt;&lt;p&gt;Second of all, who can upload and manage the host of packages. Who has
-the right to replicate the repository.&lt;/p&gt;&lt;p&gt;As a source of truth for the users, it is important to make sure the
-packages have been verified and secured before being accepted on the
-repository.&lt;/p&gt;&lt;p&gt;Many distribution have the maintainers be the only ones that are able
-to do this. Giving them cryptographic keys to sign packages and validate
-them.&lt;/p&gt;&lt;p&gt;Others have their own users build the packages, send them to a central
-hub for automatic or manual verification and then uploaded to the
-repository. Each user having their own cryptographic key for signature
-verification.&lt;/p&gt;&lt;p&gt;This comes down to an issue of trust and stability. Having the users
-upload packages isn’t always feasible when using binary packages if the
-individual packages are not containerized properly.&lt;/p&gt;&lt;p&gt;There’s a third option, the road in between, having the two types, the
-core managed by the official distribution maintainers and the rest by
-its user community.&lt;/p&gt;&lt;p&gt;Finally, the packages reach the user.&lt;/p&gt;&lt;p dir="ltr"&gt;How the user interact with the repository locally and remotely depends on
-the package management choices. Do users cache a version of the remote
-repository, like is common with the BSD port tree system.&lt;br dir="ltr"&gt;
-How flexible can it be to track updates, locking versions of software,
-allowing downgrades. Can users download from different sources. Can
-users have multiple version of the same software on the their machine.&lt;/p&gt;&lt;h3&gt;Format&lt;/h3&gt;&lt;p&gt;As we’ve said there are two main philosophy of software sharing format:
-source code port-style and pre-built binary packages.&lt;/p&gt;&lt;p dir="ltr"&gt;The software that manages those on the user side is called the package
-manager, it’s the link with the repository. Though, in source based repo
-I’m not sure we can call them this way, but regardless I’ll still refer
-to them as such.&lt;br dir="ltr"&gt;
-Many distributions create their own or reuse a popular one. It does the
-search, download, install, update, and removal of local software. It’s
-not a small task.&lt;/p&gt;&lt;p&gt;The rule of the book is that if it isn’t installed by the package manager
-then it won’t be aware of its existence. Noting that distributions don’t
-have to be limited to a single package manager, there could be many.&lt;/p&gt;&lt;p&gt;Each package manager relies on a specific format and metadata to be able
-to manage software, be it source or binary formatted. This format can
-be composed of a group of files or a single binary file with specific
-information segments that together create recipes that help throughout
-its lifecycle. Some are easier to put together than others, incidentally
-allowing more user contributions.&lt;/p&gt;&lt;p&gt;Here’s a list of common information that the package manager needs:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The package name&lt;/LI&gt;&lt;LI&gt;The version&lt;/LI&gt;&lt;LI&gt;The description&lt;/LI&gt;&lt;LI&gt;The dependencies on other packages, along with their versions&lt;/LI&gt;&lt;LI&gt;The directory layout that needs to be created for the package&lt;/LI&gt;&lt;LI&gt;Along with the configuration files that it needs and if they should
-be overwritten or not&lt;/LI&gt;&lt;LI&gt;An integrity, or ECC, on all files, such as SHA256&lt;/LI&gt;&lt;LI&gt;Authenticity, to know that it comes from the trusted source, such as
-cryptographic signatures checked against a trusted store on the user’s
-machine&lt;/LI&gt;&lt;LI&gt;If this is a group of package, meta package, or a direct one&lt;/LI&gt;&lt;LI&gt;The actions to take on certain events: pre-installation,
-post-installation, pre-removal, and post removal&lt;/LI&gt;&lt;LI&gt;If there are specific configuration flags or parameter to pass to the
-package manager upon installation&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;So what’s the advantage of having pre-compiled binary packages instead
-of cloning the source code and compiling ourselves. Won’t that remove
-a burden from package maintainers.&lt;/p&gt;&lt;p dir="ltr"&gt;One advantage is that pre-compiled packages are convenient, it’s easier to
-download them and run them instantly. It’s also hard, if not impossible,
-these days, and energy intensive, to compile huge software such as
-web browsers.&lt;br dir="ltr"&gt;
-Another point, is that proprietary software are often already distributed
-as binary packages, which would creates a mix of source and binary
-packages.&lt;/p&gt;&lt;p dir="ltr"&gt;Binary formats are also space efficient as the code is stored in a
-compressed archived format. For example: APK, Deb, Nix, ORB, PKG, RPM,
-Snap, pkg.tar.gz/xz, etc..&lt;br dir="ltr"&gt;
-Some package managers may also choose to leave the choice of compression
-up to the user and dynamically discern from its configuration file how
-to decompress packages.&lt;/p&gt;&lt;p&gt;Let’s add that there exists tools, such as “Alien”, that facilitate the
-job of package maintainers by converting from one binary package format
-to another.&lt;/p&gt;&lt;h2&gt;Conflict resolution &amp;amp; Dependencies management&lt;/h2&gt;&lt;h3&gt;Resolving dependencies&lt;/h3&gt;&lt;p&gt;One of the hardest job of the package manager is to resolve dependencies.&lt;/p&gt;&lt;p dir="ltr"&gt;A package manager has to keep a list of all the packages and their
-versions that are currently installed on the system and their
-dependencies.&lt;br dir="ltr"&gt;
-When the user wants to install a package, it has to take as input the
-list of dependencies of that package, compare it against the one it
-already has and output a list of what needs to be installed in an order
-that satisfies all dependencies.&lt;/p&gt;&lt;p&gt;This is a problem that is commonly encountered in the software development
-world with build automation utilities such as make. The tool creates a
-directed acyclic graph (DAG), and using the power of graph theory and the
-acyclic dependencies principle (ADP) tries to find the right order. If
-no solution is found, or if there are conflicts or cycles in the graph,
-the action should be aborted.&lt;/p&gt;&lt;p&gt;The same applies in reverse, upon removal of the package. We have to make
-a decision, do we remove all the other packages that were installed as
-a dependency of that single one. What if newer packages depend on those
-dependencies, should we only allow the removal of the unused dependencies.&lt;/p&gt;&lt;p&gt;This is a hard problem, indeed.&lt;/p&gt;&lt;h3&gt;Versioning&lt;/h3&gt;&lt;p&gt;This problem increases when we add the factor of versioning to the mix,
-if we allow multiple versions of the same software to be installed on
-the system.&lt;/p&gt;&lt;p&gt;If we don’t, but allow switching from one version to another, do we also
-switch all other packages that depend on it too.&lt;/p&gt;&lt;p&gt;Versioning applies everywhere, not only to packages but to release
-versions of the distribution too. A lot of them attach certain version
-of packages to specific releases, and consequentially releases may have
-different repositories.&lt;/p&gt;&lt;p&gt;The choice of naming conventions also plays a role, it should convey to
-users what they are about and if any changes happened.&lt;/p&gt;&lt;p&gt;Should the package maintainer follow the naming convention of the software
-developer or should they use their own. What if the name of two software
-conflict with one another, this makes it impossible to have it in the
-repo, some extra information needs to be added.&lt;/p&gt;&lt;p&gt;Do we rely on semantic versioning, major, minor, patch, or do we rely
-on names like so many distributions releases do (toy story, deserts,
-etc..), or do we rely on the date it was released, or maybe simply an
-incremental number.&lt;/p&gt;&lt;p&gt;All those convey meaning to the user when they search and update packages
-from the repository.&lt;/p&gt;&lt;h3&gt;Static vs dynamic linking&lt;/h3&gt;&lt;p&gt;One thing that may not apply to source based distro, is the decision
-between building packages as statically linked to libraries or dynamically
-linked.&lt;/p&gt;&lt;p&gt;Dynamic linking is the process in which a program chooses not to include
-a library it depends upon in its executable but only a reference to it,
-which is then resolved at run-time by a dynamic linker that will load
-the shared object in memory upon usage. On the opposite, static linking
-means storing the libraries right inside the compiled executable program.&lt;/p&gt;&lt;p&gt;Dynamic linking is useful when many software rely on the same library,
-thus only a single instance of the library has to be in memory at a time.
-Executables sizes are also smaller, and when it is updated all programs
-relying on it get the benefit (as long as the interfaces are the same).&lt;/p&gt;&lt;p&gt;So what does this have to do with distributions and package management.&lt;/p&gt;&lt;p&gt;Package managers in dynamic linking environment have to take care of
-the versions of the libraries that are installed and which packages
-depend on them. This can create issues if different packages rely on
-different versions.&lt;/p&gt;&lt;p&gt;For this reason, some distro communities have chosen to get rid of dynamic
-linking altogether and rely on static linking, at least for things that
-are not related to the core system.&lt;/p&gt;&lt;p&gt;Another incidental advantage of static linking is that it doesn’t have
-to resolve dependencies with the dynamic linker, which makes it gain a
-small boost in speed.&lt;/p&gt;&lt;p&gt;So static builds simplify the package management process. There
-doesn’t need to be a complex DAG because everything is self
-contained. Additionally, this can allow to have multiple versions of the
-same software installed alongside one another without conflicts. Updates
-and rollbacks are not messy with static linking.&lt;/p&gt;&lt;p dir="ltr"&gt;This gives rise to more containerised software, and continuing on this
-path leads to market platforms such as Android and iOS where distribution
-can be done by the individual software developers themselves, skipping the
-middle-man altogether and giving the ability for increasingly impatient
-users to always have the latest version that works for their current
-OS. Everything is self-packaged.&lt;br dir="ltr"&gt;
-However, this relies heavily on the trust of the
-repository/marketplace. There needs to be many security mechanisms in
-place to not allow rogue software to be uploaded. We’ll talk more about
-this when we come back to containers&lt;/p&gt;&lt;p&gt;This is great for users and, from a certain perspective, software
-developers too as they can directly distribute pre-built packages,
-especially when there’s a stable ABI for the base system.&lt;/p&gt;&lt;p&gt;All this breaks the classic distribution scheme we’re accustomed to on
-the desktop.&lt;/p&gt;&lt;p&gt;Is it all roses and butterflies, though.&lt;/p&gt;&lt;p dir="ltr"&gt;As we’ve said, packages take much more space with static linking, thus
-wasting resources (storage, memory, power).&lt;br dir="ltr"&gt;
-Moreover, because it’s a model where software developers push directly
-to users, this removes the filtering that distribution maintainers have
-over the distro, and encourages licenses uncertainties. There’s no more
-overall philosophies that surrounds the distribution.&lt;br dir="ltr"&gt;
-There’s also the issue of library updates, the weight is on the software
-developers to make sure they have no vulnerabilities or bugs in their
-code. This adds a veil on which software uses what, all we see is the
-end products.&lt;/p&gt;&lt;p&gt;From a software developer using this type of distribution perspective,
-this adds extra steps to download the source code of each libraries their
-software depends on, and build each one individually. Turning the system
-into a source based distro.&lt;/p&gt;&lt;h3&gt;Reproducibility&lt;/h3&gt;&lt;p&gt;Because package management is increasingly becoming messier the past few
-years, a new trend has emerged to put back a sense of order in all this,
-reproducibility.&lt;/p&gt;&lt;p dir="ltr"&gt;It has been inspired by the world of functional programming and the world
-of containers. Package managers that respect reproducibility have each
-of their builds asserted to always produce the same output.&lt;br dir="ltr"&gt;
-They allow for packages of different versions to be installed alongside
-one another, each living in its own tree, and it allows normal users
-to install packages only them can access. Thus, many users can have
-different packages.&lt;/p&gt;&lt;p&gt;They can be used as universal package managers, installed alongside any
-other package managers without conflict.&lt;/p&gt;&lt;p&gt;The most prominent example is Nix and Guix, that use a purely functional
-deployment model where software is installed into unique directories
-generated through cryptographic hashes. Dependencies from each software
-are included within each hash, solving the problem of dependency
-hell. This approach to package management promises to generate more
-reliable, reproducible, and portable packages.&lt;/p&gt;&lt;h3&gt;Stateless and verifiable systems&lt;/h3&gt;&lt;p&gt;The discussion about trust, portability, and reproducibility can also
-be applied to the whole system itself.&lt;/p&gt;&lt;p&gt;When we talked about repositories as marketplaces, where software
-developers push directly to it and the users have instant access to the
-latest version, we said it was mandatory to have additional measures
-for security.&lt;/p&gt;&lt;p&gt;One of them is to containerised, to sandbox every software. Having each
-software run in their own space not affecting the rest of the system
-resources. This removes the heavy burden of auditing and verifying each
-and every software. Many solutions exist to achieve this sandboxing, from
-docker, chroot, jails, firejail, selinux, cgroups, etc..&lt;/p&gt;&lt;p&gt;We could also distance the home directory of the users, making them
-self-contained, never installing or modifying the globally accessible
-places.&lt;/p&gt;&lt;p&gt;This could let us have the core of the system verifiable as it is not
-changed, as it stays pristine. Making sure it’s secure would be really
-easy.&lt;/p&gt;&lt;p&gt;The idea of having the user part of the distro as atomic, movable,
-containerized, and the rest reproducible is game changing. But again,
-do we want to move to a world where every distro is interchangeable?&lt;/p&gt;&lt;h2&gt;Do Distros matter with containers, virtualisation, and specific and universal package managers&lt;/h2&gt;&lt;p&gt;It remains to be asked if distributions still have a role today with
-all the containers, virtualisation, and specific and universal package
-managers.&lt;/p&gt;&lt;p&gt;When it comes to containers, they are still very important as they most
-often are the base of the stack the other components build upon.&lt;/p&gt;&lt;p&gt;The distribution is made up of people that work together to build and
-distribute the software and make sure it works fine. It isn’t the role
-of the person managing the container and much more convenient for them
-to rely on a distribution.&lt;/p&gt;&lt;p dir="ltr"&gt;Another point, is that containers hide vulnerabilities, they aren’t
-checked after they are put together, while on the other hand, distribution
-maintainers, have as a role to communicate and follow up on security
-vulnerabilities and other bugs. Community is what solves daunting problems
-that everyone shares.&lt;br dir="ltr"&gt;
-A system administrator building containers can’t possibly have the
-knowledge to manage and builds hundreds of software and libraries and
-ensure they work well together.&lt;/p&gt;&lt;h3&gt;If packages are self-contained&lt;/h3&gt;&lt;p&gt;Do distributions matter if packages are self-contained?&lt;/p&gt;&lt;p&gt;To an extent they do as they could be in this ecosystem the
-providers/distributors of such universal self-contained packages. And
-as we’ve said it is important to keep the philosophy of the distro and
-offer a tested toolbox that fits the use case.&lt;/p&gt;&lt;p&gt;What’s more probable is that we’ll move to a world with multiple package
-managers, each trusted for its specific space and purpose. Each with a
-different source of philosophical and technical truth.&lt;/p&gt;&lt;h3&gt;Programming language package management specific&lt;/h3&gt;&lt;p&gt;This phenomena is already exploding in the world of programming language
-package management.&lt;/p&gt;&lt;p&gt;The speed and granularity at which software is built today is almost
-impossible to follow using the old method of packaging. The old software
-release life cycle has been thrown out the window. Thus language-specific
-tools were developed, not limited to installing libraries but also
-software. We can now refer to the distribution offered package manager as
-system-level and others as application-level or specific package managers.&lt;/p&gt;&lt;p&gt;Consequentially, the complexity and conflicts within a system has
-exploded, and distribution package managers are finding it pointless
-to manage and maintain anything that can already be installed via those
-tools. Vice-versa, the specific tool makers are also not interested in
-having what they provide included in distribution system-level package
-managers.&lt;/p&gt;&lt;p&gt;Package managers that respect reproducibility, such as Nix, that we’ve
-mentioned, handle such cases more cleanly as they respect the idea
-of locality, everything residing withing a directory tree that isn’t
-maintained by the system-level package manager.&lt;/p&gt;&lt;p&gt;Again, same conclusion here, we’re stuck with multiple package managers
-that have different roles.&lt;/p&gt;&lt;h3&gt;Going distro-less&lt;/h3&gt;&lt;p&gt;A popular topic in the container world is “distro-less”.&lt;/p&gt;&lt;p&gt;It’s about replacing everything provided in a distribution, removing
-it’s customization, or building an image from scratch and maybe relying
-on universal package managers or none.&lt;/p&gt;&lt;p&gt;The advantage of such containers is that they are really small and
-targeted for a single purpose. This let the sysadmin have full control
-of what happens on that box.&lt;/p&gt;&lt;p&gt;However, remember that there’s a huge cost to controlling everything,
-just like we mentioned earlier. This moves the burden upon the sysadmin
-to manage and be responsible to keep up with bugs and security updates
-instead of the distribution maintainers&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p&gt;With everything we’ve presented about distributions, I hope we now have
-a clearer picture of what they are providing and their place in our
-current times.&lt;/p&gt;&lt;p&gt;What’s your opinion on this topic? Do you like the diversity? Which stack
-would you use to build a distribution? What’s your take on static builds,
-having users upload their own software to the repo? Do you have a solution
-to the trust issue? How do you see this evolve?&lt;/p&gt;&lt;p dir="ltr"&gt;More discussion here: &lt;a href="https://nixers.net/showthread.php?tid=2192" dir="ltr"&gt;https://nixers.net/showthread.php?tid=2192&lt;/a&gt;&lt;/p&gt;&lt;p&gt;What is a distribution&lt;/p&gt;&lt;p&gt;Different ways to approach it&lt;/p&gt;&lt;p&gt;Package management&lt;/p&gt;&lt;p&gt;Do Distros matter with containers, virtualisation, and specific and universal package managers&lt;/p&gt;&lt;p&gt;Attributions:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Marjory Collins / Public domain&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
-If you want to have a more in depth discussion I'm always available by &lt;a href="https://venam.nixers.net/blog/about.html" dir="ltr"&gt;email or irc&lt;/a&gt;.
-We can discuss and argue about what you like and dislike, about new ideas to consider, opinions, etc..&lt;br dir="ltr"&gt;
-If you don't feel like "having a discussion" or are intimidated by emails
-then you can simply say something small in the comment sections below
-and/or share it with your friends.
-&lt;/p&gt;&lt;h4&gt;No Comments Yet&lt;/h4&gt;&lt;div contenteditable="true"&gt;Type Comment Here (at least 3 chars)&lt;/div&gt;</description><pubDate>Thu, 02 Apr 2020 03:31:35 -0500</pubDate></item><item><title>Notes on the M4 Macro Language</title><link>https://lobste.rs/s/pxtss0</link><description>&lt;h2&gt;About this document&lt;/h2&gt;&lt;h3&gt;Which m4?&lt;/h3&gt;&lt;p dir="ltr"&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;That should work with just top-of-master-branch LLVM/Clang (and a very simple test.c). I did end up needing to change LLVM in a few ways in the end, but it’s really fairly minimal, so much thanks to the IBM folks for doing the hard part of the work for me!&lt;/p&gt;&lt;h3&gt;Now do Swift&lt;/h3&gt;&lt;p&gt;Being able to compile a simple test program was a great milestone, but I had to do a fair bit of work before I could get swiftc to compile a whole BitPaint. Here are some of the highlights:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Teach Swift about the PPC/AIX target.&lt;/strong&gt; This mostly involved adding &lt;code dir="ltr"&gt;ppc&lt;/code&gt; and &lt;code dir="ltr"&gt;AIX&lt;/code&gt; cases to switch statements across the Swift compiler, but also involved making a simple description of the Swift calling conventions for Clang (which I cribbed from the 32-bit ARM implementation) and then assuring the PPC/AIX backend that this was an okay calling convention to be using. I got lucky in the amount of work I had to do here because Swift already supports 32-bit ARM, little-endian 64-bit PowerPC (when running Linux), and big-endian 64-bit s390x (another IBM architecture); all the pieces were already in place.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Add support for Pascal strings.&lt;/strong&gt; The Mac’s first high-level programming language was Pascal, not C! As such, the default format for strings throughout the Toolbox APIs was &lt;em dir="ltr"&gt;Pascal strings&lt;/em&gt; (a length byte followed by string data) rather than &lt;em dir="ltr"&gt;C strings&lt;/em&gt; (string data followed by a null byte). With the &lt;code dir="ltr"&gt;-fpascal-strings&lt;/code&gt; command-line flag, Clang supports static Pascal strings with the syntax &lt;code dir="ltr"&gt;"\pHello World"&lt;/code&gt;. The &lt;code dir="ltr"&gt;\p&lt;/code&gt; would be replaced by the length of the string (which must be no more than 255 bytes) so that you didn’t have to count it yourself. &lt;a href="https://belkadan.com/source/swift/commitdiff/293d4b39ab9bbfd3f0762b6883da860e3601d373" dir="ltr"&gt;I&amp;nbsp;hacked this into Swift as well&lt;/a&gt;, and while my implementation probably has problems&lt;sup dir="ltr"&gt;&lt;a href="https://belkadan.com/blog/2020/04/Swift-on-Mac-OS-9/#fn:utf-8" dir="ltr"&gt;10&lt;/a&gt;&lt;/sup&gt;, it was enough to get simple things working.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Turn off reflection support and nearly all runtime metadata.&lt;/strong&gt; The Swift runtime is very powerful, but I didn’t want to write much of a runtime for this project, which was primarily about calling a bunch of C functions. Beyond that, though, the default format for Swift metadata makes heavy use of &lt;em dir="ltr"&gt;relative addressing&lt;/em&gt; (mainly to reduce startup time, but &lt;a href="https://youtu.be/G3bpj-4tWVU" dir="ltr"&gt;learn more here&lt;/a&gt;) as well as symbols pointing inside of a global, and the LLVM XCOFF implementation doesn’t (yet?) support either. So to get to a working proof-of-concept, I aggressively commented out parts of IRGen that made use of either feature. I’d like to get some of the static metadata back at some point, but reflection’s not something I’m ever interested in. Probably.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Make a smol stdlib.&lt;/strong&gt; The full Swift standard library has a &lt;em dir="ltr"&gt;lot&lt;/em&gt; of things in it I don’t need, and some that I wouldn’t even know &lt;em dir="ltr"&gt;how&lt;/em&gt; to implement. (What’s a String in a world that can’t assume Unicode?) But all the logic to integrate with C code is based on having some basic types in the standard library (like Int16 and UnsafeMutablePointer). What I ended up doing was taking a subset of the standard library sources, and then adding additional files and commenting things out until it worked.&lt;/p&gt;&lt;p dir="ltr"&gt;…haha, nope, even that wasn’t good enough. My early attempts at this compiled okay, but they managed to crash PPCLink when I tried to write a test program, presumably because there’s just &lt;em dir="ltr"&gt;too many symbols&lt;/em&gt; in the standard library. So I cut things down to an even &lt;em dir="ltr"&gt;smaller&lt;/em&gt; subset, and that (eventually) worked. Of course, I was working on this at the same time as I was modifying the compiler to get to a working proof-of-concept, so I think I ultimately went further than I needed to. (A bunch of symbols are only used for runtime metadata purposes.) As mentioned above, non-optimized builds of non-trivial programs don’t work yet, so I don’t know if I’m in the danger zone or not, but I might try to add a few more things back in.&lt;/p&gt;&lt;p dir="ltr"&gt;Rather than modify the actual Swift repo for this, I decided to keep my stripped-down standard library separate, so you can find it in the &lt;a href="https://belkadan.com/source/ppc-swift-project" dir="ltr"&gt;ppc-swift-project&lt;/a&gt; repo. &lt;strong dir="ltr"&gt;This might be a good reference for someone looking for a C-compatible, runtime-less subset of Swift&lt;/strong&gt;, perhaps for an embedded or other resource-constrained environment.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Disable jump tables.&lt;/strong&gt; LLVM optimizes switch statements into &lt;em dir="ltr"&gt;&lt;a href="https://en.wikipedia.org/wiki/Branch_table" dir="ltr"&gt;jump tables&lt;/a&gt;&lt;/em&gt; when it looks like it’ll help performance and/or code size, but its default implementations of jump tables also weren’t supported in the LLVM XCOFF implementation. I imagine the AIX folks will get around to implementing this sooner or later, but for now I just disabled jump tables entirely, forcing the compiler to emit switches as a series of &lt;code dir="ltr"&gt;if&lt;/code&gt;s instead.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;You can check out all the changes in the &lt;a href="https://belkadan.com/source/swift/shortlog/refs/heads/ppc-swift" dir="ltr"&gt;swift&lt;/a&gt; and &lt;a href="https://belkadan.com/source/llvm-project/shortlog/refs/heads/ppc-swift" dir="ltr"&gt;llvm-project&lt;/a&gt; repos, if you’re curious. Very few are appropriate for upstreaming to their respective projects, but I’ll try to get the ones that &lt;em dir="ltr"&gt;are&lt;/em&gt; relevant upstreamed at some point.&lt;/p&gt;&lt;h3&gt;A week of mysterious failures&lt;/h3&gt;&lt;p&gt;Having made all the changes above, I had an app that worked! In Swift!&lt;/p&gt;&lt;p dir="ltr"&gt;…except, it only worked some of the time. I’d change something arbitrary and suddenly events wouldn’t register any more. It got so bad that I added a counter: after &lt;em dir="ltr"&gt;any&lt;/em&gt; ten events, exit the app. Without that, I’d get trapped, unable to even quit without restarting the (virtual) machine. Even in a seemingly working version, my friend Nadine reported that trying to use the Reset command caused the app to crash. What was going on?&lt;/p&gt;&lt;p dir="ltr"&gt;I decided I had to get to the bottom of something strange I’d seen earlier: even the &lt;em dir="ltr"&gt;Clang&lt;/em&gt; version of the program didn’t work correctly when I turned on optimizations. It’s possible that that was a bug in IBM’s newly-added AIX support, or 32-bit PowerPC support since it’s not such a common platform, or even LLVM’s optimizations. It could be that AIX and Classic Mac OS really weren’t as similar as I thought they were, and so my code wasn’t agreeing with the system code on how things were supposed to work. And it could be that the optimized code was using an instruction that SheepShaver didn’t support, though that didn’t really seem to match the symptoms.&lt;/p&gt;&lt;p&gt;And the symptoms were weird. Some local variables were getting corrupted, but others weren’t. So I started testing everything I could think of:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;was the stack aligned properly?&lt;/LI&gt;&lt;LI&gt;was the stack pointer somehow not getting restored properly?&lt;/LI&gt;&lt;LI&gt;was the glue code for cross-library calls trashing other data?&lt;sup dir="ltr"&gt;&lt;a href="https://belkadan.com/blog/2020/04/Swift-on-Mac-OS-9/#fn:indirect" dir="ltr"&gt;11&lt;/a&gt;&lt;/sup&gt; (see the &lt;a href="https://developer.apple.com/library/archive/documentation/mac/pdf/MacOS_RT_Architectures.pdf" dir="ltr"&gt;Mac OS Runtime Architectures&lt;/a&gt; guide)&lt;/LI&gt;&lt;LI&gt;was there something causing the Code Fragment Manager (dynamic linker) to put the wrong address in for cross-library calls?&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Without being able to rely on logging, I made the simplest textual debug output facility I could: modifying the title of a menu. I wrote C functions that tracked the current stack pointer to make sure it was getting restored properly; I made good use of the &lt;code dir="ltr"&gt;DumpXCOFF&lt;/code&gt; and &lt;code dir="ltr"&gt;DumpPEF&lt;/code&gt; tools that came with MPW; I learned how PEF “pidata” (“pattern-initialized data”) worked and tried to step through CFM relocations by hand (again, see the &lt;a href="https://developer.apple.com/library/archive/documentation/mac/pdf/MacOS_RT_Architectures.pdf" dir="ltr"&gt;Mac OS Runtime Architectures&lt;/a&gt; guide). I even started trying to decompile some of the actual system libraries to see if they were doing anything suspicious, even though a bug in the actual Mac OS&amp;nbsp;9 seemed incredibly unlikely. This led all the way to learning about the “toolbox ROM”, which isn’t actually ROM at all: it’s a boot script and a compressed set of system libraries. (It’s called that because it’s content that &lt;em dir="ltr"&gt;used&lt;/em&gt; to be in ROM.) Fortunately &lt;a href="https://github.com/cebix/macemu/blob/2e302d60a337daa252c6992335e6365a9beac83f/SheepShaver/src/rom_patches.cpp#L148" dir="ltr"&gt;SheepShaver already knows how to load it&lt;/a&gt;, which meant that I could do the same decompression and then manually split out the individual libraries.&lt;/p&gt;&lt;p&gt;Yeah, I got way off in the weeds. I learned a lot, though!&lt;/p&gt;&lt;p&gt;Finally, I looked at the decompiled optimized code—the C version, not the Swift version. I observed that the variable getting corrupted was in general-purpose register 13. That’s supposed to be an okay place to put data in Classic Mac OS (and in 32-bit AIX, and in 32-bit Mac OS X), but I decided I didn’t trust that, particularly because that register had been used to track thread-local storage in 64-bit AIX. So I marked r13 as reserved…&lt;/p&gt;&lt;p dir="ltr"&gt;…and the problems went away. Optimized, non-optimized, even with &lt;a href="https://clang.llvm.org/docs/ClangCommandLineReference.html#cmdoption-clang-fstack-protector" dir="ltr"&gt;&lt;code dir="ltr"&gt;-fstack-protector-all&lt;/code&gt;&lt;/a&gt; on. And Swift.&lt;/p&gt;&lt;p&gt;(Debugging this took about a week, unfortunately, which led to this project being a little less ambitious than I originally wanted.)&lt;/p&gt;&lt;h3&gt;“Future directions”&lt;/h3&gt;&lt;p&gt;What didn’t I get to? An awful lot, actually.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;There’s no runtime at all, which means no dynamic allocation (among other things).&lt;/LI&gt;&lt;LI&gt;There’s no type metadata, which means no generics (that aren’t optimized away).&lt;/LI&gt;&lt;LI&gt;There’s no field metadata, which means no key paths (that aren’t optimized away).&lt;/LI&gt;&lt;LI&gt;There’s no Unicode support, so no Strings. Arguably I could make a String without Characters, or a String using &lt;a href="https://en.wikipedia.org/wiki/Mac_OS_Roman" dir="ltr"&gt;MacRoman&lt;/a&gt; as the native encoding, but it wouldn’t necessarily look much like today’s Swift.String.&lt;/LI&gt;&lt;LI&gt;There are a bunch of other standard library things missing because I wanted to get the proof-of-concept working, but also because &lt;code dir="ltr"&gt;PPCLink&lt;/code&gt; was choking on large object files. If I do get more standard library stuff working, I’ll probably split it out of the ‘Swift’ module somehow.&lt;/LI&gt;&lt;LI&gt;I had to mess with &lt;a href="https://en.wikipedia.org/wiki/Linkage_(software)" dir="ltr"&gt;linkage&lt;/a&gt; in a number of ways to make the LLVM XCOFF backend happy, so I’m not sure multi-file builds would work. I didn’t even test it.&lt;/LI&gt;&lt;LI&gt;I’m using Carbon, which means that my program &lt;em dir="ltr"&gt;ought&lt;/em&gt; to work on older versions of Mac OS X as well, but my friend Nadine tried and it didn’t, and it wasn’t a priority to figure out.&lt;/LI&gt;&lt;LI&gt;I wanted to try making nice abstractions on top of the some of the Toolbox APIs.&lt;/LI&gt;&lt;LI&gt;I wanted to make more complicated example apps!&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Maybe I’ll follow up on some of these, but I’ve been putting a lot of effort into making sure I could finish this by April 1, so I should probably get to some of the things I’ve been neglecting in favor of this project instead.&lt;/p&gt;&lt;h3&gt;Summary&lt;/h3&gt;&lt;p&gt;This project took a lot of time, even though I (1) know a lot about compilers and (2) hacked my way to success instead of being careful and maintaining proper software development practices. But I learned a lot, and I accomplished a goal I’ve had in the back of my mind for a long time.&lt;/p&gt;&lt;p&gt;If you made it all the way to the end of the article, here’s a reward: BitPaint running under Classic on Mac OS X 10.2 (also courtesy of Nadine).&lt;/p&gt;&lt;img src="https://belkadan.com/blog/2020/04/Swift-on-Mac-OS-9/classic.jpg" alt="You can see BitPaint running in the middle, and the Classic version of Apple System Profiler...but also the Mac OS X &amp;quot;About This Computer&amp;quot; box showing 10.2.8." width="665" height="499"&gt;&lt;p&gt;Stay safe, everyone, and help the people around you when you can. And if anybody makes something with this project, I want to hear about it!&lt;/p&gt;</description><pubDate>Thu, 02 Apr 2020 05:59:35 -0500</pubDate></item><item><title>How many warnings should your JavaScript app have?</title><link>https://lobste.rs/s/kup4nk</link><description>&lt;h1&gt;How many warnings should your JavaScript app have?&lt;/h1&gt;&lt;p&gt;JavaScript warnings are these messages being displayed in yellow or red in your JavaScript console or terminal. They make no sense at all in general but they are a good indication of the health of your app. The points below will give you a general idea of how many warnings you should expect in your app:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;0 warnings&lt;/strong&gt;: the app is not working at all&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;5 warnings&lt;/strong&gt;: app is probably starting but crashing soon after - try to find why it crashes. You'd think you could read the warnings to learn why it doesn't work, but that's not what warnings are for.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;50 warnings&lt;/strong&gt;: That's the soft spot - most likely everything's running smoothly&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;200+ warnings&lt;/strong&gt;: It might be an indication of a problem, but it could just be that a package developer decided to print pages of warnings for something they thought was very important. Everything still works the same, and the developer has moved on to more important stuff so get used to see these warnings all the time.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;20,000+ warnings&lt;/strong&gt;: you need to do something. The app still works fine of course, but the amount of warnings being printed is starting to slow everything down. This is usually when it makes sense to throw away the whole app and start a new one (╯°□°）╯︵ ┻━┻ New apps have less warnings and are more fun to work on anyway.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;img src="https://camo.githubusercontent.com/1100f4d9f86e4c4de99c8821fb971cb7aeaca1b7/68747470733a2f2f692e696d6775722e636f6d2f726d43523168642e706e67" width="330" height="201"&gt;&lt;p&gt;&lt;em&gt;An example of a well working app. All tests are passing with flying colours.&lt;/em&gt;&lt;/p&gt;</description><pubDate>Wed, 01 Apr 2020 10:24:14 -0500</pubDate></item><item><title>Open reimplementation of Might and Magic 6 7 8 game engine</title><link>https://lobste.rs/s/e8fwaf</link><description>&lt;h1&gt;Might and Magic Trilogy &lt;/h1&gt;&lt;img src="https://camo.githubusercontent.com/1e9a96069c85dacb60da8e2c92dd6c08988ad779/68747470733a2f2f696d672e736869656c64732e696f2f62616467652f636861742d6f6e253230646973636f72642d677265656e2e737667" alt="" width="100" height="20"&gt;&lt;p&gt;Might and Magic VI-VIII engine remake using original data &amp;amp; code&lt;/p&gt;&lt;img src="https://raw.githubusercontent.com/SourceCodeDeleted/world-of-might-and-magic/master/install_images/gamestart.PNG" alt="alt text" width="914" height="728"&gt;&lt;h2&gt;Getting Started&lt;/h2&gt;&lt;OL&gt;&lt;LI&gt;You will require a GoG or any older version of Might and Magic 7 installed for engine to guess game assets folder. You can override  assets/game path in launcher.&lt;/LI&gt;&lt;LI&gt;Use any IDE with CMake integration (Visual Studio is good).&lt;/LI&gt;&lt;LI&gt;Build &amp;amp; run game directly, or via launcher.&lt;/LI&gt;&lt;/OL&gt;&lt;h2&gt;Getting Started (With IMAGES!)&lt;/h2&gt;&lt;summary&gt;Images&lt;/summary&gt;&lt;h2&gt;Development&lt;/h2&gt;&lt;p&gt;See the HACKING document in the source code root for information on how to compile.&lt;/p&gt;&lt;h2&gt;GamePlay&lt;/h2&gt;&lt;img src="https://raw.githubusercontent.com/SourceCodeDeleted/world-of-might-and-magic/master/install_images/gameplay.PNG" alt="alt text" width="914" height="711"&gt;&lt;h2&gt;Current build status&lt;/h2&gt;&lt;p&gt;Master: &lt;/p&gt;&lt;img src="https://camo.githubusercontent.com/f67bdb6c780eb7347bb9e2b072591a7ff1225a0b/68747470733a2f2f63692e6170707665796f722e636f6d2f6170692f70726f6a656374732f7374617475732f6e6c6e6f35766f37346a6636726e74332f6272616e63682f6d61737465723f7376673d74727565" alt="Build Status" width="106" height="20"&gt;&lt;p&gt;Code analysis: &lt;/p&gt;&lt;img src="https://camo.githubusercontent.com/7e7484914fbb77ca21a374e5e238e8ceae568fd4/68747470733a2f2f7363616e2e636f7665726974792e636f6d2f70726f6a656374732f31363433342f62616467652e737667" alt="Coverity Status" width="114" height="20"&gt;</description><pubDate>Thu, 02 Apr 2020 10:06:52 -0500</pubDate></item><item><title>Notes on the M4 Macro Language</title><link>https://lobste.rs/s/pxtss0</link><description>&lt;h2&gt;About this document&lt;/h2&gt;&lt;h3&gt;Which m4?&lt;/h3&gt;&lt;p dir="ltr"&gt;
 This document describes GNU m4, as included with Linux;
 areas of potential incompatibility of which I am aware
 are mentioned as they arise and highlighted with a
@@ -1763,7 +1391,379 @@ where, for several reasons, m4 was unsuitable.
 On the other hand, m4 is clearly a more sensible and
 appropriate choice for Unix sendmail's configuration
 macros.
-&lt;/p&gt;</description><pubDate>Thu, 02 Apr 2020 05:31:09 -0500</pubDate></item><item><title>How to SSH Properly</title><link>https://lobste.rs/s/tkrzdt</link><description>&lt;article&gt;&lt;time datetime="Apr 1, 2020"&gt;
+&lt;/p&gt;</description><pubDate>Thu, 02 Apr 2020 05:31:09 -0500</pubDate></item><item><title>Software Distributions And Their Roles Today</title><link>https://lobste.rs/s/2ezol9</link><description>&lt;img src="https://venam.nixers.net/blog/assets/mailroom.jpg" alt="Mailroom" width="416" height="428"&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;NB&lt;/em&gt;: This is a repost on this blog of a post made on &lt;a href="https://nixers.net/showthread.php?tid=2192" dir="ltr"&gt;nixers.net&lt;/a&gt;&lt;/p&gt;&lt;h2&gt;What is a distribution&lt;/h2&gt;&lt;p&gt;What are software distributions? You may think you know everything there
+is to know about the term software distribution, but take a moment to
+think about it, take a step back and try to see the big picture.&lt;/p&gt;&lt;p&gt;We often have in mind the thousands of Linux distributions when we hear
+it, however, this is far from limited to Linux, BSD, Berkeley Software
+Distribution, has software distribution right in the name. Android,
+and iOS are software distributions too.&lt;/p&gt;&lt;p dir="ltr"&gt;Actually, it’s so prevalent, we may have stopped paying attention to
+the concept. We find it hard to put a definition together.&lt;br dir="ltr"&gt;
+There’s definitely the part about distributing software in it. Software
+that may be commercial or not, open source or not.&lt;br dir="ltr"&gt;
+To understand it better maybe investigating what problems software
+distributions address would clear things up.&lt;/p&gt;&lt;p dir="ltr"&gt;Let’s imagine a world before software distributions, does that world
+exist? A world where software stays within boundaries, not shared with anyone
+outside of it.&lt;br dir="ltr"&gt;
+Once we break these boundaries and we want to share it, we’ll find that we
+have to package all the software together in a meaningful way, configure
+them so that they work well together, adding some glue in between when
+necessary, find the appropriate medium to distribute the bundle, get
+it all from one end to another safely, make sure it installs properly,
+and follow up on it.&lt;/p&gt;&lt;p&gt;Thus, software distribution is about the mechanism and the community
+that takes the burden and decisions to build an assemblage of coherent
+software that can be shipped.&lt;/p&gt;&lt;p&gt;The operating system, or kernel if you like, could be, and is often,
+part of the collage offered, a software just like others.&lt;/p&gt;&lt;p dir="ltr"&gt;The people behind it are called distribution maintainers, or package
+maintainers. Their role vary widely, they could write the software that
+stores all the packages called the repository, maintain a package manager
+with its format, maintain a full operating system installer, package and
+upload software they built or that someone else built on a specific time
+frame/life cycle, make sure there aren’t any malicious code uploaded on
+the repository, follow up on the latest security issues and bug reports,
+fix third party software to fit the distribution philosophical choices
+and configurations, and most importantly test, plan, and make sure
+everything holds up together.&lt;br dir="ltr"&gt;
+These maintainers are the source of trust of the distribution, they
+take responsibility for it. In fact, I think it’s more accurate to call
+them distributors.&lt;/p&gt;&lt;h2&gt;Different ways to approach it&lt;/h2&gt;&lt;p dir="ltr"&gt;There’s so many distributions it can make your head spin. The software
+world is booming, especially the open source one. For instance, we can
+find bifurcations of distributions that get copied by new maintainers
+and divert. This creates a tree like aspect, a genealogy of both common
+ancestors and/or influences in technical and philosophical choices.&lt;br dir="ltr"&gt;
+Overall, we now have a vibrant ecosystem where a thing learned on a
+branch can help a completely unrelated leaf on another tree. There’s
+something for everyone.&lt;/p&gt;&lt;h3&gt;Target and speciality&lt;/h3&gt;&lt;p&gt;So what could be so different between all those software distributions,
+why not have a single platform that everyone can build on.&lt;/p&gt;&lt;p&gt;One thing is specialization and differentiation. Each distro caters to
+a different audience and is built by a community with its philosophy.&lt;/p&gt;&lt;p&gt;Let’s go over some of them:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;A distribution can support specific sets and combinations of hardware:
+from CPU ISA to peripherals drivers&lt;/LI&gt;&lt;LI&gt;A distribution may be specifically optimized for a type of environment:
+Be it desktop, portable mobile device, servers, warehouse size computers,
+embedded devices, virtualised environment, etc..&lt;/LI&gt;&lt;LI&gt;A distribution can be commercially backed or not&lt;/LI&gt;&lt;LI&gt;A distribution can be designed for different levels of knowledge in a
+domain, professional or not. For instance, security research, scientific
+computing, music production, multimedia box, HUD in cars, mobile device
+interface, etc..&lt;/LI&gt;&lt;LI&gt;A distribution might have been certified to follow certain standards
+that need to be adhere to in professional settings, for example security
+standards and hardening&lt;/LI&gt;&lt;LI&gt;A distribution may have a single purpose in a commodity machine,
+specific machine functionalities such as firewall, a computer cluster,
+a router, etc..&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;That all comes to the raison d’être, the philosophy of the distribution,
+it guides every decision the maintainers have to make. It guides how they
+configure every software, how they think about security, portability,
+comprehensiveness.&lt;/p&gt;&lt;p dir="ltr"&gt;For example, if a distribution cares about free software, it’s going to
+be strict about what software it includes and what licenses it allows
+in its repository, having software to check the consistency of licenses
+in the core.&lt;br dir="ltr"&gt;
+Another example is if their goal is to target a desktop audience then
+internationalization, ease of use, user friendliness, having a large
+number of packages, is going to be prioritized. While, again, if the
+target is a real time embedded device, the size of the kernel is going
+to be small, configured and optimized for this purpose, and limiting and
+choosing the appropriate packages that work in this environment. Or if
+it’s targeted at advanced users that love having control of their machine,
+the maintainers will choose to let the users make most of the decisions,
+providing as many packages as possible with the latest version possible,
+with a loosely way to install the distribution, having a lot of libraries
+and software development tools.&lt;/p&gt;&lt;p&gt;What this means is that a distribution does anything it can to provide
+sane defaults that fit its mindset. It composes and configures a layer
+of components, a stack of software.&lt;/p&gt;&lt;h3&gt;The layering&lt;/h3&gt;&lt;p dir="ltr"&gt;Distribution maintainers often have at their disposition different blocks
+and the ability to choose them, stacking them to create a unit we call a
+software distribution. There’s a range of approaches to this, they could
+choose to have more, or less, included in what they consider the &lt;em dir="ltr"&gt;core&lt;/em&gt; of
+the distribution and what is externally less important to it.&lt;br dir="ltr"&gt;
+Moreover, sometimes they might even leave the core very small and loose,
+instead providing the glue software that makes it easy for the users
+to choose and swap the blocks at specific stages in time: installation,
+run time, maintenance mode, etc..&lt;/p&gt;&lt;p&gt;So what are those blocks of interdependent components.&lt;/p&gt;&lt;p&gt;The first part is the method of installation, this is what everything
+hinges on, the starting point.&lt;/p&gt;&lt;p&gt;The second part is the kernel, the real core of all operating systems
+today. But that doesn’t mean that the distribution has to enforce
+it. Some distributions may go as far as to provide multiple kernels
+specialised in different things or none at all.&lt;/p&gt;&lt;p&gt;The third part is the filesystem and file hierarchy, the component that
+manages where and how files are spread out on the physical or virtual
+hardware. This could be a mix and match where sections of the file system
+tree are stored on separate filesystems.&lt;/p&gt;&lt;p&gt;The fourth part is the init system, PID 1. This choice has generated
+a lot of contention these days. PID 1 being the mother process of all
+other processes on the system. What role it has and what functionalities
+it should include is a subject of debate.&lt;/p&gt;&lt;p&gt;The fifth part is composed of the shell utilities, what we sometimes
+refer to as the userland or user space, as its the first layer the user
+can directly interface with to have control of the operating system, the
+place where processes run. The userland implementations on Unix-based
+systems usually tries to follow the POSIX standard. There are many such
+implementations, also subject of contention.&lt;/p&gt;&lt;p&gt;The sixth part is made up of services and their management. The daemons,
+long running processes that keep the system in order. Many argue if the
+management functionality should be part of the init system or not.&lt;/p&gt;&lt;p&gt;The seventh part is documentation. Often it is forgotten but it is still
+very important.&lt;/p&gt;&lt;p&gt;The last part is about everything else, all the user interfaces and
+utilities a user can have and ways to manage them on the system.&lt;/p&gt;&lt;h3&gt;Stable releases vs Rolling&lt;/h3&gt;&lt;p dir="ltr"&gt;There exists a spectrum on which distributions place themselves when
+it comes to keeping up to date with the versions of the software they
+provide. This most often applies to external third party open source
+software.&lt;br dir="ltr"&gt;
+The spectrum is the following: Do we allow the users to always have the
+latest version of every software while running the risk of accidentally
+breaking their system, what we call bleeding edge or rolling distro, or
+do we take a more conservative approach and take the time to test every
+software properly before allowing it in the repository, while not having
+all the latest updates, features, and optimizations of those software,
+what we call release based distro.&lt;/p&gt;&lt;p&gt;The extreme of the first scenario would be to let users directly download
+from the software vendor/creator source code repository, or the opposite,
+let the software vendor/creator push directly to the distribution
+repository. Which could easily break or conflict with the user’s system
+or lead to security vulnerability. We’ll come back to this later, as
+this could be avoided if the software runs in a containerized environment.&lt;/p&gt;&lt;p dir="ltr"&gt;When it comes to release distributions, it usually involves having a long
+term support stable version that keeps receiving and syncing with the
+necessary security updates and bug fixes on the long run while having
+another version running a bit ahead testing the future changes. On
+specific time frames, users can jump to the latest release of the
+distribution, which may involve a lot of changes in both configuration
+and software.&lt;br dir="ltr"&gt;
+Some distributions decide they may want to break ABI or API of the kernel
+upon major releases, that means that everything in the system needs to
+be rebuilt and reinstalled.&lt;/p&gt;&lt;p&gt;The release cycle, and the rate of updates is really a spectrum.&lt;/p&gt;&lt;p dir="ltr"&gt;When it comes to updates, in both cases, the distribution maintainers
+have to decide how to communicate and handle them. How to let the users
+know what changes. If a user configuration was swapped for a new one or
+merged with the new one, or copied aside.&lt;br dir="ltr"&gt;
+Communication is essential, be it through official channels, logging,
+mails, etc.. Communication needs to be bi-directional, users report bugs
+and maintainers posts what their decisions are and if users need to be
+involved in them. This creates the community around the distribution.&lt;/p&gt;&lt;p&gt;Rolling releases require intensive efforts from package maintainers as
+they constantly have to keep up with software developers. Especially
+when it comes to the thousands of newest libraries that are part of
+recent programming languages and that keep on increasing.&lt;/p&gt;&lt;p&gt;Various users will want precise things out of a system. Enterprise
+environments and mission critical tasks will prefer stable releases,
+and software developers or normal end users may prefer to have the
+ability to use the latest current software.&lt;/p&gt;&lt;h3&gt;Interdistribution standard&lt;/h3&gt;&lt;p&gt;With all this, can’t there be an interdistribution standard that creates
+order, and would we want such standard.&lt;/p&gt;&lt;p dir="ltr"&gt;At the user level, the differences are not always noticeable, most
+of the time everything seems to work as Unix systems are expected to
+work.&lt;br dir="ltr"&gt;
+There’s no real standard between distributions other than that they are
+more or less following the POSIX standards.&lt;/p&gt;&lt;p&gt;Within the Linux ecosystem, the Free Standards Group tries to improve
+interoperability of software by fixing a common Linux ABI, file system
+hierarchy, naming conventions, and more. But that’s just the tip of the
+iceberg when it comes to having something that works interdistributions.&lt;/p&gt;&lt;p&gt;Furthermore, each part of the layering we’ve seen before could be said
+to have its own standards: There are desktop interoperability standards,
+filesystem standards, networking standards, security standards, etc..&lt;/p&gt;&lt;p&gt;The biggest player right now when it comes to this is systemd in
+association with the free desktop group, it tries to create (force)
+an interdistribution standard for Linux distribution.&lt;/p&gt;&lt;p&gt;But again, the big Question: Do we actually want such inter-distribution
+standards, can’t we be happy with the mix and match we currently
+have. Would we profit from such thing?&lt;/p&gt;&lt;h2&gt;The package manager and packaging&lt;/h2&gt;&lt;p&gt;Let’s now pay attention to the package themselves, how we store them, how
+we give secure access to them, how we are able to search amongst them,
+download them, install them, remove them, and anything related to their
+local management, versioning, and configuration.&lt;/p&gt;&lt;h3&gt;Method of distribution&lt;/h3&gt;&lt;p&gt;How do we distribute software, share them, what’s the front-end to
+this process.&lt;/p&gt;&lt;p&gt;First of all, where do we store this software.&lt;/p&gt;&lt;p dir="ltr"&gt;Historically and still today, software can be shared via physical
+medium such as CD-ROM, DVD, USBs, etc.. This is common when it comes
+to proprietary vendors to have the distribution come with a piece of
+hardware they are selling, it’s also common for the procurement of the
+initial installation image.&lt;br dir="ltr"&gt;
+However, with today’s hectic software growth, using a physical medium
+isn’t flexible. Sharing over the internet is more convenient, be it via
+FTP, HTTP, HTTPS, a publicly available svn or git repo, via central
+website hubs such as Github or appliation stores such the ones Apple
+and Google provide.&lt;/p&gt;&lt;p&gt;A requirement is that the storage and the communication to it should be
+secure, reliable against failures, and accessible from anywhere. Thus,
+replication is often done to avoid failures but also to have a sort of
+edge network speeding effect across the world, load balancing. Replication
+could be done in multiple ways, it could be a P2P distributed system
+for instance.&lt;/p&gt;&lt;p&gt;How we store it and in what format is up to the repository
+maintainers. Usually, this is a file system with a software API users
+can interact with over the wire. Two main format strategies exist:
+source based repositories and binary repositories.&lt;/p&gt;&lt;p&gt;Second of all, who can upload and manage the host of packages. Who has
+the right to replicate the repository.&lt;/p&gt;&lt;p&gt;As a source of truth for the users, it is important to make sure the
+packages have been verified and secured before being accepted on the
+repository.&lt;/p&gt;&lt;p&gt;Many distribution have the maintainers be the only ones that are able
+to do this. Giving them cryptographic keys to sign packages and validate
+them.&lt;/p&gt;&lt;p&gt;Others have their own users build the packages, send them to a central
+hub for automatic or manual verification and then uploaded to the
+repository. Each user having their own cryptographic key for signature
+verification.&lt;/p&gt;&lt;p&gt;This comes down to an issue of trust and stability. Having the users
+upload packages isn’t always feasible when using binary packages if the
+individual packages are not containerized properly.&lt;/p&gt;&lt;p&gt;There’s a third option, the road in between, having the two types, the
+core managed by the official distribution maintainers and the rest by
+its user community.&lt;/p&gt;&lt;p&gt;Finally, the packages reach the user.&lt;/p&gt;&lt;p dir="ltr"&gt;How the user interact with the repository locally and remotely depends on
+the package management choices. Do users cache a version of the remote
+repository, like is common with the BSD port tree system.&lt;br dir="ltr"&gt;
+How flexible can it be to track updates, locking versions of software,
+allowing downgrades. Can users download from different sources. Can
+users have multiple version of the same software on the their machine.&lt;/p&gt;&lt;h3&gt;Format&lt;/h3&gt;&lt;p&gt;As we’ve said there are two main philosophy of software sharing format:
+source code port-style and pre-built binary packages.&lt;/p&gt;&lt;p dir="ltr"&gt;The software that manages those on the user side is called the package
+manager, it’s the link with the repository. Though, in source based repo
+I’m not sure we can call them this way, but regardless I’ll still refer
+to them as such.&lt;br dir="ltr"&gt;
+Many distributions create their own or reuse a popular one. It does the
+search, download, install, update, and removal of local software. It’s
+not a small task.&lt;/p&gt;&lt;p&gt;The rule of the book is that if it isn’t installed by the package manager
+then it won’t be aware of its existence. Noting that distributions don’t
+have to be limited to a single package manager, there could be many.&lt;/p&gt;&lt;p&gt;Each package manager relies on a specific format and metadata to be able
+to manage software, be it source or binary formatted. This format can
+be composed of a group of files or a single binary file with specific
+information segments that together create recipes that help throughout
+its lifecycle. Some are easier to put together than others, incidentally
+allowing more user contributions.&lt;/p&gt;&lt;p&gt;Here’s a list of common information that the package manager needs:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The package name&lt;/LI&gt;&lt;LI&gt;The version&lt;/LI&gt;&lt;LI&gt;The description&lt;/LI&gt;&lt;LI&gt;The dependencies on other packages, along with their versions&lt;/LI&gt;&lt;LI&gt;The directory layout that needs to be created for the package&lt;/LI&gt;&lt;LI&gt;Along with the configuration files that it needs and if they should
+be overwritten or not&lt;/LI&gt;&lt;LI&gt;An integrity, or ECC, on all files, such as SHA256&lt;/LI&gt;&lt;LI&gt;Authenticity, to know that it comes from the trusted source, such as
+cryptographic signatures checked against a trusted store on the user’s
+machine&lt;/LI&gt;&lt;LI&gt;If this is a group of package, meta package, or a direct one&lt;/LI&gt;&lt;LI&gt;The actions to take on certain events: pre-installation,
+post-installation, pre-removal, and post removal&lt;/LI&gt;&lt;LI&gt;If there are specific configuration flags or parameter to pass to the
+package manager upon installation&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;So what’s the advantage of having pre-compiled binary packages instead
+of cloning the source code and compiling ourselves. Won’t that remove
+a burden from package maintainers.&lt;/p&gt;&lt;p dir="ltr"&gt;One advantage is that pre-compiled packages are convenient, it’s easier to
+download them and run them instantly. It’s also hard, if not impossible,
+these days, and energy intensive, to compile huge software such as
+web browsers.&lt;br dir="ltr"&gt;
+Another point, is that proprietary software are often already distributed
+as binary packages, which would creates a mix of source and binary
+packages.&lt;/p&gt;&lt;p dir="ltr"&gt;Binary formats are also space efficient as the code is stored in a
+compressed archived format. For example: APK, Deb, Nix, ORB, PKG, RPM,
+Snap, pkg.tar.gz/xz, etc..&lt;br dir="ltr"&gt;
+Some package managers may also choose to leave the choice of compression
+up to the user and dynamically discern from its configuration file how
+to decompress packages.&lt;/p&gt;&lt;p&gt;Let’s add that there exists tools, such as “Alien”, that facilitate the
+job of package maintainers by converting from one binary package format
+to another.&lt;/p&gt;&lt;h2&gt;Conflict resolution &amp;amp; Dependencies management&lt;/h2&gt;&lt;h3&gt;Resolving dependencies&lt;/h3&gt;&lt;p&gt;One of the hardest job of the package manager is to resolve dependencies.&lt;/p&gt;&lt;p dir="ltr"&gt;A package manager has to keep a list of all the packages and their
+versions that are currently installed on the system and their
+dependencies.&lt;br dir="ltr"&gt;
+When the user wants to install a package, it has to take as input the
+list of dependencies of that package, compare it against the one it
+already has and output a list of what needs to be installed in an order
+that satisfies all dependencies.&lt;/p&gt;&lt;p&gt;This is a problem that is commonly encountered in the software development
+world with build automation utilities such as make. The tool creates a
+directed acyclic graph (DAG), and using the power of graph theory and the
+acyclic dependencies principle (ADP) tries to find the right order. If
+no solution is found, or if there are conflicts or cycles in the graph,
+the action should be aborted.&lt;/p&gt;&lt;p&gt;The same applies in reverse, upon removal of the package. We have to make
+a decision, do we remove all the other packages that were installed as
+a dependency of that single one. What if newer packages depend on those
+dependencies, should we only allow the removal of the unused dependencies.&lt;/p&gt;&lt;p&gt;This is a hard problem, indeed.&lt;/p&gt;&lt;h3&gt;Versioning&lt;/h3&gt;&lt;p&gt;This problem increases when we add the factor of versioning to the mix,
+if we allow multiple versions of the same software to be installed on
+the system.&lt;/p&gt;&lt;p&gt;If we don’t, but allow switching from one version to another, do we also
+switch all other packages that depend on it too.&lt;/p&gt;&lt;p&gt;Versioning applies everywhere, not only to packages but to release
+versions of the distribution too. A lot of them attach certain version
+of packages to specific releases, and consequentially releases may have
+different repositories.&lt;/p&gt;&lt;p&gt;The choice of naming conventions also plays a role, it should convey to
+users what they are about and if any changes happened.&lt;/p&gt;&lt;p&gt;Should the package maintainer follow the naming convention of the software
+developer or should they use their own. What if the name of two software
+conflict with one another, this makes it impossible to have it in the
+repo, some extra information needs to be added.&lt;/p&gt;&lt;p&gt;Do we rely on semantic versioning, major, minor, patch, or do we rely
+on names like so many distributions releases do (toy story, deserts,
+etc..), or do we rely on the date it was released, or maybe simply an
+incremental number.&lt;/p&gt;&lt;p&gt;All those convey meaning to the user when they search and update packages
+from the repository.&lt;/p&gt;&lt;h3&gt;Static vs dynamic linking&lt;/h3&gt;&lt;p&gt;One thing that may not apply to source based distro, is the decision
+between building packages as statically linked to libraries or dynamically
+linked.&lt;/p&gt;&lt;p&gt;Dynamic linking is the process in which a program chooses not to include
+a library it depends upon in its executable but only a reference to it,
+which is then resolved at run-time by a dynamic linker that will load
+the shared object in memory upon usage. On the opposite, static linking
+means storing the libraries right inside the compiled executable program.&lt;/p&gt;&lt;p&gt;Dynamic linking is useful when many software rely on the same library,
+thus only a single instance of the library has to be in memory at a time.
+Executables sizes are also smaller, and when it is updated all programs
+relying on it get the benefit (as long as the interfaces are the same).&lt;/p&gt;&lt;p&gt;So what does this have to do with distributions and package management.&lt;/p&gt;&lt;p&gt;Package managers in dynamic linking environment have to take care of
+the versions of the libraries that are installed and which packages
+depend on them. This can create issues if different packages rely on
+different versions.&lt;/p&gt;&lt;p&gt;For this reason, some distro communities have chosen to get rid of dynamic
+linking altogether and rely on static linking, at least for things that
+are not related to the core system.&lt;/p&gt;&lt;p&gt;Another incidental advantage of static linking is that it doesn’t have
+to resolve dependencies with the dynamic linker, which makes it gain a
+small boost in speed.&lt;/p&gt;&lt;p&gt;So static builds simplify the package management process. There
+doesn’t need to be a complex DAG because everything is self
+contained. Additionally, this can allow to have multiple versions of the
+same software installed alongside one another without conflicts. Updates
+and rollbacks are not messy with static linking.&lt;/p&gt;&lt;p dir="ltr"&gt;This gives rise to more containerised software, and continuing on this
+path leads to market platforms such as Android and iOS where distribution
+can be done by the individual software developers themselves, skipping the
+middle-man altogether and giving the ability for increasingly impatient
+users to always have the latest version that works for their current
+OS. Everything is self-packaged.&lt;br dir="ltr"&gt;
+However, this relies heavily on the trust of the
+repository/marketplace. There needs to be many security mechanisms in
+place to not allow rogue software to be uploaded. We’ll talk more about
+this when we come back to containers&lt;/p&gt;&lt;p&gt;This is great for users and, from a certain perspective, software
+developers too as they can directly distribute pre-built packages,
+especially when there’s a stable ABI for the base system.&lt;/p&gt;&lt;p&gt;All this breaks the classic distribution scheme we’re accustomed to on
+the desktop.&lt;/p&gt;&lt;p&gt;Is it all roses and butterflies, though.&lt;/p&gt;&lt;p dir="ltr"&gt;As we’ve said, packages take much more space with static linking, thus
+wasting resources (storage, memory, power).&lt;br dir="ltr"&gt;
+Moreover, because it’s a model where software developers push directly
+to users, this removes the filtering that distribution maintainers have
+over the distro, and encourages licenses uncertainties. There’s no more
+overall philosophies that surrounds the distribution.&lt;br dir="ltr"&gt;
+There’s also the issue of library updates, the weight is on the software
+developers to make sure they have no vulnerabilities or bugs in their
+code. This adds a veil on which software uses what, all we see is the
+end products.&lt;/p&gt;&lt;p&gt;From a software developer using this type of distribution perspective,
+this adds extra steps to download the source code of each libraries their
+software depends on, and build each one individually. Turning the system
+into a source based distro.&lt;/p&gt;&lt;h3&gt;Reproducibility&lt;/h3&gt;&lt;p&gt;Because package management is increasingly becoming messier the past few
+years, a new trend has emerged to put back a sense of order in all this,
+reproducibility.&lt;/p&gt;&lt;p dir="ltr"&gt;It has been inspired by the world of functional programming and the world
+of containers. Package managers that respect reproducibility have each
+of their builds asserted to always produce the same output.&lt;br dir="ltr"&gt;
+They allow for packages of different versions to be installed alongside
+one another, each living in its own tree, and it allows normal users
+to install packages only them can access. Thus, many users can have
+different packages.&lt;/p&gt;&lt;p&gt;They can be used as universal package managers, installed alongside any
+other package managers without conflict.&lt;/p&gt;&lt;p&gt;The most prominent example is Nix and Guix, that use a purely functional
+deployment model where software is installed into unique directories
+generated through cryptographic hashes. Dependencies from each software
+are included within each hash, solving the problem of dependency
+hell. This approach to package management promises to generate more
+reliable, reproducible, and portable packages.&lt;/p&gt;&lt;h3&gt;Stateless and verifiable systems&lt;/h3&gt;&lt;p&gt;The discussion about trust, portability, and reproducibility can also
+be applied to the whole system itself.&lt;/p&gt;&lt;p&gt;When we talked about repositories as marketplaces, where software
+developers push directly to it and the users have instant access to the
+latest version, we said it was mandatory to have additional measures
+for security.&lt;/p&gt;&lt;p&gt;One of them is to containerised, to sandbox every software. Having each
+software run in their own space not affecting the rest of the system
+resources. This removes the heavy burden of auditing and verifying each
+and every software. Many solutions exist to achieve this sandboxing, from
+docker, chroot, jails, firejail, selinux, cgroups, etc..&lt;/p&gt;&lt;p&gt;We could also distance the home directory of the users, making them
+self-contained, never installing or modifying the globally accessible
+places.&lt;/p&gt;&lt;p&gt;This could let us have the core of the system verifiable as it is not
+changed, as it stays pristine. Making sure it’s secure would be really
+easy.&lt;/p&gt;&lt;p&gt;The idea of having the user part of the distro as atomic, movable,
+containerized, and the rest reproducible is game changing. But again,
+do we want to move to a world where every distro is interchangeable?&lt;/p&gt;&lt;h2&gt;Do Distros matter with containers, virtualisation, and specific and universal package managers&lt;/h2&gt;&lt;p&gt;It remains to be asked if distributions still have a role today with
+all the containers, virtualisation, and specific and universal package
+managers.&lt;/p&gt;&lt;p&gt;When it comes to containers, they are still very important as they most
+often are the base of the stack the other components build upon.&lt;/p&gt;&lt;p&gt;The distribution is made up of people that work together to build and
+distribute the software and make sure it works fine. It isn’t the role
+of the person managing the container and much more convenient for them
+to rely on a distribution.&lt;/p&gt;&lt;p dir="ltr"&gt;Another point, is that containers hide vulnerabilities, they aren’t
+checked after they are put together, while on the other hand, distribution
+maintainers, have as a role to communicate and follow up on security
+vulnerabilities and other bugs. Community is what solves daunting problems
+that everyone shares.&lt;br dir="ltr"&gt;
+A system administrator building containers can’t possibly have the
+knowledge to manage and builds hundreds of software and libraries and
+ensure they work well together.&lt;/p&gt;&lt;h3&gt;If packages are self-contained&lt;/h3&gt;&lt;p&gt;Do distributions matter if packages are self-contained?&lt;/p&gt;&lt;p&gt;To an extent they do as they could be in this ecosystem the
+providers/distributors of such universal self-contained packages. And
+as we’ve said it is important to keep the philosophy of the distro and
+offer a tested toolbox that fits the use case.&lt;/p&gt;&lt;p&gt;What’s more probable is that we’ll move to a world with multiple package
+managers, each trusted for its specific space and purpose. Each with a
+different source of philosophical and technical truth.&lt;/p&gt;&lt;h3&gt;Programming language package management specific&lt;/h3&gt;&lt;p&gt;This phenomena is already exploding in the world of programming language
+package management.&lt;/p&gt;&lt;p&gt;The speed and granularity at which software is built today is almost
+impossible to follow using the old method of packaging. The old software
+release life cycle has been thrown out the window. Thus language-specific
+tools were developed, not limited to installing libraries but also
+software. We can now refer to the distribution offered package manager as
+system-level and others as application-level or specific package managers.&lt;/p&gt;&lt;p&gt;Consequentially, the complexity and conflicts within a system has
+exploded, and distribution package managers are finding it pointless
+to manage and maintain anything that can already be installed via those
+tools. Vice-versa, the specific tool makers are also not interested in
+having what they provide included in distribution system-level package
+managers.&lt;/p&gt;&lt;p&gt;Package managers that respect reproducibility, such as Nix, that we’ve
+mentioned, handle such cases more cleanly as they respect the idea
+of locality, everything residing withing a directory tree that isn’t
+maintained by the system-level package manager.&lt;/p&gt;&lt;p&gt;Again, same conclusion here, we’re stuck with multiple package managers
+that have different roles.&lt;/p&gt;&lt;h3&gt;Going distro-less&lt;/h3&gt;&lt;p&gt;A popular topic in the container world is “distro-less”.&lt;/p&gt;&lt;p&gt;It’s about replacing everything provided in a distribution, removing
+it’s customization, or building an image from scratch and maybe relying
+on universal package managers or none.&lt;/p&gt;&lt;p&gt;The advantage of such containers is that they are really small and
+targeted for a single purpose. This let the sysadmin have full control
+of what happens on that box.&lt;/p&gt;&lt;p&gt;However, remember that there’s a huge cost to controlling everything,
+just like we mentioned earlier. This moves the burden upon the sysadmin
+to manage and be responsible to keep up with bugs and security updates
+instead of the distribution maintainers&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p&gt;With everything we’ve presented about distributions, I hope we now have
+a clearer picture of what they are providing and their place in our
+current times.&lt;/p&gt;&lt;p&gt;What’s your opinion on this topic? Do you like the diversity? Which stack
+would you use to build a distribution? What’s your take on static builds,
+having users upload their own software to the repo? Do you have a solution
+to the trust issue? How do you see this evolve?&lt;/p&gt;&lt;p dir="ltr"&gt;More discussion here: &lt;a href="https://nixers.net/showthread.php?tid=2192" dir="ltr"&gt;https://nixers.net/showthread.php?tid=2192&lt;/a&gt;&lt;/p&gt;&lt;p&gt;What is a distribution&lt;/p&gt;&lt;p&gt;Different ways to approach it&lt;/p&gt;&lt;p&gt;Package management&lt;/p&gt;&lt;p&gt;Do Distros matter with containers, virtualisation, and specific and universal package managers&lt;/p&gt;&lt;p&gt;Attributions:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Marjory Collins / Public domain&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
+If you want to have a more in depth discussion I'm always available by &lt;a href="https://venam.nixers.net/blog/about.html" dir="ltr"&gt;email or irc&lt;/a&gt;.
+We can discuss and argue about what you like and dislike, about new ideas to consider, opinions, etc..&lt;br dir="ltr"&gt;
+If you don't feel like "having a discussion" or are intimidated by emails
+then you can simply say something small in the comment sections below
+and/or share it with your friends.
+&lt;/p&gt;&lt;h4&gt;No Comments Yet&lt;/h4&gt;&lt;div contenteditable="true"&gt;Type Comment Here (at least 3 chars)&lt;/div&gt;</description><pubDate>Thu, 02 Apr 2020 03:31:35 -0500</pubDate></item><item><title>How to SSH Properly</title><link>https://lobste.rs/s/tkrzdt</link><description>&lt;article&gt;&lt;time datetime="Apr 1, 2020"&gt;
         Apr 1, 2020
         by Gus Luxton
       &lt;/time&gt;&lt;/article&gt;&lt;img src="https://gravitational.com/blog/images/2020/how-to-ssh-properly-header.png" width="453" height="255"&gt;&lt;p dir="ltr"&gt;There’s no denying that &lt;a href="https://www.openssh.com/" dir="ltr"&gt;SSH&lt;/a&gt; is the &lt;em dir="ltr"&gt;de facto&lt;/em&gt; tool for *nix server administration. It’s far from perfect, but it was designed with security in mind and there’s been a huge amount of tooling written over the years to make it easier to use. In addition, many popular products and just about every server deployment system integrates with SSH somehow. It is universally supported across pretty much all architectures and distributions, from Raspberry Pis all the way up to massive supercomputer clusters.&lt;/p&gt;&lt;p&gt;SSH is a powerful tool which often grants a lot of access to anyone using it to log into a server. In this post, I’m going to talk about a few different ways that you can easily improve the security of your SSH model without needing to deploy a new application or make any huge changes to user experience.&lt;/p&gt;&lt;h2&gt;SSH certificates&lt;/h2&gt;&lt;p dir="ltr"&gt;Most people can agree that using public key authentication for SSH is generally better than using passwords. Nobody ever types in a private key, so it can’t be keylogged or observed over your shoulder. SSH keys have their own issues, however, some of which we’ve covered in a &lt;a href="https://gravitational.com/blog/ssh-key-management/" dir="ltr"&gt;previous post about SSH key management&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;The next level up from SSH keys is SSH certificates. OpenSSH has supported the use of certificates since &lt;a href="https://www.openssh.com/txt/release-5.4" dir="ltr"&gt;OpenSSH 5.4&lt;/a&gt; which was released back in 2010.&lt;/p&gt;&lt;p dir="ltr"&gt;With &lt;a href="https://gravitational.com/blog/ssh-certificates-explained/" dir="ltr"&gt;SSH certificates&lt;/a&gt;, you generate a certificate authority (CA) and then use this to issue and cryptographically sign certificates which can authenticate users to hosts, or hosts to users. You can generate a keypair using the &lt;code dir="ltr"&gt;ssh-keygen&lt;/code&gt; command, like this:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ ssh-keygen -t rsa -b 4096 -f host_ca -C host_ca
@@ -2042,7 +2042,7 @@ take advantage of it.&lt;/p&gt;&lt;p dir="ltr"&gt;We hope you find your tail lat
 will be interested to hear how this change impacted real-world deployments. Feel
 free to comment on &lt;a href="https://github.com/tokio-rs/tokio/issues/2359" dir="ltr"&gt;this&lt;/a&gt; issue.&lt;/p&gt;&lt;div&gt;—Carl Lerche&lt;/div&gt;&lt;div dir="ltr"&gt;
           &lt;b dir="ltr"&gt;Next up&lt;/b&gt;: &lt;a href="https://tokio.rs/blog/2019-12-compat/" dir="ltr"&gt;Announcing Tokio-Compat&lt;/a&gt;
-        &lt;/div&gt;</description><pubDate>Thu, 02 Apr 2020 09:02:24 -0500</pubDate></item><item><title>Good resources to learn about computer networking</title><link>https://lobste.rs/s/tkkygt</link><description>&lt;p&gt;Hello fellow lobsters!&lt;/p&gt;&lt;p&gt;Networking in general is probably the area related to Computer Engineering I’m less familiar with, but I would like to use this quarantine to change that. Usually every time I deal with a networking issue I end up fixing it by trial and error and a bit of intuition but I would like to understand what is going on, and be able to reason about it.&lt;/p&gt;&lt;p&gt;What are good resources (blogposts, books, platforms) to learn about networking.&lt;/p&gt;</description><pubDate>Wed, 01 Apr 2020 10:13:19 -0500</pubDate></item><item><title>How to Scope Down PRs</title><link>https://lobste.rs/s/aifhoq</link><description>&lt;p&gt;One of the most valuable skills one can possess as a developer is to learn how to scope down your work into manageable pull requests (PRs). Why the emphasis on something as seemingly trivial as size? There are many reasons, but here are some of the most pertinent:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;It’s easier on reviewers&lt;/LI&gt;&lt;LI&gt;It’s easier to test&lt;/LI&gt;&lt;LI&gt;It’s easier to iterate&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;We’ll dive into some of those whys, and then move on to the hows: the processes you can use to scope PRs down, as well as who on your team can assist.&lt;/p&gt;&lt;h2&gt;Why Do We Scope Down?&lt;/h2&gt;&lt;h3&gt;Small PRs are easier on reviewers&lt;/h3&gt;&lt;p&gt;If someone has to read through and make sense of your code in order to evaluate it, it’s much easier to get through if it’s smaller and more focused. Think about it from the reviewer’s standpoint: it’s their job to make sure whatever code they’re reading makes it through this process in the best state possible. The smaller the amount of code, the lower the cognitive load you impose on them to envision all the moving parts and any potential side effects.&lt;/p&gt;&lt;img src="https://cdn.netlify.com/28822d656e7b875335f1fb462ab0d0fbe2b39a63/8021f/img/blog/conversation-github.png" alt="A PR with a lot of changes and 233 comments" title="The higher the number the amount of changes, the more conversation you’ll have to have" width="445" height="26"&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;The higher the number of changes, the more conversation you’ll have to have.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;It also requires reviewers to do much more work as a communicator, which takes two skills: the actual code review, and the ability to communicate how/why the changes need to be made. As a reviewer, sometimes I’m handed huge chunks of code, some of which I would like to take, some of which I can’t. This means I now have to break these concepts apart, explain the differences between them, and talk through an iteration plan. This is ok, but a lot more mental overhead for everyone involved, particularly because it can potentially be damaging to the team if the communication goes poorly. Smaller PRs keep the conversation focused, and as such, reduce the need for any communication gymnastics.&lt;/p&gt;&lt;h3&gt;Small PRs are easier to test&lt;/h3&gt;&lt;p&gt;Large PRs mean there are more potential side effects and moving parts. It becomes more opaque to see what’s been altered. When there are less moving parts, it’s not just more clear what the testing strategy is, but also how much coverage the tests offer.&lt;/p&gt;&lt;p&gt;For instance, if I have an enormous PR and there are a few tests, I have to still spend a good amount of time matching the contents of the PR with the types of tests involved to see if the coverage is adequate.&lt;/p&gt;&lt;p&gt;Having fewer moving parts also makes it clear what else in the codebase is affected, the bigger the PR, the more potential surprises you might have. It’s easier to iterate if work needs to be adjusted, revisited, or not accepted, there’s much less investment, both personally and in terms of developer time. The chance that you went in the wrong direction for a long time without any course correction increases with the size of the PR.&lt;/p&gt;&lt;p&gt;Some of this investment is personal: you might be more attached to your work at that point and less willing to take in feedback. Some of this investment is a business concern: developer time is expensive. If you went heads down for a week and didn’t communicate, and some of the work can’t be used, that’s not helpful to the company’s bottom line and ability to ship products.&lt;/p&gt;&lt;p&gt;When you create smaller pieces of work, you can adjust and communicate more quickly, even as things outside the project change, if there are shifting priorities. Your teammates will also trust that they’ll see subsequent work from you soon. You might be amazed at how much more quickly they’re willing to review your work and get it in.&lt;/p&gt;&lt;h2&gt;How do we break down a project?&lt;/h2&gt;&lt;p&gt;There are a number of tools at our disposal for scoping work down. They may not all might be available to you, though, so let’s go over them.&lt;/p&gt;&lt;h3&gt;Clear Expectation of Output&lt;/h3&gt;&lt;p&gt;This one has less to do with tools and more to do with people. If your company has a Project Manager role (this is different from a Product Manager), they are typically very effective in helping break down tickets into more manageable units and estimating the size and time of the work. On some teams, this duty falls more to the Engineer Manager or Product Manager.&lt;/p&gt;&lt;p&gt;If you find that this person isn’t accustomed to this duty, or you’re the one in charge, here are some suggestions: it’s incredibly difficult to estimate engineering work — some things that you think will take 2 minutes turn into hours or days, or vice versa. So start with the end.  What output do you expect to see from that ticket? Now, we can walk backwards. What parts of the codebase will be affected in this change? If you’re newer to the project, ask someone with more seniority on the team to help you track which areas will need to be updated. If possible, break those into disparate tasks. Even if they are dependent on one another, you can usually find a way to break it into step 1, step 2, and so forth. If you’re using the branching model outlined below and communicate to your reviewers clearly, they know to expect many pieces of work from you and not one giant finished product.&lt;/p&gt;&lt;h3&gt;Branching&lt;/h3&gt;&lt;p&gt;In a branching model, you communicate what you’re working on through the iteration of work on branches. Typically these branches are named semantically with the project in question: FeatureName or RefactorName, sometimes with versioning as well. The nice thing about using branches like this is that you can do frequent work in one place, and no one is expecting everything to be done in one go.&lt;/p&gt;&lt;p&gt;But branching does require coordination: people on your team should know that this work is correlated to a certain piece and not to merge it until the work is complete. If there is a ton of work that needs to be done on a specific branch, you likely need some end to end tests to validate that the merge won’t break anything.&lt;/p&gt;&lt;h3&gt;Labels&lt;/h3&gt;&lt;p&gt;I typically have my teams use branching with labels to scope down work, they’re very effective when used together. For instance, maybe you’re working on one part of a particular feature that’s part of a 1.0 roadmap. Your coworker is working on another piece. If you both use the same label but different branches, you can clearly see who is working on what and make sure the changes are tracked together. This means everyone can work incrementally because there’s insight into what work is done globally on a project as well as the small parts.&lt;/p&gt;&lt;h3&gt;Feature Flags&lt;/h3&gt;&lt;p&gt;It’s also possible to use feature flags to gate checks, and merge code in slowly that you can test in production. When I worked at Trulia/Zillow, we would use this model frequently with cookies that one could set in their browser, so that stakeholders could not just check against it, but we could also run split-testing and work out conflicts long before it ever hit primetime. We would roll things out to prod slowly, monitoring the work in partnership with other teams as we went. It allowed us to be very coordinated, which was especially important for big releases with a lot of moving parts.&lt;/p&gt;&lt;p dir="ltr"&gt;We made good use of feature flags here at Netlify for our most recent release of &lt;a href="https://www.netlify.com/blog/2020/03/25/announcing-faster-deploys-for-large-sites/" dir="ltr"&gt;faster deploys&lt;/a&gt;. Specifically, we use a &lt;a href="https://github.com/jnunemaker/flipper" dir="ltr"&gt;Ruby gem called Flipper&lt;/a&gt;. We like testing in production, and our process allows us to roll out from day one in production and make good use of telemetry to monitor how well the changes are functioning.&lt;/p&gt;&lt;h3&gt;Number of Concerns&lt;/h3&gt;&lt;p dir="ltr"&gt;The most effective PRs I see and ones I love as a reviewer, are small, focused, and scope the work down to the smallest number of concerns. Think through your work in terms of how many things are changing, and try to limit this number as much as you can. There’s a great post here about the &lt;a href="https://medium.com/@hugooodias/the-anatomy-of-a-perfect-pull-request-567382bb6067" dir="ltr"&gt;Single Responsibility Principle&lt;/a&gt;, which outlines how every module or class should have responsibility over a single part of the functionality, and how this can be applied to pull requests as well.&lt;/p&gt;&lt;p&gt;It might seem at first that it’s critical that all changes be made at once, but you’ll find over time with the branching model, that this isn’t necessary. You can communicate to people within the PR that there’s more work to do as well.&lt;/p&gt;&lt;p&gt;Furthermore, each PR should, when possible, only have one goal so the next iteration can build on it. In other words, if you’re both refactoring old code, and introducing new tests, that’s much harder on a reviewer than if it is split. If you have two iterative PRs, it’s easier to ensure the functionality didn’t change prior to modifying the implementation.&lt;/p&gt;&lt;h3&gt;Tracking what’s left&lt;/h3&gt;&lt;p&gt;If you’re going to leave unfinished work, it’s helpful to keep track of what’s left. This is not just for you, but for any stakeholders like your teammates or PMs. A lot of teams will make use of project boards for this, which also helps you go over what’s going on in the project as a group&lt;/p&gt;&lt;img src="https://cdn.netlify.com/e807f0d3900f148b4d1e9d3cca374dc0d7f5e097/655c6/img/blog/example-project-board.png" alt="Example GitHub Board, you can add in issues as well as notes." title="Example GitHub Board, you can add in issues as well as notes." width="445" height="352"&gt;&lt;p&gt;&lt;em&gt;Example GitHub Board, you can add in issues as well as notes.&lt;/em&gt;&lt;/p&gt;&lt;p&gt;Some tools like GitHub and Jira will help you with some automation as well:&lt;/p&gt;&lt;img src="https://cdn.netlify.com/a93ea450fcb837d98581a8fcc3acbb1bb2d17153/23be0/img/blog/github-project-templates.png" alt="Showing a dropdown with an automated kanban board from GitHub" width="445" height="567"&gt;&lt;p&gt;Even if you’re tracking things within these boards, it can be useful to your coworkers/reviewers to do a todo list or list of changes in the PR itself as well. This helps them immediately see the scope of the PR without having to check any other references, which can help with speed of execution:&lt;/p&gt;&lt;img src="https://cdn.netlify.com/5844932758dcdc371d8c9f354f7887058acd6d72/fe1ec/img/blog/pr-discussion.png" alt="Example of a comment where the work done is in a bulleted list and explained to be a rough draft" width="445" height="181"&gt;&lt;p dir="ltr"&gt;As mentioned above, you can also make use of To dos — I do this sometimes, and will track what’s left with &lt;a href="https://marketplace.visualstudio.com/items?itemName=wayou.vscode-todo-highlight" dir="ltr"&gt;this VS Code extension&lt;/a&gt; that goes through and highlights any to do comments for you. You can also override and customize it, should your team have a different convention.&lt;/p&gt;&lt;img src="https://cdn.netlify.com/c427418c0aeb56ade19afe36edbae6ae0d3fa885/16ed7/img/blog/material-night-eighties.png" alt="Showing how the VS Code extension highlights to do and fixmes in the editor" width="445" height="283"&gt;&lt;p&gt;These are just a few ways to track work at the developer level. Truly, there is a whole project management discipline that employs many different tools and techniques! Covering everything is out of the scope of the article, but hopefully these help while coding.&lt;/p&gt;&lt;h3&gt;Working on a few pieces at once&lt;/h3&gt;&lt;p&gt;This one is tricky, but a skill you might develop as you level up. As you get better at scoping down work, you’ll find that there are times that you’re waiting for review on these smaller pieces, so what do you do with that time? In fact, I think this is where some will assume that one large PR is more effective because they can spend the time working before submitting the PR. Unfortunately, this will often come back to haunt them when it gets locked up in review.&lt;/p&gt;&lt;p&gt;As you get better at breaking large projects down, you also start to learn how to cut work up into many pieces and have two concurrent pieces of work that are not reliant on each other. Perhaps in a personalization project, there are changes that need to be made within the navigation, as well as updates to the data coming into the sidebar. They may be similar pieces, but figuring out ahead of time how to break them apart does a few things: can cause fewer side effects as the nav and the sidebar are now not potentially going to break one another, and while you’re waiting for the nav review you can get cracking on the sidebar piece. This is a simplistic example but illustrates that you can plan for this situation ahead of the actual work to make the most use of your productive hours as possible.&lt;/p&gt;&lt;h2&gt;Wrapping up&lt;/h2&gt;&lt;p dir="ltr"&gt;Hopefully this helps you and your team be more effective, work through problems quicker, and review code more effectively! Have more to add to the conversation? You can let me know on &lt;a href="https://twitter.com/sarah_edo" dir="ltr"&gt;twitter&lt;/a&gt;, or in our &lt;a href="https://community.netlify.com/" dir="ltr"&gt;Community&lt;/a&gt;.&lt;/p&gt;</description><pubDate>Thu, 02 Apr 2020 08:47:40 -0500</pubDate></item><item><title>Zero-overhead deterministic failure - A unified mechanism for C and C++ (2018)</title><link>http://www.open-std.org/jtc1/sc22/wg14/www/docs/n2289.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/gvmlwp/zero_overhead_deterministic_failure"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Thu, 02 Apr 2020 08:34:07 -0500</pubDate></item><item><title>Vim rendered on a cube for no reason</title><link>https://lobste.rs/s/yhofxe</link><description>&lt;h2&gt;Vim³&lt;/h2&gt;&lt;p&gt;Most people use vim in two stupid dimensions. But not me. I use it in three:&lt;/p&gt;&lt;img src="https://github.com/oakes/vim_cubed/raw/master/vim3.gif" width="640" height="360"&gt;&lt;p dir="ltr"&gt;To run it, &lt;a href="https://nim-lang.org/install.html" rel="nofollow" dir="ltr"&gt;install Nim&lt;/a&gt;, and from this repo do:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;nimble run vim3
+        &lt;/div&gt;</description><pubDate>Thu, 02 Apr 2020 09:02:24 -0500</pubDate></item><item><title>Good resources to learn about computer networking</title><link>https://lobste.rs/s/tkkygt</link><description>&lt;p&gt;Hello fellow lobsters!&lt;/p&gt;&lt;p&gt;Networking in general is probably the area related to Computer Engineering I’m less familiar with, but I would like to use this quarantine to change that. Usually every time I deal with a networking issue I end up fixing it by trial and error and a bit of intuition but I would like to understand what is going on, and be able to reason about it.&lt;/p&gt;&lt;p&gt;What are good resources (blogposts, books, platforms) to learn about networking.&lt;/p&gt;</description><pubDate>Wed, 01 Apr 2020 10:13:19 -0500</pubDate></item><item><title>How to Scope Down PRs</title><link>https://lobste.rs/s/aifhoq</link><description>&lt;p&gt;One of the most valuable skills one can possess as a developer is to learn how to scope down your work into manageable pull requests (PRs). Why the emphasis on something as seemingly trivial as size? There are many reasons, but here are some of the most pertinent:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;It’s easier on reviewers&lt;/LI&gt;&lt;LI&gt;It’s easier to test&lt;/LI&gt;&lt;LI&gt;It’s easier to iterate&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;We’ll dive into some of those whys, and then move on to the hows: the processes you can use to scope PRs down, as well as who on your team can assist.&lt;/p&gt;&lt;h2&gt;Why Do We Scope Down?&lt;/h2&gt;&lt;h3&gt;Small PRs are easier on reviewers&lt;/h3&gt;&lt;p&gt;If someone has to read through and make sense of your code in order to evaluate it, it’s much easier to get through if it’s smaller and more focused. Think about it from the reviewer’s standpoint: it’s their job to make sure whatever code they’re reading makes it through this process in the best state possible. The smaller the amount of code, the lower the cognitive load you impose on them to envision all the moving parts and any potential side effects.&lt;/p&gt;&lt;img src="https://cdn.netlify.com/28822d656e7b875335f1fb462ab0d0fbe2b39a63/8021f/img/blog/conversation-github.png" alt="A PR with a lot of changes and 233 comments" title="The higher the number the amount of changes, the more conversation you’ll have to have" width="445" height="26"&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;The higher the number of changes, the more conversation you’ll have to have.&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;It also requires reviewers to do much more work as a communicator, which takes two skills: the actual code review, and the ability to communicate how/why the changes need to be made. As a reviewer, sometimes I’m handed huge chunks of code, some of which I would like to take, some of which I can’t. This means I now have to break these concepts apart, explain the differences between them, and talk through an iteration plan. This is ok, but a lot more mental overhead for everyone involved, particularly because it can potentially be damaging to the team if the communication goes poorly. Smaller PRs keep the conversation focused, and as such, reduce the need for any communication gymnastics.&lt;/p&gt;&lt;h3&gt;Small PRs are easier to test&lt;/h3&gt;&lt;p&gt;Large PRs mean there are more potential side effects and moving parts. It becomes more opaque to see what’s been altered. When there are less moving parts, it’s not just more clear what the testing strategy is, but also how much coverage the tests offer.&lt;/p&gt;&lt;p&gt;For instance, if I have an enormous PR and there are a few tests, I have to still spend a good amount of time matching the contents of the PR with the types of tests involved to see if the coverage is adequate.&lt;/p&gt;&lt;p&gt;Having fewer moving parts also makes it clear what else in the codebase is affected, the bigger the PR, the more potential surprises you might have. It’s easier to iterate if work needs to be adjusted, revisited, or not accepted, there’s much less investment, both personally and in terms of developer time. The chance that you went in the wrong direction for a long time without any course correction increases with the size of the PR.&lt;/p&gt;&lt;p&gt;Some of this investment is personal: you might be more attached to your work at that point and less willing to take in feedback. Some of this investment is a business concern: developer time is expensive. If you went heads down for a week and didn’t communicate, and some of the work can’t be used, that’s not helpful to the company’s bottom line and ability to ship products.&lt;/p&gt;&lt;p&gt;When you create smaller pieces of work, you can adjust and communicate more quickly, even as things outside the project change, if there are shifting priorities. Your teammates will also trust that they’ll see subsequent work from you soon. You might be amazed at how much more quickly they’re willing to review your work and get it in.&lt;/p&gt;&lt;h2&gt;How do we break down a project?&lt;/h2&gt;&lt;p&gt;There are a number of tools at our disposal for scoping work down. They may not all might be available to you, though, so let’s go over them.&lt;/p&gt;&lt;h3&gt;Clear Expectation of Output&lt;/h3&gt;&lt;p&gt;This one has less to do with tools and more to do with people. If your company has a Project Manager role (this is different from a Product Manager), they are typically very effective in helping break down tickets into more manageable units and estimating the size and time of the work. On some teams, this duty falls more to the Engineer Manager or Product Manager.&lt;/p&gt;&lt;p&gt;If you find that this person isn’t accustomed to this duty, or you’re the one in charge, here are some suggestions: it’s incredibly difficult to estimate engineering work — some things that you think will take 2 minutes turn into hours or days, or vice versa. So start with the end.  What output do you expect to see from that ticket? Now, we can walk backwards. What parts of the codebase will be affected in this change? If you’re newer to the project, ask someone with more seniority on the team to help you track which areas will need to be updated. If possible, break those into disparate tasks. Even if they are dependent on one another, you can usually find a way to break it into step 1, step 2, and so forth. If you’re using the branching model outlined below and communicate to your reviewers clearly, they know to expect many pieces of work from you and not one giant finished product.&lt;/p&gt;&lt;h3&gt;Branching&lt;/h3&gt;&lt;p&gt;In a branching model, you communicate what you’re working on through the iteration of work on branches. Typically these branches are named semantically with the project in question: FeatureName or RefactorName, sometimes with versioning as well. The nice thing about using branches like this is that you can do frequent work in one place, and no one is expecting everything to be done in one go.&lt;/p&gt;&lt;p&gt;But branching does require coordination: people on your team should know that this work is correlated to a certain piece and not to merge it until the work is complete. If there is a ton of work that needs to be done on a specific branch, you likely need some end to end tests to validate that the merge won’t break anything.&lt;/p&gt;&lt;h3&gt;Labels&lt;/h3&gt;&lt;p&gt;I typically have my teams use branching with labels to scope down work, they’re very effective when used together. For instance, maybe you’re working on one part of a particular feature that’s part of a 1.0 roadmap. Your coworker is working on another piece. If you both use the same label but different branches, you can clearly see who is working on what and make sure the changes are tracked together. This means everyone can work incrementally because there’s insight into what work is done globally on a project as well as the small parts.&lt;/p&gt;&lt;h3&gt;Feature Flags&lt;/h3&gt;&lt;p&gt;It’s also possible to use feature flags to gate checks, and merge code in slowly that you can test in production. When I worked at Trulia/Zillow, we would use this model frequently with cookies that one could set in their browser, so that stakeholders could not just check against it, but we could also run split-testing and work out conflicts long before it ever hit primetime. We would roll things out to prod slowly, monitoring the work in partnership with other teams as we went. It allowed us to be very coordinated, which was especially important for big releases with a lot of moving parts.&lt;/p&gt;&lt;p dir="ltr"&gt;We made good use of feature flags here at Netlify for our most recent release of &lt;a href="https://www.netlify.com/blog/2020/03/25/announcing-faster-deploys-for-large-sites/" dir="ltr"&gt;faster deploys&lt;/a&gt;. Specifically, we use a &lt;a href="https://github.com/jnunemaker/flipper" dir="ltr"&gt;Ruby gem called Flipper&lt;/a&gt;. We like testing in production, and our process allows us to roll out from day one in production and make good use of telemetry to monitor how well the changes are functioning.&lt;/p&gt;&lt;h3&gt;Number of Concerns&lt;/h3&gt;&lt;p dir="ltr"&gt;The most effective PRs I see and ones I love as a reviewer, are small, focused, and scope the work down to the smallest number of concerns. Think through your work in terms of how many things are changing, and try to limit this number as much as you can. There’s a great post here about the &lt;a href="https://medium.com/@hugooodias/the-anatomy-of-a-perfect-pull-request-567382bb6067" dir="ltr"&gt;Single Responsibility Principle&lt;/a&gt;, which outlines how every module or class should have responsibility over a single part of the functionality, and how this can be applied to pull requests as well.&lt;/p&gt;&lt;p&gt;It might seem at first that it’s critical that all changes be made at once, but you’ll find over time with the branching model, that this isn’t necessary. You can communicate to people within the PR that there’s more work to do as well.&lt;/p&gt;&lt;p&gt;Furthermore, each PR should, when possible, only have one goal so the next iteration can build on it. In other words, if you’re both refactoring old code, and introducing new tests, that’s much harder on a reviewer than if it is split. If you have two iterative PRs, it’s easier to ensure the functionality didn’t change prior to modifying the implementation.&lt;/p&gt;&lt;h3&gt;Tracking what’s left&lt;/h3&gt;&lt;p&gt;If you’re going to leave unfinished work, it’s helpful to keep track of what’s left. This is not just for you, but for any stakeholders like your teammates or PMs. A lot of teams will make use of project boards for this, which also helps you go over what’s going on in the project as a group&lt;/p&gt;&lt;img src="https://cdn.netlify.com/e807f0d3900f148b4d1e9d3cca374dc0d7f5e097/655c6/img/blog/example-project-board.png" alt="Example GitHub Board, you can add in issues as well as notes." title="Example GitHub Board, you can add in issues as well as notes." width="445" height="352"&gt;&lt;p&gt;&lt;em&gt;Example GitHub Board, you can add in issues as well as notes.&lt;/em&gt;&lt;/p&gt;&lt;p&gt;Some tools like GitHub and Jira will help you with some automation as well:&lt;/p&gt;&lt;img src="https://cdn.netlify.com/a93ea450fcb837d98581a8fcc3acbb1bb2d17153/23be0/img/blog/github-project-templates.png" alt="Showing a dropdown with an automated kanban board from GitHub" width="445" height="567"&gt;&lt;p&gt;Even if you’re tracking things within these boards, it can be useful to your coworkers/reviewers to do a todo list or list of changes in the PR itself as well. This helps them immediately see the scope of the PR without having to check any other references, which can help with speed of execution:&lt;/p&gt;&lt;img src="https://cdn.netlify.com/5844932758dcdc371d8c9f354f7887058acd6d72/fe1ec/img/blog/pr-discussion.png" alt="Example of a comment where the work done is in a bulleted list and explained to be a rough draft" width="445" height="181"&gt;&lt;p dir="ltr"&gt;As mentioned above, you can also make use of To dos — I do this sometimes, and will track what’s left with &lt;a href="https://marketplace.visualstudio.com/items?itemName=wayou.vscode-todo-highlight" dir="ltr"&gt;this VS Code extension&lt;/a&gt; that goes through and highlights any to do comments for you. You can also override and customize it, should your team have a different convention.&lt;/p&gt;&lt;img src="https://cdn.netlify.com/c427418c0aeb56ade19afe36edbae6ae0d3fa885/16ed7/img/blog/material-night-eighties.png" alt="Showing how the VS Code extension highlights to do and fixmes in the editor" width="445" height="283"&gt;&lt;p&gt;These are just a few ways to track work at the developer level. Truly, there is a whole project management discipline that employs many different tools and techniques! Covering everything is out of the scope of the article, but hopefully these help while coding.&lt;/p&gt;&lt;h3&gt;Working on a few pieces at once&lt;/h3&gt;&lt;p&gt;This one is tricky, but a skill you might develop as you level up. As you get better at scoping down work, you’ll find that there are times that you’re waiting for review on these smaller pieces, so what do you do with that time? In fact, I think this is where some will assume that one large PR is more effective because they can spend the time working before submitting the PR. Unfortunately, this will often come back to haunt them when it gets locked up in review.&lt;/p&gt;&lt;p&gt;As you get better at breaking large projects down, you also start to learn how to cut work up into many pieces and have two concurrent pieces of work that are not reliant on each other. Perhaps in a personalization project, there are changes that need to be made within the navigation, as well as updates to the data coming into the sidebar. They may be similar pieces, but figuring out ahead of time how to break them apart does a few things: can cause fewer side effects as the nav and the sidebar are now not potentially going to break one another, and while you’re waiting for the nav review you can get cracking on the sidebar piece. This is a simplistic example but illustrates that you can plan for this situation ahead of the actual work to make the most use of your productive hours as possible.&lt;/p&gt;&lt;h2&gt;Wrapping up&lt;/h2&gt;&lt;p dir="ltr"&gt;Hopefully this helps you and your team be more effective, work through problems quicker, and review code more effectively! Have more to add to the conversation? You can let me know on &lt;a href="https://twitter.com/sarah_edo" dir="ltr"&gt;twitter&lt;/a&gt;, or in our &lt;a href="https://community.netlify.com/" dir="ltr"&gt;Community&lt;/a&gt;.&lt;/p&gt;</description><pubDate>Thu, 02 Apr 2020 08:47:40 -0500</pubDate></item><item><title>Zero-overhead deterministic failure - A unified mechanism for C and C++ (2018)</title><link>http://www.open-std.org/jtc1/sc22/wg14/www/docs/n2289.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/gvmlwp/zero_overhead_deterministic_failure"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Thu, 02 Apr 2020 08:34:07 -0500</pubDate></item><item><title>SIGBOVIK 2020</title><link>http://sigbovik.org/2020/proceedings.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/ccjorq/sigbovik_2020"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Thu, 02 Apr 2020 10:54:12 -0500</pubDate></item><item><title>Vim rendered on a cube for no reason</title><link>https://lobste.rs/s/yhofxe</link><description>&lt;h2&gt;Vim³&lt;/h2&gt;&lt;p&gt;Most people use vim in two stupid dimensions. But not me. I use it in three:&lt;/p&gt;&lt;img src="https://github.com/oakes/vim_cubed/raw/master/vim3.gif" width="640" height="360"&gt;&lt;p dir="ltr"&gt;To run it, &lt;a href="https://nim-lang.org/install.html" rel="nofollow" dir="ltr"&gt;install Nim&lt;/a&gt;, and from this repo do:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;nimble run vim3
 &lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Once you're ready to start using it as your main editor, do:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;nimble install
 &lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;As long as &lt;code dir="ltr"&gt;~/.nimble/bin&lt;/code&gt; is on your PATH, you will now be able to open files like this:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;vim3 path/to/myfile.txt
 &lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;Q &amp;amp; A&lt;/h2&gt;&lt;h3&gt;How do i acquire your power?&lt;/h3&gt;&lt;p&gt;It's not that hard&lt;/p&gt;&lt;h3&gt;How do i stop the cube from spinning&lt;/h3&gt;&lt;p&gt;no&lt;/p&gt;&lt;h3&gt;I don't even have vim installed, how is this possible?&lt;/h3&gt;&lt;p dir="ltr"&gt;It's using &lt;a href="https://github.com/paranim/paravim" dir="ltr"&gt;paravim&lt;/a&gt; which has a real copy of vim built in&lt;/p&gt;&lt;h3&gt;Which OS does it work on?&lt;/h3&gt;&lt;p&gt;All of them pretty much&lt;/p&gt;&lt;h3&gt;Why can't i run it on linux?&lt;/h3&gt;&lt;p dir="ltr"&gt;Could be you need opengl libraries, try &lt;code dir="ltr"&gt;sudo apt install xorg-dev libgl1-mesa-dev&lt;/code&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;You might also need to do &lt;code dir="ltr"&gt;sudo apt install libtinfo5&lt;/code&gt;&lt;/p&gt;&lt;h3&gt;I use arch btw&lt;/h3&gt;&lt;p dir="ltr"&gt;Try this: &lt;code dir="ltr"&gt;sudo ln -s /usr/lib/libtinfo.so.6 /usr/lib/libtinfo.so.5&lt;/code&gt;&lt;/p&gt;</description><pubDate>Tue, 31 Mar 2020 17:13:52 -0500</pubDate></item><item><title>1.1 Billion Taxi Rides on kdb+/q &amp; 4 Xeon Phi CPUs</title><link>https://lobste.rs/s/ae429z</link><description>&lt;p&gt;Q is a programming language with a built-in, column-oriented, in-memory and on-disk database called kdb+. Q both includes and extends SQL. Q is native to the database engine so, unlike most databases, there is no shipping of data between the client and the server.&lt;/p&gt;&lt;p&gt;Q and kdb+ are shipped as a single binary that has a small memory footprint and is capable of running in the L2 and L3 caches of modern CPUs making the system very performant. Its tables can be stored on a local disk or distributed but will nonetheless appear as a single table. Table data can be partitioned and segmented into memory mapped files which helps remove I/O bottlenecks.&lt;/p&gt;&lt;p&gt;The earliest version of kdb+ was developed by Kx Systems in the 1990's. The Q language originally grew out of their K programming language which, up until 1998, was exclusively licensed to the Swiss Bank UBS. These days the software is popular with quantitative analysts doing pre- and post-trade analytics and back testing, with stock exchanges doing realtime surveillance for insider trading and compliance purposes and there is a sizeable portion of users using it for realtime streaming analytics such as intra-day tick analysis.&lt;/p&gt;&lt;p dir="ltr"&gt;kdb+/q is commercial software but the good thing is that the 32-bit version can be downloaded &lt;a href="https://kx.com/download/" dir="ltr"&gt;for free&lt;/a&gt;. The x86 version for Linux is a 587 KB binary that can run without any real setup process on most flavours of Linux. There is also support for Solaris, Windows and Mac OSX.&lt;/p&gt;&lt;p dir="ltr"&gt;kdb+/q is considered by its users to have good performance attributes. So this is something I wanted to try for myself, which turned out to give some interesting results. In this blog post I'll see how fast kdb+/q can query 1.1 billion taxi rides. I'll be using the same dataset I've used to benchmark &lt;a href="https://tech.marksblogg.com/billion-nyc-taxi-rides-aws-athena.html" dir="ltr"&gt;Amazon Athena&lt;/a&gt;, &lt;a href="https://tech.marksblogg.com/billion-nyc-taxi-rides-bigquery.html" dir="ltr"&gt;BigQuery&lt;/a&gt;, &lt;a href="https://tech.marksblogg.com/all-billion-nyc-taxi-rides-elasticsearch.html" dir="ltr"&gt;Elasticsearch&lt;/a&gt;, &lt;a href="https://tech.marksblogg.com/50-node-emr-cluster-presto.html" dir="ltr"&gt;EMR&lt;/a&gt;, &lt;a href="https://tech.marksblogg.com/billion-nyc-taxi-rides-nvidia-pascal-titan-x-mapd.html" dir="ltr"&gt;MapD&lt;/a&gt;, &lt;a href="https://tech.marksblogg.com/billion-nyc-taxi-rides-postgresql.html" dir="ltr"&gt;PostgreSQL&lt;/a&gt; and &lt;a href="https://tech.marksblogg.com/billion-nyc-taxi-rides-redshift-large-cluster.html" dir="ltr"&gt;Redshift&lt;/a&gt;. I've compiled a &lt;a href="https://tech.marksblogg.com/benchmarks.html" dir="ltr"&gt;single-page summary&lt;/a&gt; of these benchmarks.&lt;/p&gt;&lt;h2&gt;The Hardware&lt;/h2&gt;&lt;p&gt;For this benchmark I'll be using four CentOS 7.2.1511 servers, each with a Knights Landing-based Intel Xeon Phi 7210 CPU clocked at 1.3 GHz. While the clock speed may not be much to write home about, the chip comes with 64 cores, each with 4 threads. This isn't dissimilar to using graphics cards which often come with relatively slow compute cores but many of them.&lt;/p&gt;&lt;p&gt;The 7210 has a vector processing unit with 512-bit registers bringing its memory bus width in line with those found on high-end GPUs.&lt;/p&gt;&lt;p dir="ltr"&gt;As of November 2016, &lt;a href="https://www.top500.org/lists/2016/11/" dir="ltr"&gt;3 of the top 6&lt;/a&gt; fastest supercomputers in the world are using Xeon Phi chips.&lt;/p&gt;&lt;PRE&gt;$ lscpu
@@ -2490,7 +2490,121 @@ Given Zoom’s privacy and security track record this should surprise absolutely
   (&lt;span dir="ltr"&gt;handler-bind&lt;/span&gt; ((invalid-line-error
                   #'(&lt;span dir="ltr"&gt;lambda&lt;/span&gt; (e)
                       (&lt;span dir="ltr"&gt;invoke-restart&lt;/span&gt; 'skip-line))))
-    (parse-lines lines)))&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;There is a lot to unpack here. The compiler code is using &lt;code dir="ltr"&gt;handler-case&lt;/code&gt;, which is comparable to &lt;code dir="ltr"&gt;catch&lt;/code&gt; in other languages. It unwinds the stack to the current point and runs the error handling code, in this case &lt;code dir="ltr"&gt;print-error&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Because we do not actually want to unwind the stack all the way, but resume execution inside the &lt;code dir="ltr"&gt;loop&lt;/code&gt; in &lt;code dir="ltr"&gt;parse-lines&lt;/code&gt;, we use a different construct, &lt;code dir="ltr"&gt;handler-bind&lt;/code&gt;, which automatically catches &lt;code dir="ltr"&gt;invalid-line-error&lt;/code&gt; and invokes the &lt;code dir="ltr"&gt;skip-line&lt;/code&gt; restart. If you scroll up to &lt;code dir="ltr"&gt;parse-lines&lt;/code&gt; now, you will see that the restart clause says, if we restart here, just return &lt;code dir="ltr"&gt;nil&lt;/code&gt;, and &lt;code dir="ltr"&gt;nil&lt;/code&gt; will be filtered on the very next line by &lt;code dir="ltr"&gt;when entry&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;The elegance here is the split of error handling code, and decisions about which error handling approach to take. You can register a lot of different &lt;code dir="ltr"&gt;restart-case&lt;/code&gt; statements throughout the stack, and let the caller decide if some errors are okay to ignore, without the caller having to have intricate knowledge of the lower-level code.&lt;/p&gt;&lt;p&gt;If you want to learn more about this, make sure to have a look at the book, it goes into much more detail than I did here.&lt;/p&gt;</description><pubDate>Wed, 01 Apr 2020 03:51:52 -0500</pubDate></item><item><title>BattlEye reverse engineer tracking</title><link>https://lobste.rs/s/sh17nx</link><description>&lt;h1 dir="ltr"&gt; &lt;a href="https://secret.club/2020/03/31/battleye-developer-tracking.html#preface" dir="ltr"&gt;Preface&lt;/a&gt;&lt;/h1&gt;&lt;p dir="ltr"&gt;Modern commercial anti-cheats are faced by an increasing competetiveness in professional game-hack production, and thus have begun implementing questionable methods to prevent this. In this article, we will present a previously unknown anti-cheat module, pushed to a small fraction of the player base by the commercial anti-cheat &lt;a href="https://www.battleye.com/" dir="ltr"&gt;BattlEye&lt;/a&gt;. The prevalent theory is that this module is specifically targetted against reverse engineers, to monitor the production of video game hacking tools, due to the circumstances that this is dynamically pushed.&lt;/p&gt;&lt;h1 dir="ltr"&gt; &lt;a href="https://secret.club/2020/03/31/battleye-developer-tracking.html#shellcode-" dir="ltr"&gt;Shellcode ??&lt;/a&gt;&lt;/h1&gt;&lt;p&gt;[1] Shellcode refers to independent code that is dynamically loaded into a running process.&lt;/p&gt;&lt;p dir="ltr"&gt;The code snippets in this article are beautified decompilations of shellcode [1] that we’ve dumped and deobfuscated from BattlEye. The shellcode was pushed to my development machine while messing around in &lt;a href="https://www.escapefromtarkov.com/" dir="ltr"&gt;Escape from Tarkov&lt;/a&gt;. On this machine various reverse engineering applications such as &lt;a href="https://x64dbg.com/" dir="ltr"&gt;x64dbg&lt;/a&gt; are installed and frequently running, which might’ve caught the attention of the anti-cheat in question. To confirm the suspicion, a secondary secondary machines that is mainly use for testing was booted, and on it, &lt;a href="https://www.escapefromtarkov.com/" dir="ltr"&gt;Escape from Tarkov&lt;/a&gt; was installed. The shellcode in question was &lt;em dir="ltr"&gt;not&lt;/em&gt; pushed to the secondary machine, which runs on the same network and utilized the same game account as the development machine.&lt;/p&gt;&lt;p dir="ltr"&gt;Other members of &lt;a href="https://secret.club/" dir="ltr"&gt;Secret Club&lt;/a&gt; have experienced the same ordeal, and the common denominator here is that we’re all highly specialized reverse engineers, which means most have the same applications installed. To put a nail in the coffin I asked a few of my fellow highschool classmates to let me log shellcode activity (using a &lt;a href="https://revers.engineering/7-days-to-virtualization-a-series-on-hypervisor-development/" dir="ltr"&gt;hypervisor&lt;/a&gt;) on their machines while playing &lt;a href="https://www.escapefromtarkov.com/" dir="ltr"&gt;Escape from Tarkov&lt;/a&gt;, and not a single one of them received the module in question. Needless to say, some kind of technical minority is being targeted, which the following code segments will show.&lt;/p&gt;&lt;h1 dir="ltr"&gt; &lt;a href="https://secret.club/2020/03/31/battleye-developer-tracking.html#context" dir="ltr"&gt;Context&lt;/a&gt;&lt;/h1&gt;&lt;p dir="ltr"&gt;In this article, you will see references to a function called &lt;code dir="ltr"&gt;battleye::send&lt;/code&gt;. This function is used by the commercial anti-cheat to send information from the client module &lt;code dir="ltr"&gt;BEClient_x64/x86.dll&lt;/code&gt; inside of the game process, to the respective game server. This is to be interpreted as a pure “send data over the internet” function, and only takes a buffer as input. The id in each report header determines the type of “packet”, which can be used to distinguish packets from one another.&lt;/p&gt;&lt;h1 dir="ltr"&gt; &lt;a href="https://secret.club/2020/03/31/battleye-developer-tracking.html#device-driver-enumeration" dir="ltr"&gt;Device driver enumeration&lt;/a&gt;&lt;/h1&gt;&lt;p dir="ltr"&gt;This routine has two main purposes: enumerating device drivers and installed certificates used by the respective device drivers. The former has a somewhat surprising twist though, this shellcode will upload(!!) any device driver matching the arbitrary “evil” filter to the game server. This means that if your proprietary, top-secret and &lt;em dir="ltr"&gt;completely unrelated&lt;/em&gt; device driver has the word “Callback” in it, the shellcode will upload &lt;strong dir="ltr"&gt;the entire contents of the file on disk&lt;/strong&gt;. This is a huge privacy concern as it is not an infrequent word to use for device drivers that install kernel callbacks for monitoring events.&lt;/p&gt;&lt;p&gt;The certificate enumerator sends the contents of all certificates used by device drivers on your machine directly to the game server:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;  &lt;span dir="ltr"&gt;// ONLY ENUMERATE ON X64 MACHINES&lt;/span&gt;
+    (parse-lines lines)))&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;There is a lot to unpack here. The compiler code is using &lt;code dir="ltr"&gt;handler-case&lt;/code&gt;, which is comparable to &lt;code dir="ltr"&gt;catch&lt;/code&gt; in other languages. It unwinds the stack to the current point and runs the error handling code, in this case &lt;code dir="ltr"&gt;print-error&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Because we do not actually want to unwind the stack all the way, but resume execution inside the &lt;code dir="ltr"&gt;loop&lt;/code&gt; in &lt;code dir="ltr"&gt;parse-lines&lt;/code&gt;, we use a different construct, &lt;code dir="ltr"&gt;handler-bind&lt;/code&gt;, which automatically catches &lt;code dir="ltr"&gt;invalid-line-error&lt;/code&gt; and invokes the &lt;code dir="ltr"&gt;skip-line&lt;/code&gt; restart. If you scroll up to &lt;code dir="ltr"&gt;parse-lines&lt;/code&gt; now, you will see that the restart clause says, if we restart here, just return &lt;code dir="ltr"&gt;nil&lt;/code&gt;, and &lt;code dir="ltr"&gt;nil&lt;/code&gt; will be filtered on the very next line by &lt;code dir="ltr"&gt;when entry&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;The elegance here is the split of error handling code, and decisions about which error handling approach to take. You can register a lot of different &lt;code dir="ltr"&gt;restart-case&lt;/code&gt; statements throughout the stack, and let the caller decide if some errors are okay to ignore, without the caller having to have intricate knowledge of the lower-level code.&lt;/p&gt;&lt;p&gt;If you want to learn more about this, make sure to have a look at the book, it goes into much more detail than I did here.&lt;/p&gt;</description><pubDate>Wed, 01 Apr 2020 03:51:52 -0500</pubDate></item><item><title>Rapid Refactoring With Vim</title><link>https://lobste.rs/s/opczcj</link><description>&lt;div dir="ltr"&gt;
+          &lt;span dir="ltr"&gt;
+            Rapid Refactoring With Vim
+          &lt;/span&gt;
+          &lt;/div&gt;&lt;p dir="ltr"&gt;Last weekend, I was tasked with refactoring the 96 unit
+tests on
+&lt;a href="https://github.com/ruma/ruma-events/pull/70" dir="ltr"&gt;ruma-events&lt;/a&gt;
+to use strictly typed json objects using &lt;code dir="ltr"&gt;serde_json::json!&lt;/code&gt;
+instead of raw strings.  It was rather painless thanks to
+vim :)&lt;/p&gt;&lt;p&gt;Here's a small sample of what had to be done (note the lines
+prefixed with the arrow):&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;→ use serde_json::{from_str};
+  
+  #[test]
+  fn deserialize() {
+    assert_eq!(
+→       from_str::&amp;lt;Action&amp;gt;(r#"{"set_tweak": "highlight"}"#),
+        Action::SetTweak(Tweak::Highlight { value: true })
+        );
+  }
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;had to be converted to:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;→ use serde_json::{from_value};
+  
+  #[test]
+  fn deserialize() {
+    assert_eq!(
+→       from_value::&amp;lt;Action&amp;gt;(json!({"set_tweak": "highlight"})),
+        Action::SetTweak(Tweak::Highlight { value: true })
+        );
+  }
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;The arglist&lt;/h3&gt;&lt;p dir="ltr"&gt;For the initial pass, I decided to handle imports, this was
+a simple find and replace operation, done to all the files
+containing tests. Luckily, modules (and therefore files)
+containing tests in Rust are annotated with the
+&lt;code dir="ltr"&gt;#[cfg(test)]&lt;/code&gt; attribute. I opened all such files:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;# `grep -l pattern files` lists all the files
+#  matching the pattern
+
+vim $(grep -l 'cfg\(test\)' ./**/*.rs)
+
+# expands to something like:
+vim push_rules.rs room/member.rs key/verification/lib.rs
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Starting vim with more than one file at the shell prompt
+populates the arglist.  Hit &lt;code dir="ltr"&gt;:args&lt;/code&gt; to see the list of
+files currently ready to edit. The square [brackets]
+indicate the current file.  Navigate through the arglist
+with &lt;code dir="ltr"&gt;:next&lt;/code&gt; and &lt;code dir="ltr"&gt;:prev&lt;/code&gt;. I use tpope's vim-unimpaired
+&lt;sup dir="ltr"&gt;&lt;a href="https://peppe.rs/posts/rapid_refactoring_with_vim/#fn1" rel="footnote" dir="ltr"&gt;1&lt;/a&gt;&lt;/sup&gt;, which adds &lt;code dir="ltr"&gt;]a&lt;/code&gt; and &lt;code dir="ltr"&gt;[a&lt;/code&gt;, mapped to &lt;code dir="ltr"&gt;:next&lt;/code&gt; and
+&lt;code dir="ltr"&gt;:prev&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;All that's left to do is the find and replace, for which we
+will be using vim's &lt;code dir="ltr"&gt;argdo&lt;/code&gt;, applying a substitution to
+every file in the arglist:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;:argdo s/from_str/from_value/g
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;The quickfix list&lt;/h3&gt;&lt;p dir="ltr"&gt;Next up, replacing &lt;code dir="ltr"&gt;r#" ... "#&lt;/code&gt; with &lt;code dir="ltr"&gt;json!( ... )&lt;/code&gt;. I
+couldn't search and replace that trivially, so I went with a
+macro call &lt;sup dir="ltr"&gt;&lt;a href="https://peppe.rs/posts/rapid_refactoring_with_vim/#fn2" rel="footnote" dir="ltr"&gt;2&lt;/a&gt;&lt;/sup&gt; instead, starting with the cursor on
+‘r’, represented by the caret, in my attempt to breakdown
+the process:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;BUFFER:    r#" ... "#;
+           ^
+
+ACTION:    vllsjson!(
+
+BUFFER     json!( ... "#;
+                ^
+
+ACTION:    &amp;lt;esc&amp;gt;$F#
+
+BUFFER:    json!( ... "#;
+                       ^
+
+ACTION:    vhs)&amp;lt;esc&amp;gt;
+
+BUFFER:    json!( ... );
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Here's the recorded &lt;sup dir="ltr"&gt;&lt;a href="https://peppe.rs/posts/rapid_refactoring_with_vim/#fn3" rel="footnote" dir="ltr"&gt;3&lt;/a&gt;&lt;/sup&gt; macro in all its glory:
+&lt;code dir="ltr"&gt;vllsjson!(&amp;lt;esc&amp;gt;$F#vhs)&amp;lt;esc&amp;gt;&lt;/code&gt;. &lt;/p&gt;&lt;p dir="ltr"&gt;Great! So now we just go ahead, find every occurrence of
+&lt;code dir="ltr"&gt;r#&lt;/code&gt; and apply the macro right? Unfortunately, there were
+more than a few occurrences of raw strings that had to stay
+raw strings. Enter, the quickfix list.&lt;/p&gt;&lt;p&gt;The idea behind the quickfix list is to jump from one
+position in a file to another (maybe in a different file),
+much like how the arglist lets you jump from one file to
+another.&lt;/p&gt;&lt;p dir="ltr"&gt;One of the easiest ways to populate this list with a bunch
+of positions is to use &lt;code dir="ltr"&gt;vimgrep&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;# basic usage
+:vimgrep pattern files
+
+# search for raw strings
+:vimgrep 'r#' ./**/*.rs
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Like &lt;code dir="ltr"&gt;:next&lt;/code&gt; and &lt;code dir="ltr"&gt;:prev&lt;/code&gt;, you can navigate the quickfix list
+with &lt;code dir="ltr"&gt;:cnext&lt;/code&gt; and &lt;code dir="ltr"&gt;:cprev&lt;/code&gt;. Every time you move up or down
+the list, vim indicates your index:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;(1 of 131): r#"{"set_tweak": "highlight"}"#;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;And just like &lt;code dir="ltr"&gt;argdo&lt;/code&gt;, you can &lt;code dir="ltr"&gt;cdo&lt;/code&gt; to apply commands to
+&lt;em dir="ltr"&gt;every&lt;/em&gt; match in the quickfix list:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;:cdo norm! @q
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;But, I had to manually pick out matches, and it involved
+some button mashing.&lt;/p&gt;&lt;h3&gt;External Filtering&lt;/h3&gt;&lt;p dir="ltr"&gt;Some code reviews later, I was asked to format all the json
+inside the &lt;code dir="ltr"&gt;json!&lt;/code&gt; macro. All you have to do is pass a
+visual selection through a pretty json printer. Select the
+range to be formatted in visual mode, and hit &lt;code dir="ltr"&gt;:&lt;/code&gt;, you will
+notice the command line displaying what seems to be
+gibberish:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;:'&amp;lt;,'&amp;gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;'&amp;lt;&lt;/code&gt; and &lt;code dir="ltr"&gt;'&amp;gt;&lt;/code&gt; are &lt;em dir="ltr"&gt;marks&lt;/em&gt; &lt;sup dir="ltr"&gt;&lt;a href="https://peppe.rs/posts/rapid_refactoring_with_vim/#fn4" rel="footnote" dir="ltr"&gt;4&lt;/a&gt;&lt;/sup&gt;. More
+specifically, they are marks that vim sets automatically
+every time you make a visual selection, denoting the start
+and end of the selection.&lt;/p&gt;&lt;p dir="ltr"&gt;A range is one or more line specifiers separated by a &lt;code dir="ltr"&gt;,&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;:1,7       lines 1 through 7
+:32        just line 32
+:.         the current line
+:.,$       the current line to the last line
+:'a,'b     mark 'a' to mark 'b'
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Most &lt;code dir="ltr"&gt;:&lt;/code&gt; commands can be prefixed by ranges. &lt;code dir="ltr"&gt;:help
+usr_10.txt&lt;/code&gt; for more on that.&lt;/p&gt;&lt;p dir="ltr"&gt;Alright, lets pass json through &lt;code dir="ltr"&gt;python -m json.tool&lt;/code&gt;, a
+json formatter that accepts &lt;code dir="ltr"&gt;stdin&lt;/code&gt; (note the use of &lt;code dir="ltr"&gt;!&lt;/code&gt; to
+make use of an external program):&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;:'&amp;lt;,'&amp;gt;!python -m json.tool
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Unfortunately that didn't quite work for me because the
+range included some non-json text as well, a mix of regex
+and macros helped fix that. I think you get the drift.&lt;/p&gt;&lt;p dir="ltr"&gt;Another fun filter I use from time to time is &lt;code dir="ltr"&gt;:!sort&lt;/code&gt;, to
+sort css attributes, or &lt;code dir="ltr"&gt;:!uniq&lt;/code&gt; to remove repeated imports.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/tpope/vim-unimpaired" dir="ltr"&gt;https://github.com/tpope/vim-unimpaired&lt;/a&gt;
+It also handles various other mappings, &lt;code dir="ltr"&gt;]q&lt;/code&gt; and &lt;code dir="ltr"&gt;[q&lt;/code&gt; to
+navigate the quickfix list for example&amp;nbsp;&lt;a href="https://peppe.rs/posts/rapid_refactoring_with_vim/#fnref1" rev="footnote" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;:help recording&lt;/code&gt;&amp;nbsp;&lt;a href="https://peppe.rs/posts/rapid_refactoring_with_vim/#fnref2" rev="footnote" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;When I'm recording a macro, I prefer starting out by
+storing it in register &lt;code dir="ltr"&gt;q&lt;/code&gt;, and then copying it over to
+another register if it works as intended. I think of &lt;code dir="ltr"&gt;qq&lt;/code&gt; as
+‘quick record’.&amp;nbsp;&lt;a href="https://peppe.rs/posts/rapid_refactoring_with_vim/#fnref3" rev="footnote" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;:help mark-motions&lt;/code&gt;&amp;nbsp;&lt;a href="https://peppe.rs/posts/rapid_refactoring_with_vim/#fnref4" rev="footnote" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;div&gt;
+        Hi. &lt;/div&gt;</description><pubDate>Wed, 01 Apr 2020 02:36:41 -0500</pubDate></item><item><title>BattlEye reverse engineer tracking</title><link>https://lobste.rs/s/sh17nx</link><description>&lt;h1 dir="ltr"&gt; &lt;a href="https://secret.club/2020/03/31/battleye-developer-tracking.html#preface" dir="ltr"&gt;Preface&lt;/a&gt;&lt;/h1&gt;&lt;p dir="ltr"&gt;Modern commercial anti-cheats are faced by an increasing competetiveness in professional game-hack production, and thus have begun implementing questionable methods to prevent this. In this article, we will present a previously unknown anti-cheat module, pushed to a small fraction of the player base by the commercial anti-cheat &lt;a href="https://www.battleye.com/" dir="ltr"&gt;BattlEye&lt;/a&gt;. The prevalent theory is that this module is specifically targetted against reverse engineers, to monitor the production of video game hacking tools, due to the circumstances that this is dynamically pushed.&lt;/p&gt;&lt;h1 dir="ltr"&gt; &lt;a href="https://secret.club/2020/03/31/battleye-developer-tracking.html#shellcode-" dir="ltr"&gt;Shellcode ??&lt;/a&gt;&lt;/h1&gt;&lt;p&gt;[1] Shellcode refers to independent code that is dynamically loaded into a running process.&lt;/p&gt;&lt;p dir="ltr"&gt;The code snippets in this article are beautified decompilations of shellcode [1] that we’ve dumped and deobfuscated from BattlEye. The shellcode was pushed to my development machine while messing around in &lt;a href="https://www.escapefromtarkov.com/" dir="ltr"&gt;Escape from Tarkov&lt;/a&gt;. On this machine various reverse engineering applications such as &lt;a href="https://x64dbg.com/" dir="ltr"&gt;x64dbg&lt;/a&gt; are installed and frequently running, which might’ve caught the attention of the anti-cheat in question. To confirm the suspicion, a secondary secondary machines that is mainly use for testing was booted, and on it, &lt;a href="https://www.escapefromtarkov.com/" dir="ltr"&gt;Escape from Tarkov&lt;/a&gt; was installed. The shellcode in question was &lt;em dir="ltr"&gt;not&lt;/em&gt; pushed to the secondary machine, which runs on the same network and utilized the same game account as the development machine.&lt;/p&gt;&lt;p dir="ltr"&gt;Other members of &lt;a href="https://secret.club/" dir="ltr"&gt;Secret Club&lt;/a&gt; have experienced the same ordeal, and the common denominator here is that we’re all highly specialized reverse engineers, which means most have the same applications installed. To put a nail in the coffin I asked a few of my fellow highschool classmates to let me log shellcode activity (using a &lt;a href="https://revers.engineering/7-days-to-virtualization-a-series-on-hypervisor-development/" dir="ltr"&gt;hypervisor&lt;/a&gt;) on their machines while playing &lt;a href="https://www.escapefromtarkov.com/" dir="ltr"&gt;Escape from Tarkov&lt;/a&gt;, and not a single one of them received the module in question. Needless to say, some kind of technical minority is being targeted, which the following code segments will show.&lt;/p&gt;&lt;h1 dir="ltr"&gt; &lt;a href="https://secret.club/2020/03/31/battleye-developer-tracking.html#context" dir="ltr"&gt;Context&lt;/a&gt;&lt;/h1&gt;&lt;p dir="ltr"&gt;In this article, you will see references to a function called &lt;code dir="ltr"&gt;battleye::send&lt;/code&gt;. This function is used by the commercial anti-cheat to send information from the client module &lt;code dir="ltr"&gt;BEClient_x64/x86.dll&lt;/code&gt; inside of the game process, to the respective game server. This is to be interpreted as a pure “send data over the internet” function, and only takes a buffer as input. The id in each report header determines the type of “packet”, which can be used to distinguish packets from one another.&lt;/p&gt;&lt;h1 dir="ltr"&gt; &lt;a href="https://secret.club/2020/03/31/battleye-developer-tracking.html#device-driver-enumeration" dir="ltr"&gt;Device driver enumeration&lt;/a&gt;&lt;/h1&gt;&lt;p dir="ltr"&gt;This routine has two main purposes: enumerating device drivers and installed certificates used by the respective device drivers. The former has a somewhat surprising twist though, this shellcode will upload(!!) any device driver matching the arbitrary “evil” filter to the game server. This means that if your proprietary, top-secret and &lt;em dir="ltr"&gt;completely unrelated&lt;/em&gt; device driver has the word “Callback” in it, the shellcode will upload &lt;strong dir="ltr"&gt;the entire contents of the file on disk&lt;/strong&gt;. This is a huge privacy concern as it is not an infrequent word to use for device drivers that install kernel callbacks for monitoring events.&lt;/p&gt;&lt;p&gt;The certificate enumerator sends the contents of all certificates used by device drivers on your machine directly to the game server:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;  &lt;span dir="ltr"&gt;// ONLY ENUMERATE ON X64 MACHINES&lt;/span&gt;
   &lt;span dir="ltr"&gt;GetNativeSystemInfo&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;native_system_info&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
   &lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt; &lt;span dir="ltr"&gt;native_system_info&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;u&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;s&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;wProcessorArchitecture&lt;/span&gt; &lt;span dir="ltr"&gt;==&lt;/span&gt; &lt;span dir="ltr"&gt;PROCESSOR_ARCHITECTURE_AMD64&lt;/span&gt; &lt;span dir="ltr"&gt;)&lt;/span&gt;
   &lt;span dir="ltr"&gt;{&lt;/span&gt;
@@ -3118,119 +3232,5 @@ Given Zoom’s privacy and security track record this should surprise absolutely
     &lt;span dir="ltr"&gt;free&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;report_buffer&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
   &lt;span dir="ltr"&gt;}&lt;/span&gt;
 &lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;</description><pubDate>Wed, 01 Apr 2020 19:54:32 -0500</pubDate></item><item><title>Rapid Refactoring With Vim</title><link>https://lobste.rs/s/opczcj</link><description>&lt;div dir="ltr"&gt;
-          &lt;span dir="ltr"&gt;
-            Rapid Refactoring With Vim
-          &lt;/span&gt;
-          &lt;/div&gt;&lt;p dir="ltr"&gt;Last weekend, I was tasked with refactoring the 96 unit
-tests on
-&lt;a href="https://github.com/ruma/ruma-events/pull/70" dir="ltr"&gt;ruma-events&lt;/a&gt;
-to use strictly typed json objects using &lt;code dir="ltr"&gt;serde_json::json!&lt;/code&gt;
-instead of raw strings.  It was rather painless thanks to
-vim :)&lt;/p&gt;&lt;p&gt;Here's a small sample of what had to be done (note the lines
-prefixed with the arrow):&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;→ use serde_json::{from_str};
-  
-  #[test]
-  fn deserialize() {
-    assert_eq!(
-→       from_str::&amp;lt;Action&amp;gt;(r#"{"set_tweak": "highlight"}"#),
-        Action::SetTweak(Tweak::Highlight { value: true })
-        );
-  }
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;had to be converted to:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;→ use serde_json::{from_value};
-  
-  #[test]
-  fn deserialize() {
-    assert_eq!(
-→       from_value::&amp;lt;Action&amp;gt;(json!({"set_tweak": "highlight"})),
-        Action::SetTweak(Tweak::Highlight { value: true })
-        );
-  }
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;The arglist&lt;/h3&gt;&lt;p dir="ltr"&gt;For the initial pass, I decided to handle imports, this was
-a simple find and replace operation, done to all the files
-containing tests. Luckily, modules (and therefore files)
-containing tests in Rust are annotated with the
-&lt;code dir="ltr"&gt;#[cfg(test)]&lt;/code&gt; attribute. I opened all such files:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;# `grep -l pattern files` lists all the files
-#  matching the pattern
-
-vim $(grep -l 'cfg\(test\)' ./**/*.rs)
-
-# expands to something like:
-vim push_rules.rs room/member.rs key/verification/lib.rs
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Starting vim with more than one file at the shell prompt
-populates the arglist.  Hit &lt;code dir="ltr"&gt;:args&lt;/code&gt; to see the list of
-files currently ready to edit. The square [brackets]
-indicate the current file.  Navigate through the arglist
-with &lt;code dir="ltr"&gt;:next&lt;/code&gt; and &lt;code dir="ltr"&gt;:prev&lt;/code&gt;. I use tpope's vim-unimpaired
-&lt;sup dir="ltr"&gt;&lt;a href="https://peppe.rs/posts/rapid_refactoring_with_vim/#fn1" rel="footnote" dir="ltr"&gt;1&lt;/a&gt;&lt;/sup&gt;, which adds &lt;code dir="ltr"&gt;]a&lt;/code&gt; and &lt;code dir="ltr"&gt;[a&lt;/code&gt;, mapped to &lt;code dir="ltr"&gt;:next&lt;/code&gt; and
-&lt;code dir="ltr"&gt;:prev&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;All that's left to do is the find and replace, for which we
-will be using vim's &lt;code dir="ltr"&gt;argdo&lt;/code&gt;, applying a substitution to
-every file in the arglist:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;:argdo s/from_str/from_value/g
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;The quickfix list&lt;/h3&gt;&lt;p dir="ltr"&gt;Next up, replacing &lt;code dir="ltr"&gt;r#" ... "#&lt;/code&gt; with &lt;code dir="ltr"&gt;json!( ... )&lt;/code&gt;. I
-couldn't search and replace that trivially, so I went with a
-macro call &lt;sup dir="ltr"&gt;&lt;a href="https://peppe.rs/posts/rapid_refactoring_with_vim/#fn2" rel="footnote" dir="ltr"&gt;2&lt;/a&gt;&lt;/sup&gt; instead, starting with the cursor on
-‘r’, represented by the caret, in my attempt to breakdown
-the process:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;BUFFER:    r#" ... "#;
-           ^
-
-ACTION:    vllsjson!(
-
-BUFFER     json!( ... "#;
-                ^
-
-ACTION:    &amp;lt;esc&amp;gt;$F#
-
-BUFFER:    json!( ... "#;
-                       ^
-
-ACTION:    vhs)&amp;lt;esc&amp;gt;
-
-BUFFER:    json!( ... );
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Here's the recorded &lt;sup dir="ltr"&gt;&lt;a href="https://peppe.rs/posts/rapid_refactoring_with_vim/#fn3" rel="footnote" dir="ltr"&gt;3&lt;/a&gt;&lt;/sup&gt; macro in all its glory:
-&lt;code dir="ltr"&gt;vllsjson!(&amp;lt;esc&amp;gt;$F#vhs)&amp;lt;esc&amp;gt;&lt;/code&gt;. &lt;/p&gt;&lt;p dir="ltr"&gt;Great! So now we just go ahead, find every occurrence of
-&lt;code dir="ltr"&gt;r#&lt;/code&gt; and apply the macro right? Unfortunately, there were
-more than a few occurrences of raw strings that had to stay
-raw strings. Enter, the quickfix list.&lt;/p&gt;&lt;p&gt;The idea behind the quickfix list is to jump from one
-position in a file to another (maybe in a different file),
-much like how the arglist lets you jump from one file to
-another.&lt;/p&gt;&lt;p dir="ltr"&gt;One of the easiest ways to populate this list with a bunch
-of positions is to use &lt;code dir="ltr"&gt;vimgrep&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;# basic usage
-:vimgrep pattern files
-
-# search for raw strings
-:vimgrep 'r#' ./**/*.rs
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Like &lt;code dir="ltr"&gt;:next&lt;/code&gt; and &lt;code dir="ltr"&gt;:prev&lt;/code&gt;, you can navigate the quickfix list
-with &lt;code dir="ltr"&gt;:cnext&lt;/code&gt; and &lt;code dir="ltr"&gt;:cprev&lt;/code&gt;. Every time you move up or down
-the list, vim indicates your index:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;(1 of 131): r#"{"set_tweak": "highlight"}"#;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;And just like &lt;code dir="ltr"&gt;argdo&lt;/code&gt;, you can &lt;code dir="ltr"&gt;cdo&lt;/code&gt; to apply commands to
-&lt;em dir="ltr"&gt;every&lt;/em&gt; match in the quickfix list:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;:cdo norm! @q
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;But, I had to manually pick out matches, and it involved
-some button mashing.&lt;/p&gt;&lt;h3&gt;External Filtering&lt;/h3&gt;&lt;p dir="ltr"&gt;Some code reviews later, I was asked to format all the json
-inside the &lt;code dir="ltr"&gt;json!&lt;/code&gt; macro. All you have to do is pass a
-visual selection through a pretty json printer. Select the
-range to be formatted in visual mode, and hit &lt;code dir="ltr"&gt;:&lt;/code&gt;, you will
-notice the command line displaying what seems to be
-gibberish:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;:'&amp;lt;,'&amp;gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;'&amp;lt;&lt;/code&gt; and &lt;code dir="ltr"&gt;'&amp;gt;&lt;/code&gt; are &lt;em dir="ltr"&gt;marks&lt;/em&gt; &lt;sup dir="ltr"&gt;&lt;a href="https://peppe.rs/posts/rapid_refactoring_with_vim/#fn4" rel="footnote" dir="ltr"&gt;4&lt;/a&gt;&lt;/sup&gt;. More
-specifically, they are marks that vim sets automatically
-every time you make a visual selection, denoting the start
-and end of the selection.&lt;/p&gt;&lt;p dir="ltr"&gt;A range is one or more line specifiers separated by a &lt;code dir="ltr"&gt;,&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;:1,7       lines 1 through 7
-:32        just line 32
-:.         the current line
-:.,$       the current line to the last line
-:'a,'b     mark 'a' to mark 'b'
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Most &lt;code dir="ltr"&gt;:&lt;/code&gt; commands can be prefixed by ranges. &lt;code dir="ltr"&gt;:help
-usr_10.txt&lt;/code&gt; for more on that.&lt;/p&gt;&lt;p dir="ltr"&gt;Alright, lets pass json through &lt;code dir="ltr"&gt;python -m json.tool&lt;/code&gt;, a
-json formatter that accepts &lt;code dir="ltr"&gt;stdin&lt;/code&gt; (note the use of &lt;code dir="ltr"&gt;!&lt;/code&gt; to
-make use of an external program):&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;:'&amp;lt;,'&amp;gt;!python -m json.tool
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Unfortunately that didn't quite work for me because the
-range included some non-json text as well, a mix of regex
-and macros helped fix that. I think you get the drift.&lt;/p&gt;&lt;p dir="ltr"&gt;Another fun filter I use from time to time is &lt;code dir="ltr"&gt;:!sort&lt;/code&gt;, to
-sort css attributes, or &lt;code dir="ltr"&gt;:!uniq&lt;/code&gt; to remove repeated imports.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/tpope/vim-unimpaired" dir="ltr"&gt;https://github.com/tpope/vim-unimpaired&lt;/a&gt;
-It also handles various other mappings, &lt;code dir="ltr"&gt;]q&lt;/code&gt; and &lt;code dir="ltr"&gt;[q&lt;/code&gt; to
-navigate the quickfix list for example&amp;nbsp;&lt;a href="https://peppe.rs/posts/rapid_refactoring_with_vim/#fnref1" rev="footnote" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;:help recording&lt;/code&gt;&amp;nbsp;&lt;a href="https://peppe.rs/posts/rapid_refactoring_with_vim/#fnref2" rev="footnote" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;When I'm recording a macro, I prefer starting out by
-storing it in register &lt;code dir="ltr"&gt;q&lt;/code&gt;, and then copying it over to
-another register if it works as intended. I think of &lt;code dir="ltr"&gt;qq&lt;/code&gt; as
-‘quick record’.&amp;nbsp;&lt;a href="https://peppe.rs/posts/rapid_refactoring_with_vim/#fnref3" rev="footnote" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;:help mark-motions&lt;/code&gt;&amp;nbsp;&lt;a href="https://peppe.rs/posts/rapid_refactoring_with_vim/#fnref4" rev="footnote" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;div&gt;
-        Hi. &lt;/div&gt;</description><pubDate>Wed, 01 Apr 2020 02:36:41 -0500</pubDate></item><item><title>SIGBOVIK 2020</title><link>http://sigbovik.org/2020/proceedings.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/ccjorq/sigbovik_2020"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Thu, 02 Apr 2020 10:54:12 -0500</pubDate></item><item><title>What dev machine have you been using to develop software</title><link>https://lobste.rs/s/mlv0v0</link><description>&lt;p&gt;Hi Everyone,
+&lt;/code&gt;&lt;/PRE&gt;</description><pubDate>Wed, 01 Apr 2020 19:54:32 -0500</pubDate></item><item><title>What dev machine have you been using to develop software</title><link>https://lobste.rs/s/mlv0v0</link><description>&lt;p&gt;Hi Everyone,
 First of all i would like to thank this community has been really helpful. So here’s my question. I come from a linux world and have been using linux extensively for few years. Now I’m thinking about getting into developing apps for iPhone and for that i would definitely get a MacBook. I would love hear community input on do you own a MacBook and how long have you been using it for and is it customizable compared to linux.Furthermore, what dev machine do you use ?&lt;/p&gt;</description><pubDate>Wed, 01 Apr 2020 10:44:42 -0500</pubDate></item><item><title>How to manage one to ones</title><link>https://lobste.rs/s/tszxyp</link><description>&lt;p&gt;Dear new developer,&lt;/p&gt;&lt;p&gt;Hopefully you’ll work in a place where you’ll have regular one to ones with your manager. I find these helpful for building a relationship and engaging with your manager and your reports (if any). I even did them with my co-founder when I founded a startup.&lt;/p&gt;&lt;p&gt;These meetings tend to be 30 minutes and on a regular cadence (weekly, biweekly or monthly, typically). If you are face to face, you can have them in the office, but going for a walk or to lunch is a great way to mix it up as well. If you are doing them over video chat due to being in different locations, it’s best to have a great internet connection, a quiet space and video turned on. There are nuances you pick up via someone’s face that you’ll miss if you only have their voice.&lt;/p&gt;&lt;p&gt;The purpose of these meetings is to keep communication lines open for both parties. It also helps both parties get to know each other as people. People generally react poorly to surprises and stress, but building the relationship and communication practices before any of these situations arrive (and they will) will help the team to navigate them.&lt;/p&gt;&lt;p&gt;It’s worth stating that as a new developer, you probably don’t have a lot of influence over many things. In fact, you might not even have a one to one. If you don’t, the first step is to ask for a regular meeting with your supervisor. You can start with a monthly 30 minute meeting, which shouldn’t be impossible to schedule. I’d frame this request in terms that are helpful for the company and your supervisor:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;I want to understand where we are heading&lt;/LI&gt;&lt;LI&gt;I want to know how I can best help you and the company&lt;/LI&gt;&lt;LI&gt;The insights I gain will help me be more effective in helping the team&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;If you do have a one to one, you can use it to share knowledge and gain understanding. Here are some tips for making the most out of your one to ones as a new developer.&lt;/p&gt;&lt;p dir="ltr"&gt;First, schedule (or ask for) &lt;strong dir="ltr"&gt;regular meetings&lt;/strong&gt; at a time that works for both of you. Be cognizant of each other’s schedule (does someone like to get up early or work late? Are you in the same time zone?). Scheduling these back to back can be helpful for a manager. And scheduling them outside of “in the zone” blocks of time can make sure that there’s time for other work to be done.&lt;/p&gt;&lt;p&gt;The fact that the meetings are regular is important. They don’t have to last the entire scheduled time, but the manager should never cancel them, and if they must be rescheduled, do that promptly. (This meeting is very important for you as a new developer, and the manager should treat it that way.) If your manager is stretched too thin or is for whatever reason not treating this like an important meeting, suggest decreasing the frequency.&lt;/p&gt;&lt;p&gt;Regular meetings establish the relationship. If the only time you are meeting with your manager is when there are issues, you need guidance on work to be done, or at your performance review, that relationship won’t have the time to grow.&lt;/p&gt;&lt;p dir="ltr"&gt;As the employee, come to a one to one &lt;strong dir="ltr"&gt;with your agenda&lt;/strong&gt;. I use a google doc in reverse chronological order, with the current meeting at the top. If you can, share this with your manager. Over the week or weeks between your meetings, add items to this doc. This can include items such as:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;How should I have handled situation XXX?&lt;/LI&gt;&lt;LI&gt;I’d like to learn more about NoSQL databases; what are the opportunities at this company?&lt;/LI&gt;&lt;LI&gt;I’m struggling with XXX, do you have any suggestions?&lt;/LI&gt;&lt;LI&gt;What are the challenges you see facing our team during project YYY?&lt;/LI&gt;&lt;LI&gt;I heard a rumor that we’re opening a London office; is there anything you can tell me about that?&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;In general, topics should be about professional challenges, discussions or opportunities. Some chitchat about what you each did over the weekend is good social lubricant, if you both feel that way. (I’ve struggled in the past with connecting to reports, but found that discussing their out of work interests can lead to good conversations and a stronger relationship.)&lt;/p&gt;&lt;p&gt;I like to record action items for myself and the other party right in this google doc (sometimes the action item may be as simple as “bring this up again in three months”). This means that when the next one to one comes around, I can see what we discussed last time and if there was any progress. This doc is also great for preparing for your performance review, sharing with a new supervisor, or even just to see what you’ve done or been concerned about over time.&lt;/p&gt;&lt;p dir="ltr"&gt;Another thing that I’ve had to learn over the years is that one to ones are a great place for me as an employee to &lt;strong dir="ltr"&gt;ask for what I want&lt;/strong&gt;. It’s awkward for me, because I’m a people pleaser at work, but if I don’t ask for what I want or need from my supervisor, how will they know? Now that doesn’t mean you can ask for the moon, but if you see opportunities in adjacent areas to your current work, ask for them.&lt;/p&gt;&lt;p&gt;If you see technologies that you think would make everyone’s lives easier, ask if you can investigate them. If you see a conference or other educational opportunity, ask if there’s money for you to attend. I remember at my very first job, I was interested in learning about databases and database administration. I asked my supervisor about doing a three month internship in that group, and they let me do so. I learned a lot about the data driven mindset during that time.&lt;/p&gt;&lt;p dir="ltr"&gt;What is said in a one to one &lt;strong dir="ltr"&gt;should be kept private&lt;/strong&gt;, unless sharing it is discussed and both parties agree. Keep the agenda doc between the two of you. I think &lt;a href="https://medium.com/@royrapoport/the-1-on-1-disclosure-framework-bec6118402ce" dir="ltr"&gt;this article, “The 1-on-1 Disclosure Framework”,&amp;nbsp; covers the levels of privacy&lt;/a&gt; very well.&lt;/p&gt;&lt;p&gt;Finally, it’s worth acknowledging that there’s a power differential in every one to one, based on the fact that the manager influences and/or controls the employee’s role, salary, and job. This meeting isn’t about being buddies or friends, but rather about building the person to person relationship that will allow both parties to thrive and help the company with its goals.&lt;/p&gt;&lt;p&gt;Sincerely,&lt;/p&gt;&lt;p&gt;Dan&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Tagged&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Thu, 02 Apr 2020 08:57:34 -0500</pubDate></item></channel></rss>
