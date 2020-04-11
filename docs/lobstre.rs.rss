@@ -668,343 +668,7 @@ We are software developers who take pride in our work but choose not to be wholl
 &lt;/div&gt;&lt;UL&gt;&lt;LI&gt;Write a technical blog&lt;/LI&gt;&lt;LI&gt;Contribute to open source projects&lt;/LI&gt;&lt;LI&gt;Attend user groups in your spare time&lt;/LI&gt;&lt;LI&gt;Mostly only read books about coding and productivity&lt;/LI&gt;&lt;LI&gt;Are committed to maximum awesomeness at all times, or would have us believe it&lt;/LI&gt;&lt;/UL&gt;&lt;div&gt;
 
 ...we respect you for it. There's probably some pity in there too, but honestly, it's mostly respect.&lt;/div&gt;&lt;div&gt;We recognize that your willingness to allow your employment to penetrate deeply into your personal life means that you will inevitably become our supervisor. We're cool with this.&lt;/div&gt;&lt;div dir="ltr"&gt;In return, you must recognize that the success of the projects on which we work together depends largely upon the degree to which you treat &lt;em dir="ltr"&gt;us&lt;/em&gt; with respect, both as &lt;strong dir="ltr"&gt;skilled professionals&lt;/strong&gt; and as &lt;strong dir="ltr"&gt;a diversity of autonomous living people&lt;/strong&gt;. Get that right, and we'll do a great job. Get it badly wrong, and there's a risk that we'll piss 
-&lt;em dir="ltr"&gt;all&lt;/em&gt; over your fireworks. There are more of us than there are of you.&lt;/div&gt;&lt;div dir="ltr"&gt;To us it is &lt;em dir="ltr"&gt;just a job&lt;/em&gt;, but we still do it well.&lt;/div&gt;&lt;UL&gt;&lt;LI&gt;Revived 2020-04-08.&lt;/LI&gt;&lt;LI&gt;Created 2012-04-17. &lt;a href="mailto:501@501manifesto.dev" dir="ltr"&gt;Email&lt;/a&gt;. Full respect to Scott Hanselman and to the authors of the Agile Manifesto, which I have so lamely pastiched. Sorry about the ugly HTML - I'd fix it, but I'm going home now.&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Thu, 09 Apr 2020 08:41:58 -0500</pubDate></item><item><title>Somewhat Less Lethargic JSON Support for iOS/macOS, Part 1: The Status Quo</title><link>https://lobste.rs/s/0risyw</link><description>&lt;div itemprop="description articleBody" dir="ltr"&gt;
-I just finished watching Daniel Lemire's talk on the current iteration of &lt;a href="https://github.com/simdjson/simdjson" dir="ltr"&gt;simdjson&lt;/a&gt;, a JSON parser that clocks in at 2.5GB/s!  I've been following Daniel's work for some time now and can't really recommend it highly enough.&lt;/div&gt;&lt;div class="embed-placeholder" data-type="youtube" data-id="wlvKAT7SZIQ"&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;
-
-This reminded me of a recent twitter conversation where I had offered to contribute a fast, Swift-compatible JSON parser loosely based on MAX, my
-fast and convenient XML parser.  Due to various factors most of which are not under my control, I can't really offer anything that's
-&lt;em dir="ltr"&gt;fast&lt;/em&gt; when compared to simdjson, but I &lt;em dir="ltr"&gt;can&lt;/em&gt; manage something quite a bit less lethargic than what's currently on offer
-in the Apple and particularly the Swift world.&lt;/p&gt;&lt;h3&gt;Environmental assumptions and constraints&lt;/h3&gt;&lt;div itemprop="description articleBody" dir="ltr"&gt;
-
-My first assumption is that we are going to operate in the Apple ecosystem, and for simplicity's sake I am going to use macOS.
-Next, I will assume that what we want from our parse(r) are &lt;em dir="ltr"&gt;domain objects&lt;/em&gt; for further processing within our application
-(or structs, the difference is not important in this context). 
-
-&lt;/div&gt;&lt;img alt="" height="169" src="https://dl.dropbox.com/s/8kuduy9prj54gyd/json2objects.png?dl=0" title="" width="400"&gt;&lt;div itemprop="description articleBody"&gt;
-
-
- 
-We are going to use the following class with a mix of integer and string instance variables, in Swift:&lt;/div&gt;&lt;PRE&gt;@objc class TestClass: NSObject, Codable {
-    let hi:Int
-    let there:Int
-    let comment:String
-...
-}
-&lt;/PRE&gt;&lt;div itemprop="description articleBody"&gt;
-
-and the same in Objective-C:&lt;/div&gt;&lt;PRE&gt;@interface TestClass : NSObject
-
-@property (nonatomic) long hi,there;
-@property (nonatomic,strong) NSString *comment;
-
-@end
-&lt;/PRE&gt;&lt;div itemprop="description articleBody" dir="ltr"&gt;
-
-To make it all easy to measure, we are going to use one million objects, which we are going to initialise with increasing integers and the constant string &lt;code dir="ltr"&gt;"comment"&lt;/code&gt;.  This yields the same 44MB JSON file with different serialisation methods, which can be correctly parsed by all the parsers tested.  This is obviously a very simple class an file structure, but I think it gives a reasonable approximation for real-world use.&lt;/div&gt;&lt;p&gt;
-
-The first thing to check is how quickly we can create these objects straight in code, without any parsing.
-
-&lt;/p&gt;&lt;img alt="" height="160" src="https://dl.dropbox.com/s/xuskcc089m9oohx/just2objects.png?dl=0" title="" width="300"&gt;&lt;p&gt;
-
-  That should give us a good upper
-bound for the performance we can achieve when parsing to domain objects.
-
-&lt;/p&gt;&lt;PRE&gt;#define COUNT 1000000
--(void)createObjects
-{
-    NSMutableArray *objResult=[NSMutableArray arrayWithCapacity:COUNT+20];
-    for ( int i=0;i&amp;lt;COUNT;i++ ) {
-        TestClass *cur=[TestClass new];
-        cur.hi=i;
-        cur.there=i;
-        cur.comment=@"comment";
-        [objResult addObject:cur];
-    }
-    NSLog(@"Created objects in code w/o parsing %@ with %ld objects",objResult[0],[objResult count]);
-}
-&lt;/PRE&gt;&lt;div itemprop="description articleBody"&gt;
-
-On my Quad Core, 2.7Ghz MBP '18, this runs in 0.141 seconds.  Although we aren't actually parsing, it would mean that 
-just creating all the objects that would result from parsingg our 44MB JSON file would yield a rate of 312 MB/s.&lt;/div&gt;&lt;p dir="ltr"&gt; 
-
-Wait a second!  312MB/s is almost 10x &lt;em dir="ltr"&gt;slower&lt;/em&gt; than Daniel Lemire's parser, the one that actually parses JSON, and we are only
-creating the objects that would result if we were parsing, without doing any actual parsing.&lt;/p&gt;&lt;p dir="ltr"&gt;
-
-This is one of the many unintuitive aspects of parsing performance: the actual low-level, character-level parsing is generally the 
-least important part for overall performance. Unless you do something crazy like use &lt;code dir="ltr"&gt;NSScanner&lt;/code&gt;. Don't use &lt;code dir="ltr"&gt;NSScanner&lt;/code&gt;. Please.&lt;/p&gt;&lt;p dir="ltr"&gt;
-
-One reason this is unintuitive is that we all learned that performance is dominated by the innermost loop, and character level processing
-&lt;em dir="ltr"&gt;is&lt;/em&gt; the innermost loop.  But when you have magnitudes in performance differences and inner and outer loops
-differ by less than that amount, the stuff happennnig in the outer loop can dominate. 
-
-
-
-
-&lt;/p&gt;&lt;h3&gt;NSJSONSerialization&lt;/h3&gt;&lt;div itemprop="description articleBody" dir="ltr"&gt;
-
-Apple's JSON story very much revolves around &lt;code dir="ltr"&gt;&lt;a href="https://developer.apple.com/documentation/foundation/nsjsonserialization" dir="ltr"&gt;NSJSONSerialization&lt;/a&gt;&lt;/code&gt;, very much like most of the rest of
-its serialization story revolves around the very similar &lt;code dir="ltr"&gt;NSPropertyListSerialization&lt;/code&gt; class. It has
-a reasonable quick implementation, turning the 44 MB JSON file into an &lt;code dir="ltr"&gt;NSArrray&lt;/code&gt; of &lt;code dir="ltr"&gt;NSDictionary&lt;/code&gt;
-instances in 0.421 seconds when called from Objective-C, for a rate of 105 MB/s.  From Swift, it takes 0.562 seconds,  for 78 MB/s.&lt;/div&gt;&lt;p&gt;
-
-Of course, that gets us to a property list (array of dicts, in this case), not to the domain objects we actually want.&lt;/p&gt;&lt;img alt="" height="145" src="https://dl.dropbox.com/s/tx10szymoh5kc97/json2dict2objects.png?dl=0" title="" width="500"&gt;&lt;p&gt;
-
-If you read my book (did I mention my book?  Oh, I think I did), you will know that this type of dictonary 
-representation is fairly expensive:  expensive to create, expensive in terms of memory consumption and
-expensive to access.  Just creating dictionaries equivalent to the objects we created before takes 0.321 seconds,
-so around 2.5x the time for creating the equivalent objects and a "rate" of 137 MB/s relative to our 44 MB JSON file.&lt;/p&gt;&lt;PRE&gt;-(void)createDicts
-{
-    NSMutableArray *objResult=[NSMutableArray arrayWithCapacity:COUNT+20];
-    for ( int i=0;i&amp;lt;COUNT;i++ ) {
-        NSMutableDictionary *cur=[NSMutableDictionary dictionary];
-        cur[@"hi"]=@(i);
-        cur[@"there"]=@(i);
-        cur[@"comment"]=@"comment";
-        [objResult addObject:cur];
-    }
-    NSLog(@"Created dicts in code w/o parsing %@ with %ld objects",objResult[0],[objResult count]);
-}
-&lt;/PRE&gt;&lt;div itemprop="description articleBody"&gt;
-Creating the dict in a single step using a dictionary literal is not significantly faster, but creating
-an immutable copy of the mutable dict after we're done filling brings the time to half a second.&lt;/div&gt;&lt;p&gt;
-
-
-Getting from dicts to objects is typically straightforward, if tedious:  just fetch the entry of the dictionary
-and call the corresponding setter with the value thus retrieved from the dictionary.  As this isn't production
-code and we're just trying to get some bounds of what is possible, there is an easier way:  just use Key Value
-Coding with the keys found in the dictionary.
-
-The combined code, parsing and then creating the objects is shown below:
-
-&lt;/p&gt;&lt;PRE&gt;-(void)decodeNSJSONAndKVC:(NSData*)json
-{
-    NSArray *keys=@[ @"hi", @"there", @"comment"];
-    NSArray *plistResult=[NSJSONSerialization JSONObjectWithData:json options:0 error:nil];
-    NSMutableArray *objResult=[NSMutableArray arrayWithCapacity:plistResult.count+20];
-    for ( NSDictionary *d in plistResult) {
-        TestClass *cur=[TestClass new];
-        for (NSString *key in keys) {
-            [cur setValue:d[key] forKey:key];
-        }
-        [objResult addObject:cur];
-    }
-    NSLog(@"NSJSON+KVC %@ with %ld objects",objResult[0],[objResult count]);
-}
-&lt;/PRE&gt;&lt;div itemprop="description articleBody"&gt;
-
-Note that KVC is slow.  Really slow.  Order-of-magnitude slower than just sending messages kind of slow, and so it has significant impact on the total time, which comes to a total of 1.142 seconds including parsing and object creation,
-or just shy of 38 MB/s. 
-
-&lt;/div&gt;&lt;img alt="" height="130" src="https://dl.dropbox.com/s/gjz0jzn0uu48kkx/json2dict2objects-kvc.png?dl=0" title="" width="520"&gt;&lt;h3&gt;Swift JSON Coding&lt;/h3&gt;&lt;div itemprop="description articleBody" dir="ltr"&gt;
-
-For the first couple of releases of Swift, JSON support by Apple was limited to a wrapped &lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt;, with the slight
-performance penalty already noted.  As I write in my book (see sidebar), many JSON "parsers" were published, but none of these
-with the notable exception of the Big Nerd Ranch's Freddy were actual parses, they all just transformed the 
-arrays and dictionaries returned by &lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt; into Swift objects.  Performance was 
-abysmal, with around 25x overhead in addition to the basic &lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt; parse. &lt;/div&gt;&lt;p dir="ltr"&gt; 
-
-Apple's Swift &lt;code dir="ltr"&gt;Codable&lt;/code&gt; promised to solve all that, and on the convenience front it certainly does
-a great job.
-
-&lt;/p&gt;&lt;PRE&gt;    func readJSONCoder(data:Data) -&amp;gt; [TestClass] {
-        NSLog("Swift Decoding")
-        let coder=JSONDecoder( )
-        let array=try! coder.decode([TestClass].self, from: data)
-        return array
-    }
-&lt;/PRE&gt;&lt;div itemprop="description articleBody" dir="ltr"&gt;
-
-(All the forcing is because this is just test code, please don't do this in production!).  Alas, performance is
-still not great:  4.39 seconds, or 10 MB/s.  That's 10x slower than the basic &lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt; 
-parse and 4x slower than our slow but simple complete parse via &lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt; and KVC.&lt;/div&gt;&lt;p dir="ltr"&gt;
-
-However, it &lt;em dir="ltr"&gt;is&lt;/em&gt; significantly faster than the previous third-party JSON to Swift objects "parsers", to 
-the tune of 3-4x.  This is the old "first mark up 400% then discount 50%" sales trick applied to performance, 
-except that the relative numbers are larger.&lt;/p&gt;&lt;h3&gt;Third Party JSON Parsers&lt;/h3&gt;&lt;div itemprop="description articleBody" dir="ltr"&gt;
-
-I looked a little at third party JSON parsers, particularly &lt;a href="https://github.com/delba/JASON" dir="ltr"&gt;JASON&lt;/a&gt;, &lt;a href="https://github.com/nst/STJSON" dir="ltr"&gt;STJSON&lt;/a&gt; and &lt;a href="https://github.com/michaeleisel/ZippyJSON" dir="ltr"&gt;ZippyJSON&lt;/a&gt;.&lt;/div&gt;&lt;p dir="ltr"&gt;
-
-STTJSON does not make any claims to speed and manages to clock in at 5 seconds, or just under 10 MB/s.  JASON bills
-itself as a "faster" JSON parser (they compare to SwiftyJSON), and does reasonably well at 0.75 seconds or 59 MB/s. 
-However both of these parse to their own internal representation, not to domain objects (or structs), and so should
-be compared to &lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt;, at which point they both disappoint.&lt;/p&gt;&lt;p dir="ltr"&gt;
-
-Probably the most interesting of these is SwiftyJSON, as it uses Daniel Lemire's simdjson and is &lt;code dir="ltr"&gt;Codable&lt;/code&gt;
-compatible.  Alas, I couldn't get SwiftyJSON to compile, so I don't
-have numbers, but I will keep trying.   They claim around 3x faster than Apple's &lt;code dir="ltr"&gt;JSONDecoder&lt;/code&gt;, which
-would make it the only parser to be at least in the same ballpark as the trivial &lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt; + KVC method I showed above.&lt;/p&gt;&lt;p&gt;
-
-Another interesting tidbit comes from ZippyJSON's README, under the heading "Why is it so much faster".
-
-&lt;/p&gt;&lt;BLOCKQUOTE&gt;
-Apple's version first converts the JSON into an NSDictionary using &lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt; and then afterwards makes things Swifty. The creation of that intermediate dictionary is expensive.
-&lt;/BLOCKQUOTE&gt;&lt;div itemprop="description articleBody" dir="ltr"&gt;
-
-This is true by itself: first converting to an intermediate representation &lt;em dir="ltr"&gt;is&lt;/em&gt; slow, particularly one
-that's as heavy-weight as property lists.  However, it cannot be the primary reason, because creating that
-expensive representation only takes 1/8th of the total running time.  The other 7/8ths is Codable apparently
-talking to itself.  And speaking very s-l-o-w-l-y while doing that.&lt;/div&gt;&lt;p dir="ltr"&gt;
-
-
-To corroborate, I also tried a the &lt;a href="https://github.com/Flight-School/MessagePack" dir="ltr"&gt;Flight-School&lt;/a&gt; implementation of Codable for MessagePack, which obviously does not use &lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt;.
- It makes no performance claims and takes 18 seconds to decode the same
-objects we used in the JSON files, of course with a different file that's 34 MB in size.  Normalized to our 44 MB
-file that would be 2.4 MB/s.&lt;/p&gt;&lt;h3&gt;MAX and MASON&lt;/h3&gt;&lt;div itemprop="description articleBody" dir="ltr"&gt;
-
-So where does that leave us?  Considering what simdjs shows is theoretically possible with JSON parsing, we are
-not in a good place, to put it mildly.  2.5 GB/s vs. 10 MB/s with Apple's JSONDecoder, several times slower than
-&lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt;, which isn't exactly a speed daemon and around 30x slower than pure object creation.  Comically bad might be another way of putting it.  At least we're being entertained. &lt;/div&gt;&lt;p dir="ltr"&gt;
-
-What can I contribute?  Well, I've been through most of this once before with XML and the result was/is 
-&lt;a href="https://github.com/mpw/MPWFoundation/blob/master/XML/MPWMAXParser.h" dir="ltr"&gt;MAX&lt;/a&gt; (Messaging API for XML), a parser that is not just super-fast itself (though no SIMD), but also 
-presents APIs that make it both &lt;a href="https://blog.metaobject.com/2009/12/simple-objective-xml-example.html" dir="ltr"&gt;super-convenient&lt;/a&gt; and also super-fast to go directly from the XML to
-an object-representation, either as a tree or a stream of domain objects while using mostly constant
-memory.  Have I mentioned my book?  Yeah, it's in the book, in gory detail.&lt;/p&gt;&lt;p&gt;
-
-Anyway, XML has sorta faded, so the question was whether the same techniques would work for a JSON parser.  
-The answer is yes, roughly, though with some added complexity and less convenience because JSON is a 
-less informative file format than XML.  Open- and close-tags really give you a good heads-up as to what's
-coming that "{" just does not.&lt;/p&gt;&lt;p&gt;
-
-The goal will be to produce domain objects at as close to the theoretical maximum of slightly more than 300 MB/s
-as possible, while at the same time making the parser convenient to use, close to Swift Codable in convenience.
-It won't support Codable per default, as the overheads seem to be too high, but ZippyJSON suggests that an
-adapter wouldn't be too hard.&lt;/p&gt;&lt;p dir="ltr"&gt;
-
-That parser is &lt;a href="https://github.com/mpw/MPWFoundation/blob/master/JSON/MPWMASONParser.h" dir="ltr"&gt;MPWMASONParser&lt;/a&gt;,
-and no, it isn't done yet.  In its initial state, it parses JSON to dictionaries in 0.58 seconds, or 76 MB/s and
-slightly slower than &lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt;.&lt;/p&gt;&lt;p&gt;
-
-So we have a bit of way to go, come join me on this little parsing performance journey!&lt;/p&gt;</description><pubDate>Fri, 10 Apr 2020 09:18:40 -0500</pubDate></item><item><title>The Death of Hype: What's Next for Scala</title><link>https://lobste.rs/s/5m7mtd</link><description>&lt;p&gt;A recent tweet by a friend of mine noted how the public interest in the Scala programming language seems to have plateaued or waned, which matches my feeling of the latest trends and zeitgeist. This blog post will go into why I think that has happened, where Scala stands now, and what the future holds for the Scala community.&lt;/p&gt;&lt;p&gt;This blogpost was inspired by the following tweet:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;It's a shame to see friends from Typesafe/Lightbend being laid off, but as I've always said, it's hard to sell free stuff.&lt;/p&gt;&lt;p&gt;I do wonder about #Scala's adoption now. It's not Clojure-dead, but it seemed to peak around 2016. I have zero data to back that, though.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Jamie notes that public interest in the Scala programming language seems to have waned: less interest in meetups, less interest in conferences, and so on. This more or less matches what I am seeing as well. While the Scala-specific conferences targeting enthusiasts are still going strong (or were, until COVID19 shut down the global economy) I think there is no doubt that there is much less &lt;em dir="ltr"&gt;talk&lt;/em&gt; about Scala in the broader engineering community.&lt;/p&gt;&lt;p&gt;I think that this reduction in public interest is real, but also expected given the typical "Hype Cycle" that follows any new technology:&lt;/p&gt;&lt;img src="http://www.lihaoyi.com/post/TheScalaEcosystem/HypeCycle.jpg" alt="HypeCycle.jpg" width="453" height="302"&gt;&lt;p&gt;Early on, Scala rode a wave of hype that frankly surprised even me: hype around pushing syntactic boundaries, hype around reactive architectures, hype around functional programming, hype around the Apache Spark project. Much of that hype has since died down, and there was a period of backlash and negativity both within the Scala community and outside of it. Since then, even the backlash has faded, and what is left is a reasonable, boring language steadily advancing and providing a great platform for general software engineering.&lt;/p&gt;&lt;h2&gt;The Past: the Peak of Inflated Expectations&lt;/h2&gt;&lt;p&gt;While Scala was initially created in 2004, the language only really started taking off in the early 2010s:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;~2009: Twitter started picking up the language for production systems&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;~2010: the first tagged release of the Scalaz functional programming library&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;~2011: Lightbend, a company pushing Scala and related technologies, was  founded&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;~2014: Apache Spark was written in Scala&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;~2015: first tagged release of the Cats functional programming library&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;While there was no doubt activity in the Scala community before this, these were no doubt major milestones that kickstarted interest in the language. With large-scale commercial adoption, commercial support, and a killer big-data product like Apache Spark, it is not surprising that there was a surge in public interest. A lot of these efforts went into the following domains:&lt;/p&gt;&lt;h3&gt;Pushing Syntactic Boundaries&lt;/h3&gt;&lt;p&gt;A lot of early Scala interest was in how flexible the language was: it had extension methods, operator overloading, implicit constructors/conversions, and a very flexible implicit-parameter feature that could be used in all sorts of ways. This flexibility was liberating, as it opened up all sorts of domain-specific-languages and programming styles that would be unheard of in other languages.&lt;/p&gt;&lt;p dir="ltr"&gt;These were exemplified by a number of projects, such as the &lt;a href="https://databinder.net/" dir="ltr"&gt;Databinder Dispatch&lt;/a&gt; HTTP client, &lt;a href="http://www.scala-graph.org/" dir="ltr"&gt;Scala-Graph&lt;/a&gt; data structure library, or &lt;a href="https://www.scala-sbt.org/" dir="ltr"&gt;SBT&lt;/a&gt; build tool:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;// Making a HTTP request and processing the output in Databinder Dispatch&lt;/span&gt;
-executer&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;/&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;host&lt;span dir="ltr"&gt;,&lt;/span&gt; port&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;/&lt;/span&gt; target &lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt; reqBody &lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt; fromRespStr &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;// Constructing a simple directed graph with labelled edges in Scala Graph&lt;/span&gt;
-&lt;span dir="ltr"&gt;val&lt;/span&gt; flights &lt;span dir="ltr"&gt;=&lt;/span&gt; Graph&lt;span dir="ltr"&gt;(&lt;/span&gt;
-	&lt;span dir="ltr"&gt;(&lt;/span&gt;jfc &lt;span dir="ltr"&gt;~&lt;/span&gt;&lt;span dir="ltr"&gt;+&lt;/span&gt;#&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; fra&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;Flight&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"LH 400"&lt;/span&gt; &lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;10&lt;/span&gt; o &lt;span dir="ltr"&gt;25&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;8&lt;/span&gt; h &lt;span dir="ltr"&gt;20&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-	&lt;span dir="ltr"&gt;(&lt;/span&gt;fra &lt;span dir="ltr"&gt;~&lt;/span&gt;&lt;span dir="ltr"&gt;+&lt;/span&gt;#&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; dme&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;Flight&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"LH 1444"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;7&lt;/span&gt; o &lt;span dir="ltr"&gt;50&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;3&lt;/span&gt; h &lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;// Append the contents of a URL to a File after filtering through grep using SBT&lt;/span&gt;
-url&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"http://databinder.net/dispatch/About"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; #&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;"grep JSON"&lt;/span&gt; #&lt;span dir="ltr"&gt;&amp;gt;&amp;gt;&lt;/span&gt; file&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"About_JSON"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;!&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;// Search for uses of null in the source directory using SBT&lt;/span&gt;
-&lt;span dir="ltr"&gt;"find src -name *.scala -exec grep null {} ;"&lt;/span&gt;  #&lt;span dir="ltr"&gt;|&lt;/span&gt;  &lt;span dir="ltr"&gt;"xargs test -z"&lt;/span&gt;  #&lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt;  &lt;span dir="ltr"&gt;"echo null-free"&lt;/span&gt;  #&lt;span dir="ltr"&gt;||&lt;/span&gt;  &lt;span dir="ltr"&gt;"echo null detected"&lt;/span&gt;  &lt;span dir="ltr"&gt;!&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Many of these libraries have evolved since the early days and have since moved to more boring method-based APIs. It turns out that naming operators &lt;code dir="ltr"&gt;&amp;gt;-&lt;/code&gt; &lt;code dir="ltr"&gt;~+#&amp;gt;&lt;/code&gt; or &lt;code dir="ltr"&gt;#&amp;amp;&amp;amp;&lt;/code&gt;, while possible, was not always the wisest thing to do. Nevertheless, there is no doubt that pushing the boundaries of Scala's syntax using operators and domain-specific-languages was one of the big points of interest for early Scala.&lt;/p&gt;&lt;h3&gt;Reactive Architectures&lt;/h3&gt;&lt;p dir="ltr"&gt;Reactive architectures, pushed largely by Lightbend via their &lt;a href="https://akka.io/" dir="ltr"&gt;Akka Actor framework&lt;/a&gt;, was another big effort. This was a way of writing code that was very different from "normal" code that someone might earn in school, but allowed high levels of concurrency and performance beyond what is achievable writing code in a traditional style.&lt;/p&gt;&lt;p&gt;In its initial incantation, Akka Actors sacrificed a lot of what Scala what it is: a total lack of type-safety between actors, prohibiting blocking APIs, and many other idiosyncracies. Working with Akka Actors were basically their own language, embedded in Scala, but with their own conventions, syntax, and semantics.&lt;/p&gt;&lt;p&gt;More recently, with Typed Actors and Reactive Streams, the Akka developer experience has shifted to be much closer to the type-checked experience you would expect in typical Scala programs. I think there's also been a shift in the community mood: rather than treating reactive architectures like a general-purpose solution to all problems, they are now being treated as one possible approach for one specific class of problems. That mostly matches my own experience using these techniques in my own applications.&lt;/p&gt;&lt;h3&gt;Functional Programming&lt;/h3&gt;&lt;p&gt;Functional programming in Scala is best exemplified by the Scalaz and Cats projects. These two libraries attempt to bring much of the functional programming techniques from Haskell to the Scala language: a heavy focus on concepts like Monads or Applicatives, eschewing the object-oriented side of the language for a more pure-functional style.&lt;/p&gt;&lt;p&gt;The two libraries have different styles, and both remain heavily used by portions of the community today. The evangelism has died down, to some extent, but usage remains strong and everyone recognizes functional programming as one possible style in which to write your Scala applications.&lt;/p&gt;&lt;h3&gt;Apache Spark&lt;/h3&gt;&lt;p dir="ltr"&gt;The last big project that drove Scala's early hype was Apache Spark. A distributed big-data process framework, Apache Spark leveraged Scala's functional style and serializable lambdas to take common collection like &lt;code dir="ltr"&gt;map&lt;/code&gt;, &lt;code dir="ltr"&gt;filter&lt;/code&gt;, and &lt;code dir="ltr"&gt;reduce&lt;/code&gt; and run them distributed over a compute cluster processing huge amounts of code. Apache Spark allowed big data processing pipelines to be written in orders of magnitude less code and running in orders of magnitude less time than the earlier Hadoop APIs. Spark proved an instant hit.&lt;/p&gt;&lt;p&gt;Apache Spark was Scala's killer app. A huge fraction of the Scala community is only using Scala because they need to inter-operate with Spark in some way.&lt;/p&gt;&lt;p&gt;Apache Spark now supports developer APIs in many languages: SQL, R, with Python being the most popular. The original collections-like APIs have been largely superseded by a more SQL-like interface that allows better optimizability, an important factor when working with the huge datasets that Apache Spark is often used for. Nevertheless the Apache Spark codebase remains mostly Scala to this day.&lt;/p&gt;&lt;h2&gt;In the Trough of Disillusionment&lt;/h2&gt;&lt;p&gt;Since the initial spark, there definitely has been some backlash against Scala as the initial hype has died down. Some early contributors have left the community, and there was some inter-personal unhappiness. This was not just in aggregate, but on an individual level as well: I personally know many individuals who got tired of the things they themselves had been hyping, and moved on with a slightly sour taste in their mouths.&lt;/p&gt;&lt;p&gt;It's hard to pin-point an exact time where the hype died down, perhaps around 2016-2018.&lt;/p&gt;&lt;p&gt;Even on a technical level, not all was well. While many organizations used these techniques successfully in their respective niches, others have regretted going all-in on actors and all-in on functional programming. They were finding that these techniques don't fit their problem as well as they would have liked, and had to spend some time backing out of their all-in investment in a particular programming paradigm. I personally know many organizations who have had to make this adjustment.&lt;/p&gt;&lt;p&gt;Even before the fall, in the early 2010s, I was surprised at the amount of hype around some of these technologies. The usage of operators in some of these libraries was clearly through the roof, and sometimes turned even simple tasks into complex brain-teasers. The amount of hype I saw around reactive architectures and functional programming did not match the specialized use cases I found that they fit best: every Scala conference had keynote speakers evangelizing both of these approaches as the be-all end-all future of software architecture.&lt;/p&gt;&lt;p dir="ltr"&gt;It surprises me not at all that over time, others would join me in realizing the &lt;em dir="ltr"&gt;Trough of Disillusionment&lt;/em&gt;.&lt;/p&gt;&lt;h2&gt;The Present: on the Slope of Enlightenment&lt;/h2&gt;&lt;p&gt;Scala had its hype in the early 2010s, followed by a backlash against that hype in the mid-late 2010s. Where that does that leave Scala now?&lt;/p&gt;&lt;h3&gt;A Steadily Growing Community&lt;/h3&gt;&lt;img src="http://www.lihaoyi.com/post/TheScalaEcosystem/Sonatype.png" alt="Sonatype.png" width="453" height="112"&gt;&lt;p&gt;Despite the apparent downturn in public interest, usage of Scala continues to increase. I maintain a large number of open source libraries, and the number of unique IPs downloading these libraries from the Maven Central package repository has grown just over 2x over the last year. While there is some variation in the number of downloads, or the metrics for each individual package, overall they match this trend quite closely.&lt;/p&gt;&lt;p&gt;While this growth isn't the exponential rocket ship that some projects are hoping for, this is a steady increase in usage that matches my own subjective experience: usage of Scala continues to increase even as the hype has died away. If we can maintain this 2x growth every year, I think the Scala community would continue to be in pretty good shape!&lt;/p&gt;&lt;p dir="ltr"&gt;If you look at the most recent &lt;a href="https://redmonk.com/sogrady/2020/02/28/language-rankings-1-20/" dir="ltr"&gt;Redmonk Rankings&lt;/a&gt; or &lt;a href="https://www.tiobe.com/tiobe-index/" dir="ltr"&gt;Tiobe Rankings&lt;/a&gt;, they both show Scala as stably hovering just outside the clique of mainstream languages, ranked 13 and 28 respectively. Uncommon, but not obscure.&lt;/p&gt;&lt;p&gt;With the hype and the backlash both distant memories, we now see Scala for what it is a flexible language supporting multiple programming styles, each with their own tradeoffs and use cases. A lot of the early religiosity and conflict has transformed into people using Scala for steady work, enjoying the language in the way they each choose.&lt;/p&gt;&lt;h3&gt;A Solid Platform for Production Usage&lt;/h3&gt;&lt;p&gt;Despite the reduction in hype, the Scala language is in a lot better place than it used to be:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;The SBT build tool has improved by leaps and bounds in the last few years:  massively faster and easier to use.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;If you don't like SBT, you now have a choice: many organizations use Bazel or  Pants with Scala, while my own  &lt;a href="https://github.com/lihaoyi/mill" dir="ltr"&gt;Mill build tool&lt;/a&gt; is stable and widely used&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;New tools like &lt;a href="https://github.com/coursier/coursier" dir="ltr"&gt;Coursier&lt;/a&gt; are forming a  new foundation for the ecosystem: used by tools from Ammonite to SBT to Mill&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://github.com/scalameta/metals" dir="ltr"&gt;METALS&lt;/a&gt; project brings Scala support  to VSCode, Sublime Text, and any other editor with language-server support&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;catntellij's own Scala plugin continues to improve: faster, more accurate, and  with support for new tools like Ammonite scripts or the Mill build tool.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;The new collections library in Scala 2.13 cleans up a huge number of old warts  and significantly improves performance in many cases (e.g.  &lt;a href="https://github.com/databricks/sjsonnet#performance" dir="ltr"&gt;25-40% speedup on Sjsonnet&lt;/a&gt;)&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;"Polish" features like  &lt;a href="https://github.com/scala/scala/pull/7387" dir="ltr"&gt;pattern matching on strings&lt;/a&gt; or  &lt;a href="https://github.com/scala/scala/pull/8373" dir="ltr"&gt;warning suppression&lt;/a&gt; continue to  make life better for everyone&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;The compiler itself is massively sped up, with code compiling literally twice  as fast as it just three years ago&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;img src="http://www.lihaoyi.com/post/TheScalaEcosystem/CompilerGrafana.png" alt="CompilerGrafana.png" width="453" height="263"&gt;&lt;p&gt;While the language specification has hardly changed at all in the past few years, the amount of quality-of-life improvements that have landed is hard to overstate. If you had talked to any Scala-using engineering organization about halving their compile times back in 2017, they would have showered you with money to make it happen!&lt;/p&gt;&lt;p&gt;Each of the these individually has significantly improved my own personal experience writing Scala, and there are many more improvements that I cannot comprehensively list here.&lt;/p&gt;&lt;h3&gt;A Broad and Varied Ecosystem&lt;/h3&gt;&lt;p&gt;While the hype around the original four efforts has waned, these still form large and active sub-communities within the Scala ecosystem. For example while not everyone may want to use pure functional programming, and any individual may not want to use it all the time, the libraries and ecosystem surrounding it are nevertheless varied, high-quality, and well-maintained. When you do encounter an occasion to use pure functional programming, you will find everything you need.&lt;/p&gt;&lt;p&gt;In a way, the hype has served its purpose: by introducing a large number of people to a particular paradigm, it helps achieve the critical mass for some fraction of those people to sustain that sub-community going forward.&lt;/p&gt;&lt;p&gt;The broad range of styles in Scala can be thought of as a boon: rather than considering it a way of splitting the community apart, it is a way of bringing together communities that would otherwise never interact with each other. Without Scala, these communities may be disparately working in Haskell, Python, Java, and Go systems. By focusing on what's shared, rather than what's different, Scala allows these communities to collaborate on the things that benefit them all while still preserving the things that make each sub-community unique.&lt;/p&gt;&lt;p&gt;I personally do not default to architecting my code reactively using Actors, but I have shipped production code that heavily uses Actors when the situation called for them. I do not default to pure functional programming techniques, but I have used pretty esoteric constructs like Free Applicatives when useful. I think the community as a whole has matured in a similar way: appreciating the different styles, and using them where appropriate, without the dogmatism that plague the early days of Scala&lt;/p&gt;&lt;h2&gt;The Future&lt;/h2&gt;&lt;p&gt;So what exciting things do I think lie in Scala's Future? To me, the Scala language itself is in a relatively good state: an afternoon writing modern Java code is enough to relieve me of any illusions that other languages have "caught up". Where the greatest potential lies is in introducing Scala to new sets of people, or new sets of use cases, that up to this point have been completely out of bounds.&lt;/p&gt;&lt;p&gt;I think there are two main things that stand out to me:&lt;/p&gt;&lt;h3&gt;Usability&lt;/h3&gt;&lt;p&gt;In the initial four Scala efforts, one thing was missing from all of them: the ability for a new developer to start on a codebase and be immediately productive. It doesn't matter whether you were using an operator-heavy dispatch style, a actor-heavy reactive style, or a pure-FP Cats/Scalaz style: someone trying to onboard was going to have a hard time.&lt;/p&gt;&lt;p&gt;Why does that need to be the case?&lt;/p&gt;&lt;p&gt;As a counter-example, developers generally find Python an easy language to get started with: "executable pseudocode" they call it. New programmers learn Python. Non-programmers learn Python. When people write code on a whiteboard with a marker, they often write Python. While Python's performance, concurrency, or large-scale maintenability are questionable, its ease of getting started is unmatched.&lt;/p&gt;&lt;p&gt;Why can't Scala be as easy to get started with as Python?&lt;/p&gt;&lt;p&gt;Answering that question is the goal of the entire suite of libraries that I maintain. Many of my libraries are carbon-copies, shameless clones of their Python equivalents. For example:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/lihaoyi/Ammonite" dir="ltr"&gt;Ammonite&lt;/a&gt;, a clone of the IPython REPL&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/lihaoyi/upickle" dir="ltr"&gt;uPickle&lt;/a&gt;, a clone of the Python &lt;code dir="ltr"&gt;json&lt;/code&gt;  module&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/lihaoyi/PPrint" dir="ltr"&gt;PPrint&lt;/a&gt;, a clone of the Python &lt;code dir="ltr"&gt;pprint&lt;/code&gt;  module&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/lihaoyi/requests-scala" dir="ltr"&gt;Requests-Scala&lt;/a&gt;, a clone of  Kenneth Rietz' Requests module&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/lihaoyi/os-lib" dir="ltr"&gt;OS-Lib&lt;/a&gt;, a clone of the Python &lt;code dir="ltr"&gt;os&lt;/code&gt;,  &lt;code dir="ltr"&gt;sys&lt;/code&gt;, and &lt;code dir="ltr"&gt;shutil&lt;/code&gt; modules&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/lihaoyi/cask" dir="ltr"&gt;Cask&lt;/a&gt;, a clone of the Armin Ronacher's Flask  library&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;It turns out that you can make Scala as easy to get started with as Python. And for all of Pythons weaknesses - performance, concurrency, maintainability - Scala already does excellently. Scala has the potential to be the language with the usability and flexiblity of Python with the performance and scalability of Java or Go, and type-safe maintainability far beyond any of those options. Quite literally the best of both worlds!&lt;/p&gt;&lt;p&gt;While there will always be use cases where high-concurrency reactive architectures or pure-functional programming are the best tool for the job, I hope going forward that developers will be able to onboard onto the Scala language in an easy and straightforward way, and only need to learn those more advanced techniques when the need for it comes.&lt;/p&gt;&lt;h3&gt;Scala Native&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;a href="http://www.scala-js.org/" dir="ltr"&gt;Scala.js&lt;/a&gt; has demonstrated the feasiblity of using Scala on an alternate platform: compiled to Javascript instead of on the JVM, it has a vibrant ecosystem and community, and brings the Scala language into the browser, somewhere it could never be used before.&lt;/p&gt;&lt;p&gt;Scala-Native promises an even bigger revolution: by compiling Scala to self-contained binary executables, that would allow the Scala language to be used in scenarios where the startup time and resource overhead of a JVM or Javascript runtime is unacceptable. While Scala.js brought Scala to the browser, Scala-Native promises to bring Scala to a host of new environments:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Command-line tools like &lt;code dir="ltr"&gt;git&lt;/code&gt;, &lt;code dir="ltr"&gt;ls&lt;/code&gt;, &lt;code dir="ltr"&gt;rsync&lt;/code&gt;, etc. which cannot tolerate the  startup time of the JVM.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Sidecar processes or background daemons, where the significant memory overhead  of the JVM makes using Scala problematic&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Mobile development on iOS, running on iPhones and iPads, one of the most  ubiquitous consumer computing devices in the world&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Desktop applications, where the JVM startup time is too slow or bundling the  JVM too bulky&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Deep integrations with native libraries, like the Tensorflow machine learning  framework&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;These sorts of programs have been traditionally written in unsafe languages like C or C++. More recent implementations are often written in Rust or Go, and there's a whole cottage industry of not-C programming languages like Nim, Zig, or Crystal also trying to fill this space. Scala-Native promises to be able to fill this space, not with a brand-new language, but with an already-popular language with an existing rich ecosystem of libraries and tooling.&lt;/p&gt;&lt;p&gt;Scala-Native will be much more difficult to make successful than Scala.js was. In particular, Scala.js could focus on the compiler and then delegate to an existing Javascript runtime, while Scala-Native has to build its own runtime from first principles: threading, garbage-collection, event-loops, and so on. This is addition to the formidable amount of compiler work necessary. Nevertheless, if successful, this would be a massive boon for broadening the use cases for which the Scala language can be used.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p dir="ltr"&gt;While amount of &lt;em dir="ltr"&gt;hype&lt;/em&gt; around the Scala language has definitely died down over the years, the &lt;em dir="ltr"&gt;usage&lt;/em&gt; seems to be growing at a steady clip, and the experience of using the language has been improving rapidly. This is exactly what you would expect as a language progresses through the hype cycle, and moves from a fad-driven community to a value-driven community. Scala developers are using the language, not as an end unto itself, but instead as a solid tool they can use to accomplish their non-Scala-related technical or business objectives.&lt;/p&gt;&lt;p&gt;In effect, this is what it means for the community to mature.&lt;/p&gt;&lt;p&gt;Going forward, I hope we can see more of this. More focus on outcomes and value, rather than hype. More weighing of tradeoffs, rather than dogmatism. More celebrating the shared core, rather than arguing over the differences. And more 2x compiler speedups!&lt;/p&gt;&lt;p dir="ltr"&gt;I think the way we 10x the Scala community is not by spending 10x the effort bikeshedding over the existing language syntax, 10x the effort arguing about functional vs object oriented programming, or 10x the effort trying to make our already-very-type-safe code even more type-safe. It is instead by inclusively expanding the language to reach those developers we could never reach before: the newbies, the non-programmers, the command-line-tool folks, the iOS developers, and so on. If we look at the &lt;a href="https://www.jetbrains.com/lp/devecosystem-2019/python/" dir="ltr"&gt;2019 Jetbrains Developer Survey for Python&lt;/a&gt;, we can see the breadth of different domains in which the Python language is used:&lt;/p&gt;&lt;img src="http://www.lihaoyi.com/post/TheScalaEcosystem/JetbrainsSurvey.png" alt="JetbrainsSurvey.png" width="453" height="232"&gt;&lt;p&gt;Currently Scala is overwhelmingly used for backend services and/or Spark data pipelines, but there is no reason the above use cases couldn't be satisfied by Scala as well. It's up to the community to make using Scala easy and broadly-usable enough that anyone, not just the grizzled backend/data engineers, are able to pick up Scala and and use it while enjoying the conciseness, performance, and type-safety that those within the Scala community already know and love.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;About the Author:&lt;/b&gt;&lt;i dir="ltr"&gt; Haoyi is a software engineer, an early contributor to &lt;a href="http://www.scala-js.org/" dir="ltr"&gt;Scala.js&lt;/a&gt;, and the author of many open-source Scala tools such as the &lt;a href="http://www.lihaoyi.com/post/lihaoyi.com/Ammonite" dir="ltr"&gt;Ammonite REPL&lt;/a&gt; and &lt;a href="https://github.com/lihaoyi/fastparse" dir="ltr"&gt;FastParse&lt;/a&gt;. &lt;/i&gt;&lt;/p&gt;&lt;p&gt;&lt;i dir="ltr"&gt;If you've enjoyed this blog, or enjoyed using Haoyi's other open source libraries, please chip in (or get your Company to chip in!) via &lt;a href="https://www.patreon.com/lihaoyi" dir="ltr"&gt;Patreon&lt;/a&gt; so he can continue his open-source work&lt;/i&gt;&lt;/p&gt;</description><pubDate>Fri, 10 Apr 2020 03:52:05 -0500</pubDate></item><item><title>open-source satellite ground-stations network reaches 2,000,000th satellite pass milestone</title><link>https://lobste.rs/s/u5rgls</link><description>&lt;p&gt;We are excited and thrilled to announce that the SatNOGS network has reached its 2.000.000th observation on the 9th of April!&lt;/p&gt;&lt;p dir="ltr"&gt;Observation &lt;a href="https://network.satnogs.org/observations/2000000/#" dir="ltr"&gt;#2000000&lt;/a&gt; got uploaded on the SatNOGS Network by station &lt;a href="https://network.satnogs.org/stations/6/" dir="ltr"&gt;#6&lt;/a&gt;-Apomahon in Nea Filadelfia , Athens, Greece, operated by Dimitris Papadeas receiving data from &lt;a href="https://db.satnogs.org/satellite/44404/" dir="ltr"&gt;SOKRAT &lt;/a&gt;satellite.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;figure&gt;&lt;img src="https://satnogs.org/wp-content/uploads/2020/04/Untitled-design-6.png" alt="" srcset="https://satnogs.org/wp-content/uploads/2020/04/Untitled-design-6.png 560w, https://satnogs.org/wp-content/uploads/2020/04/Untitled-design-6-300x169.png 300w" width="445" height="250"&gt;&lt;/figure&gt;&lt;p&gt; The 2.000.000th observation is a result of an amazing network of ground stations and it marks the continuous efforts of hundreds of ground station owners! The SatNOGS community boasts a booming number of 200+ fully operational ground stations and 100+ in testing mode. The observations come from 400+ satellites and 880+ transmitters and over 64.800.000 data frames.  &lt;/p&gt;&lt;p dir="ltr"&gt;Do you want to join the next millions of observations? Do you want to be part of this community? Check out the SatNOGS knowledge-base &lt;a href="https://wiki.satnogs.org/Main_Page" dir="ltr"&gt;wiki&lt;/a&gt;, and don’t hesitate to reach out to the &lt;a href="https://community.libre.space/" dir="ltr"&gt;community forums&lt;/a&gt; and &lt;a href="https://riot.im/app/#/room/#satnogs:matrix.org" dir="ltr"&gt;chat&lt;/a&gt;. We would love to have you onboard the &lt;a href="https://satnogs.org/" dir="ltr"&gt;SatNOGS &lt;/a&gt;network and community. &lt;a href="https://wiki.satnogs.org/Get_Started" dir="ltr"&gt;Join us now&lt;/a&gt;!&amp;nbsp;&lt;br dir="ltr"&gt;&lt;/p&gt;</description><pubDate>Fri, 10 Apr 2020 10:40:49 -0500</pubDate></item><item><title>An alternate way of receiving signals</title><link>https://lobste.rs/s/dhuubq</link><description>&lt;p dir="ltr"&gt;If you've ever dealt with signal handling, you probably still have in mind how
-&lt;em dir="ltr"&gt;painful&lt;/em&gt; of an experience that was: making a reliable signal handler often is
-an &lt;strong dir="ltr"&gt;astonishingly difficult task&lt;/strong&gt;.&lt;/p&gt;&lt;p&gt;The reason lies in the way signal handlers work: they interrupt whatever work was
-being done, even the work that really shouldn't be.&lt;/p&gt;&lt;p&gt;Because of the very limited set of actions that can be done in such conditions,
-people found ways around it:&lt;/p&gt;&lt;p&gt;Instead of interrupting the process, the general idea is to write the signal
-somewhere the process can read when it's ready.&lt;/p&gt;&lt;p&gt;I knew of two ways to implement this same principle, but neither felt
-appropriate. I scratched my head for a few days, and came up with a new one!&lt;/p&gt;&lt;p&gt;Let's discuss the two common implementations first:&lt;/p&gt;&lt;h2&gt;The pipe trick&lt;/h2&gt;&lt;p&gt;Write the signal number to a pipe in the signal handler, and read it in the main
-program. This trick is very old but works fairly well.&lt;/p&gt;&lt;p&gt;It has its issues:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;when a process forks, it still shares its parent's pipe, which can cause
-mayhem if the child process writes a signal which is read in the parent
-process.&lt;/LI&gt;&lt;LI&gt;when the pipe fills up, you have no choice but to drop messages, which
-doesn't sound great.&lt;/LI&gt;&lt;LI&gt;it uses one more system call than the other solutions (not a big deal)&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;And some benefits:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;it provides a file descriptor, which can be used in event loops&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;SignalFD&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;tt dir="ltr"&gt;signalfd&lt;/tt&gt; is a Linux-specific API, which does almost the same as the pipe
-trick.&lt;/p&gt;&lt;p&gt;It solves both of the above issues while creating a major one:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;to be able to receive a signal using &lt;tt dir="ltr"&gt;signalfd&lt;/tt&gt;, a signal must be blocked
-by the traditional signal handling API. As the fact a signal is blocked is
-inherited when creating new processes, you may end up spawning processes that
-have many signals inadvertently blocked. The workaround is to unblock it
-right after spawning the new process, which is a pretty inconvenient thing to
-do.&lt;/LI&gt;&lt;LI&gt;it's also very linux specific&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;It comes with benefits:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;it yields better performance, as it does not interrupt the process at all, not even system calls&lt;/LI&gt;&lt;LI&gt;it also provides a file descriptor, which can be used in event loops&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;I did not like any of these techniques, as signalfd is linux specific, and the
-pipe trick has fork safety and capacity issues. Here's what I came up with:&lt;/p&gt;&lt;h2&gt;The versioned lookup table&lt;/h2&gt;&lt;p&gt;This technique, just like the pipe trick, uses on plain old signal handlers.
-It relies on these two base principles:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;the main program acts as a consumer. It polls the producer for new updates&lt;/LI&gt;&lt;LI&gt;each signal is assigned an unique revision number&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;If the main process wants to check whether a new SIGINT has been received, it
-can read the revision number of the producer and compare it with the last
-revision number processed by the consumer.&lt;/p&gt;&lt;p&gt;Also:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;both the producer and the consumer needs to hold a lookup table which maps
-signals to their revision number&lt;/LI&gt;&lt;LI&gt;an additional revision pair can be used to track the overall number of
-received signals, to avoid needlessly scanning the lookup table&lt;/LI&gt;&lt;LI&gt;the number of times some signal was received is not guaranteed to be
-preserved by the signal delivery process, and thus does not need to be
-preserved at this stage&lt;/LI&gt;&lt;LI&gt;an atomic flag can be used to allow multithreaded signal delivery on the
-signal handler side&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;The design of this technique was heavily inspired by the very interesting etcd
-data model, thanks to which I learned about this revision trick.&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;/*&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;Reading end:&lt;/span&gt;
-&lt;span dir="ltr"&gt; - read and cache the producer revision&lt;/span&gt;
-&lt;span dir="ltr"&gt; - if the cached producer and consumer revision are the same, stop there&lt;/span&gt;
-&lt;span dir="ltr"&gt; - otherwise, scan through the signaled array:&lt;/span&gt;
-&lt;span dir="ltr"&gt;   - skip signals where producer revision == consumer revision&lt;/span&gt;
-&lt;span dir="ltr"&gt;   - add the remaining signals to the result pool&lt;/span&gt;
-&lt;span dir="ltr"&gt;   - copy the signal producer revision into the signal consumer revision&lt;/span&gt;
-&lt;span dir="ltr"&gt; - copy the cached producer revision into the consumer revision&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;Writing end:&lt;/span&gt;
-&lt;span dir="ltr"&gt; - acquire the producer lock (if MT support enabled)&lt;/span&gt;
-&lt;span dir="ltr"&gt; - increment the signal revision&lt;/span&gt;
-&lt;span dir="ltr"&gt; - set the producer signal revision for the received signal&lt;/span&gt;
-&lt;span dir="ltr"&gt; - release the producer lock (if MT support enabled)&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;*/&lt;/span&gt;
-
-
-&lt;span dir="ltr"&gt;/* we need a big integer type that can be written in one instruction.&lt;/span&gt;
-&lt;span dir="ltr"&gt;   unfortunately, sig_atomic_t is not always that big, is often signed,&lt;/span&gt;
-&lt;span dir="ltr"&gt;   often smaller than needed, and doesn't even work properly on all&lt;/span&gt;
-&lt;span dir="ltr"&gt;   architectures.&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;   /!\ this typedef is architecture dependent, see the full source /!\&lt;/span&gt;
-&lt;span dir="ltr"&gt;                 https://github.com/multun/signal-lut&lt;/span&gt;
-&lt;span dir="ltr"&gt;*/&lt;/span&gt;
-&lt;span dir="ltr"&gt;typedef&lt;/span&gt; &lt;span dir="ltr"&gt;/* some type */&lt;/span&gt; &lt;span dir="ltr"&gt;lsig_atomic_t&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-
-
-&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;signal_lut&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    &lt;span dir="ltr"&gt;/* when a signal is received, the handler sets this flag. other signal&lt;/span&gt;
-&lt;span dir="ltr"&gt;       handlers have to spin, waiting for the lock to be released */&lt;/span&gt;
-    &lt;span dir="ltr"&gt;atomic_flag&lt;/span&gt; &lt;span dir="ltr"&gt;producer_lock&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-
-    &lt;span dir="ltr"&gt;/* increased by one each time a signal is added to the lookup table */&lt;/span&gt;
-    &lt;span dir="ltr"&gt;volatile&lt;/span&gt; &lt;span dir="ltr"&gt;lsig_atomic_t&lt;/span&gt; &lt;span dir="ltr"&gt;lut_producer_revision&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-
-    &lt;span dir="ltr"&gt;/* the revision of last processed signal */&lt;/span&gt;
-    &lt;span dir="ltr"&gt;volatile&lt;/span&gt; &lt;span dir="ltr"&gt;lsig_atomic_t&lt;/span&gt; &lt;span dir="ltr"&gt;lut_consumer_revision&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-
-    &lt;span dir="ltr"&gt;/* each cell stores the revision of the most recently received signal */&lt;/span&gt;
-    &lt;span dir="ltr"&gt;volatile&lt;/span&gt; &lt;span dir="ltr"&gt;lsig_atomic_t&lt;/span&gt; &lt;span dir="ltr"&gt;producer_signal_revision&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;MAX_SIGNAL_NUMBER&lt;/span&gt;&lt;span dir="ltr"&gt;];&lt;/span&gt;
-
-    &lt;span dir="ltr"&gt;/* each cell stores the revision of the last processed signal */&lt;/span&gt;
-    &lt;span dir="ltr"&gt;volatile&lt;/span&gt; &lt;span dir="ltr"&gt;lsig_atomic_t&lt;/span&gt; &lt;span dir="ltr"&gt;consumer_signal_revision&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;MAX_SIGNAL_NUMBER&lt;/span&gt;&lt;span dir="ltr"&gt;];&lt;/span&gt;
-&lt;span dir="ltr"&gt;};&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;static&lt;/span&gt; &lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;signal_lut&lt;/span&gt; &lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;void&lt;/span&gt; &lt;span dir="ltr"&gt;signal_lut_handler&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;signum&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-&lt;span dir="ltr"&gt;{&lt;/span&gt;
-    &lt;span dir="ltr"&gt;/* acquire the handler lock */&lt;/span&gt;
-    &lt;span dir="ltr"&gt;while&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;atomic_flag_test_and_set_explicit&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;producer_lock&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;memory_order_acquire&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;
-        &lt;span dir="ltr"&gt;continue&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-
-    &lt;span dir="ltr"&gt;/* update the signal freshness */&lt;/span&gt;
-    &lt;span dir="ltr"&gt;lsig_atomic_t&lt;/span&gt; &lt;span dir="ltr"&gt;sig_id&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;++&lt;/span&gt;&lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;lut_producer_freshness&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;producer_signal_freshness&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;signum&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;sig_id&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-
-    &lt;span dir="ltr"&gt;/* release the handler lock */&lt;/span&gt;
-    &lt;span dir="ltr"&gt;atomic_flag_clear_explicit&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;producer_lock&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;memory_order_release&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;signal_lut_read&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;signal_list&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;events&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-&lt;span dir="ltr"&gt;{&lt;/span&gt;
-    &lt;span dir="ltr"&gt;/* read events from the array */&lt;/span&gt;
-    &lt;span dir="ltr"&gt;lsig_atomic_t&lt;/span&gt; &lt;span dir="ltr"&gt;cached_lut_producer_freshness&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;lut_producer_freshness&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-
-    &lt;span dir="ltr"&gt;/* stop if no new event was received */&lt;/span&gt;
-    &lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;cached_lut_producer_freshness&lt;/span&gt; &lt;span dir="ltr"&gt;==&lt;/span&gt; &lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;lut_consumer_freshness&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-        &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;events&lt;/span&gt;&lt;span dir="ltr"&gt;-&amp;gt;&lt;/span&gt;&lt;span dir="ltr"&gt;count&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-
-    &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;size_t&lt;/span&gt; &lt;span dir="ltr"&gt;i&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;i&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt; &lt;span dir="ltr"&gt;MAX_SIGNAL_NUMBER&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;++&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-        &lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;consumer_signal_freshness&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt; &lt;span dir="ltr"&gt;==&lt;/span&gt; &lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;producer_signal_freshness&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;])&lt;/span&gt;
-            &lt;span dir="ltr"&gt;continue&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-
-        &lt;span dir="ltr"&gt;signal_list_add&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;events&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
-        &lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;consumer_signal_freshness&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;producer_signal_freshness&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;];&lt;/span&gt;
-    &lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-    &lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;lut_consumer_freshness&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;cached_lut_producer_freshness&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;events&lt;/span&gt;&lt;span dir="ltr"&gt;-&amp;gt;&lt;/span&gt;&lt;span dir="ltr"&gt;count&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;/PRE&gt;&lt;p&gt;Let's see how it performs:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;it doesn't have any of the issues of the pipe trick&lt;/LI&gt;&lt;LI&gt;checking if a signal was received comes at almost no performance penalty&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;But:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;it can't be used as is in an event loop (see the next section for a workaround)&lt;/LI&gt;&lt;LI&gt;it needs more code / is less efficient for architectures which can't write big
-integers in a single atomic instruction (these architectures very uncommon,
-and it can be worked around using &lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;sigprocmask&lt;/span&gt;&lt;/code&gt;)&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;pipe + versioned lookup table&lt;/h3&gt;&lt;p&gt;The pipe trick not being entirely reliable (it must drop messages the pipe is
-full) is one of the main reasons why I started looking for a new technique.&lt;/p&gt;&lt;p&gt;This issue can be addressed by using the lookup table as a fallback when the
-pipe is full. The file descriptor from the pipe can still be used in an event
-loop, which is definitely a plus.&lt;/p&gt;&lt;p&gt;I really enjoyed writing this article, and I hope you enjoyed reading it!&lt;/p&gt;&lt;p dir="ltr"&gt;Check out the full source code here: &lt;a href="https://github.com/multun/signal-lut" dir="ltr"&gt;https://github.com/multun/signal-lut&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sat, 11 Apr 2020 02:01:51 -0500</pubDate></item><item><title>On architecture, urban planning and software construction</title><link>https://lobste.rs/s/i2y6ze</link><description>&lt;p dir="ltr"&gt;Despite having the term &lt;em dir="ltr"&gt;science&lt;/em&gt; in its name, it is not always clear what kind of
+&lt;em dir="ltr"&gt;all&lt;/em&gt; over your fireworks. There are more of us than there are of you.&lt;/div&gt;&lt;div dir="ltr"&gt;To us it is &lt;em dir="ltr"&gt;just a job&lt;/em&gt;, but we still do it well.&lt;/div&gt;&lt;UL&gt;&lt;LI&gt;Revived 2020-04-08.&lt;/LI&gt;&lt;LI&gt;Created 2012-04-17. &lt;a href="mailto:501@501manifesto.dev" dir="ltr"&gt;Email&lt;/a&gt;. Full respect to Scott Hanselman and to the authors of the Agile Manifesto, which I have so lamely pastiched. Sorry about the ugly HTML - I'd fix it, but I'm going home now.&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Thu, 09 Apr 2020 08:41:58 -0500</pubDate></item><item><title>On architecture, urban planning and software construction</title><link>https://lobste.rs/s/i2y6ze</link><description>&lt;p dir="ltr"&gt;Despite having the term &lt;em dir="ltr"&gt;science&lt;/em&gt; in its name, it is not always clear what kind of
 discipline &lt;em dir="ltr"&gt;computer science&lt;/em&gt; actually is. Research on programming is sometimes like
 science, sometimes like mathematics, sometimes like engineering, sometimes like design
 and sometimes like art. It also has a long tradition of importing ideas from a wide range
@@ -1431,7 +1095,343 @@ and ways of studying unorganized complexity by focusing on unaverage values in t
 many would say that our version of the idea is a mere caricature of what architects envisioned.
 I would not be surprised if the next great idea in programming was also inspired by architecture or
 urban planning. I'm just curious to see whether it will be one of those discussed in this blog post
-or not.&lt;/p&gt;</description><pubDate>Fri, 10 Apr 2020 23:10:47 -0500</pubDate></item><item><title>Singapore open-sources BlueTrace, its Contacts Tracing set of applications, under the GPLv3</title><link>https://lobste.rs/s/v5nh1g</link><description>&lt;div&gt;OpenTrace is the reference implementation of BlueTrace, a privacy-preserving protocol for epidemiological contact tracing to fight COVID-19&lt;/div&gt;&lt;div&gt;&lt;button type="button" data-action="click:signup-prompt-controller#dismiss" data-ga-click="(Logged out) Sign up prompt, clicked Dismiss, text:dismiss"&gt;
+or not.&lt;/p&gt;</description><pubDate>Fri, 10 Apr 2020 23:10:47 -0500</pubDate></item><item><title>Somewhat Less Lethargic JSON Support for iOS/macOS, Part 1: The Status Quo</title><link>https://lobste.rs/s/0risyw</link><description>&lt;div itemprop="description articleBody" dir="ltr"&gt;
+I just finished watching Daniel Lemire's talk on the current iteration of &lt;a href="https://github.com/simdjson/simdjson" dir="ltr"&gt;simdjson&lt;/a&gt;, a JSON parser that clocks in at 2.5GB/s!  I've been following Daniel's work for some time now and can't really recommend it highly enough.&lt;/div&gt;&lt;div class="embed-placeholder" data-type="youtube" data-id="wlvKAT7SZIQ"&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;
+
+This reminded me of a recent twitter conversation where I had offered to contribute a fast, Swift-compatible JSON parser loosely based on MAX, my
+fast and convenient XML parser.  Due to various factors most of which are not under my control, I can't really offer anything that's
+&lt;em dir="ltr"&gt;fast&lt;/em&gt; when compared to simdjson, but I &lt;em dir="ltr"&gt;can&lt;/em&gt; manage something quite a bit less lethargic than what's currently on offer
+in the Apple and particularly the Swift world.&lt;/p&gt;&lt;h3&gt;Environmental assumptions and constraints&lt;/h3&gt;&lt;div itemprop="description articleBody" dir="ltr"&gt;
+
+My first assumption is that we are going to operate in the Apple ecosystem, and for simplicity's sake I am going to use macOS.
+Next, I will assume that what we want from our parse(r) are &lt;em dir="ltr"&gt;domain objects&lt;/em&gt; for further processing within our application
+(or structs, the difference is not important in this context). 
+
+&lt;/div&gt;&lt;img alt="" height="169" src="https://dl.dropbox.com/s/8kuduy9prj54gyd/json2objects.png?dl=0" title="" width="400"&gt;&lt;div itemprop="description articleBody"&gt;
+
+
+ 
+We are going to use the following class with a mix of integer and string instance variables, in Swift:&lt;/div&gt;&lt;PRE&gt;@objc class TestClass: NSObject, Codable {
+    let hi:Int
+    let there:Int
+    let comment:String
+...
+}
+&lt;/PRE&gt;&lt;div itemprop="description articleBody"&gt;
+
+and the same in Objective-C:&lt;/div&gt;&lt;PRE&gt;@interface TestClass : NSObject
+
+@property (nonatomic) long hi,there;
+@property (nonatomic,strong) NSString *comment;
+
+@end
+&lt;/PRE&gt;&lt;div itemprop="description articleBody" dir="ltr"&gt;
+
+To make it all easy to measure, we are going to use one million objects, which we are going to initialise with increasing integers and the constant string &lt;code dir="ltr"&gt;"comment"&lt;/code&gt;.  This yields the same 44MB JSON file with different serialisation methods, which can be correctly parsed by all the parsers tested.  This is obviously a very simple class an file structure, but I think it gives a reasonable approximation for real-world use.&lt;/div&gt;&lt;p&gt;
+
+The first thing to check is how quickly we can create these objects straight in code, without any parsing.
+
+&lt;/p&gt;&lt;img alt="" height="160" src="https://dl.dropbox.com/s/xuskcc089m9oohx/just2objects.png?dl=0" title="" width="300"&gt;&lt;p&gt;
+
+  That should give us a good upper
+bound for the performance we can achieve when parsing to domain objects.
+
+&lt;/p&gt;&lt;PRE&gt;#define COUNT 1000000
+-(void)createObjects
+{
+    NSMutableArray *objResult=[NSMutableArray arrayWithCapacity:COUNT+20];
+    for ( int i=0;i&amp;lt;COUNT;i++ ) {
+        TestClass *cur=[TestClass new];
+        cur.hi=i;
+        cur.there=i;
+        cur.comment=@"comment";
+        [objResult addObject:cur];
+    }
+    NSLog(@"Created objects in code w/o parsing %@ with %ld objects",objResult[0],[objResult count]);
+}
+&lt;/PRE&gt;&lt;div itemprop="description articleBody"&gt;
+
+On my Quad Core, 2.7Ghz MBP '18, this runs in 0.141 seconds.  Although we aren't actually parsing, it would mean that 
+just creating all the objects that would result from parsingg our 44MB JSON file would yield a rate of 312 MB/s.&lt;/div&gt;&lt;p dir="ltr"&gt; 
+
+Wait a second!  312MB/s is almost 10x &lt;em dir="ltr"&gt;slower&lt;/em&gt; than Daniel Lemire's parser, the one that actually parses JSON, and we are only
+creating the objects that would result if we were parsing, without doing any actual parsing.&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+This is one of the many unintuitive aspects of parsing performance: the actual low-level, character-level parsing is generally the 
+least important part for overall performance. Unless you do something crazy like use &lt;code dir="ltr"&gt;NSScanner&lt;/code&gt;. Don't use &lt;code dir="ltr"&gt;NSScanner&lt;/code&gt;. Please.&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+One reason this is unintuitive is that we all learned that performance is dominated by the innermost loop, and character level processing
+&lt;em dir="ltr"&gt;is&lt;/em&gt; the innermost loop.  But when you have magnitudes in performance differences and inner and outer loops
+differ by less than that amount, the stuff happennnig in the outer loop can dominate. 
+
+
+
+
+&lt;/p&gt;&lt;h3&gt;NSJSONSerialization&lt;/h3&gt;&lt;div itemprop="description articleBody" dir="ltr"&gt;
+
+Apple's JSON story very much revolves around &lt;code dir="ltr"&gt;&lt;a href="https://developer.apple.com/documentation/foundation/nsjsonserialization" dir="ltr"&gt;NSJSONSerialization&lt;/a&gt;&lt;/code&gt;, very much like most of the rest of
+its serialization story revolves around the very similar &lt;code dir="ltr"&gt;NSPropertyListSerialization&lt;/code&gt; class. It has
+a reasonable quick implementation, turning the 44 MB JSON file into an &lt;code dir="ltr"&gt;NSArrray&lt;/code&gt; of &lt;code dir="ltr"&gt;NSDictionary&lt;/code&gt;
+instances in 0.421 seconds when called from Objective-C, for a rate of 105 MB/s.  From Swift, it takes 0.562 seconds,  for 78 MB/s.&lt;/div&gt;&lt;p&gt;
+
+Of course, that gets us to a property list (array of dicts, in this case), not to the domain objects we actually want.&lt;/p&gt;&lt;img alt="" height="145" src="https://dl.dropbox.com/s/tx10szymoh5kc97/json2dict2objects.png?dl=0" title="" width="500"&gt;&lt;p&gt;
+
+If you read my book (did I mention my book?  Oh, I think I did), you will know that this type of dictonary 
+representation is fairly expensive:  expensive to create, expensive in terms of memory consumption and
+expensive to access.  Just creating dictionaries equivalent to the objects we created before takes 0.321 seconds,
+so around 2.5x the time for creating the equivalent objects and a "rate" of 137 MB/s relative to our 44 MB JSON file.&lt;/p&gt;&lt;PRE&gt;-(void)createDicts
+{
+    NSMutableArray *objResult=[NSMutableArray arrayWithCapacity:COUNT+20];
+    for ( int i=0;i&amp;lt;COUNT;i++ ) {
+        NSMutableDictionary *cur=[NSMutableDictionary dictionary];
+        cur[@"hi"]=@(i);
+        cur[@"there"]=@(i);
+        cur[@"comment"]=@"comment";
+        [objResult addObject:cur];
+    }
+    NSLog(@"Created dicts in code w/o parsing %@ with %ld objects",objResult[0],[objResult count]);
+}
+&lt;/PRE&gt;&lt;div itemprop="description articleBody"&gt;
+Creating the dict in a single step using a dictionary literal is not significantly faster, but creating
+an immutable copy of the mutable dict after we're done filling brings the time to half a second.&lt;/div&gt;&lt;p&gt;
+
+
+Getting from dicts to objects is typically straightforward, if tedious:  just fetch the entry of the dictionary
+and call the corresponding setter with the value thus retrieved from the dictionary.  As this isn't production
+code and we're just trying to get some bounds of what is possible, there is an easier way:  just use Key Value
+Coding with the keys found in the dictionary.
+
+The combined code, parsing and then creating the objects is shown below:
+
+&lt;/p&gt;&lt;PRE&gt;-(void)decodeNSJSONAndKVC:(NSData*)json
+{
+    NSArray *keys=@[ @"hi", @"there", @"comment"];
+    NSArray *plistResult=[NSJSONSerialization JSONObjectWithData:json options:0 error:nil];
+    NSMutableArray *objResult=[NSMutableArray arrayWithCapacity:plistResult.count+20];
+    for ( NSDictionary *d in plistResult) {
+        TestClass *cur=[TestClass new];
+        for (NSString *key in keys) {
+            [cur setValue:d[key] forKey:key];
+        }
+        [objResult addObject:cur];
+    }
+    NSLog(@"NSJSON+KVC %@ with %ld objects",objResult[0],[objResult count]);
+}
+&lt;/PRE&gt;&lt;div itemprop="description articleBody"&gt;
+
+Note that KVC is slow.  Really slow.  Order-of-magnitude slower than just sending messages kind of slow, and so it has significant impact on the total time, which comes to a total of 1.142 seconds including parsing and object creation,
+or just shy of 38 MB/s. 
+
+&lt;/div&gt;&lt;img alt="" height="130" src="https://dl.dropbox.com/s/gjz0jzn0uu48kkx/json2dict2objects-kvc.png?dl=0" title="" width="520"&gt;&lt;h3&gt;Swift JSON Coding&lt;/h3&gt;&lt;div itemprop="description articleBody" dir="ltr"&gt;
+
+For the first couple of releases of Swift, JSON support by Apple was limited to a wrapped &lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt;, with the slight
+performance penalty already noted.  As I write in my book (see sidebar), many JSON "parsers" were published, but none of these
+with the notable exception of the Big Nerd Ranch's Freddy were actual parses, they all just transformed the 
+arrays and dictionaries returned by &lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt; into Swift objects.  Performance was 
+abysmal, with around 25x overhead in addition to the basic &lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt; parse. &lt;/div&gt;&lt;p dir="ltr"&gt; 
+
+Apple's Swift &lt;code dir="ltr"&gt;Codable&lt;/code&gt; promised to solve all that, and on the convenience front it certainly does
+a great job.
+
+&lt;/p&gt;&lt;PRE&gt;    func readJSONCoder(data:Data) -&amp;gt; [TestClass] {
+        NSLog("Swift Decoding")
+        let coder=JSONDecoder( )
+        let array=try! coder.decode([TestClass].self, from: data)
+        return array
+    }
+&lt;/PRE&gt;&lt;div itemprop="description articleBody" dir="ltr"&gt;
+
+(All the forcing is because this is just test code, please don't do this in production!).  Alas, performance is
+still not great:  4.39 seconds, or 10 MB/s.  That's 10x slower than the basic &lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt; 
+parse and 4x slower than our slow but simple complete parse via &lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt; and KVC.&lt;/div&gt;&lt;p dir="ltr"&gt;
+
+However, it &lt;em dir="ltr"&gt;is&lt;/em&gt; significantly faster than the previous third-party JSON to Swift objects "parsers", to 
+the tune of 3-4x.  This is the old "first mark up 400% then discount 50%" sales trick applied to performance, 
+except that the relative numbers are larger.&lt;/p&gt;&lt;h3&gt;Third Party JSON Parsers&lt;/h3&gt;&lt;div itemprop="description articleBody" dir="ltr"&gt;
+
+I looked a little at third party JSON parsers, particularly &lt;a href="https://github.com/delba/JASON" dir="ltr"&gt;JASON&lt;/a&gt;, &lt;a href="https://github.com/nst/STJSON" dir="ltr"&gt;STJSON&lt;/a&gt; and &lt;a href="https://github.com/michaeleisel/ZippyJSON" dir="ltr"&gt;ZippyJSON&lt;/a&gt;.&lt;/div&gt;&lt;p dir="ltr"&gt;
+
+STTJSON does not make any claims to speed and manages to clock in at 5 seconds, or just under 10 MB/s.  JASON bills
+itself as a "faster" JSON parser (they compare to SwiftyJSON), and does reasonably well at 0.75 seconds or 59 MB/s. 
+However both of these parse to their own internal representation, not to domain objects (or structs), and so should
+be compared to &lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt;, at which point they both disappoint.&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Probably the most interesting of these is SwiftyJSON, as it uses Daniel Lemire's simdjson and is &lt;code dir="ltr"&gt;Codable&lt;/code&gt;
+compatible.  Alas, I couldn't get SwiftyJSON to compile, so I don't
+have numbers, but I will keep trying.   They claim around 3x faster than Apple's &lt;code dir="ltr"&gt;JSONDecoder&lt;/code&gt;, which
+would make it the only parser to be at least in the same ballpark as the trivial &lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt; + KVC method I showed above.&lt;/p&gt;&lt;p&gt;
+
+Another interesting tidbit comes from ZippyJSON's README, under the heading "Why is it so much faster".
+
+&lt;/p&gt;&lt;BLOCKQUOTE&gt;
+Apple's version first converts the JSON into an NSDictionary using &lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt; and then afterwards makes things Swifty. The creation of that intermediate dictionary is expensive.
+&lt;/BLOCKQUOTE&gt;&lt;div itemprop="description articleBody" dir="ltr"&gt;
+
+This is true by itself: first converting to an intermediate representation &lt;em dir="ltr"&gt;is&lt;/em&gt; slow, particularly one
+that's as heavy-weight as property lists.  However, it cannot be the primary reason, because creating that
+expensive representation only takes 1/8th of the total running time.  The other 7/8ths is Codable apparently
+talking to itself.  And speaking very s-l-o-w-l-y while doing that.&lt;/div&gt;&lt;p dir="ltr"&gt;
+
+
+To corroborate, I also tried a the &lt;a href="https://github.com/Flight-School/MessagePack" dir="ltr"&gt;Flight-School&lt;/a&gt; implementation of Codable for MessagePack, which obviously does not use &lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt;.
+ It makes no performance claims and takes 18 seconds to decode the same
+objects we used in the JSON files, of course with a different file that's 34 MB in size.  Normalized to our 44 MB
+file that would be 2.4 MB/s.&lt;/p&gt;&lt;h3&gt;MAX and MASON&lt;/h3&gt;&lt;div itemprop="description articleBody" dir="ltr"&gt;
+
+So where does that leave us?  Considering what simdjs shows is theoretically possible with JSON parsing, we are
+not in a good place, to put it mildly.  2.5 GB/s vs. 10 MB/s with Apple's JSONDecoder, several times slower than
+&lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt;, which isn't exactly a speed daemon and around 30x slower than pure object creation.  Comically bad might be another way of putting it.  At least we're being entertained. &lt;/div&gt;&lt;p dir="ltr"&gt;
+
+What can I contribute?  Well, I've been through most of this once before with XML and the result was/is 
+&lt;a href="https://github.com/mpw/MPWFoundation/blob/master/XML/MPWMAXParser.h" dir="ltr"&gt;MAX&lt;/a&gt; (Messaging API for XML), a parser that is not just super-fast itself (though no SIMD), but also 
+presents APIs that make it both &lt;a href="https://blog.metaobject.com/2009/12/simple-objective-xml-example.html" dir="ltr"&gt;super-convenient&lt;/a&gt; and also super-fast to go directly from the XML to
+an object-representation, either as a tree or a stream of domain objects while using mostly constant
+memory.  Have I mentioned my book?  Yeah, it's in the book, in gory detail.&lt;/p&gt;&lt;p&gt;
+
+Anyway, XML has sorta faded, so the question was whether the same techniques would work for a JSON parser.  
+The answer is yes, roughly, though with some added complexity and less convenience because JSON is a 
+less informative file format than XML.  Open- and close-tags really give you a good heads-up as to what's
+coming that "{" just does not.&lt;/p&gt;&lt;p&gt;
+
+The goal will be to produce domain objects at as close to the theoretical maximum of slightly more than 300 MB/s
+as possible, while at the same time making the parser convenient to use, close to Swift Codable in convenience.
+It won't support Codable per default, as the overheads seem to be too high, but ZippyJSON suggests that an
+adapter wouldn't be too hard.&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+That parser is &lt;a href="https://github.com/mpw/MPWFoundation/blob/master/JSON/MPWMASONParser.h" dir="ltr"&gt;MPWMASONParser&lt;/a&gt;,
+and no, it isn't done yet.  In its initial state, it parses JSON to dictionaries in 0.58 seconds, or 76 MB/s and
+slightly slower than &lt;code dir="ltr"&gt;NSJSONSerialization&lt;/code&gt;.&lt;/p&gt;&lt;p&gt;
+
+So we have a bit of way to go, come join me on this little parsing performance journey!&lt;/p&gt;</description><pubDate>Fri, 10 Apr 2020 09:18:40 -0500</pubDate></item><item><title>The Death of Hype: What's Next for Scala</title><link>https://lobste.rs/s/5m7mtd</link><description>&lt;p&gt;A recent tweet by a friend of mine noted how the public interest in the Scala programming language seems to have plateaued or waned, which matches my feeling of the latest trends and zeitgeist. This blog post will go into why I think that has happened, where Scala stands now, and what the future holds for the Scala community.&lt;/p&gt;&lt;p&gt;This blogpost was inspired by the following tweet:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;It's a shame to see friends from Typesafe/Lightbend being laid off, but as I've always said, it's hard to sell free stuff.&lt;/p&gt;&lt;p&gt;I do wonder about #Scala's adoption now. It's not Clojure-dead, but it seemed to peak around 2016. I have zero data to back that, though.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Jamie notes that public interest in the Scala programming language seems to have waned: less interest in meetups, less interest in conferences, and so on. This more or less matches what I am seeing as well. While the Scala-specific conferences targeting enthusiasts are still going strong (or were, until COVID19 shut down the global economy) I think there is no doubt that there is much less &lt;em dir="ltr"&gt;talk&lt;/em&gt; about Scala in the broader engineering community.&lt;/p&gt;&lt;p&gt;I think that this reduction in public interest is real, but also expected given the typical "Hype Cycle" that follows any new technology:&lt;/p&gt;&lt;img src="http://www.lihaoyi.com/post/TheScalaEcosystem/HypeCycle.jpg" alt="HypeCycle.jpg" width="453" height="302"&gt;&lt;p&gt;Early on, Scala rode a wave of hype that frankly surprised even me: hype around pushing syntactic boundaries, hype around reactive architectures, hype around functional programming, hype around the Apache Spark project. Much of that hype has since died down, and there was a period of backlash and negativity both within the Scala community and outside of it. Since then, even the backlash has faded, and what is left is a reasonable, boring language steadily advancing and providing a great platform for general software engineering.&lt;/p&gt;&lt;h2&gt;The Past: the Peak of Inflated Expectations&lt;/h2&gt;&lt;p&gt;While Scala was initially created in 2004, the language only really started taking off in the early 2010s:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;~2009: Twitter started picking up the language for production systems&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;~2010: the first tagged release of the Scalaz functional programming library&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;~2011: Lightbend, a company pushing Scala and related technologies, was  founded&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;~2014: Apache Spark was written in Scala&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;~2015: first tagged release of the Cats functional programming library&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;While there was no doubt activity in the Scala community before this, these were no doubt major milestones that kickstarted interest in the language. With large-scale commercial adoption, commercial support, and a killer big-data product like Apache Spark, it is not surprising that there was a surge in public interest. A lot of these efforts went into the following domains:&lt;/p&gt;&lt;h3&gt;Pushing Syntactic Boundaries&lt;/h3&gt;&lt;p&gt;A lot of early Scala interest was in how flexible the language was: it had extension methods, operator overloading, implicit constructors/conversions, and a very flexible implicit-parameter feature that could be used in all sorts of ways. This flexibility was liberating, as it opened up all sorts of domain-specific-languages and programming styles that would be unheard of in other languages.&lt;/p&gt;&lt;p dir="ltr"&gt;These were exemplified by a number of projects, such as the &lt;a href="https://databinder.net/" dir="ltr"&gt;Databinder Dispatch&lt;/a&gt; HTTP client, &lt;a href="http://www.scala-graph.org/" dir="ltr"&gt;Scala-Graph&lt;/a&gt; data structure library, or &lt;a href="https://www.scala-sbt.org/" dir="ltr"&gt;SBT&lt;/a&gt; build tool:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;// Making a HTTP request and processing the output in Databinder Dispatch&lt;/span&gt;
+executer&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;/&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;host&lt;span dir="ltr"&gt;,&lt;/span&gt; port&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;/&lt;/span&gt; target &lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt; reqBody &lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt; fromRespStr &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;// Constructing a simple directed graph with labelled edges in Scala Graph&lt;/span&gt;
+&lt;span dir="ltr"&gt;val&lt;/span&gt; flights &lt;span dir="ltr"&gt;=&lt;/span&gt; Graph&lt;span dir="ltr"&gt;(&lt;/span&gt;
+	&lt;span dir="ltr"&gt;(&lt;/span&gt;jfc &lt;span dir="ltr"&gt;~&lt;/span&gt;&lt;span dir="ltr"&gt;+&lt;/span&gt;#&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; fra&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;Flight&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"LH 400"&lt;/span&gt; &lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;10&lt;/span&gt; o &lt;span dir="ltr"&gt;25&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;8&lt;/span&gt; h &lt;span dir="ltr"&gt;20&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+	&lt;span dir="ltr"&gt;(&lt;/span&gt;fra &lt;span dir="ltr"&gt;~&lt;/span&gt;&lt;span dir="ltr"&gt;+&lt;/span&gt;#&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; dme&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;Flight&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"LH 1444"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;7&lt;/span&gt; o &lt;span dir="ltr"&gt;50&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;3&lt;/span&gt; h &lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;// Append the contents of a URL to a File after filtering through grep using SBT&lt;/span&gt;
+url&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"http://databinder.net/dispatch/About"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; #&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;"grep JSON"&lt;/span&gt; #&lt;span dir="ltr"&gt;&amp;gt;&amp;gt;&lt;/span&gt; file&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"About_JSON"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;!&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;// Search for uses of null in the source directory using SBT&lt;/span&gt;
+&lt;span dir="ltr"&gt;"find src -name *.scala -exec grep null {} ;"&lt;/span&gt;  #&lt;span dir="ltr"&gt;|&lt;/span&gt;  &lt;span dir="ltr"&gt;"xargs test -z"&lt;/span&gt;  #&lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt;  &lt;span dir="ltr"&gt;"echo null-free"&lt;/span&gt;  #&lt;span dir="ltr"&gt;||&lt;/span&gt;  &lt;span dir="ltr"&gt;"echo null detected"&lt;/span&gt;  &lt;span dir="ltr"&gt;!&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Many of these libraries have evolved since the early days and have since moved to more boring method-based APIs. It turns out that naming operators &lt;code dir="ltr"&gt;&amp;gt;-&lt;/code&gt; &lt;code dir="ltr"&gt;~+#&amp;gt;&lt;/code&gt; or &lt;code dir="ltr"&gt;#&amp;amp;&amp;amp;&lt;/code&gt;, while possible, was not always the wisest thing to do. Nevertheless, there is no doubt that pushing the boundaries of Scala's syntax using operators and domain-specific-languages was one of the big points of interest for early Scala.&lt;/p&gt;&lt;h3&gt;Reactive Architectures&lt;/h3&gt;&lt;p dir="ltr"&gt;Reactive architectures, pushed largely by Lightbend via their &lt;a href="https://akka.io/" dir="ltr"&gt;Akka Actor framework&lt;/a&gt;, was another big effort. This was a way of writing code that was very different from "normal" code that someone might earn in school, but allowed high levels of concurrency and performance beyond what is achievable writing code in a traditional style.&lt;/p&gt;&lt;p&gt;In its initial incantation, Akka Actors sacrificed a lot of what Scala what it is: a total lack of type-safety between actors, prohibiting blocking APIs, and many other idiosyncracies. Working with Akka Actors were basically their own language, embedded in Scala, but with their own conventions, syntax, and semantics.&lt;/p&gt;&lt;p&gt;More recently, with Typed Actors and Reactive Streams, the Akka developer experience has shifted to be much closer to the type-checked experience you would expect in typical Scala programs. I think there's also been a shift in the community mood: rather than treating reactive architectures like a general-purpose solution to all problems, they are now being treated as one possible approach for one specific class of problems. That mostly matches my own experience using these techniques in my own applications.&lt;/p&gt;&lt;h3&gt;Functional Programming&lt;/h3&gt;&lt;p&gt;Functional programming in Scala is best exemplified by the Scalaz and Cats projects. These two libraries attempt to bring much of the functional programming techniques from Haskell to the Scala language: a heavy focus on concepts like Monads or Applicatives, eschewing the object-oriented side of the language for a more pure-functional style.&lt;/p&gt;&lt;p&gt;The two libraries have different styles, and both remain heavily used by portions of the community today. The evangelism has died down, to some extent, but usage remains strong and everyone recognizes functional programming as one possible style in which to write your Scala applications.&lt;/p&gt;&lt;h3&gt;Apache Spark&lt;/h3&gt;&lt;p dir="ltr"&gt;The last big project that drove Scala's early hype was Apache Spark. A distributed big-data process framework, Apache Spark leveraged Scala's functional style and serializable lambdas to take common collection like &lt;code dir="ltr"&gt;map&lt;/code&gt;, &lt;code dir="ltr"&gt;filter&lt;/code&gt;, and &lt;code dir="ltr"&gt;reduce&lt;/code&gt; and run them distributed over a compute cluster processing huge amounts of code. Apache Spark allowed big data processing pipelines to be written in orders of magnitude less code and running in orders of magnitude less time than the earlier Hadoop APIs. Spark proved an instant hit.&lt;/p&gt;&lt;p&gt;Apache Spark was Scala's killer app. A huge fraction of the Scala community is only using Scala because they need to inter-operate with Spark in some way.&lt;/p&gt;&lt;p&gt;Apache Spark now supports developer APIs in many languages: SQL, R, with Python being the most popular. The original collections-like APIs have been largely superseded by a more SQL-like interface that allows better optimizability, an important factor when working with the huge datasets that Apache Spark is often used for. Nevertheless the Apache Spark codebase remains mostly Scala to this day.&lt;/p&gt;&lt;h2&gt;In the Trough of Disillusionment&lt;/h2&gt;&lt;p&gt;Since the initial spark, there definitely has been some backlash against Scala as the initial hype has died down. Some early contributors have left the community, and there was some inter-personal unhappiness. This was not just in aggregate, but on an individual level as well: I personally know many individuals who got tired of the things they themselves had been hyping, and moved on with a slightly sour taste in their mouths.&lt;/p&gt;&lt;p&gt;It's hard to pin-point an exact time where the hype died down, perhaps around 2016-2018.&lt;/p&gt;&lt;p&gt;Even on a technical level, not all was well. While many organizations used these techniques successfully in their respective niches, others have regretted going all-in on actors and all-in on functional programming. They were finding that these techniques don't fit their problem as well as they would have liked, and had to spend some time backing out of their all-in investment in a particular programming paradigm. I personally know many organizations who have had to make this adjustment.&lt;/p&gt;&lt;p&gt;Even before the fall, in the early 2010s, I was surprised at the amount of hype around some of these technologies. The usage of operators in some of these libraries was clearly through the roof, and sometimes turned even simple tasks into complex brain-teasers. The amount of hype I saw around reactive architectures and functional programming did not match the specialized use cases I found that they fit best: every Scala conference had keynote speakers evangelizing both of these approaches as the be-all end-all future of software architecture.&lt;/p&gt;&lt;p dir="ltr"&gt;It surprises me not at all that over time, others would join me in realizing the &lt;em dir="ltr"&gt;Trough of Disillusionment&lt;/em&gt;.&lt;/p&gt;&lt;h2&gt;The Present: on the Slope of Enlightenment&lt;/h2&gt;&lt;p&gt;Scala had its hype in the early 2010s, followed by a backlash against that hype in the mid-late 2010s. Where that does that leave Scala now?&lt;/p&gt;&lt;h3&gt;A Steadily Growing Community&lt;/h3&gt;&lt;img src="http://www.lihaoyi.com/post/TheScalaEcosystem/Sonatype.png" alt="Sonatype.png" width="453" height="112"&gt;&lt;p&gt;Despite the apparent downturn in public interest, usage of Scala continues to increase. I maintain a large number of open source libraries, and the number of unique IPs downloading these libraries from the Maven Central package repository has grown just over 2x over the last year. While there is some variation in the number of downloads, or the metrics for each individual package, overall they match this trend quite closely.&lt;/p&gt;&lt;p&gt;While this growth isn't the exponential rocket ship that some projects are hoping for, this is a steady increase in usage that matches my own subjective experience: usage of Scala continues to increase even as the hype has died away. If we can maintain this 2x growth every year, I think the Scala community would continue to be in pretty good shape!&lt;/p&gt;&lt;p dir="ltr"&gt;If you look at the most recent &lt;a href="https://redmonk.com/sogrady/2020/02/28/language-rankings-1-20/" dir="ltr"&gt;Redmonk Rankings&lt;/a&gt; or &lt;a href="https://www.tiobe.com/tiobe-index/" dir="ltr"&gt;Tiobe Rankings&lt;/a&gt;, they both show Scala as stably hovering just outside the clique of mainstream languages, ranked 13 and 28 respectively. Uncommon, but not obscure.&lt;/p&gt;&lt;p&gt;With the hype and the backlash both distant memories, we now see Scala for what it is a flexible language supporting multiple programming styles, each with their own tradeoffs and use cases. A lot of the early religiosity and conflict has transformed into people using Scala for steady work, enjoying the language in the way they each choose.&lt;/p&gt;&lt;h3&gt;A Solid Platform for Production Usage&lt;/h3&gt;&lt;p&gt;Despite the reduction in hype, the Scala language is in a lot better place than it used to be:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;The SBT build tool has improved by leaps and bounds in the last few years:  massively faster and easier to use.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;If you don't like SBT, you now have a choice: many organizations use Bazel or  Pants with Scala, while my own  &lt;a href="https://github.com/lihaoyi/mill" dir="ltr"&gt;Mill build tool&lt;/a&gt; is stable and widely used&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;New tools like &lt;a href="https://github.com/coursier/coursier" dir="ltr"&gt;Coursier&lt;/a&gt; are forming a  new foundation for the ecosystem: used by tools from Ammonite to SBT to Mill&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://github.com/scalameta/metals" dir="ltr"&gt;METALS&lt;/a&gt; project brings Scala support  to VSCode, Sublime Text, and any other editor with language-server support&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;catntellij's own Scala plugin continues to improve: faster, more accurate, and  with support for new tools like Ammonite scripts or the Mill build tool.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;The new collections library in Scala 2.13 cleans up a huge number of old warts  and significantly improves performance in many cases (e.g.  &lt;a href="https://github.com/databricks/sjsonnet#performance" dir="ltr"&gt;25-40% speedup on Sjsonnet&lt;/a&gt;)&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;"Polish" features like  &lt;a href="https://github.com/scala/scala/pull/7387" dir="ltr"&gt;pattern matching on strings&lt;/a&gt; or  &lt;a href="https://github.com/scala/scala/pull/8373" dir="ltr"&gt;warning suppression&lt;/a&gt; continue to  make life better for everyone&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;The compiler itself is massively sped up, with code compiling literally twice  as fast as it just three years ago&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;img src="http://www.lihaoyi.com/post/TheScalaEcosystem/CompilerGrafana.png" alt="CompilerGrafana.png" width="453" height="263"&gt;&lt;p&gt;While the language specification has hardly changed at all in the past few years, the amount of quality-of-life improvements that have landed is hard to overstate. If you had talked to any Scala-using engineering organization about halving their compile times back in 2017, they would have showered you with money to make it happen!&lt;/p&gt;&lt;p&gt;Each of the these individually has significantly improved my own personal experience writing Scala, and there are many more improvements that I cannot comprehensively list here.&lt;/p&gt;&lt;h3&gt;A Broad and Varied Ecosystem&lt;/h3&gt;&lt;p&gt;While the hype around the original four efforts has waned, these still form large and active sub-communities within the Scala ecosystem. For example while not everyone may want to use pure functional programming, and any individual may not want to use it all the time, the libraries and ecosystem surrounding it are nevertheless varied, high-quality, and well-maintained. When you do encounter an occasion to use pure functional programming, you will find everything you need.&lt;/p&gt;&lt;p&gt;In a way, the hype has served its purpose: by introducing a large number of people to a particular paradigm, it helps achieve the critical mass for some fraction of those people to sustain that sub-community going forward.&lt;/p&gt;&lt;p&gt;The broad range of styles in Scala can be thought of as a boon: rather than considering it a way of splitting the community apart, it is a way of bringing together communities that would otherwise never interact with each other. Without Scala, these communities may be disparately working in Haskell, Python, Java, and Go systems. By focusing on what's shared, rather than what's different, Scala allows these communities to collaborate on the things that benefit them all while still preserving the things that make each sub-community unique.&lt;/p&gt;&lt;p&gt;I personally do not default to architecting my code reactively using Actors, but I have shipped production code that heavily uses Actors when the situation called for them. I do not default to pure functional programming techniques, but I have used pretty esoteric constructs like Free Applicatives when useful. I think the community as a whole has matured in a similar way: appreciating the different styles, and using them where appropriate, without the dogmatism that plague the early days of Scala&lt;/p&gt;&lt;h2&gt;The Future&lt;/h2&gt;&lt;p&gt;So what exciting things do I think lie in Scala's Future? To me, the Scala language itself is in a relatively good state: an afternoon writing modern Java code is enough to relieve me of any illusions that other languages have "caught up". Where the greatest potential lies is in introducing Scala to new sets of people, or new sets of use cases, that up to this point have been completely out of bounds.&lt;/p&gt;&lt;p&gt;I think there are two main things that stand out to me:&lt;/p&gt;&lt;h3&gt;Usability&lt;/h3&gt;&lt;p&gt;In the initial four Scala efforts, one thing was missing from all of them: the ability for a new developer to start on a codebase and be immediately productive. It doesn't matter whether you were using an operator-heavy dispatch style, a actor-heavy reactive style, or a pure-FP Cats/Scalaz style: someone trying to onboard was going to have a hard time.&lt;/p&gt;&lt;p&gt;Why does that need to be the case?&lt;/p&gt;&lt;p&gt;As a counter-example, developers generally find Python an easy language to get started with: "executable pseudocode" they call it. New programmers learn Python. Non-programmers learn Python. When people write code on a whiteboard with a marker, they often write Python. While Python's performance, concurrency, or large-scale maintenability are questionable, its ease of getting started is unmatched.&lt;/p&gt;&lt;p&gt;Why can't Scala be as easy to get started with as Python?&lt;/p&gt;&lt;p&gt;Answering that question is the goal of the entire suite of libraries that I maintain. Many of my libraries are carbon-copies, shameless clones of their Python equivalents. For example:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/lihaoyi/Ammonite" dir="ltr"&gt;Ammonite&lt;/a&gt;, a clone of the IPython REPL&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/lihaoyi/upickle" dir="ltr"&gt;uPickle&lt;/a&gt;, a clone of the Python &lt;code dir="ltr"&gt;json&lt;/code&gt;  module&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/lihaoyi/PPrint" dir="ltr"&gt;PPrint&lt;/a&gt;, a clone of the Python &lt;code dir="ltr"&gt;pprint&lt;/code&gt;  module&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/lihaoyi/requests-scala" dir="ltr"&gt;Requests-Scala&lt;/a&gt;, a clone of  Kenneth Rietz' Requests module&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/lihaoyi/os-lib" dir="ltr"&gt;OS-Lib&lt;/a&gt;, a clone of the Python &lt;code dir="ltr"&gt;os&lt;/code&gt;,  &lt;code dir="ltr"&gt;sys&lt;/code&gt;, and &lt;code dir="ltr"&gt;shutil&lt;/code&gt; modules&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/lihaoyi/cask" dir="ltr"&gt;Cask&lt;/a&gt;, a clone of the Armin Ronacher's Flask  library&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;It turns out that you can make Scala as easy to get started with as Python. And for all of Pythons weaknesses - performance, concurrency, maintainability - Scala already does excellently. Scala has the potential to be the language with the usability and flexiblity of Python with the performance and scalability of Java or Go, and type-safe maintainability far beyond any of those options. Quite literally the best of both worlds!&lt;/p&gt;&lt;p&gt;While there will always be use cases where high-concurrency reactive architectures or pure-functional programming are the best tool for the job, I hope going forward that developers will be able to onboard onto the Scala language in an easy and straightforward way, and only need to learn those more advanced techniques when the need for it comes.&lt;/p&gt;&lt;h3&gt;Scala Native&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;a href="http://www.scala-js.org/" dir="ltr"&gt;Scala.js&lt;/a&gt; has demonstrated the feasiblity of using Scala on an alternate platform: compiled to Javascript instead of on the JVM, it has a vibrant ecosystem and community, and brings the Scala language into the browser, somewhere it could never be used before.&lt;/p&gt;&lt;p&gt;Scala-Native promises an even bigger revolution: by compiling Scala to self-contained binary executables, that would allow the Scala language to be used in scenarios where the startup time and resource overhead of a JVM or Javascript runtime is unacceptable. While Scala.js brought Scala to the browser, Scala-Native promises to bring Scala to a host of new environments:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Command-line tools like &lt;code dir="ltr"&gt;git&lt;/code&gt;, &lt;code dir="ltr"&gt;ls&lt;/code&gt;, &lt;code dir="ltr"&gt;rsync&lt;/code&gt;, etc. which cannot tolerate the  startup time of the JVM.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Sidecar processes or background daemons, where the significant memory overhead  of the JVM makes using Scala problematic&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Mobile development on iOS, running on iPhones and iPads, one of the most  ubiquitous consumer computing devices in the world&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Desktop applications, where the JVM startup time is too slow or bundling the  JVM too bulky&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Deep integrations with native libraries, like the Tensorflow machine learning  framework&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;These sorts of programs have been traditionally written in unsafe languages like C or C++. More recent implementations are often written in Rust or Go, and there's a whole cottage industry of not-C programming languages like Nim, Zig, or Crystal also trying to fill this space. Scala-Native promises to be able to fill this space, not with a brand-new language, but with an already-popular language with an existing rich ecosystem of libraries and tooling.&lt;/p&gt;&lt;p&gt;Scala-Native will be much more difficult to make successful than Scala.js was. In particular, Scala.js could focus on the compiler and then delegate to an existing Javascript runtime, while Scala-Native has to build its own runtime from first principles: threading, garbage-collection, event-loops, and so on. This is addition to the formidable amount of compiler work necessary. Nevertheless, if successful, this would be a massive boon for broadening the use cases for which the Scala language can be used.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p dir="ltr"&gt;While amount of &lt;em dir="ltr"&gt;hype&lt;/em&gt; around the Scala language has definitely died down over the years, the &lt;em dir="ltr"&gt;usage&lt;/em&gt; seems to be growing at a steady clip, and the experience of using the language has been improving rapidly. This is exactly what you would expect as a language progresses through the hype cycle, and moves from a fad-driven community to a value-driven community. Scala developers are using the language, not as an end unto itself, but instead as a solid tool they can use to accomplish their non-Scala-related technical or business objectives.&lt;/p&gt;&lt;p&gt;In effect, this is what it means for the community to mature.&lt;/p&gt;&lt;p&gt;Going forward, I hope we can see more of this. More focus on outcomes and value, rather than hype. More weighing of tradeoffs, rather than dogmatism. More celebrating the shared core, rather than arguing over the differences. And more 2x compiler speedups!&lt;/p&gt;&lt;p dir="ltr"&gt;I think the way we 10x the Scala community is not by spending 10x the effort bikeshedding over the existing language syntax, 10x the effort arguing about functional vs object oriented programming, or 10x the effort trying to make our already-very-type-safe code even more type-safe. It is instead by inclusively expanding the language to reach those developers we could never reach before: the newbies, the non-programmers, the command-line-tool folks, the iOS developers, and so on. If we look at the &lt;a href="https://www.jetbrains.com/lp/devecosystem-2019/python/" dir="ltr"&gt;2019 Jetbrains Developer Survey for Python&lt;/a&gt;, we can see the breadth of different domains in which the Python language is used:&lt;/p&gt;&lt;img src="http://www.lihaoyi.com/post/TheScalaEcosystem/JetbrainsSurvey.png" alt="JetbrainsSurvey.png" width="453" height="232"&gt;&lt;p&gt;Currently Scala is overwhelmingly used for backend services and/or Spark data pipelines, but there is no reason the above use cases couldn't be satisfied by Scala as well. It's up to the community to make using Scala easy and broadly-usable enough that anyone, not just the grizzled backend/data engineers, are able to pick up Scala and and use it while enjoying the conciseness, performance, and type-safety that those within the Scala community already know and love.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;About the Author:&lt;/b&gt;&lt;i dir="ltr"&gt; Haoyi is a software engineer, an early contributor to &lt;a href="http://www.scala-js.org/" dir="ltr"&gt;Scala.js&lt;/a&gt;, and the author of many open-source Scala tools such as the &lt;a href="http://www.lihaoyi.com/post/lihaoyi.com/Ammonite" dir="ltr"&gt;Ammonite REPL&lt;/a&gt; and &lt;a href="https://github.com/lihaoyi/fastparse" dir="ltr"&gt;FastParse&lt;/a&gt;. &lt;/i&gt;&lt;/p&gt;&lt;p&gt;&lt;i dir="ltr"&gt;If you've enjoyed this blog, or enjoyed using Haoyi's other open source libraries, please chip in (or get your Company to chip in!) via &lt;a href="https://www.patreon.com/lihaoyi" dir="ltr"&gt;Patreon&lt;/a&gt; so he can continue his open-source work&lt;/i&gt;&lt;/p&gt;</description><pubDate>Fri, 10 Apr 2020 03:52:05 -0500</pubDate></item><item><title>open-source satellite ground-stations network reaches 2,000,000th satellite pass milestone</title><link>https://lobste.rs/s/u5rgls</link><description>&lt;p&gt;We are excited and thrilled to announce that the SatNOGS network has reached its 2.000.000th observation on the 9th of April!&lt;/p&gt;&lt;p dir="ltr"&gt;Observation &lt;a href="https://network.satnogs.org/observations/2000000/#" dir="ltr"&gt;#2000000&lt;/a&gt; got uploaded on the SatNOGS Network by station &lt;a href="https://network.satnogs.org/stations/6/" dir="ltr"&gt;#6&lt;/a&gt;-Apomahon in Nea Filadelfia , Athens, Greece, operated by Dimitris Papadeas receiving data from &lt;a href="https://db.satnogs.org/satellite/44404/" dir="ltr"&gt;SOKRAT &lt;/a&gt;satellite.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;figure&gt;&lt;img src="https://satnogs.org/wp-content/uploads/2020/04/Untitled-design-6.png" alt="" srcset="https://satnogs.org/wp-content/uploads/2020/04/Untitled-design-6.png 560w, https://satnogs.org/wp-content/uploads/2020/04/Untitled-design-6-300x169.png 300w" width="445" height="250"&gt;&lt;/figure&gt;&lt;p&gt; The 2.000.000th observation is a result of an amazing network of ground stations and it marks the continuous efforts of hundreds of ground station owners! The SatNOGS community boasts a booming number of 200+ fully operational ground stations and 100+ in testing mode. The observations come from 400+ satellites and 880+ transmitters and over 64.800.000 data frames.  &lt;/p&gt;&lt;p dir="ltr"&gt;Do you want to join the next millions of observations? Do you want to be part of this community? Check out the SatNOGS knowledge-base &lt;a href="https://wiki.satnogs.org/Main_Page" dir="ltr"&gt;wiki&lt;/a&gt;, and don’t hesitate to reach out to the &lt;a href="https://community.libre.space/" dir="ltr"&gt;community forums&lt;/a&gt; and &lt;a href="https://riot.im/app/#/room/#satnogs:matrix.org" dir="ltr"&gt;chat&lt;/a&gt;. We would love to have you onboard the &lt;a href="https://satnogs.org/" dir="ltr"&gt;SatNOGS &lt;/a&gt;network and community. &lt;a href="https://wiki.satnogs.org/Get_Started" dir="ltr"&gt;Join us now&lt;/a&gt;!&amp;nbsp;&lt;br dir="ltr"&gt;&lt;/p&gt;</description><pubDate>Fri, 10 Apr 2020 10:40:49 -0500</pubDate></item><item><title>An alternate way of receiving signals</title><link>https://lobste.rs/s/dhuubq</link><description>&lt;p dir="ltr"&gt;If you've ever dealt with signal handling, you probably still have in mind how
+&lt;em dir="ltr"&gt;painful&lt;/em&gt; of an experience that was: making a reliable signal handler often is
+an &lt;strong dir="ltr"&gt;astonishingly difficult task&lt;/strong&gt;.&lt;/p&gt;&lt;p&gt;The reason lies in the way signal handlers work: they interrupt whatever work was
+being done, even the work that really shouldn't be.&lt;/p&gt;&lt;p&gt;Because of the very limited set of actions that can be done in such conditions,
+people found ways around it:&lt;/p&gt;&lt;p&gt;Instead of interrupting the process, the general idea is to write the signal
+somewhere the process can read when it's ready.&lt;/p&gt;&lt;p&gt;I knew of two ways to implement this same principle, but neither felt
+appropriate. I scratched my head for a few days, and came up with a new one!&lt;/p&gt;&lt;p&gt;Let's discuss the two common implementations first:&lt;/p&gt;&lt;h2&gt;The pipe trick&lt;/h2&gt;&lt;p&gt;Write the signal number to a pipe in the signal handler, and read it in the main
+program. This trick is very old but works fairly well.&lt;/p&gt;&lt;p&gt;It has its issues:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;when a process forks, it still shares its parent's pipe, which can cause
+mayhem if the child process writes a signal which is read in the parent
+process.&lt;/LI&gt;&lt;LI&gt;when the pipe fills up, you have no choice but to drop messages, which
+doesn't sound great.&lt;/LI&gt;&lt;LI&gt;it uses one more system call than the other solutions (not a big deal)&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;And some benefits:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;it provides a file descriptor, which can be used in event loops&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;SignalFD&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;tt dir="ltr"&gt;signalfd&lt;/tt&gt; is a Linux-specific API, which does almost the same as the pipe
+trick.&lt;/p&gt;&lt;p&gt;It solves both of the above issues while creating a major one:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;to be able to receive a signal using &lt;tt dir="ltr"&gt;signalfd&lt;/tt&gt;, a signal must be blocked
+by the traditional signal handling API. As the fact a signal is blocked is
+inherited when creating new processes, you may end up spawning processes that
+have many signals inadvertently blocked. The workaround is to unblock it
+right after spawning the new process, which is a pretty inconvenient thing to
+do.&lt;/LI&gt;&lt;LI&gt;it's also very linux specific&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;It comes with benefits:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;it yields better performance, as it does not interrupt the process at all, not even system calls&lt;/LI&gt;&lt;LI&gt;it also provides a file descriptor, which can be used in event loops&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;I did not like any of these techniques, as signalfd is linux specific, and the
+pipe trick has fork safety and capacity issues. Here's what I came up with:&lt;/p&gt;&lt;h2&gt;The versioned lookup table&lt;/h2&gt;&lt;p&gt;This technique, just like the pipe trick, uses on plain old signal handlers.
+It relies on these two base principles:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;the main program acts as a consumer. It polls the producer for new updates&lt;/LI&gt;&lt;LI&gt;each signal is assigned an unique revision number&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;If the main process wants to check whether a new SIGINT has been received, it
+can read the revision number of the producer and compare it with the last
+revision number processed by the consumer.&lt;/p&gt;&lt;p&gt;Also:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;both the producer and the consumer needs to hold a lookup table which maps
+signals to their revision number&lt;/LI&gt;&lt;LI&gt;an additional revision pair can be used to track the overall number of
+received signals, to avoid needlessly scanning the lookup table&lt;/LI&gt;&lt;LI&gt;the number of times some signal was received is not guaranteed to be
+preserved by the signal delivery process, and thus does not need to be
+preserved at this stage&lt;/LI&gt;&lt;LI&gt;an atomic flag can be used to allow multithreaded signal delivery on the
+signal handler side&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;The design of this technique was heavily inspired by the very interesting etcd
+data model, thanks to which I learned about this revision trick.&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;/*&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;Reading end:&lt;/span&gt;
+&lt;span dir="ltr"&gt; - read and cache the producer revision&lt;/span&gt;
+&lt;span dir="ltr"&gt; - if the cached producer and consumer revision are the same, stop there&lt;/span&gt;
+&lt;span dir="ltr"&gt; - otherwise, scan through the signaled array:&lt;/span&gt;
+&lt;span dir="ltr"&gt;   - skip signals where producer revision == consumer revision&lt;/span&gt;
+&lt;span dir="ltr"&gt;   - add the remaining signals to the result pool&lt;/span&gt;
+&lt;span dir="ltr"&gt;   - copy the signal producer revision into the signal consumer revision&lt;/span&gt;
+&lt;span dir="ltr"&gt; - copy the cached producer revision into the consumer revision&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;Writing end:&lt;/span&gt;
+&lt;span dir="ltr"&gt; - acquire the producer lock (if MT support enabled)&lt;/span&gt;
+&lt;span dir="ltr"&gt; - increment the signal revision&lt;/span&gt;
+&lt;span dir="ltr"&gt; - set the producer signal revision for the received signal&lt;/span&gt;
+&lt;span dir="ltr"&gt; - release the producer lock (if MT support enabled)&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;*/&lt;/span&gt;
+
+
+&lt;span dir="ltr"&gt;/* we need a big integer type that can be written in one instruction.&lt;/span&gt;
+&lt;span dir="ltr"&gt;   unfortunately, sig_atomic_t is not always that big, is often signed,&lt;/span&gt;
+&lt;span dir="ltr"&gt;   often smaller than needed, and doesn't even work properly on all&lt;/span&gt;
+&lt;span dir="ltr"&gt;   architectures.&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;   /!\ this typedef is architecture dependent, see the full source /!\&lt;/span&gt;
+&lt;span dir="ltr"&gt;                 https://github.com/multun/signal-lut&lt;/span&gt;
+&lt;span dir="ltr"&gt;*/&lt;/span&gt;
+&lt;span dir="ltr"&gt;typedef&lt;/span&gt; &lt;span dir="ltr"&gt;/* some type */&lt;/span&gt; &lt;span dir="ltr"&gt;lsig_atomic_t&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+
+
+&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;signal_lut&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    &lt;span dir="ltr"&gt;/* when a signal is received, the handler sets this flag. other signal&lt;/span&gt;
+&lt;span dir="ltr"&gt;       handlers have to spin, waiting for the lock to be released */&lt;/span&gt;
+    &lt;span dir="ltr"&gt;atomic_flag&lt;/span&gt; &lt;span dir="ltr"&gt;producer_lock&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+
+    &lt;span dir="ltr"&gt;/* increased by one each time a signal is added to the lookup table */&lt;/span&gt;
+    &lt;span dir="ltr"&gt;volatile&lt;/span&gt; &lt;span dir="ltr"&gt;lsig_atomic_t&lt;/span&gt; &lt;span dir="ltr"&gt;lut_producer_revision&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+
+    &lt;span dir="ltr"&gt;/* the revision of last processed signal */&lt;/span&gt;
+    &lt;span dir="ltr"&gt;volatile&lt;/span&gt; &lt;span dir="ltr"&gt;lsig_atomic_t&lt;/span&gt; &lt;span dir="ltr"&gt;lut_consumer_revision&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+
+    &lt;span dir="ltr"&gt;/* each cell stores the revision of the most recently received signal */&lt;/span&gt;
+    &lt;span dir="ltr"&gt;volatile&lt;/span&gt; &lt;span dir="ltr"&gt;lsig_atomic_t&lt;/span&gt; &lt;span dir="ltr"&gt;producer_signal_revision&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;MAX_SIGNAL_NUMBER&lt;/span&gt;&lt;span dir="ltr"&gt;];&lt;/span&gt;
+
+    &lt;span dir="ltr"&gt;/* each cell stores the revision of the last processed signal */&lt;/span&gt;
+    &lt;span dir="ltr"&gt;volatile&lt;/span&gt; &lt;span dir="ltr"&gt;lsig_atomic_t&lt;/span&gt; &lt;span dir="ltr"&gt;consumer_signal_revision&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;MAX_SIGNAL_NUMBER&lt;/span&gt;&lt;span dir="ltr"&gt;];&lt;/span&gt;
+&lt;span dir="ltr"&gt;};&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;static&lt;/span&gt; &lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;signal_lut&lt;/span&gt; &lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;void&lt;/span&gt; &lt;span dir="ltr"&gt;signal_lut_handler&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;signum&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;span dir="ltr"&gt;{&lt;/span&gt;
+    &lt;span dir="ltr"&gt;/* acquire the handler lock */&lt;/span&gt;
+    &lt;span dir="ltr"&gt;while&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;atomic_flag_test_and_set_explicit&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;producer_lock&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;memory_order_acquire&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;
+        &lt;span dir="ltr"&gt;continue&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+
+    &lt;span dir="ltr"&gt;/* update the signal freshness */&lt;/span&gt;
+    &lt;span dir="ltr"&gt;lsig_atomic_t&lt;/span&gt; &lt;span dir="ltr"&gt;sig_id&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;++&lt;/span&gt;&lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;lut_producer_freshness&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;producer_signal_freshness&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;signum&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;sig_id&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+
+    &lt;span dir="ltr"&gt;/* release the handler lock */&lt;/span&gt;
+    &lt;span dir="ltr"&gt;atomic_flag_clear_explicit&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;producer_lock&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;memory_order_release&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;signal_lut_read&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;signal_list&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;events&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;span dir="ltr"&gt;{&lt;/span&gt;
+    &lt;span dir="ltr"&gt;/* read events from the array */&lt;/span&gt;
+    &lt;span dir="ltr"&gt;lsig_atomic_t&lt;/span&gt; &lt;span dir="ltr"&gt;cached_lut_producer_freshness&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;lut_producer_freshness&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+
+    &lt;span dir="ltr"&gt;/* stop if no new event was received */&lt;/span&gt;
+    &lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;cached_lut_producer_freshness&lt;/span&gt; &lt;span dir="ltr"&gt;==&lt;/span&gt; &lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;lut_consumer_freshness&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+        &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;events&lt;/span&gt;&lt;span dir="ltr"&gt;-&amp;gt;&lt;/span&gt;&lt;span dir="ltr"&gt;count&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+
+    &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;size_t&lt;/span&gt; &lt;span dir="ltr"&gt;i&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;i&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt; &lt;span dir="ltr"&gt;MAX_SIGNAL_NUMBER&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;++&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+        &lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;consumer_signal_freshness&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt; &lt;span dir="ltr"&gt;==&lt;/span&gt; &lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;producer_signal_freshness&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;])&lt;/span&gt;
+            &lt;span dir="ltr"&gt;continue&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+
+        &lt;span dir="ltr"&gt;signal_list_add&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;events&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
+        &lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;consumer_signal_freshness&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;producer_signal_freshness&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;];&lt;/span&gt;
+    &lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+    &lt;span dir="ltr"&gt;state&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;lut_consumer_freshness&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;cached_lut_producer_freshness&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;events&lt;/span&gt;&lt;span dir="ltr"&gt;-&amp;gt;&lt;/span&gt;&lt;span dir="ltr"&gt;count&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;/PRE&gt;&lt;p&gt;Let's see how it performs:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;it doesn't have any of the issues of the pipe trick&lt;/LI&gt;&lt;LI&gt;checking if a signal was received comes at almost no performance penalty&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;But:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;it can't be used as is in an event loop (see the next section for a workaround)&lt;/LI&gt;&lt;LI&gt;it needs more code / is less efficient for architectures which can't write big
+integers in a single atomic instruction (these architectures very uncommon,
+and it can be worked around using &lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;sigprocmask&lt;/span&gt;&lt;/code&gt;)&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;pipe + versioned lookup table&lt;/h3&gt;&lt;p&gt;The pipe trick not being entirely reliable (it must drop messages the pipe is
+full) is one of the main reasons why I started looking for a new technique.&lt;/p&gt;&lt;p&gt;This issue can be addressed by using the lookup table as a fallback when the
+pipe is full. The file descriptor from the pipe can still be used in an event
+loop, which is definitely a plus.&lt;/p&gt;&lt;p&gt;I really enjoyed writing this article, and I hope you enjoyed reading it!&lt;/p&gt;&lt;p dir="ltr"&gt;Check out the full source code here: &lt;a href="https://github.com/multun/signal-lut" dir="ltr"&gt;https://github.com/multun/signal-lut&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sat, 11 Apr 2020 02:01:51 -0500</pubDate></item><item><title>Singapore open-sources BlueTrace, its Contacts Tracing set of applications, under the GPLv3</title><link>https://lobste.rs/s/v5nh1g</link><description>&lt;div&gt;OpenTrace is the reference implementation of BlueTrace, a privacy-preserving protocol for epidemiological contact tracing to fight COVID-19&lt;/div&gt;&lt;div&gt;&lt;button type="button" data-action="click:signup-prompt-controller#dismiss" data-ga-click="(Logged out) Sign up prompt, clicked Dismiss, text:dismiss"&gt;
           Dismiss
         &lt;/button&gt;&lt;/div&gt;&lt;h3&gt;Grow your team on GitHub&lt;/h3&gt;&lt;p&gt;GitHub is home to over 40 million developers working together. Join them to grow your own development teams, manage permissions, and collaborate on projects.&lt;/p&gt;</description><pubDate>Fri, 10 Apr 2020 11:11:43 -0500</pubDate></item><item><title>CMU 15-819 - Homotopy Type Theory</title><link>https://lobste.rs/s/llejwf</link><description>&lt;h2&gt;Course Information&lt;/h2&gt;&lt;table class="disp" dir="ltr"&gt;
 	&lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
