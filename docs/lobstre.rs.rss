@@ -2141,7 +2141,138 @@ We can use binary format, we can post it as huge integer:&lt;/p&gt;&lt;PRE&gt;&l
 9831545895899997311194908866099892662200438185858903893802349550297108232343975
 7063807807
 &lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Before you ask - yes, this is my PGP public key as a single decimal integer.&lt;/p&gt;&lt;p&gt;Next time you will see someone asking for “shorter UUID” you can point them
-there and say - just pick shorter representation.&lt;/p&gt;&lt;div&gt;&lt;span&gt;Read other posts&lt;/span&gt;&lt;/div&gt;</description><pubDate>Mon, 27 Apr 2020 06:11:31 -0500</pubDate></item><item><title>Towards Sequoia v1.0</title><link>https://lobste.rs/s/zjil7k</link><description>&lt;p dir="ltr"&gt;By &lt;a href="https://sequoia-pgp.org/blog/2020/04/26/202004-towards-sequoia-v1.0/#" dir="ltr"&gt;Neal&lt;/a&gt; | April 26, 2020&lt;/p&gt;&lt;p dir="ltr"&gt;For the past few weeks, Sequoia has been in a feature freeze as we
+there and say - just pick shorter representation.&lt;/p&gt;&lt;div&gt;&lt;span&gt;Read other posts&lt;/span&gt;&lt;/div&gt;</description><pubDate>Mon, 27 Apr 2020 06:11:31 -0500</pubDate></item><item><title>Hunting a Linux kernel bug</title><link>https://lobste.rs/s/yiol1z</link><description>&lt;div dir="ltr"&gt;
+          &lt;span dir="ltr"&gt;Monday, 27 April 2020&lt;/span&gt;
+
+          &lt;/div&gt;&lt;p&gt;Earlier last year, we identified a firewall misconfiguration which accidentally dropped most network traffic. We expected resetting the firewall configuration to fix the issue, but resetting the firewall configuration exposed a kernel bug!&lt;/p&gt;&lt;p&gt;Totally resetting the firewall gave us the default CentOS configuration, which blocks all traffic except for ssh. Bringing in our previously good firewall configuration didn't fix this because the default sysctl settings ran into a corner case kernel bug. Let's take a look at what this means and what happened.&lt;/p&gt;&lt;p&gt;To understand what happened, we'll need some background about a few different parts of our stack:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Linux reverse path filter&lt;/LI&gt;&lt;LI&gt;Mesos network isolation&lt;/LI&gt;&lt;LI&gt;Linux local packet routing&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Reverse path filter&lt;/h2&gt;&lt;p&gt;The reverse path filter is a mitigation against DDoS attacks that does a reverse routing table lookup for each incoming IP packet on the arrival interface by source IP address.&lt;/p&gt;&lt;p&gt;If the lookup succeeds and the next hop device returned by routing table matches the arrival interface, the packet is accepted. If not, the packet is considered a "martian" address and dropped before it enters the IP stack. For example, loopback IP addresses in the subnet 127.0.0.0/8 should never appear on any hardware interface attached to the wire and will therefore be identified as martians and dropped.&lt;/p&gt;&lt;p dir="ltr"&gt;The reverse path filter is enabled by default on many Linux distros. This means that the sysctl &lt;i dir="ltr"&gt;net.ipv4.conf.all.rp_filter&lt;/i&gt; is set to 1. Setting this to 2 turns off "strict" mode and enables "loose" mode, which relaxes the interface matching rule, allowing packets that don't match the arrival interface to be received.&lt;/p&gt;&lt;h2&gt;Mesos network isolation&lt;/h2&gt;&lt;p&gt;We have too many datacenter machines to assign an IPv4 address per container. Instead, each host gets an IPv4 address and each container gets a port range. Our container configuration isolates the entire TCP/IP stack with network namespaces, including routing tables, IP addresses, as well as the loopback interface, which is used for all local network communications.&lt;/p&gt;&lt;p&gt;To communicate between containers on the same host, we create a virtual ethernet pair for each container. Packets go into one end of the pair and come out from the other end of the pair. The port range based network isolation is conceptually similar to the transport layer and the IP layer communication works as a whole stack, as normal. In particular, we have to explicitly bring back the local network communications between different containers on the same host after isolation.&lt;/p&gt;&lt;p&gt;Mesos uses Linux Traffic Control (TC) filters and actions to move packets between containers and the host (per above, this is based on the port). This turns out to be somewhat complicated and, as we'll see, the Linux routing table code doesn't have high test coverage for doing this when dealing with the loopback interface and virtual ethernet pairs.&lt;/p&gt;&lt;p&gt;Another piece of Mesos background is that when we introduced the port range based isolation, we were using an old kernel which had a few bugs that required us to turn off the reverse path filter. Those bugs have been fixed, but we've continued to set rp_filter to 0 because there wasn't a strong reason to change it back.&lt;/p&gt;&lt;h2&gt;Routing local network packets&lt;/h2&gt;&lt;p&gt;At the IP layer, we have two types of local network packets flying around within a host:&lt;/p&gt;&lt;p&gt;1) Loopback packets whose destination address is a loopback address (i.e., in the 127.0.0.0/8 IP subnet). Those packets are routed to the virtual loopback interface per the local routing table.&lt;/p&gt;&lt;p&gt;2) Packets whose destination IP address is owned by the host. Linux kernel optimizes this case by rerouting them to the loopback interface.&lt;/p&gt;&lt;p&gt;The virtual loopback interface is automatically created by kernel along with the loopback IP address, 127.0.0.1, and the routing entry for the 127.0.0.0/8 subnet. These are in the local routing table which is not visible by default:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ ip route show table local
+broadcast 10.53.180.0 dev eth0 proto kernel scope link src 10.53.180.130
+local 10.53.180.130 dev eth0 proto kernel scope host src 10.53.180.130
+broadcast 10.53.180.255 dev eth0 proto kernel scope link src 10.53.180.130
+broadcast 127.0.0.0 dev lo proto kernel scope link src 127.0.0.1
+local 127.0.0.0/8 dev lo proto kernel scope host src 127.0.0.1
+local 127.0.0.1 dev lo proto kernel scope host src 127.0.0.1
+broadcast 127.255.255.255 dev lo proto kernel scope link src 127.0.0.1&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Another optimization is that every packet that goes through the loopback interface saves its routing information to avoid another routing table lookup when looping back to the same IP stack.&lt;/p&gt;&lt;p&gt;That information is discarded in virtual ethernet pair case with respect to network isolation, even though a routing table lookup could be saved for the same reason as in the case above.&lt;/p&gt;&lt;p dir="ltr"&gt;One more complication is that, for all packets of type (1), packets with a loopback destination, the 127.0.0.0/8 subnet isn't considered routable unless the&amp;nbsp;&lt;i dir="ltr"&gt;net.ipv4.conf.all.route_localnet&lt;/i&gt; sysctl is set to 1. And both type (1) and type (2) packets still aren't accepted by the routing table unless the &lt;i dir="ltr"&gt;net.ipv4.conf.all.accept_local&lt;/i&gt; sysctl is set to 1.&lt;/p&gt;&lt;p&gt;From this, we see that the optimization of saving routing information for loopback packets is actually built into the Linux networking stack.&lt;/p&gt;&lt;h2&gt;Debugging&lt;/h2&gt;&lt;p&gt;Now that we have the necessary background, let's look at the bug.&lt;/p&gt;&lt;p dir="ltr"&gt;A firewall change caused the initial outage. The first thing we did was to reset the configuration and bring in CentOS defaults, which blocked all incoming connections except for ssh. We then restored a known good configuration. However, doing this and restarting the firewall services reset our sysctl settings too, particularly resetting &lt;i dir="ltr"&gt;net.ipv4.conf.all.rp_filter&lt;/i&gt; to 1.&lt;/p&gt;&lt;p dir="ltr"&gt;Curiously, setting rp_filter to 1 prevented us from routing local network packets properly! On a debug host with &lt;i dir="ltr"&gt;net.ipv4.conf.all.log_martians&lt;/i&gt; turned on (which logs all martian packets), we saw&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;[7949958.398209] IPv4: martian source 10.53.180.130 from 10.53.180.130, on dev lo 
+[7949958.405429] ll header: 00000000: 98 03 9b 7f ff d0 98 03 9b 7f ff d0 08 00  
+.............. 
+
+[7949959.447357] IPv4: martian source 10.53.180.130 from 10.53.180.130, on dev lo 
+[7949959.454577] ll header: 00000000: 98 03 9b 7f ff d0 98 03 9b 7f ff d0 08 00        
+..............&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Recall from the routing local packets section, these are type (2) packets since their source IP belongs to the same host. These packets are being routed through the loopback interface, as expected, so rp_filter shouldn't drop these packets in either strict or loose mode, but they're being dropped in strict mode.&lt;/p&gt;&lt;p dir="ltr"&gt;There are a number of places where the packet could be dropped, too many to inspect every possible line of Linux kernel code. To find the offending code, we turned on all routing trace points via &lt;i dir="ltr"&gt;/sys/kernel/debug/tracing/events/fib/enable&lt;/i&gt;. These highly suspicious lines showed up in &lt;i dir="ltr"&gt;/sys/kernel/debug/tracing/trace&lt;/i&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;&amp;lt;...&amp;gt;-311708 [040] ..s1 7951180.957825: fib_table_lookup: table 254 oif 0 iif 1 src 10.53.180.130 dst 10.53.180.130 tos 0 scope 0 flags 0 
+&amp;lt;...&amp;gt;-311708 [040] ..s1 7951180.957826: fib_table_lookup_nh: nexthop dev eth0 oif 4 src 10.53.180.130 &lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;i dir="ltr"&gt;fib_table_lookup&lt;/i&gt; is the trace point for routing table lookup and &lt;i dir="ltr"&gt;fib_table_lookup_nh&lt;/i&gt; is the trace point right after routing table lookup for matching the next hop device.&lt;/p&gt;&lt;p dir="ltr"&gt;We can see that the routing table returns &lt;i dir="ltr"&gt;eth0&lt;/i&gt; as the next hop device instead of the loopback interface, &lt;i dir="ltr"&gt;lo&lt;/i&gt;, even though the lookup itself is done on &lt;i dir="ltr"&gt;lo&lt;/i&gt; (whose index is 1). This causes rp_filter to consider the packet a martian.&lt;/p&gt;&lt;p dir="ltr"&gt;But it doesn't make sense that the next hop device of the local network packet is &lt;i dir="ltr"&gt;eth0&lt;/i&gt; and not &lt;i dir="ltr"&gt;lo&lt;/i&gt;. If that were correct, the loopback interface wouldn't have been selected for egress!&lt;/p&gt;&lt;p&gt;This indicates that we should look at more details of Linux routing table.&lt;/p&gt;&lt;p&gt;Each time an IP address is added for a network interface, there are two routing entries automatically created for it by Linux kernel: one routing entry for the IP subnet represents an entire network and one routing entry for the specific IP address in the local routing table. The latter one is the table of interest here. It has a 32-bit prefix in order to match itself. Its routing type is marked as local and next hop device for which it was created.&lt;/p&gt;&lt;p dir="ltr"&gt;In each routing table, &lt;a href="https://vincent.bernat.ch/en/blog/2017-ipv4-route-lookup-linux" title="IPv4 route lookup on Linux" dir="ltr"&gt;a trie&lt;/a&gt; is used to speedup the routing table lookup, which is usually a form of longest prefix match algorithm. The routing entry for the specific IP address with a 32-bit prefix is added to the trie as a leaf since it's the longest. Linux exposes the trie in &lt;i dir="ltr"&gt;/proc/net/fib_trie&lt;/i&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ cat /proc/net/fib_trie
+…
+Local:
+  +-- 0.0.0.0/1 2 0 2
+     +-- 0.0.0.0/4 2 0 2
+        |-- 0.0.0.0
+           /0 universe UNICAST
+        +-- 10.53.180.0/24 2 0 1
+           |-- 10.53.180.0
+              /32 link BROADCAST
+              /24 link UNICAST
+           |-- 10.53.180.130
+              /32 host LOCAL
+           |-- 10.53.180.255
+              /32 link BROADCAST
+     +-- 127.0.0.0/8 2 0 2
+        +-- 127.0.0.0/31 1 0 0
+           |-- 127.0.0.0
+              /32 link BROADCAST
+              /8 host LOCAL
+           |-- 127.0.0.1
+              /32 host LOCAL
+        |-- 127.255.255.255
+           /32 link BROADCAST&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;When the kernel does a lookup in the local routing table for an outgoing packet with destination address 10.53.180.130, its most specific routing entry matches and it returns &lt;i dir="ltr"&gt;eth0&lt;/i&gt; as its next hop device.&lt;/p&gt;&lt;p dir="ltr"&gt;Following the code path on the egress routing table lookup, we see that Linux kernel immediately amends the next hop device with the loopback interface after knowing this is a local route. Likewise for the reverse routing table lookup, &lt;i dir="ltr"&gt;eth0&lt;/i&gt; is returned and clearly doesn’t match the incoming interface &lt;i dir="ltr"&gt;lo&lt;/i&gt;, which causes us to fail the strict rp_filter checks!&lt;/p&gt;&lt;h2&gt;Bug fix&lt;/h2&gt;&lt;p dir="ltr"&gt;Our &lt;a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=66f8209547cc11d8e139d45cb7c937c1bbcce182" title="fib: relax source validation check for loopback packets" dir="ltr"&gt;final fix&lt;/a&gt; for this is a small (5 line) patch that amends the reverse routing table lookup in a similar way to egress. In addition to the previous existing matching logic, if it's a local route, we also allow the packet to pass the filter if the arrival interface matches the loopback interface.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;diff --git a/net/ipv4/fib_frontend.c b/net/ipv4/fib_frontend.c
+index 317339cd7f03..e8bc939b56dd 100644
+--- a/net/ipv4/fib_frontend.c
++++ b/net/ipv4/fib_frontend.c
+@@ -388,6 +388,11 @@ static int __fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
+ 	fib_combine_itag(itag, &amp;amp;res);
+ 
+ 	dev_match = fib_info_nh_uses_dev(res.fi, dev);
++	/* This is not common, loopback packets retain skb_dst so normally they
++	 * would not even hit this slow path.
++	 */
++	dev_match = dev_match || (res.type == RTN_LOCAL &amp;amp;&amp;amp;
++				  dev == net-&amp;gt;loopback_dev);
+ 	if (dev_match) {
+ 		ret = FIB_RES_NHC(res)-&amp;gt;nhc_scope &amp;gt;= RT_SCOPE_HOST;
+ 		return ret;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;We also added &lt;a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=adb701d6cfa432f5dbdf28839b5e64291a7ed30b" title="selftests: add a test case for rp_filter" dir="ltr"&gt;a self-contained test case&lt;/a&gt; to make sure there isn't a regression in the future.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p&gt;We learned how Linux routes some kinds of packets and about one corner case that Linux wasn't handling correctly. Thanks to trace events, we saw how to get internal Linux kernel state in user-space without modifying the source code. This kind of thing often comes in handy when you want to debug a kernel bug or do performance tuning.&lt;/p&gt;&lt;img src="https://pbs.twimg.com/profile_images/659560610254876672/MpZ8Y6ms_200x200.jpg" alt="@c0ngwang" width="108" height="108"&gt;&lt;p&gt;Cong Wang&lt;/p&gt;&lt;p&gt;Software Engineer&lt;/p&gt;&lt;img src="https://pbs.twimg.com/profile_images/526429203554525185/P5uadNbN_200x200.png" alt="@danluu" width="108" height="108"&gt;</description><pubDate>Tue, 28 Apr 2020 04:02:44 -0500</pubDate></item><item><title>Tmux for mere mortals</title><link>https://lobste.rs/s/owu9ai</link><description>&lt;p&gt;Tmux has liberated me from tiling window mangers. Not that I didn’t like those, but I occasionally have to work with macOS or default GNOME setups. And over the years I realised that I only need a terminal multiplexor to do terminal tiling for me, the rest of the windows are just fine to be full-screen in separate workspaces.&lt;/p&gt;&lt;p&gt;So, I ended up doing 80% of my work in terminals with tmux. But, the prefix thing? Pardonnez-moi, but usability matters. Pressing a chorded prefix hotkey only to press another chorded hotkey to perform a single action is clear nonsense.&lt;/p&gt;&lt;p&gt;With this in mind, I decided to customize my tmux to use only simple chorded hotkeys without a prefix for most common actions, and to make them easy to remember. Additionally, my goal was not to override anything in the default tmux configuration to be able to use default tmux as well, if I have to (i.e. when ssh’ed to some remote server). Finally, I wanted it to be similar in German/US keyboards, as well as work for MacBooks and regular laptops.&lt;/p&gt;&lt;p&gt;Here’s what I came up with:&lt;/p&gt;&lt;img src="https://zserge.com/images/tmux-1.png" alt="keys-without-shift" width="445" height="177"&gt;&lt;UL&gt;&lt;LI&gt;Mod+1..9: switch windows from 1 to 9&lt;/LI&gt;&lt;LI&gt;Mod+, and Mod+.: switch to next/prev windows&lt;/LI&gt;&lt;LI&gt;Mod+HJKL or arrows: switch between panes&lt;/LI&gt;&lt;LI&gt;Mod+N: create new window&lt;/LI&gt;&lt;LI&gt;Mod+F: toggle full-screen&lt;/LI&gt;&lt;LI&gt;Mod+V: split vertically&lt;/LI&gt;&lt;LI&gt;Mod+B: split horizontally (“bisect”)&lt;/LI&gt;&lt;LI&gt;Mod+X: close pane&lt;/LI&gt;&lt;LI&gt;Mod+/: enter copy and scroll mode&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Intuitive? Now, same hotkeys with Shift key are used to &lt;em dir="ltr"&gt;modify&lt;/em&gt; things:&lt;/p&gt;&lt;img src="https://zserge.com/images/tmux-2.png" alt="keys-with-shift" width="445" height="176"&gt;&lt;UL&gt;&lt;LI&gt;Mod+&amp;lt; and Mod+&amp;gt;: move current window to the left/right&lt;/LI&gt;&lt;LI&gt;Mod+Shift+HJKL or arrows: move pane to the left/right/up/down&lt;/LI&gt;&lt;LI&gt;Mod+Shift+X: close window&lt;/LI&gt;&lt;LI&gt;Mod+Shift+R: rename window&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;That’s pretty much everything I ever needed from tmux. For other, less frequent actions I accept to use the default bindings, from time to time.&lt;/p&gt;&lt;p&gt;Additionally, I would like tmux to use my primary clipboard on all systems, so that I would only have to copy text with my mouse or keyboard selection. Resizing panes is also usable with a mouse.&lt;/p&gt;&lt;p&gt;As for the status bar, I’m not a big fan of being overloaded with information, so I only show window names there, or in the case then window has only an open shell - current directory name.&lt;/p&gt;&lt;p&gt;Nothing else.&lt;/p&gt;&lt;p dir="ltr"&gt;Here’s the tmux.conf (or you may always have a look at my &lt;a href="https://github.com/zserge/dotfiles" dir="ltr"&gt;dotfiles&lt;/a&gt; for a newer version:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;set-option -g default-terminal screen-256color
+set -g history-limit 10000
+set -g base-index 1
+set-option -g renumber-windows on
+set -s escape-time 0
+bind-key -n M-n new-window -c "#{pane_current_path}"
+bind-key -n M-1 select-window -t :1
+bind-key -n M-2 select-window -t :2
+bind-key -n M-3 select-window -t :3
+bind-key -n M-4 select-window -t :4
+bind-key -n M-5 select-window -t :5
+bind-key -n M-6 select-window -t :6
+bind-key -n M-7 select-window -t :7
+bind-key -n M-8 select-window -t :8
+bind-key -n M-9 select-window -t :9
+bind-key -n M-0 select-window -t :0
+bind-key -n M-. select-window -n
+bind-key -n M-, select-window -p
+bind-key -n M-&amp;lt; swap-window -t -1
+bind-key -n M-&amp;gt; swap-window -t +1
+bind-key -n M-X confirm-before "kill-window"
+bind-key -n M-v split-window -h -c "#{pane_current_path}"
+bind-key -n M-b split-window -v -c "#{pane_current_path}"
+bind-key -n M-R command-prompt -I "" "rename-window '%%'"
+bind-key -n M-f resize-pane -Z
+bind-key -n M-h select-pane -L
+bind-key -n M-l select-pane -R
+bind-key -n M-k select-pane -U
+bind-key -n M-j select-pane -D
+bind-key -n M-Left select-pane -L
+bind-key -n M-Right select-pane -R
+bind-key -n M-Up select-pane -U
+bind-key -n M-Down select-pane -D
+bind-key -n "M-H" run-shell 'old=`tmux display -p "#{pane_index}"`; tmux select-pane -L; tmux swap-pane -t $old'
+bind-key -n "M-J" run-shell 'old=`tmux display -p "#{pane_index}"`; tmux select-pane -D; tmux swap-pane -t $old'
+bind-key -n "M-K" run-shell 'old=`tmux display -p "#{pane_index}"`; tmux select-pane -U; tmux swap-pane -t $old'
+bind-key -n "M-L" run-shell 'old=`tmux display -p "#{pane_index}"`; tmux select-pane -R; tmux swap-pane -t $old'
+bind-key -n "M-S-Left" run-shell 'old=`tmux display -p "#{pane_index}"`; tmux select-pane -L; tmux swap-pane -t $old'
+bind-key -n "M-S-Down" run-shell 'old=`tmux display -p "#{pane_index}"`; tmux select-pane -D; tmux swap-pane -t $old'
+bind-key -n "M-S-Up" run-shell 'old=`tmux display -p "#{pane_index}"`; tmux select-pane -U; tmux swap-pane -t $old'
+bind-key -n "M-S-Right" run-shell 'old=`tmux display -p "#{pane_index}"`; tmux select-pane -R; tmux swap-pane -t $old'
+bind-key -n M-x confirm-before "kill-pane"
+bind-key -n M-/ copy-mode
+
+# Linux system clipboard
+bind -T copy-mode-vi Enter send-keys -X copy-pipe-and-cancel "xclip -in -selection clipboard"
+bind-key -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-and-cancel "xclip -in -selection clipboard"
+
+# macOS system clipboard
+#bind -T copy-mode-vi Enter send-keys -X copy-pipe-and-cancel "pbcopy"
+#bind-key -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-and-cancel "pbcopy"
+
+set -g mouse on
+set-option -g status-keys vi
+set-option -g set-titles on
+set-option -g set-titles-string 'tmux - #W'
+set -g bell-action any
+set-option -g visual-bell off
+set-option -g set-clipboard off
+setw -g mode-keys vi
+setw -g monitor-activity on
+set -g visual-activity on
+set -g status-style fg=colour15
+set -g status-justify centre
+set -g status-left ''
+set -g status-right ''
+set -g status-interval 1
+set -g message-style fg=colour0,bg=colour3
+setw -g window-status-bell-style fg=colour1
+setw -g window-status-current-style fg=yellow,bold
+setw -g window-status-style fg=colour250
+setw -g window-status-current-format ' #{?#{==:#W,#{b:SHELL}},#{b:pane_current_path},#W} '
+setw -g window-status-format ' #{?#{==:#W,#{b:SHELL}},#{b:pane_current_path},#W} '
+# For older tmux:
+#setw -g window-status-format ' #W '
+#setw -g window-status-current-format ' #W '
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Now tmux feels like a regular desktop app and truly boosts the productivity in the terminal. What do you think?&lt;/p&gt;&lt;p&gt;&lt;em&gt;Apr 25, 2020&lt;/em&gt;&lt;/p&gt;</description><pubDate>Tue, 28 Apr 2020 03:52:29 -0500</pubDate></item><item><title>Towards Sequoia v1.0</title><link>https://lobste.rs/s/zjil7k</link><description>&lt;p dir="ltr"&gt;By &lt;a href="https://sequoia-pgp.org/blog/2020/04/26/202004-towards-sequoia-v1.0/#" dir="ltr"&gt;Neal&lt;/a&gt; | April 26, 2020&lt;/p&gt;&lt;p dir="ltr"&gt;For the past few weeks, Sequoia has been in a feature freeze as we
 &lt;a href="https://gitlab.com/sequoia-pgp/sequoia/-/issues?milestone_title=v1.0" dir="ltr"&gt;make final preparations&lt;/a&gt; for the 1.0 release.  This is an exciting
 time for us.  Although there are &lt;a href="https://pep.foundation/dev/repos/pEpEngine" dir="ltr"&gt;already&lt;/a&gt; &lt;a href="https://keys.openpgp.org/" dir="ltr"&gt;several&lt;/a&gt; &lt;a href="https://gitlab.com/openpgp-ca/openpgp-ca" dir="ltr"&gt;users&lt;/a&gt; &lt;a href="https://gitlab.com/koverto/koverto" dir="ltr"&gt;of&lt;/a&gt;
 &lt;a href="https://pijul.org/" dir="ltr"&gt;our&lt;/a&gt; &lt;a href="https://crates.io/crates/kipa" dir="ltr"&gt;software&lt;/a&gt;, we look forward to offering them &lt;a href="https://github.com/radicle-dev/radicle-link/issues/20" dir="ltr"&gt;a stable API&lt;/a&gt;, and
@@ -2305,140 +2436,9 @@ What tolerances are important?&lt;/p&gt;&lt;p&gt;Not thinking means letting the 
 feedback on an earlier draft.
 All issues and mistakes that remain are my responsibility.)&lt;/p&gt;&lt;UL&gt;&lt;LI&gt; 
                 Site
-                &lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Mon, 27 Apr 2020 09:36:47 -0500</pubDate></item><item><title>Hunting a Linux kernel bug</title><link>https://lobste.rs/s/yiol1z</link><description>&lt;div dir="ltr"&gt;
-          &lt;span dir="ltr"&gt;Monday, 27 April 2020&lt;/span&gt;
+                &lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Mon, 27 Apr 2020 09:36:47 -0500</pubDate></item><item><title>Paxos vs Raft: Have we reached consensus on distributed consensus?</title><link>https://arxiv.org/pdf/2004.05074.pdf</link><description>&lt;p&gt;&lt;a href="https://arxiv.org/abs/2004.05074" rel="ugc"&gt;arXiv&lt;/a&gt;&lt;/p&gt;
 
-          &lt;/div&gt;&lt;p&gt;Earlier last year, we identified a firewall misconfiguration which accidentally dropped most network traffic. We expected resetting the firewall configuration to fix the issue, but resetting the firewall configuration exposed a kernel bug!&lt;/p&gt;&lt;p&gt;Totally resetting the firewall gave us the default CentOS configuration, which blocks all traffic except for ssh. Bringing in our previously good firewall configuration didn't fix this because the default sysctl settings ran into a corner case kernel bug. Let's take a look at what this means and what happened.&lt;/p&gt;&lt;p&gt;To understand what happened, we'll need some background about a few different parts of our stack:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Linux reverse path filter&lt;/LI&gt;&lt;LI&gt;Mesos network isolation&lt;/LI&gt;&lt;LI&gt;Linux local packet routing&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Reverse path filter&lt;/h2&gt;&lt;p&gt;The reverse path filter is a mitigation against DDoS attacks that does a reverse routing table lookup for each incoming IP packet on the arrival interface by source IP address.&lt;/p&gt;&lt;p&gt;If the lookup succeeds and the next hop device returned by routing table matches the arrival interface, the packet is accepted. If not, the packet is considered a "martian" address and dropped before it enters the IP stack. For example, loopback IP addresses in the subnet 127.0.0.0/8 should never appear on any hardware interface attached to the wire and will therefore be identified as martians and dropped.&lt;/p&gt;&lt;p dir="ltr"&gt;The reverse path filter is enabled by default on many Linux distros. This means that the sysctl &lt;i dir="ltr"&gt;net.ipv4.conf.all.rp_filter&lt;/i&gt; is set to 1. Setting this to 2 turns off "strict" mode and enables "loose" mode, which relaxes the interface matching rule, allowing packets that don't match the arrival interface to be received.&lt;/p&gt;&lt;h2&gt;Mesos network isolation&lt;/h2&gt;&lt;p&gt;We have too many datacenter machines to assign an IPv4 address per container. Instead, each host gets an IPv4 address and each container gets a port range. Our container configuration isolates the entire TCP/IP stack with network namespaces, including routing tables, IP addresses, as well as the loopback interface, which is used for all local network communications.&lt;/p&gt;&lt;p&gt;To communicate between containers on the same host, we create a virtual ethernet pair for each container. Packets go into one end of the pair and come out from the other end of the pair. The port range based network isolation is conceptually similar to the transport layer and the IP layer communication works as a whole stack, as normal. In particular, we have to explicitly bring back the local network communications between different containers on the same host after isolation.&lt;/p&gt;&lt;p&gt;Mesos uses Linux Traffic Control (TC) filters and actions to move packets between containers and the host (per above, this is based on the port). This turns out to be somewhat complicated and, as we'll see, the Linux routing table code doesn't have high test coverage for doing this when dealing with the loopback interface and virtual ethernet pairs.&lt;/p&gt;&lt;p&gt;Another piece of Mesos background is that when we introduced the port range based isolation, we were using an old kernel which had a few bugs that required us to turn off the reverse path filter. Those bugs have been fixed, but we've continued to set rp_filter to 0 because there wasn't a strong reason to change it back.&lt;/p&gt;&lt;h2&gt;Routing local network packets&lt;/h2&gt;&lt;p&gt;At the IP layer, we have two types of local network packets flying around within a host:&lt;/p&gt;&lt;p&gt;1) Loopback packets whose destination address is a loopback address (i.e., in the 127.0.0.0/8 IP subnet). Those packets are routed to the virtual loopback interface per the local routing table.&lt;/p&gt;&lt;p&gt;2) Packets whose destination IP address is owned by the host. Linux kernel optimizes this case by rerouting them to the loopback interface.&lt;/p&gt;&lt;p&gt;The virtual loopback interface is automatically created by kernel along with the loopback IP address, 127.0.0.1, and the routing entry for the 127.0.0.0/8 subnet. These are in the local routing table which is not visible by default:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ ip route show table local
-broadcast 10.53.180.0 dev eth0 proto kernel scope link src 10.53.180.130
-local 10.53.180.130 dev eth0 proto kernel scope host src 10.53.180.130
-broadcast 10.53.180.255 dev eth0 proto kernel scope link src 10.53.180.130
-broadcast 127.0.0.0 dev lo proto kernel scope link src 127.0.0.1
-local 127.0.0.0/8 dev lo proto kernel scope host src 127.0.0.1
-local 127.0.0.1 dev lo proto kernel scope host src 127.0.0.1
-broadcast 127.255.255.255 dev lo proto kernel scope link src 127.0.0.1&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Another optimization is that every packet that goes through the loopback interface saves its routing information to avoid another routing table lookup when looping back to the same IP stack.&lt;/p&gt;&lt;p&gt;That information is discarded in virtual ethernet pair case with respect to network isolation, even though a routing table lookup could be saved for the same reason as in the case above.&lt;/p&gt;&lt;p dir="ltr"&gt;One more complication is that, for all packets of type (1), packets with a loopback destination, the 127.0.0.0/8 subnet isn't considered routable unless the&amp;nbsp;&lt;i dir="ltr"&gt;net.ipv4.conf.all.route_localnet&lt;/i&gt; sysctl is set to 1. And both type (1) and type (2) packets still aren't accepted by the routing table unless the &lt;i dir="ltr"&gt;net.ipv4.conf.all.accept_local&lt;/i&gt; sysctl is set to 1.&lt;/p&gt;&lt;p&gt;From this, we see that the optimization of saving routing information for loopback packets is actually built into the Linux networking stack.&lt;/p&gt;&lt;h2&gt;Debugging&lt;/h2&gt;&lt;p&gt;Now that we have the necessary background, let's look at the bug.&lt;/p&gt;&lt;p dir="ltr"&gt;A firewall change caused the initial outage. The first thing we did was to reset the configuration and bring in CentOS defaults, which blocked all incoming connections except for ssh. We then restored a known good configuration. However, doing this and restarting the firewall services reset our sysctl settings too, particularly resetting &lt;i dir="ltr"&gt;net.ipv4.conf.all.rp_filter&lt;/i&gt; to 1.&lt;/p&gt;&lt;p dir="ltr"&gt;Curiously, setting rp_filter to 1 prevented us from routing local network packets properly! On a debug host with &lt;i dir="ltr"&gt;net.ipv4.conf.all.log_martians&lt;/i&gt; turned on (which logs all martian packets), we saw&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;[7949958.398209] IPv4: martian source 10.53.180.130 from 10.53.180.130, on dev lo 
-[7949958.405429] ll header: 00000000: 98 03 9b 7f ff d0 98 03 9b 7f ff d0 08 00  
-.............. 
-
-[7949959.447357] IPv4: martian source 10.53.180.130 from 10.53.180.130, on dev lo 
-[7949959.454577] ll header: 00000000: 98 03 9b 7f ff d0 98 03 9b 7f ff d0 08 00        
-..............&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Recall from the routing local packets section, these are type (2) packets since their source IP belongs to the same host. These packets are being routed through the loopback interface, as expected, so rp_filter shouldn't drop these packets in either strict or loose mode, but they're being dropped in strict mode.&lt;/p&gt;&lt;p dir="ltr"&gt;There are a number of places where the packet could be dropped, too many to inspect every possible line of Linux kernel code. To find the offending code, we turned on all routing trace points via &lt;i dir="ltr"&gt;/sys/kernel/debug/tracing/events/fib/enable&lt;/i&gt;. These highly suspicious lines showed up in &lt;i dir="ltr"&gt;/sys/kernel/debug/tracing/trace&lt;/i&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;&amp;lt;...&amp;gt;-311708 [040] ..s1 7951180.957825: fib_table_lookup: table 254 oif 0 iif 1 src 10.53.180.130 dst 10.53.180.130 tos 0 scope 0 flags 0 
-&amp;lt;...&amp;gt;-311708 [040] ..s1 7951180.957826: fib_table_lookup_nh: nexthop dev eth0 oif 4 src 10.53.180.130 &lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;i dir="ltr"&gt;fib_table_lookup&lt;/i&gt; is the trace point for routing table lookup and &lt;i dir="ltr"&gt;fib_table_lookup_nh&lt;/i&gt; is the trace point right after routing table lookup for matching the next hop device.&lt;/p&gt;&lt;p dir="ltr"&gt;We can see that the routing table returns &lt;i dir="ltr"&gt;eth0&lt;/i&gt; as the next hop device instead of the loopback interface, &lt;i dir="ltr"&gt;lo&lt;/i&gt;, even though the lookup itself is done on &lt;i dir="ltr"&gt;lo&lt;/i&gt; (whose index is 1). This causes rp_filter to consider the packet a martian.&lt;/p&gt;&lt;p dir="ltr"&gt;But it doesn't make sense that the next hop device of the local network packet is &lt;i dir="ltr"&gt;eth0&lt;/i&gt; and not &lt;i dir="ltr"&gt;lo&lt;/i&gt;. If that were correct, the loopback interface wouldn't have been selected for egress!&lt;/p&gt;&lt;p&gt;This indicates that we should look at more details of Linux routing table.&lt;/p&gt;&lt;p&gt;Each time an IP address is added for a network interface, there are two routing entries automatically created for it by Linux kernel: one routing entry for the IP subnet represents an entire network and one routing entry for the specific IP address in the local routing table. The latter one is the table of interest here. It has a 32-bit prefix in order to match itself. Its routing type is marked as local and next hop device for which it was created.&lt;/p&gt;&lt;p dir="ltr"&gt;In each routing table, &lt;a href="https://vincent.bernat.ch/en/blog/2017-ipv4-route-lookup-linux" title="IPv4 route lookup on Linux" dir="ltr"&gt;a trie&lt;/a&gt; is used to speedup the routing table lookup, which is usually a form of longest prefix match algorithm. The routing entry for the specific IP address with a 32-bit prefix is added to the trie as a leaf since it's the longest. Linux exposes the trie in &lt;i dir="ltr"&gt;/proc/net/fib_trie&lt;/i&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ cat /proc/net/fib_trie
-…
-Local:
-  +-- 0.0.0.0/1 2 0 2
-     +-- 0.0.0.0/4 2 0 2
-        |-- 0.0.0.0
-           /0 universe UNICAST
-        +-- 10.53.180.0/24 2 0 1
-           |-- 10.53.180.0
-              /32 link BROADCAST
-              /24 link UNICAST
-           |-- 10.53.180.130
-              /32 host LOCAL
-           |-- 10.53.180.255
-              /32 link BROADCAST
-     +-- 127.0.0.0/8 2 0 2
-        +-- 127.0.0.0/31 1 0 0
-           |-- 127.0.0.0
-              /32 link BROADCAST
-              /8 host LOCAL
-           |-- 127.0.0.1
-              /32 host LOCAL
-        |-- 127.255.255.255
-           /32 link BROADCAST&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;When the kernel does a lookup in the local routing table for an outgoing packet with destination address 10.53.180.130, its most specific routing entry matches and it returns &lt;i dir="ltr"&gt;eth0&lt;/i&gt; as its next hop device.&lt;/p&gt;&lt;p dir="ltr"&gt;Following the code path on the egress routing table lookup, we see that Linux kernel immediately amends the next hop device with the loopback interface after knowing this is a local route. Likewise for the reverse routing table lookup, &lt;i dir="ltr"&gt;eth0&lt;/i&gt; is returned and clearly doesn’t match the incoming interface &lt;i dir="ltr"&gt;lo&lt;/i&gt;, which causes us to fail the strict rp_filter checks!&lt;/p&gt;&lt;h2&gt;Bug fix&lt;/h2&gt;&lt;p dir="ltr"&gt;Our &lt;a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=66f8209547cc11d8e139d45cb7c937c1bbcce182" title="fib: relax source validation check for loopback packets" dir="ltr"&gt;final fix&lt;/a&gt; for this is a small (5 line) patch that amends the reverse routing table lookup in a similar way to egress. In addition to the previous existing matching logic, if it's a local route, we also allow the packet to pass the filter if the arrival interface matches the loopback interface.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;diff --git a/net/ipv4/fib_frontend.c b/net/ipv4/fib_frontend.c
-index 317339cd7f03..e8bc939b56dd 100644
---- a/net/ipv4/fib_frontend.c
-+++ b/net/ipv4/fib_frontend.c
-@@ -388,6 +388,11 @@ static int __fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst,
- 	fib_combine_itag(itag, &amp;amp;res);
- 
- 	dev_match = fib_info_nh_uses_dev(res.fi, dev);
-+	/* This is not common, loopback packets retain skb_dst so normally they
-+	 * would not even hit this slow path.
-+	 */
-+	dev_match = dev_match || (res.type == RTN_LOCAL &amp;amp;&amp;amp;
-+				  dev == net-&amp;gt;loopback_dev);
- 	if (dev_match) {
- 		ret = FIB_RES_NHC(res)-&amp;gt;nhc_scope &amp;gt;= RT_SCOPE_HOST;
- 		return ret;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;We also added &lt;a href="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=adb701d6cfa432f5dbdf28839b5e64291a7ed30b" title="selftests: add a test case for rp_filter" dir="ltr"&gt;a self-contained test case&lt;/a&gt; to make sure there isn't a regression in the future.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p&gt;We learned how Linux routes some kinds of packets and about one corner case that Linux wasn't handling correctly. Thanks to trace events, we saw how to get internal Linux kernel state in user-space without modifying the source code. This kind of thing often comes in handy when you want to debug a kernel bug or do performance tuning.&lt;/p&gt;&lt;img src="https://pbs.twimg.com/profile_images/659560610254876672/MpZ8Y6ms_200x200.jpg" alt="@c0ngwang" width="108" height="108"&gt;&lt;p&gt;Cong Wang&lt;/p&gt;&lt;p&gt;Software Engineer&lt;/p&gt;&lt;img src="https://pbs.twimg.com/profile_images/526429203554525185/P5uadNbN_200x200.png" alt="@danluu" width="108" height="108"&gt;</description><pubDate>Tue, 28 Apr 2020 04:02:44 -0500</pubDate></item><item><title>Paxos vs Raft: Have we reached consensus on distributed consensus?</title><link>https://arxiv.org/pdf/2004.05074.pdf</link><description>&lt;p&gt;&lt;a href="https://arxiv.org/abs/2004.05074" rel="ugc"&gt;arXiv&lt;/a&gt;&lt;/p&gt;
-
-            &lt;p&gt;&lt;a href="https://lobste.rs/s/drowbo/paxos_vs_raft_have_we_reached_consensus_on"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Mon, 27 Apr 2020 21:17:41 -0500</pubDate></item><item><title>Tmux for mere mortals</title><link>https://lobste.rs/s/owu9ai</link><description>&lt;p&gt;Tmux has liberated me from tiling window mangers. Not that I didn’t like those, but I occasionally have to work with macOS or default GNOME setups. And over the years I realised that I only need a terminal multiplexor to do terminal tiling for me, the rest of the windows are just fine to be full-screen in separate workspaces.&lt;/p&gt;&lt;p&gt;So, I ended up doing 80% of my work in terminals with tmux. But, the prefix thing? Pardonnez-moi, but usability matters. Pressing a chorded prefix hotkey only to press another chorded hotkey to perform a single action is clear nonsense.&lt;/p&gt;&lt;p&gt;With this in mind, I decided to customize my tmux to use only simple chorded hotkeys without a prefix for most common actions, and to make them easy to remember. Additionally, my goal was not to override anything in the default tmux configuration to be able to use default tmux as well, if I have to (i.e. when ssh’ed to some remote server). Finally, I wanted it to be similar in German/US keyboards, as well as work for MacBooks and regular laptops.&lt;/p&gt;&lt;p&gt;Here’s what I came up with:&lt;/p&gt;&lt;img src="https://zserge.com/images/tmux-1.png" alt="keys-without-shift" width="445" height="177"&gt;&lt;UL&gt;&lt;LI&gt;Mod+1..9: switch windows from 1 to 9&lt;/LI&gt;&lt;LI&gt;Mod+, and Mod+.: switch to next/prev windows&lt;/LI&gt;&lt;LI&gt;Mod+HJKL or arrows: switch between panes&lt;/LI&gt;&lt;LI&gt;Mod+N: create new window&lt;/LI&gt;&lt;LI&gt;Mod+F: toggle full-screen&lt;/LI&gt;&lt;LI&gt;Mod+V: split vertically&lt;/LI&gt;&lt;LI&gt;Mod+B: split horizontally (“bisect”)&lt;/LI&gt;&lt;LI&gt;Mod+X: close pane&lt;/LI&gt;&lt;LI&gt;Mod+/: enter copy and scroll mode&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Intuitive? Now, same hotkeys with Shift key are used to &lt;em dir="ltr"&gt;modify&lt;/em&gt; things:&lt;/p&gt;&lt;img src="https://zserge.com/images/tmux-2.png" alt="keys-with-shift" width="445" height="176"&gt;&lt;UL&gt;&lt;LI&gt;Mod+&amp;lt; and Mod+&amp;gt;: move current window to the left/right&lt;/LI&gt;&lt;LI&gt;Mod+Shift+HJKL or arrows: move pane to the left/right/up/down&lt;/LI&gt;&lt;LI&gt;Mod+Shift+X: close window&lt;/LI&gt;&lt;LI&gt;Mod+Shift+R: rename window&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;That’s pretty much everything I ever needed from tmux. For other, less frequent actions I accept to use the default bindings, from time to time.&lt;/p&gt;&lt;p&gt;Additionally, I would like tmux to use my primary clipboard on all systems, so that I would only have to copy text with my mouse or keyboard selection. Resizing panes is also usable with a mouse.&lt;/p&gt;&lt;p&gt;As for the status bar, I’m not a big fan of being overloaded with information, so I only show window names there, or in the case then window has only an open shell - current directory name.&lt;/p&gt;&lt;p&gt;Nothing else.&lt;/p&gt;&lt;p dir="ltr"&gt;Here’s the tmux.conf (or you may always have a look at my &lt;a href="https://github.com/zserge/dotfiles" dir="ltr"&gt;dotfiles&lt;/a&gt; for a newer version:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;set-option -g default-terminal screen-256color
-set -g history-limit 10000
-set -g base-index 1
-set-option -g renumber-windows on
-set -s escape-time 0
-bind-key -n M-n new-window -c "#{pane_current_path}"
-bind-key -n M-1 select-window -t :1
-bind-key -n M-2 select-window -t :2
-bind-key -n M-3 select-window -t :3
-bind-key -n M-4 select-window -t :4
-bind-key -n M-5 select-window -t :5
-bind-key -n M-6 select-window -t :6
-bind-key -n M-7 select-window -t :7
-bind-key -n M-8 select-window -t :8
-bind-key -n M-9 select-window -t :9
-bind-key -n M-0 select-window -t :0
-bind-key -n M-. select-window -n
-bind-key -n M-, select-window -p
-bind-key -n M-&amp;lt; swap-window -t -1
-bind-key -n M-&amp;gt; swap-window -t +1
-bind-key -n M-X confirm-before "kill-window"
-bind-key -n M-v split-window -h -c "#{pane_current_path}"
-bind-key -n M-b split-window -v -c "#{pane_current_path}"
-bind-key -n M-R command-prompt -I "" "rename-window '%%'"
-bind-key -n M-f resize-pane -Z
-bind-key -n M-h select-pane -L
-bind-key -n M-l select-pane -R
-bind-key -n M-k select-pane -U
-bind-key -n M-j select-pane -D
-bind-key -n M-Left select-pane -L
-bind-key -n M-Right select-pane -R
-bind-key -n M-Up select-pane -U
-bind-key -n M-Down select-pane -D
-bind-key -n "M-H" run-shell 'old=`tmux display -p "#{pane_index}"`; tmux select-pane -L; tmux swap-pane -t $old'
-bind-key -n "M-J" run-shell 'old=`tmux display -p "#{pane_index}"`; tmux select-pane -D; tmux swap-pane -t $old'
-bind-key -n "M-K" run-shell 'old=`tmux display -p "#{pane_index}"`; tmux select-pane -U; tmux swap-pane -t $old'
-bind-key -n "M-L" run-shell 'old=`tmux display -p "#{pane_index}"`; tmux select-pane -R; tmux swap-pane -t $old'
-bind-key -n "M-S-Left" run-shell 'old=`tmux display -p "#{pane_index}"`; tmux select-pane -L; tmux swap-pane -t $old'
-bind-key -n "M-S-Down" run-shell 'old=`tmux display -p "#{pane_index}"`; tmux select-pane -D; tmux swap-pane -t $old'
-bind-key -n "M-S-Up" run-shell 'old=`tmux display -p "#{pane_index}"`; tmux select-pane -U; tmux swap-pane -t $old'
-bind-key -n "M-S-Right" run-shell 'old=`tmux display -p "#{pane_index}"`; tmux select-pane -R; tmux swap-pane -t $old'
-bind-key -n M-x confirm-before "kill-pane"
-bind-key -n M-/ copy-mode
-
-# Linux system clipboard
-bind -T copy-mode-vi Enter send-keys -X copy-pipe-and-cancel "xclip -in -selection clipboard"
-bind-key -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-and-cancel "xclip -in -selection clipboard"
-
-# macOS system clipboard
-#bind -T copy-mode-vi Enter send-keys -X copy-pipe-and-cancel "pbcopy"
-#bind-key -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-and-cancel "pbcopy"
-
-set -g mouse on
-set-option -g status-keys vi
-set-option -g set-titles on
-set-option -g set-titles-string 'tmux - #W'
-set -g bell-action any
-set-option -g visual-bell off
-set-option -g set-clipboard off
-setw -g mode-keys vi
-setw -g monitor-activity on
-set -g visual-activity on
-set -g status-style fg=colour15
-set -g status-justify centre
-set -g status-left ''
-set -g status-right ''
-set -g status-interval 1
-set -g message-style fg=colour0,bg=colour3
-setw -g window-status-bell-style fg=colour1
-setw -g window-status-current-style fg=yellow,bold
-setw -g window-status-style fg=colour250
-setw -g window-status-current-format ' #{?#{==:#W,#{b:SHELL}},#{b:pane_current_path},#W} '
-setw -g window-status-format ' #{?#{==:#W,#{b:SHELL}},#{b:pane_current_path},#W} '
-# For older tmux:
-#setw -g window-status-format ' #W '
-#setw -g window-status-current-format ' #W '
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Now tmux feels like a regular desktop app and truly boosts the productivity in the terminal. What do you think?&lt;/p&gt;&lt;p&gt;&lt;em&gt;Apr 25, 2020&lt;/em&gt;&lt;/p&gt;</description><pubDate>Tue, 28 Apr 2020 03:52:29 -0500</pubDate></item><item><title>Custom Streaming Setup</title><link>https://lobste.rs/s/b10fuc</link><description>&lt;p dir="ltr"&gt;The other day, I decided that I wanted to start streaming. I’ll definitely be playing some games but I might also stream some other things like me playing music. We’ll see where that goes. In any case, I don’t like relying on third parties for things and didn’t want to use Twitch so I started figuring out how to build my own open source and privacy-friendly “platform” (which is really just a &lt;a href="https://secluded.site/live" dir="ltr"&gt;page&lt;/a&gt;).&lt;/p&gt;&lt;h2&gt;The search for a platform&lt;/h2&gt;&lt;p dir="ltr"&gt;Before settling on my own custom thing, I did some digging into ready-made platforms I could just throw on one of my servers and run. Two of the ones I found were &lt;a href="https://openstreamingplatform.com/" dir="ltr"&gt;OpenStreamingPlatform&lt;/a&gt; and &lt;a href="https://datarhei.github.io/restreamer/" dir="ltr"&gt;Restreamer&lt;/a&gt;. The latter isn’t exactly what I was looking for but it could have worked quite well. The former, at first glance, was absolutely &lt;em dir="ltr"&gt;perfect&lt;/em&gt;. On a functional level, it still is. However, take a look at &lt;a href="https://wiki.openstreamingplatform.com/Install/Manual" dir="ltr"&gt;the installation guide&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;&lt;code&gt;&amp;lt;rant&amp;gt;&lt;/code&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Steps 3 and 7 are unnecessary unless you feel like manually compiling your web server; it’s already available in the &lt;a href="https://packages.debian.org/buster/libnginx-mod-rtmp" dir="ltr"&gt;Debian repos&lt;/a&gt; and, by extension, Ubuntu’s. It’s even been backported to Stretch. In step 4, he has &lt;code dir="ltr"&gt;sed -i 's/appendfsync everysec/appendfsync no/'&lt;/code&gt;. Like so many application developers, he’s assuming that this is the only project that will be installed on the system. If someone is already using redis in production and they have a different value there, that command will fail. In step 9, the commands are copying the SystemD service files to &lt;code dir="ltr"&gt;/lib/systemd/&lt;/code&gt; but this is where the package manager, &lt;code dir="ltr"&gt;apt&lt;/code&gt;, stores its services. When you have your own that you’re writing or copying from somewhere else, best practise is to put them in &lt;code dir="ltr"&gt;/etc/systemd/system&lt;/code&gt;. In addition, all of this is scripted for the “standard” install. Yes, you’re always supposed to review scripts before running them but who really does that? When I see a project whose only supported installation method is a script, I nope right on out of there for exactly this reason. I know how my system &lt;em dir="ltr"&gt;is&lt;/em&gt; set up and I know how I &lt;em dir="ltr"&gt;want&lt;/em&gt; it set up. I can’t stand it when they assume they know what’s best. Just tell me what you &lt;em dir="ltr"&gt;recommend&lt;/em&gt; and I’ll make decisions from there.&lt;/p&gt;&lt;p&gt;&lt;code&gt;&amp;lt;/rant&amp;gt;&lt;/code&gt;&lt;/p&gt;&lt;h2&gt;NGINX &amp;amp; RTMP&lt;/h2&gt;&lt;p dir="ltr"&gt;RTMP stands for &lt;a href="https://wikipedia.org/wiki/Real-Time_Messaging_Protocol" dir="ltr"&gt;Real-Time Messaging Protocol&lt;/a&gt; and facilitates streaming audio, video, and other data over the internet in real-time. The NGINX module mentioned above adds functionality to NGINX that allows it to handle RTMP streams and turn them into something a browser or media streaming client can use. Connecting directly via &lt;code dir="ltr"&gt;rtmp://example.com/live/stream&lt;/code&gt; is not very widely supported so protocols such as &lt;a href="https://wikipedia.org/wiki/Dynamic_Adaptive_Streaming_over_HTTP" dir="ltr"&gt;MPEG-DASH&lt;/a&gt; and &lt;a href="https://wikipedia.org/wiki/HTTP_Live_Streaming" dir="ltr"&gt;HLS&lt;/a&gt; are used instead.&lt;/p&gt;&lt;p dir="ltr"&gt;On Debian-based systems, adding RTMP functionality to NGINX is as simple as &lt;code dir="ltr"&gt;apt install libnginx-mod-rtmp&lt;/code&gt;. After that, you’ll need to add some things to your &lt;code dir="ltr"&gt;nginx.conf&lt;/code&gt; and whatever host file you’re using for your website.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;rtmp {
+            &lt;p&gt;&lt;a href="https://lobste.rs/s/drowbo/paxos_vs_raft_have_we_reached_consensus_on"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Mon, 27 Apr 2020 21:17:41 -0500</pubDate></item><item><title>Custom Streaming Setup</title><link>https://lobste.rs/s/b10fuc</link><description>&lt;p dir="ltr"&gt;The other day, I decided that I wanted to start streaming. I’ll definitely be playing some games but I might also stream some other things like me playing music. We’ll see where that goes. In any case, I don’t like relying on third parties for things and didn’t want to use Twitch so I started figuring out how to build my own open source and privacy-friendly “platform” (which is really just a &lt;a href="https://secluded.site/live" dir="ltr"&gt;page&lt;/a&gt;).&lt;/p&gt;&lt;h2&gt;The search for a platform&lt;/h2&gt;&lt;p dir="ltr"&gt;Before settling on my own custom thing, I did some digging into ready-made platforms I could just throw on one of my servers and run. Two of the ones I found were &lt;a href="https://openstreamingplatform.com/" dir="ltr"&gt;OpenStreamingPlatform&lt;/a&gt; and &lt;a href="https://datarhei.github.io/restreamer/" dir="ltr"&gt;Restreamer&lt;/a&gt;. The latter isn’t exactly what I was looking for but it could have worked quite well. The former, at first glance, was absolutely &lt;em dir="ltr"&gt;perfect&lt;/em&gt;. On a functional level, it still is. However, take a look at &lt;a href="https://wiki.openstreamingplatform.com/Install/Manual" dir="ltr"&gt;the installation guide&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;&lt;code&gt;&amp;lt;rant&amp;gt;&lt;/code&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Steps 3 and 7 are unnecessary unless you feel like manually compiling your web server; it’s already available in the &lt;a href="https://packages.debian.org/buster/libnginx-mod-rtmp" dir="ltr"&gt;Debian repos&lt;/a&gt; and, by extension, Ubuntu’s. It’s even been backported to Stretch. In step 4, he has &lt;code dir="ltr"&gt;sed -i 's/appendfsync everysec/appendfsync no/'&lt;/code&gt;. Like so many application developers, he’s assuming that this is the only project that will be installed on the system. If someone is already using redis in production and they have a different value there, that command will fail. In step 9, the commands are copying the SystemD service files to &lt;code dir="ltr"&gt;/lib/systemd/&lt;/code&gt; but this is where the package manager, &lt;code dir="ltr"&gt;apt&lt;/code&gt;, stores its services. When you have your own that you’re writing or copying from somewhere else, best practise is to put them in &lt;code dir="ltr"&gt;/etc/systemd/system&lt;/code&gt;. In addition, all of this is scripted for the “standard” install. Yes, you’re always supposed to review scripts before running them but who really does that? When I see a project whose only supported installation method is a script, I nope right on out of there for exactly this reason. I know how my system &lt;em dir="ltr"&gt;is&lt;/em&gt; set up and I know how I &lt;em dir="ltr"&gt;want&lt;/em&gt; it set up. I can’t stand it when they assume they know what’s best. Just tell me what you &lt;em dir="ltr"&gt;recommend&lt;/em&gt; and I’ll make decisions from there.&lt;/p&gt;&lt;p&gt;&lt;code&gt;&amp;lt;/rant&amp;gt;&lt;/code&gt;&lt;/p&gt;&lt;h2&gt;NGINX &amp;amp; RTMP&lt;/h2&gt;&lt;p dir="ltr"&gt;RTMP stands for &lt;a href="https://wikipedia.org/wiki/Real-Time_Messaging_Protocol" dir="ltr"&gt;Real-Time Messaging Protocol&lt;/a&gt; and facilitates streaming audio, video, and other data over the internet in real-time. The NGINX module mentioned above adds functionality to NGINX that allows it to handle RTMP streams and turn them into something a browser or media streaming client can use. Connecting directly via &lt;code dir="ltr"&gt;rtmp://example.com/live/stream&lt;/code&gt; is not very widely supported so protocols such as &lt;a href="https://wikipedia.org/wiki/Dynamic_Adaptive_Streaming_over_HTTP" dir="ltr"&gt;MPEG-DASH&lt;/a&gt; and &lt;a href="https://wikipedia.org/wiki/HTTP_Live_Streaming" dir="ltr"&gt;HLS&lt;/a&gt; are used instead.&lt;/p&gt;&lt;p dir="ltr"&gt;On Debian-based systems, adding RTMP functionality to NGINX is as simple as &lt;code dir="ltr"&gt;apt install libnginx-mod-rtmp&lt;/code&gt;. After that, you’ll need to add some things to your &lt;code dir="ltr"&gt;nginx.conf&lt;/code&gt; and whatever host file you’re using for your website.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;rtmp {
   server {
     listen 1935;
     application live {
