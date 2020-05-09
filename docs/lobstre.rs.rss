@@ -3,7 +3,167 @@
               Lukas H
               &lt;/h4&gt;&lt;div dir="ltr"&gt;
               &amp;nbsp;Berlin, Germany
-            &lt;/div&gt;</description><pubDate>Fri, 08 May 2020 06:24:44 -0500</pubDate></item><item><title>ORCΛ: an esolang for audio-visual live coding</title><link>https://lobste.rs/s/g22ewx</link><description>&lt;form method="POST" action="/clone"&gt;&lt;button type="submit" dir="ltr"&gt;
+            &lt;/div&gt;</description><pubDate>Fri, 08 May 2020 06:24:44 -0500</pubDate></item><item><title>Full Disk Encryption with OpenBSD and a Serial Console</title><link>https://lobste.rs/s/nsvl19</link><description>&lt;p dir="ltr"&gt;We recently went looking for a method of installing OpenBSD with full
+disk encryption that would work with a serial console, because that is
+what we provide to our VPS customers. We already provided
+&lt;a href="https://wiki.prgmr.com/mediawiki/index.php/OpenBSD" dir="ltr"&gt;instructions for installing
+OpenBSD&lt;/a&gt; on our
+VPSes and &lt;a href="https://www.openbsd.org/faq/faq14.html#softraidFDE" dir="ltr"&gt;installing OpenBSD with full disk
+encryption&lt;/a&gt; is
+itself well-documented. Unfortunately, when we tried the standard
+procedures, we did not get a passphrase prompt from the bootloader
+when booting the fresh installation. There appears to be no &lt;em dir="ltr"&gt;obvious&lt;/em&gt;
+way to boot from an OpenBSD softraid – such as an encrypted disk –
+and have it use the serial console. Here is a description of how we
+kludged it. Some familiarity with OpenBSD terminology is expected.&lt;/p&gt;&lt;h1&gt;Summary&lt;/h1&gt;&lt;p dir="ltr"&gt;We make two OpenBSD slices. One contains a tiny filesystem with a bootloader
+configuration file, and the other contains the encrypted part of the disk.
+At boot, the OpenBSD bootloader looks for &lt;code dir="ltr"&gt;/etc/boot.conf&lt;/code&gt; in the first slice,
+&lt;code dir="ltr"&gt;sd0a&lt;/code&gt;. That file contains 3 instructions: set serial baud rate, use a
+serial console, and set the real boot device. The bootloader then boots
+from the real encrypted boot device, with output going to the serial console.&lt;/p&gt;&lt;h1&gt;A Tutorial Explanation&lt;/h1&gt;&lt;p dir="ltr"&gt;First, boot the OpenBSD installer, but select the shell option at the
+prompt, rather than the install option. We are going to need to do some
+pre-configuration before performing an install. Note that any line starting
+with a &lt;code dir="ltr"&gt;#&lt;/code&gt; is a shell prompt, and others are output.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;Welcome to the OpenBSD/amd64 &lt;span dir="ltr"&gt;6.6&lt;/span&gt; installation program.
+(I)nstall, (U)pgrade, (A)utoinstall or (&lt;span dir="ltr"&gt;S&lt;/span&gt;)hell? &lt;span dir="ltr"&gt;s&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;First, we’ll make the devices that we will need for the hard disk and
+the softraid. We’ll rewrite the master boot record for the
+hard disk with &lt;code dir="ltr"&gt;fdisk&lt;/code&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;# cd /dev&lt;/span&gt;
+&lt;span dir="ltr"&gt;# sh MAKEDEV sd0 sd1&lt;/span&gt;
+&lt;span dir="ltr"&gt;#   fdisk -iy sd0&lt;/span&gt;
+&lt;span dir="ltr"&gt;Writing&lt;/span&gt; MBR at offset &lt;span dir="ltr"&gt;0&lt;/span&gt;.
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;We can optionally overwrite the disk with random data to hide which part of the
+disk has been written to:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;# dd &lt;span dir="ltr"&gt;if&lt;/span&gt;=/dev/urandom of=/dev/rsd0c bs=1M&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Now, using &lt;code dir="ltr"&gt;disklabel&lt;/code&gt;, we will make two slices on the raw disk. The
+first, &lt;code dir="ltr"&gt;sd0a&lt;/code&gt;, is going to contain a really tiny filesystem with just
+one file in it: &lt;code dir="ltr"&gt;/etc/boot.conf&lt;/code&gt;. The second slice will be the
+softraid slice for the encrypted disk. In order to keep things simple,
+we don’t add a swap slice. If you want one, you should add it as another slice to &lt;code dir="ltr"&gt;sd0&lt;/code&gt;,
+rather than to the softraid. OpenBSD already encrypts swap, so there is no
+point in doubly-encrypting it.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;# disklabel -E sd0
+Label editor (enter '?' for &lt;span dir="ltr"&gt;help&lt;/span&gt; &lt;span dir="ltr"&gt;at&lt;/span&gt; &lt;span dir="ltr"&gt;any&lt;/span&gt; &lt;span dir="ltr"&gt;prompt&lt;/span&gt;)
+sd0&amp;gt; a
+&lt;span dir="ltr"&gt;partition&lt;/span&gt;: [a] a
+&lt;span dir="ltr"&gt;offset&lt;/span&gt;: [&lt;span dir="ltr"&gt;64&lt;/span&gt;] &lt;span dir="ltr"&gt;8192&lt;/span&gt;
+&lt;span dir="ltr"&gt;size&lt;/span&gt;: [&lt;span dir="ltr"&gt;62902348&lt;/span&gt;] &lt;span dir="ltr"&gt;8192&lt;/span&gt;
+FS &lt;span dir="ltr"&gt;type&lt;/span&gt;: [&lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD] 
+sd0*&amp;gt; a
+&lt;span dir="ltr"&gt;partition&lt;/span&gt;: [b] b
+&lt;span dir="ltr"&gt;offset&lt;/span&gt;: [&lt;span dir="ltr"&gt;16384&lt;/span&gt;] 
+&lt;span dir="ltr"&gt;size&lt;/span&gt;: [&lt;span dir="ltr"&gt;62894156&lt;/span&gt;] 
+FS &lt;span dir="ltr"&gt;type&lt;/span&gt;: [swap] raid
+sd0*&amp;gt; w
+sd0&amp;gt; q
+&lt;span dir="ltr"&gt;No&lt;/span&gt; label changes.
+#
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;We use an offset of 8192 for the first partition because we want partitions
+aligned on a 4 MiB boundary, in order to reduce the possibility of write
+amplification when using solid state storage.&lt;/p&gt;&lt;p dir="ltr"&gt;Next, we initialize the softraid. There are other options for the bioctl
+command that might be interesting or useful here, including &lt;code dir="ltr"&gt;-r&lt;/code&gt; for
+specifying the number of rounds of the key derivation function. However,
+we’ll keep it simple.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;# bioctl -c C -l /dev/sd0b softraid0&lt;/span&gt;
+&lt;span dir="ltr"&gt;New&lt;/span&gt; passphrase: 
+Re-type passphrase: 
+sd1 at scsibus3 targ &lt;span dir="ltr"&gt;1&lt;/span&gt; lun &lt;span dir="ltr"&gt;0&lt;/span&gt;: &amp;lt;OPENBSD, SR CRYPTO, &lt;span dir="ltr"&gt;006&lt;/span&gt;&amp;gt;
+sd1: &lt;span dir="ltr"&gt;30709&lt;/span&gt;MB, &lt;span dir="ltr"&gt;512&lt;/span&gt; bytes/sector, &lt;span dir="ltr"&gt;62893628&lt;/span&gt; sectors
+softraid0: CRYPTO volume attached &lt;span dir="ltr"&gt;as&lt;/span&gt; sd1
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;We need to make the filesystem on &lt;code dir="ltr"&gt;sd0a&lt;/code&gt; and put &lt;code dir="ltr"&gt;/etc/boot.conf&lt;/code&gt; there:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;# newfs /dev/rsd0a&lt;/span&gt;
+/dev/rsd0a: &lt;span dir="ltr"&gt;4.0&lt;/span&gt;MB &lt;span dir="ltr"&gt;in&lt;/span&gt; &lt;span dir="ltr"&gt;8192&lt;/span&gt; sectors &lt;span dir="ltr"&gt;of&lt;/span&gt; &lt;span dir="ltr"&gt;512&lt;/span&gt; bytes
+&lt;span dir="ltr"&gt;4&lt;/span&gt; cylinder groups &lt;span dir="ltr"&gt;of&lt;/span&gt; &lt;span dir="ltr"&gt;1.00&lt;/span&gt;MB, &lt;span dir="ltr"&gt;64&lt;/span&gt; blocks, &lt;span dir="ltr"&gt;128&lt;/span&gt; inodes each
+&lt;span dir="ltr"&gt;super&lt;/span&gt;-block backups (&lt;span dir="ltr"&gt;for&lt;/span&gt; fsck -b &lt;span dir="ltr"&gt;#) at:&lt;/span&gt;
+  &lt;span dir="ltr"&gt;32&lt;/span&gt;, &lt;span dir="ltr"&gt;2080&lt;/span&gt;, &lt;span dir="ltr"&gt;4128&lt;/span&gt;, &lt;span dir="ltr"&gt;6176&lt;/span&gt;,
+&lt;span dir="ltr"&gt;# mount /dev/sd0a /mnt&lt;/span&gt;
+mkdir /mnt/etc
+echo &lt;span dir="ltr"&gt;'
+stty com0 115200
+set tty com0
+set device sr0a'&lt;/span&gt; &amp;gt; /mnt/boot.conf
+&lt;span dir="ltr"&gt;# umount /dev/sd0a&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;That is all of the pre-configuration work, and you can now start the OpenBSD
+installer by invoking &lt;code dir="ltr"&gt;/install&lt;/code&gt; at the shell prompt. From this point
+forward, you can just do a fairly standard installation process. Use the
+disk &lt;code dir="ltr"&gt;sd1&lt;/code&gt; for the install. The installer should leave &lt;code dir="ltr"&gt;sd0&lt;/code&gt; alone, since
+we set it up manually. You also probably do not want to use the &lt;code dir="ltr"&gt;auto&lt;/code&gt;
+disk layout with a swap slice, since your system would be swapping to
+something on &lt;code dir="ltr"&gt;sd1&lt;/code&gt;. Here are the relevant bits from our interactive session
+with the installer; yours will likely be a bit different.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;Available disks are: sd0 sd1.
+Which disk is the root disk? ('?' for details) [sd0] sd1
+No valid MBR or GPT.
+&lt;span dir="ltr"&gt;Use&lt;/span&gt; (W)hole disk MBR, whole disk (&lt;span dir="ltr"&gt;G&lt;/span&gt;)PT &lt;span dir="ltr"&gt;or&lt;/span&gt; (&lt;span dir="ltr"&gt;E&lt;/span&gt;)dit? [whole] w
+Setting OpenBSD MBR &lt;span dir="ltr"&gt;partition&lt;/span&gt; &lt;span dir="ltr"&gt;to&lt;/span&gt; whole sd1...done.
+The &lt;span dir="ltr"&gt;auto&lt;/span&gt;-allocated layout &lt;span dir="ltr"&gt;for&lt;/span&gt; sd1 &lt;span dir="ltr"&gt;is&lt;/span&gt;:
+#                &lt;span dir="ltr"&gt;size&lt;/span&gt;           &lt;span dir="ltr"&gt;offset&lt;/span&gt;  fstype [fsize bsize   cpg]
+  a:          &lt;span dir="ltr"&gt;1024.0&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;               &lt;span dir="ltr"&gt;64&lt;/span&gt;  &lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD   &lt;span dir="ltr"&gt;2048&lt;/span&gt; &lt;span dir="ltr"&gt;16384&lt;/span&gt;     &lt;span dir="ltr"&gt;1&lt;/span&gt; # /
+  b:          &lt;span dir="ltr"&gt;1264.0&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;          &lt;span dir="ltr"&gt;2097216&lt;/span&gt;    swap                    
+  &lt;span dir="ltr"&gt;c&lt;/span&gt;:         &lt;span dir="ltr"&gt;30709.8&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;                &lt;span dir="ltr"&gt;0&lt;/span&gt;  &lt;span dir="ltr"&gt;unused&lt;/span&gt;                    
+  &lt;span dir="ltr"&gt;d&lt;/span&gt;:          &lt;span dir="ltr"&gt;1713.6&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;          &lt;span dir="ltr"&gt;4685888&lt;/span&gt;  &lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD   &lt;span dir="ltr"&gt;2048&lt;/span&gt; &lt;span dir="ltr"&gt;16384&lt;/span&gt;     &lt;span dir="ltr"&gt;1&lt;/span&gt; # /tmp
+  &lt;span dir="ltr"&gt;e&lt;/span&gt;:          &lt;span dir="ltr"&gt;2669.6&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;          &lt;span dir="ltr"&gt;8195392&lt;/span&gt;  &lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD   &lt;span dir="ltr"&gt;2048&lt;/span&gt; &lt;span dir="ltr"&gt;16384&lt;/span&gt;     &lt;span dir="ltr"&gt;1&lt;/span&gt; # /&lt;span dir="ltr"&gt;var&lt;/span&gt;
+  &lt;span dir="ltr"&gt;f&lt;/span&gt;:          &lt;span dir="ltr"&gt;2496.0&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;         &lt;span dir="ltr"&gt;13662816&lt;/span&gt;  &lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD   &lt;span dir="ltr"&gt;2048&lt;/span&gt; &lt;span dir="ltr"&gt;16384&lt;/span&gt;     &lt;span dir="ltr"&gt;1&lt;/span&gt; # /usr
+  &lt;span dir="ltr"&gt;g&lt;/span&gt;:           &lt;span dir="ltr"&gt;981.6&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;         &lt;span dir="ltr"&gt;18774656&lt;/span&gt;  &lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD   &lt;span dir="ltr"&gt;2048&lt;/span&gt; &lt;span dir="ltr"&gt;16384&lt;/span&gt;     &lt;span dir="ltr"&gt;1&lt;/span&gt; # /usr/X11R6
+  h:          &lt;span dir="ltr"&gt;4012.0&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;         &lt;span dir="ltr"&gt;20784992&lt;/span&gt;  &lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD   &lt;span dir="ltr"&gt;2048&lt;/span&gt; &lt;span dir="ltr"&gt;16384&lt;/span&gt;     &lt;span dir="ltr"&gt;1&lt;/span&gt; # /usr/&lt;span dir="ltr"&gt;local&lt;/span&gt;
+  &lt;span dir="ltr"&gt;i&lt;/span&gt;:          &lt;span dir="ltr"&gt;1698.4&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;         &lt;span dir="ltr"&gt;29001664&lt;/span&gt;  &lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD   &lt;span dir="ltr"&gt;2048&lt;/span&gt; &lt;span dir="ltr"&gt;16384&lt;/span&gt;     &lt;span dir="ltr"&gt;1&lt;/span&gt; # /usr/src
+  j:          &lt;span dir="ltr"&gt;5916.8&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;         &lt;span dir="ltr"&gt;32480000&lt;/span&gt;  &lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD   &lt;span dir="ltr"&gt;2048&lt;/span&gt; &lt;span dir="ltr"&gt;16384&lt;/span&gt;     &lt;span dir="ltr"&gt;1&lt;/span&gt; # /usr/obj
+  &lt;span dir="ltr"&gt;k&lt;/span&gt;:          &lt;span dir="ltr"&gt;8926.2&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;         &lt;span dir="ltr"&gt;44597632&lt;/span&gt;  &lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD   &lt;span dir="ltr"&gt;2048&lt;/span&gt; &lt;span dir="ltr"&gt;16384&lt;/span&gt;     &lt;span dir="ltr"&gt;1&lt;/span&gt; # /home
+&lt;span dir="ltr"&gt;Use&lt;/span&gt; (A)uto layout, (&lt;span dir="ltr"&gt;E&lt;/span&gt;)dit &lt;span dir="ltr"&gt;auto&lt;/span&gt; layout, &lt;span dir="ltr"&gt;or&lt;/span&gt; &lt;span dir="ltr"&gt;create&lt;/span&gt; (&lt;span dir="ltr"&gt;C&lt;/span&gt;)ustom layout? [a] &lt;span dir="ltr"&gt;c&lt;/span&gt;
+Label editor (enter &lt;span dir="ltr"&gt;'?'&lt;/span&gt; &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;help&lt;/span&gt; &lt;span dir="ltr"&gt;at&lt;/span&gt; &lt;span dir="ltr"&gt;any&lt;/span&gt; &lt;span dir="ltr"&gt;prompt&lt;/span&gt;)
+sd1&amp;gt; a
+&lt;span dir="ltr"&gt;partition&lt;/span&gt;: [a] a
+&lt;span dir="ltr"&gt;offset&lt;/span&gt;: [&lt;span dir="ltr"&gt;64&lt;/span&gt;] &lt;span dir="ltr"&gt;8192&lt;/span&gt;
+&lt;span dir="ltr"&gt;size&lt;/span&gt;: [&lt;span dir="ltr"&gt;62870218&lt;/span&gt;] 
+FS &lt;span dir="ltr"&gt;type&lt;/span&gt;: [&lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD] 
+&lt;span dir="ltr"&gt;mount&lt;/span&gt; point: [&lt;span dir="ltr"&gt;none&lt;/span&gt;] /
+sd1*&amp;gt; w
+sd1&amp;gt; q
+&lt;span dir="ltr"&gt;No&lt;/span&gt; label changes.
+/dev/rsd1a: &lt;span dir="ltr"&gt;30698.3&lt;/span&gt;MB &lt;span dir="ltr"&gt;in&lt;/span&gt; &lt;span dir="ltr"&gt;62870208&lt;/span&gt; sectors &lt;span dir="ltr"&gt;of&lt;/span&gt; &lt;span dir="ltr"&gt;512&lt;/span&gt; &lt;span dir="ltr"&gt;bytes&lt;/span&gt;
+&lt;span dir="ltr"&gt;152&lt;/span&gt; cylinder &lt;span dir="ltr"&gt;groups&lt;/span&gt; &lt;span dir="ltr"&gt;of&lt;/span&gt; &lt;span dir="ltr"&gt;202.47&lt;/span&gt;MB, &lt;span dir="ltr"&gt;12958&lt;/span&gt; blocks, &lt;span dir="ltr"&gt;25984&lt;/span&gt; inodes &lt;span dir="ltr"&gt;each&lt;/span&gt;
+Available disks &lt;span dir="ltr"&gt;are&lt;/span&gt;: sd0.
+Which disk &lt;span dir="ltr"&gt;do&lt;/span&gt; you wish &lt;span dir="ltr"&gt;to&lt;/span&gt; initialize? (&lt;span dir="ltr"&gt;or&lt;/span&gt; &lt;span dir="ltr"&gt;'done'&lt;/span&gt;) [done] done
+/dev/sd1a (cd70684e3d78d3b3.a) &lt;span dir="ltr"&gt;on&lt;/span&gt; /mnt &lt;span dir="ltr"&gt;type&lt;/span&gt; ffs (rw, &lt;span dir="ltr"&gt;asynchronous&lt;/span&gt;, &lt;span dir="ltr"&gt;local&lt;/span&gt;)
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Once you’re done with the installer, that’s it. You should have an encrypted
+installation of OpenBSD that prompts for the password on the serial console.&lt;/p&gt;&lt;h1&gt;Final Notes&lt;/h1&gt;&lt;p dir="ltr"&gt;There are two areas of your disk that are not encrypted. One is the
+slice containing &lt;code dir="ltr"&gt;/etc/boot.conf&lt;/code&gt;, and the other is the unencrypted area
+of the softraid, where the bootloader is stored.&lt;/p&gt;&lt;p&gt;This blog post came into existence due to a customer request for help installing
+OpenBSD. If you encounter any problems performing an install on a VPS with
+prgmr.com, please feel free to each out to support.&lt;/p&gt;</description><pubDate>Fri, 08 May 2020 12:40:54 -0500</pubDate></item><item><title>0x10 rules</title><link>https://lobste.rs/s/zlljpq</link><description>&lt;p dir="ltr"&gt;
+  I have been writing articles on this website for twelve years. If you were to look at the &lt;a href="https://web.archive.org/web/20080609192505/http://fabiensanglard.net/" dir="ltr"&gt;early versions&lt;/a&gt;, you would think it is a fresh-out-of-school project with icons drawn in Microsoft Paint. And that is exactly what it was.
+  &lt;br dir="ltr"&gt;
+  &lt;br dir="ltr"&gt;
+  The site started in a world before smartphones and tablets at a time where Apple products still used PowerPC processors. The hand-crafted framework to run it grew organically over the years and remarkably followed the path of most software. It became bloated and obsolete. In 2018, it was time to revise the engine.
+  &lt;br dir="ltr"&gt;
+  &lt;br dir="ltr"&gt;
+  I wanted to build something rooted in simplicity, responsiveness, and speed. I opted for a drastic approach where instead of starting from my existing framework and removing/fixing features, I started from scratch and added only what I needed.
+  &lt;br dir="ltr"&gt;
+  &lt;br dir="ltr"&gt;
+  It was an opportunity for introspection. I reflected about what I had liked and disliked in my browsing past. I also thought about why I wrote and what I wanted to achieve with these articles. Eventually, I drafted a list which became my guideline.
+  &lt;br dir="ltr"&gt;
+&lt;/p&gt;&lt;div&gt;Guideline&lt;/div&gt;&lt;p dir="ltr"&gt;
+0x0. I like blazing-fast websites.&lt;br dir="ltr"&gt;
+0x1. I like minimalist websites.&lt;br dir="ltr"&gt;  
+0x2. I like responsive websites that render well on tablets.&lt;br dir="ltr"&gt;
+0x3. I like when the author's name is clearly stated.&lt;br dir="ltr"&gt;
+0x4. I like when the author leaves contact information.&lt;br dir="ltr"&gt;
+0x5. I like when the publication date is easy to find.&lt;br dir="ltr"&gt;
+0x6. I like monospaced fonts.&lt;br dir="ltr"&gt;
+0x7. I like when quotes and citations are easy to find.&lt;br dir="ltr"&gt;
+0x8. I like to learn core technology like HTML/CSS. Not frameworks (Wordpress).&lt;br dir="ltr"&gt;
+0x9. I like RSS.&lt;br dir="ltr"&gt;
+0xA. I dislike analytics which serve the author's ego and track me.&lt;br dir="ltr"&gt;
+0xB. I dislike the comment area where people are rude and also serves the ego.&lt;br dir="ltr"&gt;
+0xC. I dislike ads.&lt;br dir="ltr"&gt;
+0xD. I dislike side menu which wastes horizontal real-estate.&lt;br dir="ltr"&gt;
+0xE. I dislike visible reflow.&lt;br dir="ltr"&gt;
+0xF. I dislike extra-clicks (Accept cookies?, splash, Use our app!, Medium paywall).&lt;br dir="ltr"&gt;
+&lt;/p&gt;&lt;div&gt;framework&lt;/div&gt;&lt;img src="http://fabiensanglard.net/ilike/sublime-text.svg" width="33" height="33"&gt;&lt;img src="http://fabiensanglard.net/ilike/Inkscape.logo.svg" width="33" height="33"&gt;&lt;img src="http://fabiensanglard.net/ilike/cyberduck-icon.png" width="33" height="33"&gt;&lt;p dir="ltr"&gt;
+In the past two years, I have received numerous inquiries about the framework used for this website. Here is how it works.
+&lt;br dir="ltr"&gt;
+&lt;br dir="ltr"&gt;
+The HTML pages are statically generated from php. There is a "master" script called "gen.php" which iterates over all sub-folders and searches for files named "article.php". Upon hit, the master runs the article script, wrapping it into a header and a footer, and redirects the output to a file named "index.html".
+&lt;br dir="ltr"&gt;
+&lt;br dir="ltr"&gt;
+There is one helper function, footnote(), which stores references so they can be listed in the footer. It is something any programmer could write in an hour.&lt;br dir="ltr"&gt;
+&lt;br dir="ltr"&gt;
+Authoring HTML is done with Sublime Text 3. Drawing is done with Inkscape. Syncing is done with CyberDuck. It is not the most engineered tool but it is dead simple and gets the job done. &lt;br dir="ltr"&gt;
+&lt;/p&gt;&lt;center&gt;*&lt;/center&gt;</description><pubDate>Fri, 08 May 2020 14:10:57 -0500</pubDate></item><item><title>ORCΛ: an esolang for audio-visual live coding</title><link>https://lobste.rs/s/g22ewx</link><description>&lt;form method="POST" action="/clone"&gt;&lt;button type="submit" dir="ltr"&gt;
               Clone repo to your account &lt;span dir="ltr"&gt;
 &lt;/span&gt;
             &lt;/button&gt;&lt;/form&gt;&lt;p dir="ltr"&gt;
@@ -128,167 +288,7 @@ $ build/orca                             &lt;span dir="ltr"&gt;# run orca&lt;/sp
 &lt;/PRE&gt;&lt;p dir="ltr"&gt;You can also make &lt;code dir="ltr"&gt;cli&lt;/code&gt; read from stdin:
 &lt;code dir="ltr"&gt;sh
 echo -e "...\na34\n..." | cli /dev/stdin
-&lt;/code&gt;&lt;/p&gt;</description><pubDate>Fri, 08 May 2020 15:12:52 -0500</pubDate></item><item><title>0x10 rules</title><link>https://lobste.rs/s/zlljpq</link><description>&lt;p dir="ltr"&gt;
-  I have been writing articles on this website for twelve years. If you were to look at the &lt;a href="https://web.archive.org/web/20080609192505/http://fabiensanglard.net/" dir="ltr"&gt;early versions&lt;/a&gt;, you would think it is a fresh-out-of-school project with icons drawn in Microsoft Paint. And that is exactly what it was.
-  &lt;br dir="ltr"&gt;
-  &lt;br dir="ltr"&gt;
-  The site started in a world before smartphones and tablets at a time where Apple products still used PowerPC processors. The hand-crafted framework to run it grew organically over the years and remarkably followed the path of most software. It became bloated and obsolete. In 2018, it was time to revise the engine.
-  &lt;br dir="ltr"&gt;
-  &lt;br dir="ltr"&gt;
-  I wanted to build something rooted in simplicity, responsiveness, and speed. I opted for a drastic approach where instead of starting from my existing framework and removing/fixing features, I started from scratch and added only what I needed.
-  &lt;br dir="ltr"&gt;
-  &lt;br dir="ltr"&gt;
-  It was an opportunity for introspection. I reflected about what I had liked and disliked in my browsing past. I also thought about why I wrote and what I wanted to achieve with these articles. Eventually, I drafted a list which became my guideline.
-  &lt;br dir="ltr"&gt;
-&lt;/p&gt;&lt;div&gt;Guideline&lt;/div&gt;&lt;p dir="ltr"&gt;
-0x0. I like blazing-fast websites.&lt;br dir="ltr"&gt;
-0x1. I like minimalist websites.&lt;br dir="ltr"&gt;  
-0x2. I like responsive websites that render well on tablets.&lt;br dir="ltr"&gt;
-0x3. I like when the author's name is clearly stated.&lt;br dir="ltr"&gt;
-0x4. I like when the author leaves contact information.&lt;br dir="ltr"&gt;
-0x5. I like when the publication date is easy to find.&lt;br dir="ltr"&gt;
-0x6. I like monospaced fonts.&lt;br dir="ltr"&gt;
-0x7. I like when quotes and citations are easy to find.&lt;br dir="ltr"&gt;
-0x8. I like to learn core technology like HTML/CSS. Not frameworks (Wordpress).&lt;br dir="ltr"&gt;
-0x9. I like RSS.&lt;br dir="ltr"&gt;
-0xA. I dislike analytics which serve the author's ego and track me.&lt;br dir="ltr"&gt;
-0xB. I dislike the comment area where people are rude and also serves the ego.&lt;br dir="ltr"&gt;
-0xC. I dislike ads.&lt;br dir="ltr"&gt;
-0xD. I dislike side menu which wastes horizontal real-estate.&lt;br dir="ltr"&gt;
-0xE. I dislike visible reflow.&lt;br dir="ltr"&gt;
-0xF. I dislike extra-clicks (Accept cookies?, splash, Use our app!, Medium paywall).&lt;br dir="ltr"&gt;
-&lt;/p&gt;&lt;div&gt;framework&lt;/div&gt;&lt;img src="http://fabiensanglard.net/ilike/sublime-text.svg" width="33" height="33"&gt;&lt;img src="http://fabiensanglard.net/ilike/Inkscape.logo.svg" width="33" height="33"&gt;&lt;img src="http://fabiensanglard.net/ilike/cyberduck-icon.png" width="33" height="33"&gt;&lt;p dir="ltr"&gt;
-In the past two years, I have received numerous inquiries about the framework used for this website. Here is how it works.
-&lt;br dir="ltr"&gt;
-&lt;br dir="ltr"&gt;
-The HTML pages are statically generated from php. There is a "master" script called "gen.php" which iterates over all sub-folders and searches for files named "article.php". Upon hit, the master runs the article script, wrapping it into a header and a footer, and redirects the output to a file named "index.html".
-&lt;br dir="ltr"&gt;
-&lt;br dir="ltr"&gt;
-There is one helper function, footnote(), which stores references so they can be listed in the footer. It is something any programmer could write in an hour.&lt;br dir="ltr"&gt;
-&lt;br dir="ltr"&gt;
-Authoring HTML is done with Sublime Text 3. Drawing is done with Inkscape. Syncing is done with CyberDuck. It is not the most engineered tool but it is dead simple and gets the job done. &lt;br dir="ltr"&gt;
-&lt;/p&gt;&lt;center&gt;*&lt;/center&gt;</description><pubDate>Fri, 08 May 2020 14:10:57 -0500</pubDate></item><item><title>What are you doing this weekend?</title><link>https://lobste.rs/s/fcntwr</link><description>&lt;p&gt;Feel free to tell what you plan on doing this weekend and even ask for help or feedback.&lt;/p&gt;&lt;p&gt;Please keep in mind it’s more than OK to do nothing at all too!&lt;/p&gt;</description><pubDate>Fri, 08 May 2020 06:49:37 -0500</pubDate></item><item><title>Full Disk Encryption with OpenBSD and a Serial Console</title><link>https://lobste.rs/s/nsvl19</link><description>&lt;p dir="ltr"&gt;We recently went looking for a method of installing OpenBSD with full
-disk encryption that would work with a serial console, because that is
-what we provide to our VPS customers. We already provided
-&lt;a href="https://wiki.prgmr.com/mediawiki/index.php/OpenBSD" dir="ltr"&gt;instructions for installing
-OpenBSD&lt;/a&gt; on our
-VPSes and &lt;a href="https://www.openbsd.org/faq/faq14.html#softraidFDE" dir="ltr"&gt;installing OpenBSD with full disk
-encryption&lt;/a&gt; is
-itself well-documented. Unfortunately, when we tried the standard
-procedures, we did not get a passphrase prompt from the bootloader
-when booting the fresh installation. There appears to be no &lt;em dir="ltr"&gt;obvious&lt;/em&gt;
-way to boot from an OpenBSD softraid – such as an encrypted disk –
-and have it use the serial console. Here is a description of how we
-kludged it. Some familiarity with OpenBSD terminology is expected.&lt;/p&gt;&lt;h1&gt;Summary&lt;/h1&gt;&lt;p dir="ltr"&gt;We make two OpenBSD slices. One contains a tiny filesystem with a bootloader
-configuration file, and the other contains the encrypted part of the disk.
-At boot, the OpenBSD bootloader looks for &lt;code dir="ltr"&gt;/etc/boot.conf&lt;/code&gt; in the first slice,
-&lt;code dir="ltr"&gt;sd0a&lt;/code&gt;. That file contains 3 instructions: set serial baud rate, use a
-serial console, and set the real boot device. The bootloader then boots
-from the real encrypted boot device, with output going to the serial console.&lt;/p&gt;&lt;h1&gt;A Tutorial Explanation&lt;/h1&gt;&lt;p dir="ltr"&gt;First, boot the OpenBSD installer, but select the shell option at the
-prompt, rather than the install option. We are going to need to do some
-pre-configuration before performing an install. Note that any line starting
-with a &lt;code dir="ltr"&gt;#&lt;/code&gt; is a shell prompt, and others are output.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;Welcome to the OpenBSD/amd64 &lt;span dir="ltr"&gt;6.6&lt;/span&gt; installation program.
-(I)nstall, (U)pgrade, (A)utoinstall or (&lt;span dir="ltr"&gt;S&lt;/span&gt;)hell? &lt;span dir="ltr"&gt;s&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;First, we’ll make the devices that we will need for the hard disk and
-the softraid. We’ll rewrite the master boot record for the
-hard disk with &lt;code dir="ltr"&gt;fdisk&lt;/code&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;# cd /dev&lt;/span&gt;
-&lt;span dir="ltr"&gt;# sh MAKEDEV sd0 sd1&lt;/span&gt;
-&lt;span dir="ltr"&gt;#   fdisk -iy sd0&lt;/span&gt;
-&lt;span dir="ltr"&gt;Writing&lt;/span&gt; MBR at offset &lt;span dir="ltr"&gt;0&lt;/span&gt;.
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;We can optionally overwrite the disk with random data to hide which part of the
-disk has been written to:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;# dd &lt;span dir="ltr"&gt;if&lt;/span&gt;=/dev/urandom of=/dev/rsd0c bs=1M&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Now, using &lt;code dir="ltr"&gt;disklabel&lt;/code&gt;, we will make two slices on the raw disk. The
-first, &lt;code dir="ltr"&gt;sd0a&lt;/code&gt;, is going to contain a really tiny filesystem with just
-one file in it: &lt;code dir="ltr"&gt;/etc/boot.conf&lt;/code&gt;. The second slice will be the
-softraid slice for the encrypted disk. In order to keep things simple,
-we don’t add a swap slice. If you want one, you should add it as another slice to &lt;code dir="ltr"&gt;sd0&lt;/code&gt;,
-rather than to the softraid. OpenBSD already encrypts swap, so there is no
-point in doubly-encrypting it.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;# disklabel -E sd0
-Label editor (enter '?' for &lt;span dir="ltr"&gt;help&lt;/span&gt; &lt;span dir="ltr"&gt;at&lt;/span&gt; &lt;span dir="ltr"&gt;any&lt;/span&gt; &lt;span dir="ltr"&gt;prompt&lt;/span&gt;)
-sd0&amp;gt; a
-&lt;span dir="ltr"&gt;partition&lt;/span&gt;: [a] a
-&lt;span dir="ltr"&gt;offset&lt;/span&gt;: [&lt;span dir="ltr"&gt;64&lt;/span&gt;] &lt;span dir="ltr"&gt;8192&lt;/span&gt;
-&lt;span dir="ltr"&gt;size&lt;/span&gt;: [&lt;span dir="ltr"&gt;62902348&lt;/span&gt;] &lt;span dir="ltr"&gt;8192&lt;/span&gt;
-FS &lt;span dir="ltr"&gt;type&lt;/span&gt;: [&lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD] 
-sd0*&amp;gt; a
-&lt;span dir="ltr"&gt;partition&lt;/span&gt;: [b] b
-&lt;span dir="ltr"&gt;offset&lt;/span&gt;: [&lt;span dir="ltr"&gt;16384&lt;/span&gt;] 
-&lt;span dir="ltr"&gt;size&lt;/span&gt;: [&lt;span dir="ltr"&gt;62894156&lt;/span&gt;] 
-FS &lt;span dir="ltr"&gt;type&lt;/span&gt;: [swap] raid
-sd0*&amp;gt; w
-sd0&amp;gt; q
-&lt;span dir="ltr"&gt;No&lt;/span&gt; label changes.
-#
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;We use an offset of 8192 for the first partition because we want partitions
-aligned on a 4 MiB boundary, in order to reduce the possibility of write
-amplification when using solid state storage.&lt;/p&gt;&lt;p dir="ltr"&gt;Next, we initialize the softraid. There are other options for the bioctl
-command that might be interesting or useful here, including &lt;code dir="ltr"&gt;-r&lt;/code&gt; for
-specifying the number of rounds of the key derivation function. However,
-we’ll keep it simple.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;# bioctl -c C -l /dev/sd0b softraid0&lt;/span&gt;
-&lt;span dir="ltr"&gt;New&lt;/span&gt; passphrase: 
-Re-type passphrase: 
-sd1 at scsibus3 targ &lt;span dir="ltr"&gt;1&lt;/span&gt; lun &lt;span dir="ltr"&gt;0&lt;/span&gt;: &amp;lt;OPENBSD, SR CRYPTO, &lt;span dir="ltr"&gt;006&lt;/span&gt;&amp;gt;
-sd1: &lt;span dir="ltr"&gt;30709&lt;/span&gt;MB, &lt;span dir="ltr"&gt;512&lt;/span&gt; bytes/sector, &lt;span dir="ltr"&gt;62893628&lt;/span&gt; sectors
-softraid0: CRYPTO volume attached &lt;span dir="ltr"&gt;as&lt;/span&gt; sd1
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;We need to make the filesystem on &lt;code dir="ltr"&gt;sd0a&lt;/code&gt; and put &lt;code dir="ltr"&gt;/etc/boot.conf&lt;/code&gt; there:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;# newfs /dev/rsd0a&lt;/span&gt;
-/dev/rsd0a: &lt;span dir="ltr"&gt;4.0&lt;/span&gt;MB &lt;span dir="ltr"&gt;in&lt;/span&gt; &lt;span dir="ltr"&gt;8192&lt;/span&gt; sectors &lt;span dir="ltr"&gt;of&lt;/span&gt; &lt;span dir="ltr"&gt;512&lt;/span&gt; bytes
-&lt;span dir="ltr"&gt;4&lt;/span&gt; cylinder groups &lt;span dir="ltr"&gt;of&lt;/span&gt; &lt;span dir="ltr"&gt;1.00&lt;/span&gt;MB, &lt;span dir="ltr"&gt;64&lt;/span&gt; blocks, &lt;span dir="ltr"&gt;128&lt;/span&gt; inodes each
-&lt;span dir="ltr"&gt;super&lt;/span&gt;-block backups (&lt;span dir="ltr"&gt;for&lt;/span&gt; fsck -b &lt;span dir="ltr"&gt;#) at:&lt;/span&gt;
-  &lt;span dir="ltr"&gt;32&lt;/span&gt;, &lt;span dir="ltr"&gt;2080&lt;/span&gt;, &lt;span dir="ltr"&gt;4128&lt;/span&gt;, &lt;span dir="ltr"&gt;6176&lt;/span&gt;,
-&lt;span dir="ltr"&gt;# mount /dev/sd0a /mnt&lt;/span&gt;
-mkdir /mnt/etc
-echo &lt;span dir="ltr"&gt;'
-stty com0 115200
-set tty com0
-set device sr0a'&lt;/span&gt; &amp;gt; /mnt/boot.conf
-&lt;span dir="ltr"&gt;# umount /dev/sd0a&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;That is all of the pre-configuration work, and you can now start the OpenBSD
-installer by invoking &lt;code dir="ltr"&gt;/install&lt;/code&gt; at the shell prompt. From this point
-forward, you can just do a fairly standard installation process. Use the
-disk &lt;code dir="ltr"&gt;sd1&lt;/code&gt; for the install. The installer should leave &lt;code dir="ltr"&gt;sd0&lt;/code&gt; alone, since
-we set it up manually. You also probably do not want to use the &lt;code dir="ltr"&gt;auto&lt;/code&gt;
-disk layout with a swap slice, since your system would be swapping to
-something on &lt;code dir="ltr"&gt;sd1&lt;/code&gt;. Here are the relevant bits from our interactive session
-with the installer; yours will likely be a bit different.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;Available disks are: sd0 sd1.
-Which disk is the root disk? ('?' for details) [sd0] sd1
-No valid MBR or GPT.
-&lt;span dir="ltr"&gt;Use&lt;/span&gt; (W)hole disk MBR, whole disk (&lt;span dir="ltr"&gt;G&lt;/span&gt;)PT &lt;span dir="ltr"&gt;or&lt;/span&gt; (&lt;span dir="ltr"&gt;E&lt;/span&gt;)dit? [whole] w
-Setting OpenBSD MBR &lt;span dir="ltr"&gt;partition&lt;/span&gt; &lt;span dir="ltr"&gt;to&lt;/span&gt; whole sd1...done.
-The &lt;span dir="ltr"&gt;auto&lt;/span&gt;-allocated layout &lt;span dir="ltr"&gt;for&lt;/span&gt; sd1 &lt;span dir="ltr"&gt;is&lt;/span&gt;:
-#                &lt;span dir="ltr"&gt;size&lt;/span&gt;           &lt;span dir="ltr"&gt;offset&lt;/span&gt;  fstype [fsize bsize   cpg]
-  a:          &lt;span dir="ltr"&gt;1024.0&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;               &lt;span dir="ltr"&gt;64&lt;/span&gt;  &lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD   &lt;span dir="ltr"&gt;2048&lt;/span&gt; &lt;span dir="ltr"&gt;16384&lt;/span&gt;     &lt;span dir="ltr"&gt;1&lt;/span&gt; # /
-  b:          &lt;span dir="ltr"&gt;1264.0&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;          &lt;span dir="ltr"&gt;2097216&lt;/span&gt;    swap                    
-  &lt;span dir="ltr"&gt;c&lt;/span&gt;:         &lt;span dir="ltr"&gt;30709.8&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;                &lt;span dir="ltr"&gt;0&lt;/span&gt;  &lt;span dir="ltr"&gt;unused&lt;/span&gt;                    
-  &lt;span dir="ltr"&gt;d&lt;/span&gt;:          &lt;span dir="ltr"&gt;1713.6&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;          &lt;span dir="ltr"&gt;4685888&lt;/span&gt;  &lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD   &lt;span dir="ltr"&gt;2048&lt;/span&gt; &lt;span dir="ltr"&gt;16384&lt;/span&gt;     &lt;span dir="ltr"&gt;1&lt;/span&gt; # /tmp
-  &lt;span dir="ltr"&gt;e&lt;/span&gt;:          &lt;span dir="ltr"&gt;2669.6&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;          &lt;span dir="ltr"&gt;8195392&lt;/span&gt;  &lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD   &lt;span dir="ltr"&gt;2048&lt;/span&gt; &lt;span dir="ltr"&gt;16384&lt;/span&gt;     &lt;span dir="ltr"&gt;1&lt;/span&gt; # /&lt;span dir="ltr"&gt;var&lt;/span&gt;
-  &lt;span dir="ltr"&gt;f&lt;/span&gt;:          &lt;span dir="ltr"&gt;2496.0&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;         &lt;span dir="ltr"&gt;13662816&lt;/span&gt;  &lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD   &lt;span dir="ltr"&gt;2048&lt;/span&gt; &lt;span dir="ltr"&gt;16384&lt;/span&gt;     &lt;span dir="ltr"&gt;1&lt;/span&gt; # /usr
-  &lt;span dir="ltr"&gt;g&lt;/span&gt;:           &lt;span dir="ltr"&gt;981.6&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;         &lt;span dir="ltr"&gt;18774656&lt;/span&gt;  &lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD   &lt;span dir="ltr"&gt;2048&lt;/span&gt; &lt;span dir="ltr"&gt;16384&lt;/span&gt;     &lt;span dir="ltr"&gt;1&lt;/span&gt; # /usr/X11R6
-  h:          &lt;span dir="ltr"&gt;4012.0&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;         &lt;span dir="ltr"&gt;20784992&lt;/span&gt;  &lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD   &lt;span dir="ltr"&gt;2048&lt;/span&gt; &lt;span dir="ltr"&gt;16384&lt;/span&gt;     &lt;span dir="ltr"&gt;1&lt;/span&gt; # /usr/&lt;span dir="ltr"&gt;local&lt;/span&gt;
-  &lt;span dir="ltr"&gt;i&lt;/span&gt;:          &lt;span dir="ltr"&gt;1698.4&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;         &lt;span dir="ltr"&gt;29001664&lt;/span&gt;  &lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD   &lt;span dir="ltr"&gt;2048&lt;/span&gt; &lt;span dir="ltr"&gt;16384&lt;/span&gt;     &lt;span dir="ltr"&gt;1&lt;/span&gt; # /usr/src
-  j:          &lt;span dir="ltr"&gt;5916.8&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;         &lt;span dir="ltr"&gt;32480000&lt;/span&gt;  &lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD   &lt;span dir="ltr"&gt;2048&lt;/span&gt; &lt;span dir="ltr"&gt;16384&lt;/span&gt;     &lt;span dir="ltr"&gt;1&lt;/span&gt; # /usr/obj
-  &lt;span dir="ltr"&gt;k&lt;/span&gt;:          &lt;span dir="ltr"&gt;8926.2&lt;/span&gt;&lt;span dir="ltr"&gt;M&lt;/span&gt;         &lt;span dir="ltr"&gt;44597632&lt;/span&gt;  &lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD   &lt;span dir="ltr"&gt;2048&lt;/span&gt; &lt;span dir="ltr"&gt;16384&lt;/span&gt;     &lt;span dir="ltr"&gt;1&lt;/span&gt; # /home
-&lt;span dir="ltr"&gt;Use&lt;/span&gt; (A)uto layout, (&lt;span dir="ltr"&gt;E&lt;/span&gt;)dit &lt;span dir="ltr"&gt;auto&lt;/span&gt; layout, &lt;span dir="ltr"&gt;or&lt;/span&gt; &lt;span dir="ltr"&gt;create&lt;/span&gt; (&lt;span dir="ltr"&gt;C&lt;/span&gt;)ustom layout? [a] &lt;span dir="ltr"&gt;c&lt;/span&gt;
-Label editor (enter &lt;span dir="ltr"&gt;'?'&lt;/span&gt; &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;help&lt;/span&gt; &lt;span dir="ltr"&gt;at&lt;/span&gt; &lt;span dir="ltr"&gt;any&lt;/span&gt; &lt;span dir="ltr"&gt;prompt&lt;/span&gt;)
-sd1&amp;gt; a
-&lt;span dir="ltr"&gt;partition&lt;/span&gt;: [a] a
-&lt;span dir="ltr"&gt;offset&lt;/span&gt;: [&lt;span dir="ltr"&gt;64&lt;/span&gt;] &lt;span dir="ltr"&gt;8192&lt;/span&gt;
-&lt;span dir="ltr"&gt;size&lt;/span&gt;: [&lt;span dir="ltr"&gt;62870218&lt;/span&gt;] 
-FS &lt;span dir="ltr"&gt;type&lt;/span&gt;: [&lt;span dir="ltr"&gt;4.2&lt;/span&gt;BSD] 
-&lt;span dir="ltr"&gt;mount&lt;/span&gt; point: [&lt;span dir="ltr"&gt;none&lt;/span&gt;] /
-sd1*&amp;gt; w
-sd1&amp;gt; q
-&lt;span dir="ltr"&gt;No&lt;/span&gt; label changes.
-/dev/rsd1a: &lt;span dir="ltr"&gt;30698.3&lt;/span&gt;MB &lt;span dir="ltr"&gt;in&lt;/span&gt; &lt;span dir="ltr"&gt;62870208&lt;/span&gt; sectors &lt;span dir="ltr"&gt;of&lt;/span&gt; &lt;span dir="ltr"&gt;512&lt;/span&gt; &lt;span dir="ltr"&gt;bytes&lt;/span&gt;
-&lt;span dir="ltr"&gt;152&lt;/span&gt; cylinder &lt;span dir="ltr"&gt;groups&lt;/span&gt; &lt;span dir="ltr"&gt;of&lt;/span&gt; &lt;span dir="ltr"&gt;202.47&lt;/span&gt;MB, &lt;span dir="ltr"&gt;12958&lt;/span&gt; blocks, &lt;span dir="ltr"&gt;25984&lt;/span&gt; inodes &lt;span dir="ltr"&gt;each&lt;/span&gt;
-Available disks &lt;span dir="ltr"&gt;are&lt;/span&gt;: sd0.
-Which disk &lt;span dir="ltr"&gt;do&lt;/span&gt; you wish &lt;span dir="ltr"&gt;to&lt;/span&gt; initialize? (&lt;span dir="ltr"&gt;or&lt;/span&gt; &lt;span dir="ltr"&gt;'done'&lt;/span&gt;) [done] done
-/dev/sd1a (cd70684e3d78d3b3.a) &lt;span dir="ltr"&gt;on&lt;/span&gt; /mnt &lt;span dir="ltr"&gt;type&lt;/span&gt; ffs (rw, &lt;span dir="ltr"&gt;asynchronous&lt;/span&gt;, &lt;span dir="ltr"&gt;local&lt;/span&gt;)
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Once you’re done with the installer, that’s it. You should have an encrypted
-installation of OpenBSD that prompts for the password on the serial console.&lt;/p&gt;&lt;h1&gt;Final Notes&lt;/h1&gt;&lt;p dir="ltr"&gt;There are two areas of your disk that are not encrypted. One is the
-slice containing &lt;code dir="ltr"&gt;/etc/boot.conf&lt;/code&gt;, and the other is the unencrypted area
-of the softraid, where the bootloader is stored.&lt;/p&gt;&lt;p&gt;This blog post came into existence due to a customer request for help installing
-OpenBSD. If you encounter any problems performing an install on a VPS with
-prgmr.com, please feel free to each out to support.&lt;/p&gt;</description><pubDate>Fri, 08 May 2020 12:40:54 -0500</pubDate></item><item><title>Keeping Up Appearances: Non-native macOS Light/Dark Mode</title><link>https://lobste.rs/s/fmdpn0</link><description>&lt;p&gt;
+&lt;/code&gt;&lt;/p&gt;</description><pubDate>Fri, 08 May 2020 15:12:52 -0500</pubDate></item><item><title>What are you doing this weekend?</title><link>https://lobste.rs/s/fcntwr</link><description>&lt;p&gt;Feel free to tell what you plan on doing this weekend and even ask for help or feedback.&lt;/p&gt;&lt;p&gt;Please keep in mind it’s more than OK to do nothing at all too!&lt;/p&gt;</description><pubDate>Fri, 08 May 2020 06:49:37 -0500</pubDate></item><item><title>Keeping Up Appearances: Non-native macOS Light/Dark Mode</title><link>https://lobste.rs/s/fmdpn0</link><description>&lt;p&gt;
 I like the auto light/dark mode feature of macOS, it's nice to have your system change in  the evening as
 the sun sets - less strain on the eyes if a night of hacking is ahead.
 But I spend most of my time either in a terminal or in Emacs, so don't really see much of a difference.
@@ -1219,8 +1219,7 @@ signatures — especially for generics — Java is still more verbose than Pytho
 Getting a project up and running requires more boilerplate and
 overhead — generally it’s just more &lt;em dir="ltr"&gt;work&lt;/em&gt;.&lt;/p&gt;&lt;h2&gt;Conclusions&lt;/h2&gt;&lt;p&gt;Java has had a long and storied history, both good and bad. If you haven’t
 worked with Java for a few years, maybe now is a good time to try it again for
-the first time.&lt;/p&gt;&lt;p&gt;Just don’t do this.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://sookocheff.com/post/java/why-java/java-stack.jpg" alt="java-stack.jpg" width="455" height="437"&gt;&lt;figcaption dir="auto"&gt;Java Stack&lt;/figcaption&gt;&lt;/figure&gt;</description><pubDate>Fri, 08 May 2020 12:53:22 -0500</pubDate></item><item><title>micro-mitten: simple Rust-like lang with compile-time memory management</title><link>https://lobste.rs/s/6m63wu</link><description>&lt;h1&gt;&lt;code&gt;micro-mitten&lt;/code&gt;&lt;/h1&gt;&lt;p&gt;metal's too hot? wear a mitten!&lt;/p&gt;&lt;img src="https://camo.githubusercontent.com/9dadc6848d95e7ca12cabf06528707e0a3c48a01/68747470733a2f2f7472617669732d63692e636f6d2f646f63746f726e2f6d6963726f2d6d697474656e2e7376673f746f6b656e3d4b684a6d53457a63464731616978637041417642266272616e63683d6d6173746572" alt="Build Status" width="90" height="20"&gt;&lt;h2 dir="ltr"&gt;&lt;code dir="ltr"&gt;micro-mitten&lt;/code&gt;??&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;micro-mitten&lt;/code&gt; is a bare-bones Rust-like programming language, stripped down to simplify control-flow structures and the type system.&lt;/p&gt;&lt;p dir="ltr"&gt;Like Rust, &lt;code dir="ltr"&gt;micro-mitten&lt;/code&gt; offers a static approach to memory management; however, &lt;code dir="ltr"&gt;micro-mitten&lt;/code&gt;'s approach is significantly different from Rust's. Rather than depending on single ownership and a complex lifetime system, &lt;code dir="ltr"&gt;micro-mitten&lt;/code&gt; uses a series of data-flow analyses to statically approximate heap liveness. This means that it maintains the ability to insert freeing code at appropriate program points, without putting restrictions on how you write your code. The theory behind the approach is documented in &lt;a href="https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-908.pdf" rel="nofollow" dir="ltr"&gt;this thesis&lt;/a&gt; (Proust 2017).&lt;/p&gt;&lt;p&gt;Long story short, this is an attempt to see if we really can have unrestrictive compile-time garbage collection.&lt;/p&gt;&lt;h2&gt;How can I use it?!&lt;/h2&gt;&lt;p dir="ltr"&gt;The project depends on &lt;code dir="ltr"&gt;libgc&lt;/code&gt; and the LLVM-8 toolchain. Cloning this repository and running the following should get you set up with a working copy of &lt;code dir="ltr"&gt;mmtnc&lt;/code&gt; (the &lt;code dir="ltr"&gt;micro-mitten&lt;/code&gt; compiler).&lt;/p&gt;&lt;PRE&gt;./tools.sh &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;/span&gt; installs `mitten-test`, `mitten-bench`, `knit` and the language runtime&lt;/span&gt;
-cargo install --path ./ --force &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;/span&gt; installs `mmtnc`&lt;/span&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;mmtnc&lt;/code&gt; compiles &lt;code dir="ltr"&gt;.mmtn&lt;/code&gt; files to LLVM IR (&lt;code dir="ltr"&gt;.ll&lt;/code&gt;) and just dumps the textual representation. Much more helpfully, you can get binaries directly using &lt;code dir="ltr"&gt;knit&lt;/code&gt;. To build a binary (&lt;code dir="ltr"&gt;example&lt;/code&gt;) from a source file (&lt;code dir="ltr"&gt;example.mmtn&lt;/code&gt;) use:&lt;/p&gt;&lt;PRE&gt;knit --src example.mmtn --gc-strategy=proust &lt;/PRE&gt;&lt;p dir="ltr"&gt;The &lt;code dir="ltr"&gt;--gc-strategy&lt;/code&gt; argument is optional, but the default is to use &lt;em dir="ltr"&gt;no&lt;/em&gt; garbage collection (your computer will hate you). The other options are &lt;code dir="ltr"&gt;proust&lt;/code&gt; (uses static memory management) and &lt;code dir="ltr"&gt;bdw&lt;/code&gt; (uses &lt;code dir="ltr"&gt;libgc&lt;/code&gt;).&lt;/p&gt;&lt;h2&gt;Notes&lt;/h2&gt;&lt;p dir="ltr"&gt;To get an idea of the language syntax, check out the examples in &lt;code dir="ltr"&gt;src/test/&lt;/code&gt;. If you get something wrong, the compiler shoud moan at you. Otherwise, please open an issue!&lt;/p&gt;&lt;p dir="ltr"&gt;Please note, &lt;code dir="ltr"&gt;micro-mitten&lt;/code&gt; is purely a research language and its performance is not brilliant when using static memory management. For a full run-down, see &lt;a href="http://nathancorbyn.com/nc513.pdf" rel="nofollow" dir="ltr"&gt;my dissertation&lt;/a&gt;. Most of the examples in &lt;code dir="ltr"&gt;src/test/&lt;/code&gt; will run with static memory management, but there are some notable exceptions and one or two memory leaks.&lt;/p&gt;</description><pubDate>Fri, 08 May 2020 07:57:15 -0500</pubDate></item><item><title>The Cost of Javascript Frameworks</title><link>https://lobste.rs/s/y5rale</link><description>&lt;div&gt;&lt;time&gt;April 21, 2020&lt;/time&gt;&lt;/div&gt;&lt;p&gt;There is no faster (pun intended) way to slow down a site than to use a bunch of JavaScript.&lt;/p&gt;&lt;p&gt;The thing about JavaScript is you end up paying a performance tax no less than four times:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;The cost of downloading the file on the network&lt;/LI&gt;&lt;LI&gt;The cost of parsing and compiling the uncompressed file once downloaded&lt;/LI&gt;&lt;LI&gt;The cost of executing the JavaScript&lt;/LI&gt;&lt;LI&gt;The memory cost&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;And we are shipping an increasingly high amount. We’re making the core functionality of our sites increasingly dependant on JavaScript as organizations move towards sites driven by frameworks like React, Vue.js, and friends.&lt;/p&gt;&lt;p dir="ltr"&gt;I see a lot of very heavy sites using them, but then, my perspective is very biased as the companies that I work with work with me precisely &lt;em dir="ltr"&gt;because&lt;/em&gt; they are facing performance challenges. I was curious just how common the situation is and just &lt;em dir="ltr"&gt;how&lt;/em&gt; much of a penalty we’re paying when we make these frameworks the default starting point.&lt;/p&gt;&lt;p dir="ltr"&gt;Thanks to &lt;a href="https://httparchive.org/" dir="ltr"&gt;HTTP Archive&lt;/a&gt;, we can figure that out.&lt;/p&gt;&lt;h2&gt;The data&lt;/h2&gt;&lt;p&gt;In total, HTTP Archive tracks 4,308,655 desktop URLs, and 5,484,239 mobile URLs. Among the many data points HTTP Archive reports for those URLs is a list of the detected technologies for a given site. That means we can pick out the thousands of sites that use various frameworks and see how much code they’re shipping, and what that costs the CPU.&lt;/p&gt;&lt;p&gt;I ran all the queries against March of 2020, the most recent run at the time.&lt;/p&gt;&lt;p dir="ltr"&gt;I decided to compare the aggregate HTTP Archive data for all sites recorded against sites with React, Vue.js, and Angular detected&lt;sup dir="ltr"&gt;&lt;a href="https://timkadlec.com/remembers/2020-04-21-the-cost-of-javascript-frameworks/#footnote-1" dir="ltr"&gt;1&lt;/a&gt;&lt;/sup&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;For fun, I also added jQuery—it’s still massively popular, and it also represents a bit of a different approach to building with JavaScript than the single-page application (&lt;abbr title="Single-Page Application" dir="ltr"&gt;SPA&lt;/abbr&gt;) approach provided by React, Vue.js and Angular.&lt;/p&gt;&lt;table cellspacing="3" class="plain" dir="ltr"&gt;
+the first time.&lt;/p&gt;&lt;p&gt;Just don’t do this.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://sookocheff.com/post/java/why-java/java-stack.jpg" alt="java-stack.jpg" width="455" height="437"&gt;&lt;figcaption dir="auto"&gt;Java Stack&lt;/figcaption&gt;&lt;/figure&gt;</description><pubDate>Fri, 08 May 2020 12:53:22 -0500</pubDate></item><item><title>The Cost of Javascript Frameworks</title><link>https://lobste.rs/s/y5rale</link><description>&lt;div&gt;&lt;time&gt;April 21, 2020&lt;/time&gt;&lt;/div&gt;&lt;p&gt;There is no faster (pun intended) way to slow down a site than to use a bunch of JavaScript.&lt;/p&gt;&lt;p&gt;The thing about JavaScript is you end up paying a performance tax no less than four times:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;The cost of downloading the file on the network&lt;/LI&gt;&lt;LI&gt;The cost of parsing and compiling the uncompressed file once downloaded&lt;/LI&gt;&lt;LI&gt;The cost of executing the JavaScript&lt;/LI&gt;&lt;LI&gt;The memory cost&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;And we are shipping an increasingly high amount. We’re making the core functionality of our sites increasingly dependant on JavaScript as organizations move towards sites driven by frameworks like React, Vue.js, and friends.&lt;/p&gt;&lt;p dir="ltr"&gt;I see a lot of very heavy sites using them, but then, my perspective is very biased as the companies that I work with work with me precisely &lt;em dir="ltr"&gt;because&lt;/em&gt; they are facing performance challenges. I was curious just how common the situation is and just &lt;em dir="ltr"&gt;how&lt;/em&gt; much of a penalty we’re paying when we make these frameworks the default starting point.&lt;/p&gt;&lt;p dir="ltr"&gt;Thanks to &lt;a href="https://httparchive.org/" dir="ltr"&gt;HTTP Archive&lt;/a&gt;, we can figure that out.&lt;/p&gt;&lt;h2&gt;The data&lt;/h2&gt;&lt;p&gt;In total, HTTP Archive tracks 4,308,655 desktop URLs, and 5,484,239 mobile URLs. Among the many data points HTTP Archive reports for those URLs is a list of the detected technologies for a given site. That means we can pick out the thousands of sites that use various frameworks and see how much code they’re shipping, and what that costs the CPU.&lt;/p&gt;&lt;p&gt;I ran all the queries against March of 2020, the most recent run at the time.&lt;/p&gt;&lt;p dir="ltr"&gt;I decided to compare the aggregate HTTP Archive data for all sites recorded against sites with React, Vue.js, and Angular detected&lt;sup dir="ltr"&gt;&lt;a href="https://timkadlec.com/remembers/2020-04-21-the-cost-of-javascript-frameworks/#footnote-1" dir="ltr"&gt;1&lt;/a&gt;&lt;/sup&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;For fun, I also added jQuery—it’s still massively popular, and it also represents a bit of a different approach to building with JavaScript than the single-page application (&lt;abbr title="Single-Page Application" dir="ltr"&gt;SPA&lt;/abbr&gt;) approach provided by React, Vue.js and Angular.&lt;/p&gt;&lt;table cellspacing="3" class="plain" dir="ltr"&gt;
     &lt;caption dir="ltr"&gt;URLs in HTTP Archive with specific frameworks detected&lt;/caption&gt;
     
     &lt;tbody dir="ltr"&gt;
@@ -1552,7 +1551,45 @@ What surprised me, and the reason I ended up including this data, is that at the
         &lt;/tr&gt;
     &lt;/tbody&gt;
     &lt;/table&gt;&lt;p&gt;With either baseline, the data would have looked less favorable and more dramatic. Ultimately, I ended up using the aggregate data as the baseline because:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;It's what is used broadly in the community whenever this stuff is discussed.&lt;/LI&gt;&lt;LI&gt;It avoids derailing the conversation with debates about whether or not sites without frameworks are complex enough to be an accurate comparison. You can build large, complex sites without using a framework—I've worked with companies who have—but it's an argument that would distract from the otherwise pretty clear conclusions from the data.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Still, as a few folks pointed out to me when I was showing them the data, it's interesting to see these alternate baselines as they do make it very clear how much these tools are messing with the averages.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://timkadlec.com/remembers/2020-04-21-the-cost-of-javascript-frameworks/#footnote-2-link" dir="ltr"&gt;2.&lt;/a&gt; I suspect folks could start with just the framework and build something that outperforms what Next.js or Nuxt.js gives you. The long-tail of data here, though, shows that likely isn't the case for many sites. It takes time to build out all the plumbing they provide, and build it well. Still, it is worth considering how many layers of abstraction we're willing to pull in before making the decision.
-&lt;/p&gt;</description><pubDate>Fri, 08 May 2020 10:39:01 -0500</pubDate></item><item><title>Metaphors in man pages</title><link>https://lobste.rs/s/gfr1ak</link><description>&lt;p dir="ltr"&gt;This morning I was watching a &lt;a href="https://www.youtube.com/watch?v=K8MF3aDg-bM&amp;amp;feature=youtu.be&amp;amp;t=14991" dir="ltr"&gt;great talk by
+&lt;/p&gt;</description><pubDate>Fri, 08 May 2020 10:39:01 -0500</pubDate></item><item><title>micro-mitten: simple Rust-like lang with compile-time memory management</title><link>https://lobste.rs/s/6m63wu</link><description>&lt;h1&gt;&lt;code&gt;micro-mitten&lt;/code&gt;&lt;/h1&gt;&lt;p&gt;metal's too hot? wear a mitten!&lt;/p&gt;&lt;img src="https://camo.githubusercontent.com/9dadc6848d95e7ca12cabf06528707e0a3c48a01/68747470733a2f2f7472617669732d63692e636f6d2f646f63746f726e2f6d6963726f2d6d697474656e2e7376673f746f6b656e3d4b684a6d53457a63464731616978637041417642266272616e63683d6d6173746572" alt="Build Status" width="90" height="20"&gt;&lt;h2 dir="ltr"&gt;&lt;code dir="ltr"&gt;micro-mitten&lt;/code&gt;??&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;micro-mitten&lt;/code&gt; is a bare-bones Rust-like programming language, stripped down to simplify control-flow structures and the type system.&lt;/p&gt;&lt;p dir="ltr"&gt;Like Rust, &lt;code dir="ltr"&gt;micro-mitten&lt;/code&gt; offers a static approach to memory management; however, &lt;code dir="ltr"&gt;micro-mitten&lt;/code&gt;'s approach is significantly different from Rust's. Rather than depending on single ownership and a complex lifetime system, &lt;code dir="ltr"&gt;micro-mitten&lt;/code&gt; uses a series of data-flow analyses to statically approximate heap liveness. This means that it maintains the ability to insert freeing code at appropriate program points, without putting restrictions on how you write your code. The theory behind the approach is documented in &lt;a href="https://www.cl.cam.ac.uk/techreports/UCAM-CL-TR-908.pdf" rel="nofollow" dir="ltr"&gt;this thesis&lt;/a&gt; (Proust 2017).&lt;/p&gt;&lt;p&gt;Long story short, this is an attempt to see if we really can have unrestrictive compile-time garbage collection.&lt;/p&gt;&lt;h2&gt;How can I use it?!&lt;/h2&gt;&lt;p dir="ltr"&gt;The project depends on &lt;code dir="ltr"&gt;libgc&lt;/code&gt; and the LLVM-8 toolchain. Cloning this repository and running the following should get you set up with a working copy of &lt;code dir="ltr"&gt;mmtnc&lt;/code&gt; (the &lt;code dir="ltr"&gt;micro-mitten&lt;/code&gt; compiler).&lt;/p&gt;&lt;PRE&gt;./tools.sh &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;/span&gt; installs `mitten-test`, `mitten-bench`, `knit` and the language runtime&lt;/span&gt;
+cargo install --path ./ --force &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;/span&gt; installs `mmtnc`&lt;/span&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;mmtnc&lt;/code&gt; compiles &lt;code dir="ltr"&gt;.mmtn&lt;/code&gt; files to LLVM IR (&lt;code dir="ltr"&gt;.ll&lt;/code&gt;) and just dumps the textual representation. Much more helpfully, you can get binaries directly using &lt;code dir="ltr"&gt;knit&lt;/code&gt;. To build a binary (&lt;code dir="ltr"&gt;example&lt;/code&gt;) from a source file (&lt;code dir="ltr"&gt;example.mmtn&lt;/code&gt;) use:&lt;/p&gt;&lt;PRE&gt;knit --src example.mmtn --gc-strategy=proust &lt;/PRE&gt;&lt;p dir="ltr"&gt;The &lt;code dir="ltr"&gt;--gc-strategy&lt;/code&gt; argument is optional, but the default is to use &lt;em dir="ltr"&gt;no&lt;/em&gt; garbage collection (your computer will hate you). The other options are &lt;code dir="ltr"&gt;proust&lt;/code&gt; (uses static memory management) and &lt;code dir="ltr"&gt;bdw&lt;/code&gt; (uses &lt;code dir="ltr"&gt;libgc&lt;/code&gt;).&lt;/p&gt;&lt;h2&gt;Notes&lt;/h2&gt;&lt;p dir="ltr"&gt;To get an idea of the language syntax, check out the examples in &lt;code dir="ltr"&gt;src/test/&lt;/code&gt;. If you get something wrong, the compiler shoud moan at you. Otherwise, please open an issue!&lt;/p&gt;&lt;p dir="ltr"&gt;Please note, &lt;code dir="ltr"&gt;micro-mitten&lt;/code&gt; is purely a research language and its performance is not brilliant when using static memory management. For a full run-down, see &lt;a href="http://nathancorbyn.com/nc513.pdf" rel="nofollow" dir="ltr"&gt;my dissertation&lt;/a&gt;. Most of the examples in &lt;code dir="ltr"&gt;src/test/&lt;/code&gt; will run with static memory management, but there are some notable exceptions and one or two memory leaks.&lt;/p&gt;</description><pubDate>Fri, 08 May 2020 07:57:15 -0500</pubDate></item><item><title>gitui release: terminal ui for git written in rust</title><link>https://lobste.rs/s/ff4p11</link><description>&lt;p dir="ltr"&gt;Today it is time to announce &lt;a href="https://github.com/extrawurst/gitui" dir="ltr"&gt;gitui&lt;/a&gt;:&lt;/p&gt;&lt;img src="http://extrawurst.github.io/assets/gitui/s00-diff.png" alt="s0" width="377" height="217"&gt;&lt;p&gt;Over the last couple of weeks, my side project was this little tool and some may know it from the occasional tweet already:&lt;/p&gt;&lt;div class="embed-placeholder" data-type="twitter" data-id="1252654046269366272"&gt;&lt;/div&gt;&lt;h1&gt;What?&lt;/h1&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;gitui&lt;/code&gt; is becoming my GUI alternative for using git. So far it only supports a few features but my goal is to extend it as needed. My focus is not to build a git cli substitute though, gitui is supposed to help out on tasks that are cumbersome to do on the cli for pure mortals like me. The main features so far:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;staging parts of files ((c)hunks)&lt;/LI&gt;&lt;LI&gt;browsing the commit history&lt;/LI&gt;&lt;LI&gt;inspecting large diffs/changesets&lt;/LI&gt;&lt;LI&gt;reverting changes&lt;/LI&gt;&lt;LI&gt;staging/unstaging file trees&lt;/LI&gt;&lt;LI&gt;written in &lt;strong dir="ltr"&gt;Rust&lt;/strong&gt; for safety and speed&lt;/LI&gt;&lt;LI&gt;it’s free and on &lt;a href="https://github.com/extrawurst/gitui" dir="ltr"&gt;github&lt;/a&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h1&gt;Why?&lt;/h1&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Q&lt;/strong&gt;: Why not use the raw &lt;code dir="ltr"&gt;git&lt;/code&gt; cli?&lt;br dir="ltr"&gt;
+&lt;strong dir="ltr"&gt;A&lt;/strong&gt;: Complex tasks are hard to do. I googled for how to rebase stuff interactively or stage hunks often enough to realise that some people just need something more visual.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Q&lt;/strong&gt;: Why don’t you use the GUI application &lt;code dir="ltr"&gt;{insert name}&lt;/code&gt;?&lt;br dir="ltr"&gt;
+&lt;strong dir="ltr"&gt;A&lt;/strong&gt;: I tried a lot of them, they do much &lt;em dir="ltr"&gt;more than I need&lt;/em&gt;, tend to be super &lt;em dir="ltr"&gt;slow&lt;/em&gt; and grinding to a halt on bigger repos and one after the other starts to cost money.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Q&lt;/strong&gt;: Why not build yet another GUI application?&lt;br dir="ltr"&gt;
+&lt;strong dir="ltr"&gt;A&lt;/strong&gt;: GUI applications are complex, most of them are not free because of this. If you do most of your work in the terminal, its natural not to have to leave it for your git interaction. Plus it gives me this nice nostalgic feeling ;).&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Q&lt;/strong&gt;: Isn’t there already such a tool?&lt;br dir="ltr"&gt;
+&lt;strong dir="ltr"&gt;A&lt;/strong&gt;: The idea of a terminal UI for git isn’t new, there is great examples out there: &lt;a href="https://github.com/jonas/tig" dir="ltr"&gt;tig&lt;/a&gt; and &lt;a href="https://github.com/jesseduffield/lazygit" dir="ltr"&gt;lazygit&lt;/a&gt;
+They are both awesome and inspired me but either I found them too slow/resource-hungry in some areas or too complicated to use and navigate in others. (maybe a little &lt;a href="https://en.wikipedia.org/wiki/Not_invented_here" dir="ltr"&gt;NIH-syndrome&lt;/a&gt; as well).&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Q&lt;/strong&gt;: Why in &lt;em dir="ltr"&gt;Rust&lt;/em&gt;?&lt;br dir="ltr"&gt;
+&lt;strong dir="ltr"&gt;A&lt;/strong&gt;: I started using Rust two years ago, first out of fun, then professionally and so far there was no project to build something out in the open. &lt;code dir="ltr"&gt;gitui&lt;/code&gt; gave me the opportunity to opensource something built in Rust and I think it’s a great fit for the kind of tool it is.&lt;/p&gt;&lt;h1&gt;Benefits of using Rust&lt;/h1&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Disclaimer&lt;/strong&gt;: First of all, of course &lt;code dir="ltr"&gt;gitui&lt;/code&gt; could have been written in any language. I don’t want to start language wars here.&lt;/p&gt;&lt;p&gt;My personal background is that I started out as a C++ programmer, system programming languages always appealed to me. Still I appreciated the comfort of managed systems like Java, C#, Node/Javascript and lately also Go. Over the years I kept watching out for something though that combined the strength of those two worlds. I think I found that in Rust:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;safety&lt;/strong&gt;
+    &lt;UL&gt;&lt;LI&gt;Rust has a unique memory model that offers me bare metal control without sacrificing safety&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;speed&lt;/strong&gt;
+    &lt;UL&gt;&lt;LI&gt;It is a system level language, you can be as fast as C, people wrote os kernels in it, no GC, no pauses, the sky is the limit 🚀&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;ergonomic&lt;/strong&gt;
+    &lt;UL&gt;&lt;LI&gt;closures, generics, functional, abstraction, modularization - everything but inheritance&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;interop&lt;/strong&gt;
+    &lt;UL&gt;&lt;LI&gt;seamless c interop allows to tap into a huge ecosystem of existing libraries and frameworks&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;ecosystem&lt;/strong&gt;
+    &lt;UL&gt;&lt;LI&gt;cargo+rust == npm+nodejs == gradle+java&lt;/LI&gt;&lt;LI&gt;I really don’t know how I was surviving without such a rich and tightly integrated ecosystem of libraries in C/C++ before&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;Of course &lt;code dir="ltr"&gt;gitui&lt;/code&gt; is not re-inventing the wheel at all. It is standing on the shoulders of giants using the following major dependencies:&lt;/p&gt;&lt;table dir="ltr"&gt;
+  &lt;thead dir="ltr"&gt;
+    &lt;tr dir="ltr"&gt;
+      &lt;th dir="ltr"&gt;what&lt;/th&gt;
+      &lt;th dir="ltr"&gt;why&lt;/th&gt;
+    &lt;/tr&gt;
+  &lt;/thead&gt;
+  &lt;tbody dir="ltr"&gt;
+    &lt;tr dir="ltr"&gt;
+      &lt;td dir="ltr"&gt;&lt;a href="https://github.com/crossterm-rs/crossterm" dir="ltr"&gt;crossterm&lt;/a&gt; + &lt;a href="https://github.com/fdehau/tui-rs" dir="ltr"&gt;tui-rs&lt;/a&gt;&lt;/td&gt;
+      &lt;td dir="ltr"&gt;crossterm is a cross platform terminal library and tui-rs builds an immediate mode UI layer on top of that&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr dir="ltr"&gt;
+      &lt;td dir="ltr"&gt;&lt;a href="https://github.com/rust-lang/git2-rs" dir="ltr"&gt;git2-rs&lt;/a&gt;&lt;/td&gt;
+      &lt;td dir="ltr"&gt;git2-rs is a rust wrapper on top of &lt;a href="https://libgit2.org/" dir="ltr"&gt;libgit2&lt;/a&gt; allowing to work with git natively (not having to call the commandline)&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr dir="ltr"&gt;
+      &lt;td dir="ltr"&gt;&lt;a href="https://github.com/rayon-rs/rayon" dir="ltr"&gt;rayon&lt;/a&gt;&lt;/td&gt;
+      &lt;td dir="ltr"&gt;on the topic of concurrency: &lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;gitui&lt;/code&gt; uses rayon for its threadpool&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr dir="ltr"&gt;
+      &lt;td dir="ltr"&gt;&lt;a href="https://github.com/crossbeam-rs/crossbeam" dir="ltr"&gt;crossbeam&lt;/a&gt;&lt;/td&gt;
+      &lt;td dir="ltr"&gt;more concurrency: crossbeam allows waiting (selecting) multiple channels in parallel&lt;/td&gt;
+    &lt;/tr&gt;
+  &lt;/tbody&gt;
+&lt;/table&gt;&lt;p dir="ltr"&gt;There is much more to say about how &lt;code dir="ltr"&gt;gitui&lt;/code&gt; utilizes Rust’s strengths but this post is getting out of hand already.
+&lt;strong dir="ltr"&gt;More details will follow in the next post&lt;/strong&gt;&lt;/p&gt;&lt;h1&gt;Next steps&lt;/h1&gt;&lt;UL&gt;&lt;LI&gt;join in on the fun and start contributing, its &lt;a href="https://github.com/extrawurst/gitui" dir="ltr"&gt;opensource&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;check the &lt;a href="https://github.com/extrawurst/gitui/issues" dir="ltr"&gt;issues&lt;/a&gt; and file whatever you would like to see implemented&lt;/LI&gt;&lt;LI&gt;for me up next is: &lt;strong dir="ltr"&gt;stashing&lt;/strong&gt; and &lt;strong dir="ltr"&gt;rebase&lt;/strong&gt;&lt;/LI&gt;&lt;LI&gt;if you like what you see consider supporting my work on itch.io: &lt;a href="https://extrawurst.itch.io/gitui" dir="ltr"&gt;https://extrawurst.itch.io/gitui&lt;/a&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;img src="http://extrawurst.github.io/assets/gitui/s01-log.png" alt="s1" width="377" height="217"&gt;</description><pubDate>Fri, 08 May 2020 12:48:20 -0500</pubDate></item><item><title>Metaphors in man pages</title><link>https://lobste.rs/s/gfr1ak</link><description>&lt;p dir="ltr"&gt;This morning I was watching a &lt;a href="https://www.youtube.com/watch?v=K8MF3aDg-bM&amp;amp;feature=youtu.be&amp;amp;t=14991" dir="ltr"&gt;great talk by
 Maggie Appleton&lt;/a&gt;
 where she addresses a question about metaphors that I’ve had sometimes. In her words, “Aren’t metaphors just
 a frivolous distraction? Why would I pollute my [concepts] with these fuzzy
@@ -1855,44 +1892,7 @@ far, it's been working pretty well.
 &lt;/p&gt;&lt;p&gt;
 This is just one example of what can be done.  It's not magic.  It's 
 just engineering.
-&lt;/p&gt;</description><pubDate>Thu, 07 May 2020 16:38:19 -0500</pubDate></item><item><title>gitui release: terminal ui for git written in rust</title><link>https://lobste.rs/s/ff4p11</link><description>&lt;p dir="ltr"&gt;Today it is time to announce &lt;a href="https://github.com/extrawurst/gitui" dir="ltr"&gt;gitui&lt;/a&gt;:&lt;/p&gt;&lt;img src="http://extrawurst.github.io/assets/gitui/s00-diff.png" alt="s0" width="377" height="217"&gt;&lt;p&gt;Over the last couple of weeks, my side project was this little tool and some may know it from the occasional tweet already:&lt;/p&gt;&lt;div class="embed-placeholder" data-type="twitter" data-id="1252654046269366272"&gt;&lt;/div&gt;&lt;h1&gt;What?&lt;/h1&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;gitui&lt;/code&gt; is becoming my GUI alternative for using git. So far it only supports a few features but my goal is to extend it as needed. My focus is not to build a git cli substitute though, gitui is supposed to help out on tasks that are cumbersome to do on the cli for pure mortals like me. The main features so far:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;staging parts of files ((c)hunks)&lt;/LI&gt;&lt;LI&gt;browsing the commit history&lt;/LI&gt;&lt;LI&gt;inspecting large diffs/changesets&lt;/LI&gt;&lt;LI&gt;reverting changes&lt;/LI&gt;&lt;LI&gt;staging/unstaging file trees&lt;/LI&gt;&lt;LI&gt;written in &lt;strong dir="ltr"&gt;Rust&lt;/strong&gt; for safety and speed&lt;/LI&gt;&lt;LI&gt;it’s free and on &lt;a href="https://github.com/extrawurst/gitui" dir="ltr"&gt;github&lt;/a&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h1&gt;Why?&lt;/h1&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Q&lt;/strong&gt;: Why not use the raw &lt;code dir="ltr"&gt;git&lt;/code&gt; cli?&lt;br dir="ltr"&gt;
-&lt;strong dir="ltr"&gt;A&lt;/strong&gt;: Complex tasks are hard to do. I googled for how to rebase stuff interactively or stage hunks often enough to realise that some people just need something more visual.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Q&lt;/strong&gt;: Why don’t you use the GUI application &lt;code dir="ltr"&gt;{insert name}&lt;/code&gt;?&lt;br dir="ltr"&gt;
-&lt;strong dir="ltr"&gt;A&lt;/strong&gt;: I tried a lot of them, they do much &lt;em dir="ltr"&gt;more than I need&lt;/em&gt;, tend to be super &lt;em dir="ltr"&gt;slow&lt;/em&gt; and grinding to a halt on bigger repos and one after the other starts to cost money.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Q&lt;/strong&gt;: Why not build yet another GUI application?&lt;br dir="ltr"&gt;
-&lt;strong dir="ltr"&gt;A&lt;/strong&gt;: GUI applications are complex, most of them are not free because of this. If you do most of your work in the terminal, its natural not to have to leave it for your git interaction. Plus it gives me this nice nostalgic feeling ;).&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Q&lt;/strong&gt;: Isn’t there already such a tool?&lt;br dir="ltr"&gt;
-&lt;strong dir="ltr"&gt;A&lt;/strong&gt;: The idea of a terminal UI for git isn’t new, there is great examples out there: &lt;a href="https://github.com/jonas/tig" dir="ltr"&gt;tig&lt;/a&gt; and &lt;a href="https://github.com/jesseduffield/lazygit" dir="ltr"&gt;lazygit&lt;/a&gt;
-They are both awesome and inspired me but either I found them too slow/resource-hungry in some areas or too complicated to use and navigate in others. (maybe a little &lt;a href="https://en.wikipedia.org/wiki/Not_invented_here" dir="ltr"&gt;NIH-syndrome&lt;/a&gt; as well).&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Q&lt;/strong&gt;: Why in &lt;em dir="ltr"&gt;Rust&lt;/em&gt;?&lt;br dir="ltr"&gt;
-&lt;strong dir="ltr"&gt;A&lt;/strong&gt;: I started using Rust two years ago, first out of fun, then professionally and so far there was no project to build something out in the open. &lt;code dir="ltr"&gt;gitui&lt;/code&gt; gave me the opportunity to opensource something built in Rust and I think it’s a great fit for the kind of tool it is.&lt;/p&gt;&lt;h1&gt;Benefits of using Rust&lt;/h1&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Disclaimer&lt;/strong&gt;: First of all, of course &lt;code dir="ltr"&gt;gitui&lt;/code&gt; could have been written in any language. I don’t want to start language wars here.&lt;/p&gt;&lt;p&gt;My personal background is that I started out as a C++ programmer, system programming languages always appealed to me. Still I appreciated the comfort of managed systems like Java, C#, Node/Javascript and lately also Go. Over the years I kept watching out for something though that combined the strength of those two worlds. I think I found that in Rust:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;safety&lt;/strong&gt;
-    &lt;UL&gt;&lt;LI&gt;Rust has a unique memory model that offers me bare metal control without sacrificing safety&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;speed&lt;/strong&gt;
-    &lt;UL&gt;&lt;LI&gt;It is a system level language, you can be as fast as C, people wrote os kernels in it, no GC, no pauses, the sky is the limit 🚀&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;ergonomic&lt;/strong&gt;
-    &lt;UL&gt;&lt;LI&gt;closures, generics, functional, abstraction, modularization - everything but inheritance&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;interop&lt;/strong&gt;
-    &lt;UL&gt;&lt;LI&gt;seamless c interop allows to tap into a huge ecosystem of existing libraries and frameworks&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;ecosystem&lt;/strong&gt;
-    &lt;UL&gt;&lt;LI&gt;cargo+rust == npm+nodejs == gradle+java&lt;/LI&gt;&lt;LI&gt;I really don’t know how I was surviving without such a rich and tightly integrated ecosystem of libraries in C/C++ before&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;Of course &lt;code dir="ltr"&gt;gitui&lt;/code&gt; is not re-inventing the wheel at all. It is standing on the shoulders of giants using the following major dependencies:&lt;/p&gt;&lt;table dir="ltr"&gt;
-  &lt;thead dir="ltr"&gt;
-    &lt;tr dir="ltr"&gt;
-      &lt;th dir="ltr"&gt;what&lt;/th&gt;
-      &lt;th dir="ltr"&gt;why&lt;/th&gt;
-    &lt;/tr&gt;
-  &lt;/thead&gt;
-  &lt;tbody dir="ltr"&gt;
-    &lt;tr dir="ltr"&gt;
-      &lt;td dir="ltr"&gt;&lt;a href="https://github.com/crossterm-rs/crossterm" dir="ltr"&gt;crossterm&lt;/a&gt; + &lt;a href="https://github.com/fdehau/tui-rs" dir="ltr"&gt;tui-rs&lt;/a&gt;&lt;/td&gt;
-      &lt;td dir="ltr"&gt;crossterm is a cross platform terminal library and tui-rs builds an immediate mode UI layer on top of that&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr dir="ltr"&gt;
-      &lt;td dir="ltr"&gt;&lt;a href="https://github.com/rust-lang/git2-rs" dir="ltr"&gt;git2-rs&lt;/a&gt;&lt;/td&gt;
-      &lt;td dir="ltr"&gt;git2-rs is a rust wrapper on top of &lt;a href="https://libgit2.org/" dir="ltr"&gt;libgit2&lt;/a&gt; allowing to work with git natively (not having to call the commandline)&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr dir="ltr"&gt;
-      &lt;td dir="ltr"&gt;&lt;a href="https://github.com/rayon-rs/rayon" dir="ltr"&gt;rayon&lt;/a&gt;&lt;/td&gt;
-      &lt;td dir="ltr"&gt;on the topic of concurrency: &lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;gitui&lt;/code&gt; uses rayon for its threadpool&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr dir="ltr"&gt;
-      &lt;td dir="ltr"&gt;&lt;a href="https://github.com/crossbeam-rs/crossbeam" dir="ltr"&gt;crossbeam&lt;/a&gt;&lt;/td&gt;
-      &lt;td dir="ltr"&gt;more concurrency: crossbeam allows waiting (selecting) multiple channels in parallel&lt;/td&gt;
-    &lt;/tr&gt;
-  &lt;/tbody&gt;
-&lt;/table&gt;&lt;p dir="ltr"&gt;There is much more to say about how &lt;code dir="ltr"&gt;gitui&lt;/code&gt; utilizes Rust’s strengths but this post is getting out of hand already.
-&lt;strong dir="ltr"&gt;More details will follow in the next post&lt;/strong&gt;&lt;/p&gt;&lt;h1&gt;Next steps&lt;/h1&gt;&lt;UL&gt;&lt;LI&gt;join in on the fun and start contributing, its &lt;a href="https://github.com/extrawurst/gitui" dir="ltr"&gt;opensource&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;check the &lt;a href="https://github.com/extrawurst/gitui/issues" dir="ltr"&gt;issues&lt;/a&gt; and file whatever you would like to see implemented&lt;/LI&gt;&lt;LI&gt;for me up next is: &lt;strong dir="ltr"&gt;stashing&lt;/strong&gt; and &lt;strong dir="ltr"&gt;rebase&lt;/strong&gt;&lt;/LI&gt;&lt;LI&gt;if you like what you see consider supporting my work on itch.io: &lt;a href="https://extrawurst.itch.io/gitui" dir="ltr"&gt;https://extrawurst.itch.io/gitui&lt;/a&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;img src="http://extrawurst.github.io/assets/gitui/s01-log.png" alt="s1" width="377" height="217"&gt;</description><pubDate>Fri, 08 May 2020 12:48:20 -0500</pubDate></item><item><title>Open-source Web debugging proxy alternative to Charles</title><link>https://lobste.rs/s/py2qhk</link><description>&lt;p dir="ltr"&gt; Out-of-box, fully automation with &lt;strong dir="ltr"&gt;certificate install &amp;amp; system proxy setting&lt;/strong&gt;&lt;/p&gt;&lt;img alt="battery" height="19" width="19" src="https://github.githubassets.com/images/icons/emoji/unicode/1f50b.png"&gt;&lt;p dir="ltr"&gt; Battery include, powerful &lt;code dir="ltr"&gt;hosts/proxy/capture&lt;/code&gt; based on &lt;code dir="ltr"&gt;whistle&lt;/code&gt;, what u need is just input &lt;code dir="ltr"&gt;/&lt;/code&gt;&lt;/p&gt;&lt;img alt="dash" height="19" width="19" src="https://github.githubassets.com/images/icons/emoji/unicode/1f4a8.png"&gt;&lt;p&gt; Rules take effect in one second, no hosts cache from browser&lt;/p&gt;&lt;h2&gt;Why LightProxy&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;Caputure network request &amp;amp; response&lt;/LI&gt;&lt;LI&gt;Real-time hosts binding&lt;/LI&gt;&lt;LI&gt;Forward remote url to local file or other remote file&lt;/LI&gt;&lt;LI&gt;Mock interface and pages&lt;/LI&gt;&lt;LI&gt;Modify request &amp;amp; response, for example insert &amp;lt;script&amp;gt; , modify response header etc.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Preview&lt;/h2&gt;&lt;img src="https://camo.githubusercontent.com/267f9643edbe75522e0165cb58a535ed70d25ffe/68747470733a2f2f696d672e616c6963646e2e636f6d2f7466732f5442316d43495645597231674b306a535a523058586250385858612d313233322d3831322e706e67" width="914" height="602"&gt;&lt;h2&gt;Preview GIF&lt;/h2&gt;&lt;img src="https://camo.githubusercontent.com/692e359b933565b81cca122a6e2b8e4cd2f9a35c/68747470733a2f2f692e6c6f6c692e6e65742f323032302f30352f30352f75525a4d70693872504479514636492e676966" width="600" height="384"&gt;&lt;h2&gt;Quick Start&lt;/h2&gt;&lt;p dir="ltr"&gt;Take a quick start at: &lt;a href="https://alibaba.github.io/lightproxy/quick-start.html" rel="nofollow" dir="ltr"&gt;https://alibaba.github.io/lightproxy/quick-start.html&lt;/a&gt;&lt;/p&gt;&lt;h2&gt;How to contribute&lt;/h2&gt;&lt;h3&gt;env&lt;/h3&gt;&lt;h3&gt;dev&lt;/h3&gt;&lt;PRE&gt;git clone https://github.com/alibaba/lightproxy
+&lt;/p&gt;</description><pubDate>Thu, 07 May 2020 16:38:19 -0500</pubDate></item><item><title>Open-source Web debugging proxy alternative to Charles</title><link>https://lobste.rs/s/py2qhk</link><description>&lt;p dir="ltr"&gt; Out-of-box, fully automation with &lt;strong dir="ltr"&gt;certificate install &amp;amp; system proxy setting&lt;/strong&gt;&lt;/p&gt;&lt;img alt="battery" height="19" width="19" src="https://github.githubassets.com/images/icons/emoji/unicode/1f50b.png"&gt;&lt;p dir="ltr"&gt; Battery include, powerful &lt;code dir="ltr"&gt;hosts/proxy/capture&lt;/code&gt; based on &lt;code dir="ltr"&gt;whistle&lt;/code&gt;, what u need is just input &lt;code dir="ltr"&gt;/&lt;/code&gt;&lt;/p&gt;&lt;img alt="dash" height="19" width="19" src="https://github.githubassets.com/images/icons/emoji/unicode/1f4a8.png"&gt;&lt;p&gt; Rules take effect in one second, no hosts cache from browser&lt;/p&gt;&lt;h2&gt;Why LightProxy&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;Caputure network request &amp;amp; response&lt;/LI&gt;&lt;LI&gt;Real-time hosts binding&lt;/LI&gt;&lt;LI&gt;Forward remote url to local file or other remote file&lt;/LI&gt;&lt;LI&gt;Mock interface and pages&lt;/LI&gt;&lt;LI&gt;Modify request &amp;amp; response, for example insert &amp;lt;script&amp;gt; , modify response header etc.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Preview&lt;/h2&gt;&lt;img src="https://camo.githubusercontent.com/267f9643edbe75522e0165cb58a535ed70d25ffe/68747470733a2f2f696d672e616c6963646e2e636f6d2f7466732f5442316d43495645597231674b306a535a523058586250385858612d313233322d3831322e706e67" width="914" height="602"&gt;&lt;h2&gt;Preview GIF&lt;/h2&gt;&lt;img src="https://camo.githubusercontent.com/692e359b933565b81cca122a6e2b8e4cd2f9a35c/68747470733a2f2f692e6c6f6c692e6e65742f323032302f30352f30352f75525a4d70693872504479514636492e676966" width="600" height="384"&gt;&lt;h2&gt;Quick Start&lt;/h2&gt;&lt;p dir="ltr"&gt;Take a quick start at: &lt;a href="https://alibaba.github.io/lightproxy/quick-start.html" rel="nofollow" dir="ltr"&gt;https://alibaba.github.io/lightproxy/quick-start.html&lt;/a&gt;&lt;/p&gt;&lt;h2&gt;How to contribute&lt;/h2&gt;&lt;h3&gt;env&lt;/h3&gt;&lt;h3&gt;dev&lt;/h3&gt;&lt;PRE&gt;git clone https://github.com/alibaba/lightproxy
 &lt;span dir="ltr"&gt;cd&lt;/span&gt; lightproxy
 yarn run install-deps
 yarn run dev&lt;/PRE&gt;&lt;p&gt;For new contributors you can try to fix a &lt;/p&gt;&lt;img alt="medal_sports" height="19" width="19" src="https://github.githubassets.com/images/icons/emoji/unicode/1f3c5.png"&gt;&lt;p&gt;&lt;a href="https://github.com/alibaba/lightproxy/issues?q=is%3Aissue+is%3Aopen+label%3A%22%F0%9F%8F%85send+a+PR%22"&gt;send-a-PR&lt;/a&gt;&lt;/p&gt;&lt;h2&gt;Contributors &lt;/h2&gt;&lt;img alt="sparkles" height="29" width="29" src="https://github.githubassets.com/images/icons/emoji/unicode/2728.png"&gt;&lt;p dir="ltr"&gt;Thanks goes to these wonderful people (&lt;a href="https://allcontributors.org/docs/en/emoji-key" rel="nofollow" dir="ltr"&gt;emoji key&lt;/a&gt;):&lt;/p&gt;&lt;img src="https://avatars3.githubusercontent.com/u/5436704?v=4" width="100" alt="" height="100"&gt;&lt;p dir="ltr"&gt;This project follows the &lt;a href="https://github.com/all-contributors/all-contributors" dir="ltr"&gt;all-contributors&lt;/a&gt; specification. Contributions of any kind welcome!&lt;/p&gt;</description><pubDate>Fri, 08 May 2020 00:40:14 -0500</pubDate></item><item><title>Decentralized proofs</title><link>https://lobste.rs/s/nb2oke</link><description>&lt;p dir="ltr"&gt;This document describes a method of adding social proofs to OpenPGP keys in a way that can be independently verified by clients. This is similar to &lt;a href="https://keybase.io/" dir="ltr"&gt;Keybase&lt;/a&gt; but decentralized.&lt;/p&gt;&lt;p dir="ltr"&gt;All proofs are &lt;a href="https://tools.ietf.org/html/rfc4880#section-5.2.3.16" dir="ltr"&gt;notations&lt;/a&gt; put on self-signatures by key owners.&lt;/p&gt;&lt;p dir="ltr"&gt;Currently the notation key is always &lt;code dir="ltr"&gt;proof@metacode.biz&lt;/code&gt; and the notation value is a &lt;a href="https://tools.ietf.org/html/rfc3986" dir="ltr"&gt;URI&lt;/a&gt; that can be used to fetch the proof document. Proof documents are &lt;a href="https://tools.ietf.org/html/rfc7159" dir="ltr"&gt;JSON&lt;/a&gt; files published on a social site in a way that it can be verified that only the account owner published the document.&lt;/p&gt;&lt;p dir="ltr"&gt;Proof documents contain a short string that refers back to the OpenPGP key, usually through the &lt;a href="https://metacode.biz/openpgp/openpgp4fpr" dir="ltr"&gt;&lt;code dir="ltr"&gt;openpgp4fpr&lt;/code&gt; URI&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Proofs can be used by clients to do automatic or manual verification by software working with OpenPGP keys. For example: &lt;a href="https://metacode.biz/openpgp/key#0x653909A2F0E37C106F5FAF546C8857E0D8E8F074" dir="ltr"&gt;https://metacode.biz/openpgp/key#0x653909A2F0E37C106F5FAF546C8857E0D8E8F074&lt;/a&gt;&lt;/p&gt;&lt;p&gt;Or manually, through command-line interface:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ gpg --list-options show-notations --list-sigs D8E8F074 | grep proof
