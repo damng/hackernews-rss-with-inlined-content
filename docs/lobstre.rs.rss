@@ -681,54 +681,7 @@ The Erlang/OTP source can also be found at GitHub on the official Erlang reposit
  for feedback.&lt;/em&gt;&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Disclaimer, I have not put all that much time into learning AHK best practices and am sure that all of my scripts can be made much better.
  &lt;a href="https://www.hillelwayne.com/post/ahk/#fnref:disclaimer" dir="ltr"&gt;&lt;sup dir="ltr"&gt;[return]&lt;/sup&gt;&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;the &lt;code dir="ltr"&gt;O&lt;/code&gt; means that we do not have the space after the hot string. It’s nice for things like temporal logic, where you don’t have a space in &lt;code dir="ltr"&gt;□P&lt;/code&gt;.
  &lt;a href="https://www.hillelwayne.com/post/ahk/#fnref:O" dir="ltr"&gt;&lt;sup dir="ltr"&gt;[return]&lt;/sup&gt;&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;You can get the same thing by fiddling with the registry keys, but then I’d have to fiddle with registry keys. And that’s not portable; I can copy this script to a new machine and instantly have it work right.
- &lt;a href="https://www.hillelwayne.com/post/ahk/#fnref:registry" dir="ltr"&gt;&lt;sup dir="ltr"&gt;[return]&lt;/sup&gt;&lt;/a&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;div&gt;&lt;span&gt;Categories: &lt;/span&gt;&lt;/div&gt;</description><pubDate>Tue, 12 May 2020 11:34:30 -0500</pubDate></item><item><title>Finding secrets by decompiling Python bytecode in public repositories</title><link>https://lobste.rs/s/2qd53i</link><description>&lt;div dir="ltr"&gt;
-      &lt;time datetime="2020-05-12" dir="ltr"&gt;May 12, 2020&lt;/time&gt;
-    &lt;/div&gt;&lt;div dir="ltr"&gt;
-      &lt;strong dir="ltr"&gt;tl;dr:&lt;/strong&gt; Cache rules everything around me. &lt;code dir="ltr"&gt;pyc&lt;/code&gt; files can contain secrets and should not be checked in to source control.
-    &lt;/div&gt;&lt;p dir="ltr"&gt;When you import a Python file for the first time, the Python interpreter will compile it and cache the resulting bytecode in a &lt;code dir="ltr"&gt;.pyc&lt;/code&gt; file so that subsequent imports don’t have to deal with the overhead of parsing or compiling again.&lt;/p&gt;&lt;p dir="ltr"&gt;It’s also common practice for Python projects to store configuration, keys, and passwords (collectively referred to as “secrets”) in a gitignored Python file called &lt;code dir="ltr"&gt;secrets.py&lt;/code&gt;, &lt;code dir="ltr"&gt;config.py&lt;/code&gt;, or &lt;code dir="ltr"&gt;settings.py&lt;/code&gt;, which other parts of the project import. This provides a nice separation between secrets and source code that gets checked in, and for the most part, this kind of setup works well. And because it reuses the language’s import mechanism, these projects don’t have to fuss around with file I/O or formats like JSON.&lt;/p&gt;&lt;p dir="ltr"&gt;But for the same reason that this pattern is fast and convenient, it is also potentially insecure. Because it reuses the language’s import mechanism, which has a habit of creating and caching &lt;code dir="ltr"&gt;.pyc&lt;/code&gt; files, those secrets also live in the compiled bytecode! Some initial research using the GitHub API reveals that &lt;strong dir="ltr"&gt;thousands of GitHub repositories contain secrets hidden inside their bytecode.&lt;/strong&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Existing tools for finding secrets (my favorite is &lt;a href="https://github.com/dxa4481/truffleHog" dir="ltr"&gt;trufflehog&lt;/a&gt;) in repositories skip over binary files like &lt;code dir="ltr"&gt;.pyc&lt;/code&gt; files, instead only scanning plain text files such as source code or configuration files.&lt;/p&gt;&lt;h2&gt;A crash-course on cached source&lt;/h2&gt;&lt;p dir="ltr"&gt;Earlier versions of Python stored these files next to the original source files, but beginning with &lt;a href="https://docs.python.org/dev/whatsnew/3.2.html#pep-3147-pyc-repository-directories" dir="ltr"&gt;Python 3.2&lt;/a&gt;, these files all live in a folder called &lt;code dir="ltr"&gt;__pycache__&lt;/code&gt; at the root of the imported module. For our purposes, this doesn’t matter.&lt;/p&gt;&lt;p&gt;Suppose we had a Python file containing this secret password:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="python" dir="ltr"&gt;&lt;span dir="ltr"&gt;SECRET_KEY&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"Green eggs and ham"&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The bytecode corresponding to that line of code looks like this:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;0 LOAD_CONST               1 ('Green eggs and ham')
-2 STORE_FAST               0 (SECRET_KEY)
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Note that the string and variable name are reproduced in their entirety! Further, it turns out that Python bytecode often contains enough information to recover the original structure of the file. Tools like &lt;a href="https://pypi.org/project/uncompyle6/" dir="ltr"&gt;uncompyle6&lt;/a&gt; can translate &lt;code dir="ltr"&gt;.pyc&lt;/code&gt; files back into their original forms.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ uncompyle6 secrets.cpython-38.pyc
-
-# uncompyle6 version 3.6.7
-# Python bytecode 3.8 (3413)
-# Decompiled from: Python 3.8.2 (default, Apr  8 2020, 14:31:25) 
-# [GCC 9.3.0]
-# Embedded file name: secrets.py
-# Compiled at: 2020-05-12 17:16:29
-# Size of source mod 2**32: 34 bytes
-SECRET_KEY = 'Green eggs and ham'
-# okay decompiling secrets.cpython-38.pyc
-&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;Caching out&lt;/h2&gt;&lt;p dir="ltr"&gt;To investigate just how widespread this problem was, I wrote a short script to search GitHub for &lt;code dir="ltr"&gt;.pyc&lt;/code&gt; files and decompile them to look for secrets, which found &lt;strong dir="ltr"&gt;thousands of Twitter keys, Stripe tokens, AWS credentials, and social media passwords&lt;/strong&gt;. I alerted any organizations whose keys I found with this script.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="python" dir="ltr"&gt;&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;base64&lt;/span&gt;
-&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;io&lt;/span&gt;
-&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;os&lt;/span&gt;
-&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;tempfile&lt;/span&gt;
-&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;uncompyle6&lt;/span&gt;
-&lt;span dir="ltr"&gt;from&lt;/span&gt; &lt;span dir="ltr"&gt;github&lt;/span&gt; &lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;Github&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;GITHUB_KEY&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;os&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;environ&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;get&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"GITHUB_KEY"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;g&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;Github&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;GITHUB_KEY&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-&lt;span dir="ltr"&gt;items&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;g&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;search_code&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"filename:secrets.pyc"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-&lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;item&lt;/span&gt; &lt;span dir="ltr"&gt;in&lt;/span&gt; &lt;span dir="ltr"&gt;items&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
-    &lt;span dir="ltr"&gt;print&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;f&lt;/span&gt;&lt;span dir="ltr"&gt;"DECOMPILING REPO https://github.com/{item.repository.full_name}"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-    &lt;span dir="ltr"&gt;print&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;f&lt;/span&gt;&lt;span dir="ltr"&gt;"OWNER TYPE: {item.repository.owner.type}"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-    &lt;span dir="ltr"&gt;try&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
-        &lt;span dir="ltr"&gt;contents&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;base64&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;b64decode&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;item&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;content&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-        &lt;span dir="ltr"&gt;with&lt;/span&gt; &lt;span dir="ltr"&gt;tempfile&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;NamedTemporaryFile&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;suffix&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;".pyc"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;as&lt;/span&gt; &lt;span dir="ltr"&gt;f&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
-            &lt;span dir="ltr"&gt;f&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;write&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;contents&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-            &lt;span dir="ltr"&gt;f&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;seek&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-
-            &lt;span dir="ltr"&gt;out&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;io&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;StringIO&lt;/span&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt;
-            &lt;span dir="ltr"&gt;uncompyle6&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;decompile_file&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;f&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;name&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;out&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-            &lt;span dir="ltr"&gt;out&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;seek&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-            &lt;span dir="ltr"&gt;print&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;out&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;read&lt;/span&gt;&lt;span dir="ltr"&gt;())&lt;/span&gt;
-    &lt;span dir="ltr"&gt;except&lt;/span&gt; &lt;span dir="ltr"&gt;Exception&lt;/span&gt; &lt;span dir="ltr"&gt;as&lt;/span&gt; &lt;span dir="ltr"&gt;e&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
-        &lt;span dir="ltr"&gt;print&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;e&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-        &lt;span dir="ltr"&gt;print&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;f&lt;/span&gt;&lt;span dir="ltr"&gt;"COULD NOT DECOMPILE REPO https://github.com/{item.repository.full_name}"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-        &lt;span dir="ltr"&gt;continue&lt;/span&gt;
-    &lt;span dir="ltr"&gt;print&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;\n\n\n&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;Try this out yourself!&lt;/h2&gt;&lt;p&gt;This post comes with a small capture-the-flag style lab for you to try out this technique yourself.&lt;/p&gt;&lt;p dir="ltr"&gt;You can find it at &lt;a href="https://github.com/veggiedefender/pyc-secret-lab/" dir="ltr"&gt;https://github.com/veggiedefender/pyc-secret-lab/&lt;/a&gt;&lt;/p&gt;&lt;h2&gt;Takeaways&lt;/h2&gt;&lt;p dir="ltr"&gt;Cached bytecode is a low-level internal performance optimization, which is the kind of thing Python was supposed to free us from having to think about! The contents of &lt;code dir="ltr"&gt;.pyc&lt;/code&gt; files are inscrutable without special tools like a disassembler or decompiler. When these files are buried inside &lt;code dir="ltr"&gt;__pycache__&lt;/code&gt; (the &lt;a href="https://docs.python.org/3/tutorial/classes.html#private-variables" dir="ltr"&gt;double underscores&lt;/a&gt; signal “keep out; internal use only”), they’re easy to overlook. Avoiding this requires either getting lucky with a good gitignore, or intermediate knowledge of git and python internals.&lt;/p&gt;&lt;p&gt;Actionable items you can do:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Look through your repositories for loose &lt;code dir="ltr"&gt;.pyc&lt;/code&gt; files, and delete them&lt;/LI&gt;&lt;LI&gt;If you have &lt;code dir="ltr"&gt;.pyc&lt;/code&gt; files and they contain secrets, then revoke and rotate your secrets&lt;/LI&gt;&lt;LI&gt;Use a standard &lt;a href="https://github.com/github/gitignore/blob/master/Python.gitignore" dir="ltr"&gt;gitignore&lt;/a&gt; to prevent checking in &lt;code dir="ltr"&gt;.pyc&lt;/code&gt; files&lt;/LI&gt;&lt;LI&gt;Use JSON files or environment variables for configuration&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Tue, 12 May 2020 23:07:58 -0500</pubDate></item><item><title>Subinterpreters for Python</title><link>https://lobste.rs/s/slfw7y</link><description>&lt;h2&gt;[LWN subscriber-only content]&lt;/h2&gt;&lt;h3&gt;Welcome to LWN.net&lt;/h3&gt;&lt;p&gt;
+ &lt;a href="https://www.hillelwayne.com/post/ahk/#fnref:registry" dir="ltr"&gt;&lt;sup dir="ltr"&gt;[return]&lt;/sup&gt;&lt;/a&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;div&gt;&lt;span&gt;Categories: &lt;/span&gt;&lt;/div&gt;</description><pubDate>Tue, 12 May 2020 11:34:30 -0500</pubDate></item><item><title>Subinterpreters for Python</title><link>https://lobste.rs/s/slfw7y</link><description>&lt;h2&gt;[LWN subscriber-only content]&lt;/h2&gt;&lt;h3&gt;Welcome to LWN.net&lt;/h3&gt;&lt;p&gt;
 The following subscription-only content has been made available to you 
 by an LWN subscriber.  Thousands of subscribers depend on LWN for the 
 best news from the Linux and free software communities.  If you enjoy this 
@@ -1000,7 +953,54 @@ have to wait to see if subinterpreters can clear that hurdle.
 &lt;b dir="ltr"&gt;Did you like this article?&lt;/b&gt;  Please accept our 
 &lt;a href="https://lwn.net/Promo/slink-trial2-3/claim" dir="ltr"&gt;trial subscription offer&lt;/a&gt; to be
 able to see more content like it and to participate in the discussion.
-&lt;/td&gt;&lt;/BLOCKQUOTE&gt;</description><pubDate>Wed, 13 May 2020 18:49:45 -0500</pubDate></item><item><title>Attributes — aka annotations — in PHP 8</title><link>https://lobste.rs/s/yito3p</link><description>&lt;p&gt;As of PHP 8, we'll be able to use attributes. The goal of these attributes, also known as annotations in many other languages, is to add meta data to classes, methods, variables and what not; in a structured way.&lt;/p&gt;&lt;p&gt;The concept of attributes isn't new at all, we've been using docblocks to simulate their behaviour for years now. With the addition of attributes though, we now have a first-class citizen in the language to represent this kind of meta data, instead of having to manually parse docblocks.&lt;/p&gt;&lt;p&gt;So what do they look like? How do we make custom attributes? Are there any caveats? Those are the questions that will be answered in this post. Let's dive in!&lt;/p&gt;&lt;h2&gt; Rundown&lt;/h2&gt;&lt;p&gt;First things first, here's what attribute would look like in the wild:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; &lt;span dir="ltr"&gt;\&lt;span dir="ltr"&gt;Support&lt;/span&gt;\&lt;span dir="ltr"&gt;Attributes&lt;/span&gt;\&lt;span dir="ltr"&gt;ListensTo&lt;/span&gt;&lt;/span&gt;;
+&lt;/td&gt;&lt;/BLOCKQUOTE&gt;</description><pubDate>Wed, 13 May 2020 18:49:45 -0500</pubDate></item><item><title>Finding secrets by decompiling Python bytecode in public repositories</title><link>https://lobste.rs/s/2qd53i</link><description>&lt;div dir="ltr"&gt;
+      &lt;time datetime="2020-05-12" dir="ltr"&gt;May 12, 2020&lt;/time&gt;
+    &lt;/div&gt;&lt;div dir="ltr"&gt;
+      &lt;strong dir="ltr"&gt;tl;dr:&lt;/strong&gt; Cache rules everything around me. &lt;code dir="ltr"&gt;pyc&lt;/code&gt; files can contain secrets and should not be checked in to source control.
+    &lt;/div&gt;&lt;p dir="ltr"&gt;When you import a Python file for the first time, the Python interpreter will compile it and cache the resulting bytecode in a &lt;code dir="ltr"&gt;.pyc&lt;/code&gt; file so that subsequent imports don’t have to deal with the overhead of parsing or compiling again.&lt;/p&gt;&lt;p dir="ltr"&gt;It’s also common practice for Python projects to store configuration, keys, and passwords (collectively referred to as “secrets”) in a gitignored Python file called &lt;code dir="ltr"&gt;secrets.py&lt;/code&gt;, &lt;code dir="ltr"&gt;config.py&lt;/code&gt;, or &lt;code dir="ltr"&gt;settings.py&lt;/code&gt;, which other parts of the project import. This provides a nice separation between secrets and source code that gets checked in, and for the most part, this kind of setup works well. And because it reuses the language’s import mechanism, these projects don’t have to fuss around with file I/O or formats like JSON.&lt;/p&gt;&lt;p dir="ltr"&gt;But for the same reason that this pattern is fast and convenient, it is also potentially insecure. Because it reuses the language’s import mechanism, which has a habit of creating and caching &lt;code dir="ltr"&gt;.pyc&lt;/code&gt; files, those secrets also live in the compiled bytecode! Some initial research using the GitHub API reveals that &lt;strong dir="ltr"&gt;thousands of GitHub repositories contain secrets hidden inside their bytecode.&lt;/strong&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Existing tools for finding secrets (my favorite is &lt;a href="https://github.com/dxa4481/truffleHog" dir="ltr"&gt;trufflehog&lt;/a&gt;) in repositories skip over binary files like &lt;code dir="ltr"&gt;.pyc&lt;/code&gt; files, instead only scanning plain text files such as source code or configuration files.&lt;/p&gt;&lt;h2&gt;A crash-course on cached source&lt;/h2&gt;&lt;p dir="ltr"&gt;Earlier versions of Python stored these files next to the original source files, but beginning with &lt;a href="https://docs.python.org/dev/whatsnew/3.2.html#pep-3147-pyc-repository-directories" dir="ltr"&gt;Python 3.2&lt;/a&gt;, these files all live in a folder called &lt;code dir="ltr"&gt;__pycache__&lt;/code&gt; at the root of the imported module. For our purposes, this doesn’t matter.&lt;/p&gt;&lt;p&gt;Suppose we had a Python file containing this secret password:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="python" dir="ltr"&gt;&lt;span dir="ltr"&gt;SECRET_KEY&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"Green eggs and ham"&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The bytecode corresponding to that line of code looks like this:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;0 LOAD_CONST               1 ('Green eggs and ham')
+2 STORE_FAST               0 (SECRET_KEY)
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Note that the string and variable name are reproduced in their entirety! Further, it turns out that Python bytecode often contains enough information to recover the original structure of the file. Tools like &lt;a href="https://pypi.org/project/uncompyle6/" dir="ltr"&gt;uncompyle6&lt;/a&gt; can translate &lt;code dir="ltr"&gt;.pyc&lt;/code&gt; files back into their original forms.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ uncompyle6 secrets.cpython-38.pyc
+
+# uncompyle6 version 3.6.7
+# Python bytecode 3.8 (3413)
+# Decompiled from: Python 3.8.2 (default, Apr  8 2020, 14:31:25) 
+# [GCC 9.3.0]
+# Embedded file name: secrets.py
+# Compiled at: 2020-05-12 17:16:29
+# Size of source mod 2**32: 34 bytes
+SECRET_KEY = 'Green eggs and ham'
+# okay decompiling secrets.cpython-38.pyc
+&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;Caching out&lt;/h2&gt;&lt;p dir="ltr"&gt;To investigate just how widespread this problem was, I wrote a short script to search GitHub for &lt;code dir="ltr"&gt;.pyc&lt;/code&gt; files and decompile them to look for secrets, which found &lt;strong dir="ltr"&gt;thousands of Twitter keys, Stripe tokens, AWS credentials, and social media passwords&lt;/strong&gt;. I alerted any organizations whose keys I found with this script.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="python" dir="ltr"&gt;&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;base64&lt;/span&gt;
+&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;io&lt;/span&gt;
+&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;os&lt;/span&gt;
+&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;tempfile&lt;/span&gt;
+&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;uncompyle6&lt;/span&gt;
+&lt;span dir="ltr"&gt;from&lt;/span&gt; &lt;span dir="ltr"&gt;github&lt;/span&gt; &lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;Github&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;GITHUB_KEY&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;os&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;environ&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;get&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"GITHUB_KEY"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;g&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;Github&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;GITHUB_KEY&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;span dir="ltr"&gt;items&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;g&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;search_code&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"filename:secrets.pyc"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;item&lt;/span&gt; &lt;span dir="ltr"&gt;in&lt;/span&gt; &lt;span dir="ltr"&gt;items&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
+    &lt;span dir="ltr"&gt;print&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;f&lt;/span&gt;&lt;span dir="ltr"&gt;"DECOMPILING REPO https://github.com/{item.repository.full_name}"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+    &lt;span dir="ltr"&gt;print&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;f&lt;/span&gt;&lt;span dir="ltr"&gt;"OWNER TYPE: {item.repository.owner.type}"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+    &lt;span dir="ltr"&gt;try&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
+        &lt;span dir="ltr"&gt;contents&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;base64&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;b64decode&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;item&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;content&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+        &lt;span dir="ltr"&gt;with&lt;/span&gt; &lt;span dir="ltr"&gt;tempfile&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;NamedTemporaryFile&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;suffix&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;".pyc"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;as&lt;/span&gt; &lt;span dir="ltr"&gt;f&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
+            &lt;span dir="ltr"&gt;f&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;write&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;contents&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+            &lt;span dir="ltr"&gt;f&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;seek&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+
+            &lt;span dir="ltr"&gt;out&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;io&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;StringIO&lt;/span&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt;
+            &lt;span dir="ltr"&gt;uncompyle6&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;decompile_file&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;f&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;name&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;out&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+            &lt;span dir="ltr"&gt;out&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;seek&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+            &lt;span dir="ltr"&gt;print&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;out&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;read&lt;/span&gt;&lt;span dir="ltr"&gt;())&lt;/span&gt;
+    &lt;span dir="ltr"&gt;except&lt;/span&gt; &lt;span dir="ltr"&gt;Exception&lt;/span&gt; &lt;span dir="ltr"&gt;as&lt;/span&gt; &lt;span dir="ltr"&gt;e&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
+        &lt;span dir="ltr"&gt;print&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;e&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+        &lt;span dir="ltr"&gt;print&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;f&lt;/span&gt;&lt;span dir="ltr"&gt;"COULD NOT DECOMPILE REPO https://github.com/{item.repository.full_name}"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+        &lt;span dir="ltr"&gt;continue&lt;/span&gt;
+    &lt;span dir="ltr"&gt;print&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;\n\n\n&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;Try this out yourself!&lt;/h2&gt;&lt;p&gt;This post comes with a small capture-the-flag style lab for you to try out this technique yourself.&lt;/p&gt;&lt;p dir="ltr"&gt;You can find it at &lt;a href="https://github.com/veggiedefender/pyc-secret-lab/" dir="ltr"&gt;https://github.com/veggiedefender/pyc-secret-lab/&lt;/a&gt;&lt;/p&gt;&lt;h2&gt;Takeaways&lt;/h2&gt;&lt;p dir="ltr"&gt;Cached bytecode is a low-level internal performance optimization, which is the kind of thing Python was supposed to free us from having to think about! The contents of &lt;code dir="ltr"&gt;.pyc&lt;/code&gt; files are inscrutable without special tools like a disassembler or decompiler. When these files are buried inside &lt;code dir="ltr"&gt;__pycache__&lt;/code&gt; (the &lt;a href="https://docs.python.org/3/tutorial/classes.html#private-variables" dir="ltr"&gt;double underscores&lt;/a&gt; signal “keep out; internal use only”), they’re easy to overlook. Avoiding this requires either getting lucky with a good gitignore, or intermediate knowledge of git and python internals.&lt;/p&gt;&lt;p&gt;Actionable items you can do:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Look through your repositories for loose &lt;code dir="ltr"&gt;.pyc&lt;/code&gt; files, and delete them&lt;/LI&gt;&lt;LI&gt;If you have &lt;code dir="ltr"&gt;.pyc&lt;/code&gt; files and they contain secrets, then revoke and rotate your secrets&lt;/LI&gt;&lt;LI&gt;Use a standard &lt;a href="https://github.com/github/gitignore/blob/master/Python.gitignore" dir="ltr"&gt;gitignore&lt;/a&gt; to prevent checking in &lt;code dir="ltr"&gt;.pyc&lt;/code&gt; files&lt;/LI&gt;&lt;LI&gt;Use JSON files or environment variables for configuration&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Tue, 12 May 2020 23:07:58 -0500</pubDate></item><item><title>Attributes — aka annotations — in PHP 8</title><link>https://lobste.rs/s/yito3p</link><description>&lt;p&gt;As of PHP 8, we'll be able to use attributes. The goal of these attributes, also known as annotations in many other languages, is to add meta data to classes, methods, variables and what not; in a structured way.&lt;/p&gt;&lt;p&gt;The concept of attributes isn't new at all, we've been using docblocks to simulate their behaviour for years now. With the addition of attributes though, we now have a first-class citizen in the language to represent this kind of meta data, instead of having to manually parse docblocks.&lt;/p&gt;&lt;p&gt;So what do they look like? How do we make custom attributes? Are there any caveats? Those are the questions that will be answered in this post. Let's dive in!&lt;/p&gt;&lt;h2&gt; Rundown&lt;/h2&gt;&lt;p&gt;First things first, here's what attribute would look like in the wild:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; &lt;span dir="ltr"&gt;\&lt;span dir="ltr"&gt;Support&lt;/span&gt;\&lt;span dir="ltr"&gt;Attributes&lt;/span&gt;\&lt;span dir="ltr"&gt;ListensTo&lt;/span&gt;&lt;/span&gt;;
 
 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;class&lt;/span&gt; &lt;span dir="ltr"&gt;ProductSubscriber&lt;/span&gt;
 &lt;/span&gt;{
@@ -1099,7 +1099,126 @@ $object = &lt;span dir="ltr"&gt;new&lt;/span&gt; &amp;lt;&amp;lt;&lt;span dir="l
             &lt;a href="https://mobile.twitter.com/brendt_gd" rel="noopener noreferrer" dir="ltr"&gt;on Twitter&lt;/a&gt;.
             Noticed a tpyo? You can submit a
             &lt;a href="https://github.com/brendt/stitcher.io" rel="noopener noreferrer" dir="ltr"&gt;PR&lt;/a&gt; to fix it.
-                                            &lt;/div&gt;</description><pubDate>Wed, 13 May 2020 08:56:42 -0500</pubDate></item><item><title>[1991] The Psychology of Advanced Mathematical Thinking</title><link>https://homepages.warwick.ac.uk/staff/David.Tall/pdfs/dot1991k-psychology-of-amt.pdfhttps://homepages.warwick.ac.uk/staff/David.Tall/pdfs/dot1991k-psychology-of-amt.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/l1bwms/1991_psychology_advanced_mathematical"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Wed, 13 May 2020 14:04:14 -0500</pubDate></item><item><title>Building Native macOS Apps with ClojureScript</title><link>https://lobste.rs/s/yr3nk4</link><description>&lt;p&gt;
+                                            &lt;/div&gt;</description><pubDate>Wed, 13 May 2020 08:56:42 -0500</pubDate></item><item><title>C-Kermit 4.0.025 source code 1985/02/05</title><link>https://lobste.rs/s/4jufvc</link><description>&lt;h1&gt;&lt;span&gt;C-Kermit 4.0, 5 February 1985&lt;/span&gt;&lt;/h1&gt;&lt;div dir="ltr"&gt;
+
+Frank da Cruz
+&lt;br dir="ltr"&gt;
+April 23, 2020
+&lt;br dir="ltr"&gt;
+&lt;i dir="ltr"&gt;Last update:&lt;/i&gt; Sat Apr 25 11:07:37 2020
+&lt;/div&gt;&lt;BLOCKQUOTE&gt;&lt;PRE&gt;[~] ./wermit
+C-Kermit 4.0(025) 5 Feb 85, for 4.2 BSD UNIX
+Type ? for help
+C-Kermit&amp;gt;help
+
+Type ? for a list of commands, type 'help x' for any command x.
+While typing commands, use the following special characters:
+
+ DEL, RUBOUT, BACKSPACE, CTRL-H: Delete the most recent character typed.
+ CTRL-W: Delete the most recent word typed.
+ CTRL-U: Delete the current line.
+ CTRL-R: Redisplay the current line.
+ ?       (question mark) display help on the current command or field.
+ ESC     (Escape or Altmode) Attempt to complete the current field.
+ \       (backslash) include the following character literally.
+
+From Unix command level, type 'kermit -h' to get help about command line
+args.
+
+C-Kermit&amp;gt;exit
+[~]
+&lt;/PRE&gt;&lt;/BLOCKQUOTE&gt;&lt;div dir="ltr"&gt;
+
+This was &lt;b dir="ltr"&gt;the first public release of C-Kermit&lt;/b&gt;, version 4.0,
+announced Tuesday, February 5, 1985, in
+the &lt;a href="http://www.columbia.edu/kermit/ftp/e/mail.85a" dir="ltr"&gt;Info-Kermit
+Digest&lt;/a&gt; V2 #1.  Although it was called version 4.0, it was a completely
+new program.  Its predecessor was called Unix Kermit and was not interactive
+at all; it was driven purely by command-line options.  The last Unix Kermit
+version was &lt;a href="http://www.columbia.edu/kermit/archive.html" dir="ltr"&gt; 3.0 from
+1984&lt;/a&gt;, and since C-Kermit was to replace it, continuity of versioning was
+preserved.  In the screenshot above you can see some anachronisms like the
+reference to an "Altmode" key (that's Teletype talk) and the
+non-"Y2K-compliant" date.
+
+&lt;/div&gt;&lt;BLOCKQUOTE&gt;&lt;table class="compact" dir="ltr"&gt;
+&lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
+&lt;th dir="ltr"&gt;Method
+&lt;/th&gt;&lt;th dir="ltr"&gt;Gzipped Tar archive
+&lt;/th&gt;&lt;th dir="ltr"&gt;Zip file
+&lt;/th&gt;&lt;th dir="ltr"&gt;Indivdual Source files
+&lt;/th&gt;&lt;/tr&gt;&lt;tr dir="ltr"&gt;
+&lt;td dir="ltr"&gt;FTP
+
+&lt;/td&gt;&lt;td dir="ltr"&gt;
+&lt;a href="ftp://ftp.kermitproject.org/kermit/archives/ckc025.tar.gz" dir="ltr"&gt;ftp://ftp.kermitproject.org/kermit/archives/ck0025.tar.gz&lt;/a&gt;
+
+&lt;/td&gt;&lt;td dir="ltr"&gt;
+&lt;a href="ftp://ftp.kermitproject.org/kermit/archives/ckc025.zip" dir="ltr"&gt;ftp://ftp.kermitproject.org/kermit/archives/ck0025.zip&lt;/a&gt;
+
+&lt;/td&gt;&lt;td dir="ltr"&gt;&lt;a href="ftp://ftp.kermitproject.org/kermit/ckermit40/" dir="ltr"&gt;ftp://ftp.kermitproject.org/kermit/ckermit40/&lt;/a&gt;
+
+&lt;/td&gt;&lt;/tr&gt;&lt;tr dir="ltr"&gt;
+&lt;td dir="ltr"&gt;HTTP
+
+&lt;/td&gt;&lt;td dir="ltr"&gt;
+&lt;a href="http://www.kermitproject.org/ftp/kermit/archives/ckc025.tar.gz" dir="ltr"&gt;http://www.kermitproject.org/ftp/kermit/archives/ckc025.tar.gz&lt;/a&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;
+
+&lt;/td&gt;&lt;td dir="ltr"&gt;
+&lt;a href="http://www.kermitproject.org/ftp/kermit/archives/ckc025.zip" dir="ltr"&gt;http://www.kermitproject.org/ftp/kermit/archives/ckc025.zip&lt;/a&gt;
+
+&lt;/td&gt;&lt;td dir="ltr"&gt;&amp;nbsp;
+&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/BLOCKQUOTE&gt;&lt;div dir="ltr"&gt;
+
+Unfortunately it can't be added to
+the &lt;a href="http://www.columbia.edu/kermit/archive.html" dir="ltr"&gt;archive at
+Columbia University&lt;/a&gt; because the Columbia Kermit website was closed and
+frozen in 2011; it's housed instead at the new Open Source Kermit Project
+(kermitproject.org) and listed in the
+up-to-date &lt;a href="http://www.kermitproject.org/archive.html" dir="ltr"&gt;archive page&lt;/a&gt; at that site.
+
+&lt;/div&gt;&lt;p dir="ltr"&gt;
+
+The C-Kermit 4.0 code was exhumed in March/April 2020 by Warner Losh, who
+found it on an ancient &lt;span title="Digital Equipment Corporation User
+Society" dir="ltr"&gt;DECUS&lt;/span&gt; tape.  It had been lost for 35 years.  Warner
+has written up a detailed history of this and other old C-Kermit versions
+here:
+
+&lt;/p&gt;&lt;p&gt;
+
+I tried to build the C-Kermit 4.0 code on both NetBSD and Linux, and failed
+in both places because modern C compilers are super-strict but the code was
+written before ANSI C appeared.  The build almost worked after I made the
+following adjustments:
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt; Fixed some minor corruption in the source files (wrapped lines, NULs).
+&lt;/LI&gt;&lt;LI&gt; Added "-std=c89" to makefile.
+&lt;/LI&gt;&lt;LI&gt; Changed ckermi.h to also include ansi_c.h to pick up modern .h files.
+&lt;/LI&gt;&lt;LI&gt; Made sure all source modules included ckermi.h (a few of them didn't).
+&lt;/LI&gt;&lt;LI&gt; Corrected some wart/ckwart file naming confusion.
+&lt;/LI&gt;&lt;LI&gt; Changed setstate() in wart.c to xsetstate()
+ to avoid conflict with  stdlib.h.
+&lt;/LI&gt;&lt;/UL&gt;&lt;div&gt;
+
+But because terminal i/o APIs have totally changed since 35 years ago,
+there's no way to completely build it without writing a ckxbsd.c replacement
+that uses termios function calls rather than setting ioctl bits.
+Alternatively, the work could be done to #ifdef out the code that makes
+serial port and modem connections (the CONNECT and DIAL commands and related
+SET commands), and then you'd have a compact remote-end-only version (like a
+more modern version of C-Kermit built with -DNOLOCAL).
+
+&lt;/div&gt;&lt;p&gt;
+
+C-Kermit 4.0 code consists of 9 modules and 3 header files, a total of 7252
+lines of code.  Compared to C-Kermit 9.0 with about 462000 lines of code
+and somewhere between 50 and 100 modules, depending on the desired
+configuration.
+
+&lt;/p&gt;&lt;address dir="ltr"&gt;
+&amp;nbsp;&amp;nbsp;C-Kermit 4.0 from 1985 / &lt;a href="http://www.kermitproject.org/" dir="ltr"&gt;kermitproject.org&lt;/a&gt; / 23 April 2020
+&lt;/address&gt;</description><pubDate>Wed, 13 May 2020 10:16:40 -0500</pubDate></item><item><title>[1991] The Psychology of Advanced Mathematical Thinking</title><link>https://homepages.warwick.ac.uk/staff/David.Tall/pdfs/dot1991k-psychology-of-amt.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/l1bwms/1991_psychology_advanced_mathematical"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Wed, 13 May 2020 14:04:14 -0500</pubDate></item><item><title>Building Native macOS Apps with ClojureScript</title><link>https://lobste.rs/s/yr3nk4</link><description>&lt;p&gt;
       May 13, 2020
       
     &lt;/p&gt;&lt;p dir="ltr"&gt;Thanks to &lt;a href="https://github.com/microsoft/react-native-macos" dir="ltr"&gt;Microsoft’s diligent open-source work&lt;/a&gt;,
@@ -1948,126 +2067,28 @@ context jekyll-hyde/jekyll-hyde.tex --path&lt;span dir="ltr"&gt;=&lt;/span&gt;je
   --path&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;span dir="ltr"&gt;${PATH_PROJECT}&lt;/span&gt;,&lt;span dir="ltr"&gt;${ARG_PATH_CONTEXT_TEX}&lt;/span&gt;"&lt;/span&gt; &lt;span dir="ltr"&gt;\&lt;/span&gt;
   --result&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;span dir="ltr"&gt;${ARG_FILE_CONTEXT_PDF}&lt;/span&gt;"&lt;/span&gt; &lt;span dir="ltr"&gt;\&lt;/span&gt;
   --modes&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;span dir="ltr"&gt;${ARG_CONTEXT_MODES}&lt;/span&gt;"&lt;/span&gt; &lt;span dir="ltr"&gt;\&lt;/span&gt;
-  &lt;span dir="ltr"&gt;"&lt;span dir="ltr"&gt;${ARG_FILE_CONTEXT_MAIN}&lt;/span&gt;"&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; /dev/null &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&amp;gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;1&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;If you get stuck, let me know.&lt;/p&gt;&lt;h2&gt;Download&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;a href="https://dave.autonoma.ca/blog/2020/04/28/typesetting-markdown-part-8/themes.zip" dir="ltr"&gt;Download&lt;/a&gt; the themes, distributed under the &lt;a href="https://opensource.org/licenses/MIT" dir="ltr"&gt;MIT license&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;Summary&lt;/h2&gt;&lt;p&gt;This part covered many topics:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;using lua filters to parse annotated Markdown;&lt;/LI&gt;&lt;LI&gt;defining counters for the keys in key-value pair maps;&lt;/LI&gt;&lt;LI&gt;general overview of interior design;&lt;/LI&gt;&lt;LI&gt;transcoding novels from XHTML format into Markdown;&lt;/LI&gt;&lt;LI&gt;concepts for structuring projects and products; and&lt;/LI&gt;&lt;LI&gt;applying project- and product-level themes to novels.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;The last part in this series will explore drawing with MetaPost.&lt;/p&gt;&lt;h2&gt;About the Author&lt;/h2&gt;&lt;p dir="ltr"&gt;My career has spanned &lt;strong dir="ltr"&gt;tele-&lt;/strong&gt; and &lt;strong dir="ltr"&gt;radio communications&lt;/strong&gt;, enterprise-level &lt;strong dir="ltr"&gt;e-commerce&lt;/strong&gt; solutions, &lt;strong dir="ltr"&gt;finance&lt;/strong&gt;, &lt;strong dir="ltr"&gt;transportation&lt;/strong&gt;, modernization projects in both &lt;strong dir="ltr"&gt;health&lt;/strong&gt; and &lt;strong dir="ltr"&gt;education&lt;/strong&gt;, and &lt;a href="https://dave.autonoma.ca/David_Jarvis.pdf" dir="ltr"&gt;much more&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;Delighted to discuss opportunities to work with revolutionary companies combatting climate change.&lt;/p&gt;</description><pubDate>Wed, 13 May 2020 19:49:58 -0500</pubDate></item><item><title>C-Kermit 4.0.025 source code 1985/02/05</title><link>https://lobste.rs/s/4jufvc</link><description>&lt;h1&gt;&lt;span&gt;C-Kermit 4.0, 5 February 1985&lt;/span&gt;&lt;/h1&gt;&lt;div dir="ltr"&gt;
+  &lt;span dir="ltr"&gt;"&lt;span dir="ltr"&gt;${ARG_FILE_CONTEXT_MAIN}&lt;/span&gt;"&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; /dev/null &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&amp;gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;1&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;If you get stuck, let me know.&lt;/p&gt;&lt;h2&gt;Download&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;a href="https://dave.autonoma.ca/blog/2020/04/28/typesetting-markdown-part-8/themes.zip" dir="ltr"&gt;Download&lt;/a&gt; the themes, distributed under the &lt;a href="https://opensource.org/licenses/MIT" dir="ltr"&gt;MIT license&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;Summary&lt;/h2&gt;&lt;p&gt;This part covered many topics:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;using lua filters to parse annotated Markdown;&lt;/LI&gt;&lt;LI&gt;defining counters for the keys in key-value pair maps;&lt;/LI&gt;&lt;LI&gt;general overview of interior design;&lt;/LI&gt;&lt;LI&gt;transcoding novels from XHTML format into Markdown;&lt;/LI&gt;&lt;LI&gt;concepts for structuring projects and products; and&lt;/LI&gt;&lt;LI&gt;applying project- and product-level themes to novels.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;The last part in this series will explore drawing with MetaPost.&lt;/p&gt;&lt;h2&gt;About the Author&lt;/h2&gt;&lt;p dir="ltr"&gt;My career has spanned &lt;strong dir="ltr"&gt;tele-&lt;/strong&gt; and &lt;strong dir="ltr"&gt;radio communications&lt;/strong&gt;, enterprise-level &lt;strong dir="ltr"&gt;e-commerce&lt;/strong&gt; solutions, &lt;strong dir="ltr"&gt;finance&lt;/strong&gt;, &lt;strong dir="ltr"&gt;transportation&lt;/strong&gt;, modernization projects in both &lt;strong dir="ltr"&gt;health&lt;/strong&gt; and &lt;strong dir="ltr"&gt;education&lt;/strong&gt;, and &lt;a href="https://dave.autonoma.ca/David_Jarvis.pdf" dir="ltr"&gt;much more&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;Delighted to discuss opportunities to work with revolutionary companies combatting climate change.&lt;/p&gt;</description><pubDate>Wed, 13 May 2020 19:49:58 -0500</pubDate></item><item><title>How do you take notes and organize your knowledge?</title><link>https://lobste.rs/s/7catij</link><description>&lt;p dir="ltr"&gt;I recently realized that I am not good at keeping track of what I learn, and that makes it harder to connect ideas and remember facts. For this reason, I am trying to come up with a better system to document and relate ideas. I am considering two options, &lt;a href="https://lobste.rs/s/7catij/roamresearch.com/" dir="ltr"&gt;RoamResearch&lt;/a&gt;, or emacs and org mode.&lt;/p&gt;</description><pubDate>Tue, 12 May 2020 07:28:40 -0500</pubDate></item><item><title>fortran-lang/stdlib - Fortran Standard Library</title><link>https://lobste.rs/s/dw50d4</link><description>&lt;img src="https://github.com/fortran-lang/stdlib/workflows/CI/badge.svg" alt="Actions Status" width="90" height="20"&gt;&lt;img src="https://github.com/fortran-lang/stdlib/workflows/CI_windows/badge.svg" alt="Actions Status" width="144" height="20"&gt;&lt;h2&gt;Goals and Motivation&lt;/h2&gt;&lt;p dir="ltr"&gt;The Fortran Standard, as published by the ISO (&lt;a href="https://wg5-fortran.org/" rel="nofollow" dir="ltr"&gt;https://wg5-fortran.org/&lt;/a&gt;), does
+not have a Standard Library. The goal of this project is to provide a community
+driven and agreed upon &lt;em dir="ltr"&gt;de facto&lt;/em&gt; "standard" library for Fortran, called a
+Fortran Standard Library (&lt;code dir="ltr"&gt;stdlib&lt;/code&gt;). We have a rigorous process how &lt;code dir="ltr"&gt;stdlib&lt;/code&gt; is
+developed as documented in our &lt;a href="https://github.com/fortran-lang/stdlib/blob/master/WORKFLOW.md" dir="ltr"&gt;Workflow&lt;/a&gt;. &lt;code dir="ltr"&gt;stdlib&lt;/code&gt; is both a
+specification and a reference implementation. We are cooperating with the
+Fortran Standards Committee (e.g., the effort
+&lt;a href="https://github.com/j3-fortran/fortran_proposals/issues/104" dir="ltr"&gt;started&lt;/a&gt; at the J3
+committee repository) and the plan is to continue working with the Committee in
+the future (such as in the step 5. in the &lt;a href="https://github.com/fortran-lang/stdlib/blob/master/WORKFLOW.md" dir="ltr"&gt;Workflow&lt;/a&gt; document), so
+that if the Committee wants to standardize some feature already available in &lt;code dir="ltr"&gt;stdlib&lt;/code&gt;, it would
+base it on &lt;code dir="ltr"&gt;stdlib&lt;/code&gt;'s implementation.&lt;/p&gt;&lt;h2&gt;Scope&lt;/h2&gt;&lt;p&gt;The goal of the Fortran Standard Library is to achieve the following general scope:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Utilities (containers, strings, files, OS/environment integration, unit
+testing &amp;amp; assertions, logging,  ...)&lt;/LI&gt;&lt;LI&gt;Algorithms (searching and sorting, merging, ...)&lt;/LI&gt;&lt;LI&gt;Mathematics (linear algebra, sparse matrices, special functions, fast Fourier
+transform, random numbers, statistics, ordinary differential equations,
+numerical integration, optimization, ...)&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Getting started&lt;/h2&gt;&lt;h3&gt;Get the code&lt;/h3&gt;&lt;PRE&gt;git clone https://github.com/fortran-lang/stdlib
+&lt;span dir="ltr"&gt;cd&lt;/span&gt; stdlib&lt;/PRE&gt;&lt;h3&gt;Requirements&lt;/h3&gt;&lt;p dir="ltr"&gt;The preprocessor &lt;code dir="ltr"&gt;fypp&lt;/code&gt; (&lt;a href="https://github.com/aradi/fypp" dir="ltr"&gt;https://github.com/aradi/fypp&lt;/a&gt;) is needed because metaprogramming is used.
+It can be installed using the command line installer &lt;code dir="ltr"&gt;pip&lt;/code&gt;.&lt;/p&gt;&lt;PRE&gt;pip install fypp&lt;/PRE&gt;&lt;h3&gt;Build with CMake&lt;/h3&gt;&lt;PRE&gt;cmake -B build
 
-Frank da Cruz
-&lt;br dir="ltr"&gt;
-April 23, 2020
-&lt;br dir="ltr"&gt;
-&lt;i dir="ltr"&gt;Last update:&lt;/i&gt; Sat Apr 25 11:07:37 2020
-&lt;/div&gt;&lt;BLOCKQUOTE&gt;&lt;PRE&gt;[~] ./wermit
-C-Kermit 4.0(025) 5 Feb 85, for 4.2 BSD UNIX
-Type ? for help
-C-Kermit&amp;gt;help
+cmake --build build
 
-Type ? for a list of commands, type 'help x' for any command x.
-While typing commands, use the following special characters:
-
- DEL, RUBOUT, BACKSPACE, CTRL-H: Delete the most recent character typed.
- CTRL-W: Delete the most recent word typed.
- CTRL-U: Delete the current line.
- CTRL-R: Redisplay the current line.
- ?       (question mark) display help on the current command or field.
- ESC     (Escape or Altmode) Attempt to complete the current field.
- \       (backslash) include the following character literally.
-
-From Unix command level, type 'kermit -h' to get help about command line
-args.
-
-C-Kermit&amp;gt;exit
-[~]
-&lt;/PRE&gt;&lt;/BLOCKQUOTE&gt;&lt;div dir="ltr"&gt;
-
-This was &lt;b dir="ltr"&gt;the first public release of C-Kermit&lt;/b&gt;, version 4.0,
-announced Tuesday, February 5, 1985, in
-the &lt;a href="http://www.columbia.edu/kermit/ftp/e/mail.85a" dir="ltr"&gt;Info-Kermit
-Digest&lt;/a&gt; V2 #1.  Although it was called version 4.0, it was a completely
-new program.  Its predecessor was called Unix Kermit and was not interactive
-at all; it was driven purely by command-line options.  The last Unix Kermit
-version was &lt;a href="http://www.columbia.edu/kermit/archive.html" dir="ltr"&gt; 3.0 from
-1984&lt;/a&gt;, and since C-Kermit was to replace it, continuity of versioning was
-preserved.  In the screenshot above you can see some anachronisms like the
-reference to an "Altmode" key (that's Teletype talk) and the
-non-"Y2K-compliant" date.
-
-&lt;/div&gt;&lt;BLOCKQUOTE&gt;&lt;table class="compact" dir="ltr"&gt;
-&lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
-&lt;th dir="ltr"&gt;Method
-&lt;/th&gt;&lt;th dir="ltr"&gt;Gzipped Tar archive
-&lt;/th&gt;&lt;th dir="ltr"&gt;Zip file
-&lt;/th&gt;&lt;th dir="ltr"&gt;Indivdual Source files
-&lt;/th&gt;&lt;/tr&gt;&lt;tr dir="ltr"&gt;
-&lt;td dir="ltr"&gt;FTP
-
-&lt;/td&gt;&lt;td dir="ltr"&gt;
-&lt;a href="ftp://ftp.kermitproject.org/kermit/archives/ckc025.tar.gz" dir="ltr"&gt;ftp://ftp.kermitproject.org/kermit/archives/ck0025.tar.gz&lt;/a&gt;
-
-&lt;/td&gt;&lt;td dir="ltr"&gt;
-&lt;a href="ftp://ftp.kermitproject.org/kermit/archives/ckc025.zip" dir="ltr"&gt;ftp://ftp.kermitproject.org/kermit/archives/ck0025.zip&lt;/a&gt;
-
-&lt;/td&gt;&lt;td dir="ltr"&gt;&lt;a href="ftp://ftp.kermitproject.org/kermit/ckermit40/" dir="ltr"&gt;ftp://ftp.kermitproject.org/kermit/ckermit40/&lt;/a&gt;
-
-&lt;/td&gt;&lt;/tr&gt;&lt;tr dir="ltr"&gt;
-&lt;td dir="ltr"&gt;HTTP
-
-&lt;/td&gt;&lt;td dir="ltr"&gt;
-&lt;a href="http://www.kermitproject.org/ftp/kermit/archives/ckc025.tar.gz" dir="ltr"&gt;http://www.kermitproject.org/ftp/kermit/archives/ckc025.tar.gz&lt;/a&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;
-
-&lt;/td&gt;&lt;td dir="ltr"&gt;
-&lt;a href="http://www.kermitproject.org/ftp/kermit/archives/ckc025.zip" dir="ltr"&gt;http://www.kermitproject.org/ftp/kermit/archives/ckc025.zip&lt;/a&gt;
-
-&lt;/td&gt;&lt;td dir="ltr"&gt;&amp;nbsp;
-&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/BLOCKQUOTE&gt;&lt;div dir="ltr"&gt;
-
-Unfortunately it can't be added to
-the &lt;a href="http://www.columbia.edu/kermit/archive.html" dir="ltr"&gt;archive at
-Columbia University&lt;/a&gt; because the Columbia Kermit website was closed and
-frozen in 2011; it's housed instead at the new Open Source Kermit Project
-(kermitproject.org) and listed in the
-up-to-date &lt;a href="http://www.kermitproject.org/archive.html" dir="ltr"&gt;archive page&lt;/a&gt; at that site.
-
-&lt;/div&gt;&lt;p dir="ltr"&gt;
-
-The C-Kermit 4.0 code was exhumed in March/April 2020 by Warner Losh, who
-found it on an ancient &lt;span title="Digital Equipment Corporation User
-Society" dir="ltr"&gt;DECUS&lt;/span&gt; tape.  It had been lost for 35 years.  Warner
-has written up a detailed history of this and other old C-Kermit versions
-here:
-
-&lt;/p&gt;&lt;p&gt;
-
-I tried to build the C-Kermit 4.0 code on both NetBSD and Linux, and failed
-in both places because modern C compilers are super-strict but the code was
-written before ANSI C appeared.  The build almost worked after I made the
-following adjustments:
-
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt; Fixed some minor corruption in the source files (wrapped lines, NULs).
-&lt;/LI&gt;&lt;LI&gt; Added "-std=c89" to makefile.
-&lt;/LI&gt;&lt;LI&gt; Changed ckermi.h to also include ansi_c.h to pick up modern .h files.
-&lt;/LI&gt;&lt;LI&gt; Made sure all source modules included ckermi.h (a few of them didn't).
-&lt;/LI&gt;&lt;LI&gt; Corrected some wart/ckwart file naming confusion.
-&lt;/LI&gt;&lt;LI&gt; Changed setstate() in wart.c to xsetstate()
- to avoid conflict with  stdlib.h.
-&lt;/LI&gt;&lt;/UL&gt;&lt;div&gt;
-
-But because terminal i/o APIs have totally changed since 35 years ago,
-there's no way to completely build it without writing a ckxbsd.c replacement
-that uses termios function calls rather than setting ioctl bits.
-Alternatively, the work could be done to #ifdef out the code that makes
-serial port and modem connections (the CONNECT and DIAL commands and related
-SET commands), and then you'd have a compact remote-end-only version (like a
-more modern version of C-Kermit built with -DNOLOCAL).
-
-&lt;/div&gt;&lt;p&gt;
-
-C-Kermit 4.0 code consists of 9 modules and 3 header files, a total of 7252
-lines of code.  Compared to C-Kermit 9.0 with about 462000 lines of code
-and somewhere between 50 and 100 modules, depending on the desired
-configuration.
-
-&lt;/p&gt;&lt;address dir="ltr"&gt;
-&amp;nbsp;&amp;nbsp;C-Kermit 4.0 from 1985 / &lt;a href="http://www.kermitproject.org/" dir="ltr"&gt;kermitproject.org&lt;/a&gt; / 23 April 2020
-&lt;/address&gt;</description><pubDate>Wed, 13 May 2020 10:16:40 -0500</pubDate></item><item><title>How do you take notes and organize your knowledge?</title><link>https://lobste.rs/s/7catij</link><description>&lt;p dir="ltr"&gt;I recently realized that I am not good at keeping track of what I learn, and that makes it harder to connect ideas and remember facts. For this reason, I am trying to come up with a better system to document and relate ideas. I am considering two options, &lt;a href="https://lobste.rs/s/7catij/roamresearch.com/" dir="ltr"&gt;RoamResearch&lt;/a&gt;, or emacs and org mode.&lt;/p&gt;</description><pubDate>Tue, 12 May 2020 07:28:40 -0500</pubDate></item><item><title>Small, sharp tools can cut you</title><link>https://lobste.rs/s/knhykm</link><description>&lt;img width="446" height="335" src="https://i1.wp.com/avdi.codes/wp-content/uploads/2020/05/IMG_20200506_102552-scaled.jpg?resize=1000%2C750&amp;amp;ssl=1" alt="" srcset="https://i1.wp.com/avdi.codes/wp-content/uploads/2020/05/IMG_20200506_102552-scaled.jpg?w=2560&amp;amp;ssl=1 2560w, https://i1.wp.com/avdi.codes/wp-content/uploads/2020/05/IMG_20200506_102552-scaled.jpg?resize=300%2C225&amp;amp;ssl=1 300w, https://i1.wp.com/avdi.codes/wp-content/uploads/2020/05/IMG_20200506_102552-scaled.jpg?resize=1024%2C768&amp;amp;ssl=1 1024w, https://i1.wp.com/avdi.codes/wp-content/uploads/2020/05/IMG_20200506_102552-scaled.jpg?resize=768%2C576&amp;amp;ssl=1 768w, https://i1.wp.com/avdi.codes/wp-content/uploads/2020/05/IMG_20200506_102552-scaled.jpg?resize=1536%2C1152&amp;amp;ssl=1 1536w, https://i1.wp.com/avdi.codes/wp-content/uploads/2020/05/IMG_20200506_102552-scaled.jpg?resize=2048%2C1536&amp;amp;ssl=1 2048w, https://i1.wp.com/avdi.codes/wp-content/uploads/2020/05/IMG_20200506_102552-scaled.jpg?resize=600%2C450&amp;amp;ssl=1 600w, https://i1.wp.com/avdi.codes/wp-content/uploads/2020/05/IMG_20200506_102552-scaled.jpg?resize=1000%2C750&amp;amp;ssl=1 1000w, https://i1.wp.com/avdi.codes/wp-content/uploads/2020/05/IMG_20200506_102552-scaled.jpg?w=2310&amp;amp;ssl=1 2310w"&gt;&lt;p&gt;The household where I’ve been spending stay-at-home has one of the most pragmatic kitchen organization schemes I’ve ever run across. For instance, there’s “the drawer of things that scoop”, and the “the drawer of things that cut or stab”. As a result I rarely have to ask someone where to find a tool.&lt;/p&gt;&lt;p dir="ltr"&gt;I’m told that the “drawer of things that cut or stab” was once “the drawer of things that cut or stab &lt;strong dir="ltr"&gt;or burn&lt;/strong&gt;”. This posed problems during power outages, however. When you’re rummaging around in the dark for a candle and a lighter, you’d rather it not be in a drawer full of blades and sharp points.&lt;/p&gt;&lt;p dir="ltr"&gt;The UNIX command-line philosophy is famously to provide a drawer full of &lt;a href="https://www.brandur.org/small-sharp-tools" dir="ltr"&gt;small, sharp tools&lt;/a&gt;. Years ago, in one of my many iterations of building an ebook-construction toolchain, I decided to pose myself a challenge: lean fully into the UNIX command-line model. Build the toolchain using only single-purpose command-line tools, using each one for what it does best.&lt;/p&gt;&lt;p dir="ltr"&gt;For text replacements and munging: &lt;a href="https://en.wikipedia.org/wiki/Sed" dir="ltr"&gt;sed&lt;/a&gt;. For linewise filtering and splicing: &lt;a href="https://en.wikipedia.org/wiki/AWK" dir="ltr"&gt;awk&lt;/a&gt;. For macro expansion, &lt;a href="https://en.wikipedia.org/wiki/M4_(computer_language)" dir="ltr"&gt;m4&lt;/a&gt;. For XML extraction and transformation, &lt;a href="http://xmlstar.sourceforge.net/" dir="ltr"&gt;xmlstarlet&lt;/a&gt;. For HTTP downloads and uploads, &lt;a href="https://curl.haxx.se/" dir="ltr"&gt;curl&lt;/a&gt;. For document conversions, &lt;a href="https://pandoc.org/" dir="ltr"&gt;pandoc&lt;/a&gt; and &lt;a href="https://calibre-ebook.com/" dir="ltr"&gt;Calibre&lt;/a&gt;. Tying it all together: &lt;a href="https://en.wikipedia.org/wiki/Make_(software)" dir="ltr"&gt;make&lt;/a&gt; and &lt;a href="https://en.wikipedia.org/wiki/Bash_%28Unix_shell%29" dir="ltr"&gt;bash&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;It was a nightmare. You don’t realize how much you take string-interpolation and concatenation for granted in your programming language of choice until you have to deal with a half a dozen text processing tools each of which has just &lt;em dir="ltr"&gt;slightly&lt;/em&gt; different syntactical rules for expanding variables.&lt;/p&gt;&lt;p dir="ltr"&gt;And then there’s all the character escaping. Working with a conglomeration of UNIX text tools inevitably means that at some point you will need to tunnel some code or annotated data &lt;em dir="ltr"&gt;through&lt;/em&gt; one tool into another, so that it will be expanded in the right context. Which means escaping, and double-escaping, and oh… does double-escaping cancel out the escaping in this dialect?&lt;/p&gt;&lt;p dir="ltr"&gt;This mess is exactly why Perl was created. By the time &lt;em dir="ltr"&gt;I&lt;/em&gt; came to Perl it was a general-purpose programming language that came highly recommended for chewing through large text-munging jobs. But for its original audience, Perl was a way to have &lt;code dir="ltr"&gt;sed&lt;/code&gt; and &lt;code dir="ltr"&gt;awk&lt;/code&gt; and &lt;code dir="ltr"&gt;m4&lt;/code&gt; and &lt;code dir="ltr"&gt;grep&lt;/code&gt; and &lt;code dir="ltr"&gt;cat&lt;/code&gt; and &lt;code dir="ltr"&gt;cut&lt;/code&gt; all with one &lt;em dir="ltr"&gt;consistent&lt;/em&gt; programming model, with consistent data types and consistent variable scoping and consistent expansion and interpolation rules.&lt;/p&gt;&lt;p dir="ltr"&gt;And then there was Ruby, which was just Perl but undergirded with Smalltalk’s object model instead of being constructed on a foundation of &lt;a href="https://lovecraft.fandom.com/wiki/Azathoth" dir="ltr"&gt;creeping chaos&lt;/a&gt;. And Ruby begat &lt;a href="https://github.com/ruby/rake" dir="ltr"&gt;Rake&lt;/a&gt;, and when it came time to build yet &lt;em dir="ltr"&gt;another&lt;/em&gt; ebook construction toolchain I built it in Rake, and all was well.&lt;/p&gt;&lt;p dir="ltr"&gt;Getting back to the original point… drawers full of small, sharp, self-contained tools are fine in well-lit kitchens when all you need is to pick out &lt;em dir="ltr"&gt;one&lt;/em&gt; and use it by itself. When a project requires a half a dozen of those capabilities together, with rapid context-switching between them… well, keep a box of band-aids handy.&lt;/p&gt;&lt;p dir="ltr"&gt;At that point you don’t want to treat those capabilities as separate tasks anymore. You want them to be verbs and nouns in a larger, cohesive language of construction. A monolith. A food-processor.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;img alt="" width="222" height="222" title="MVIMG_20190508_175746" src="https://i2.wp.com/avdi.codes/wp-content/uploads/2019/05/MVIMG_20190508_175746.jpg?resize=770%2C770&amp;amp;ssl=1"&gt;&lt;p data-css="tve-u-115e72540adfccd"&gt;Let's correspond!&lt;/p&gt;&lt;p data-css="tve-u-125e72540adfd0b"&gt;May I write to you? Every week or so you'll get a SIGAVDI newsletter with a few handpicked links to interesting articles, talks, or resources; an update on what I've published lately; and some reflections at the intersection of software and life. Replies go directly to me, and I try to respond to every single one (eventually!)&lt;/p&gt;&lt;div data-css="tve-u-155e72540adfdc7" data-button-style="" data-tcb_hover_state_parent=""&gt;&lt;button type="submit"&gt;Subscribe&lt;/button&gt;&lt;/div&gt;</description><pubDate>Tue, 12 May 2020 16:15:57 -0500</pubDate></item><item><title>When the sum of two actual ux improvements becomes a bigger ux problem</title><link>https://lobste.rs/s/33dxd1</link><description>&lt;article&gt;&lt;time datetime="2020-05-13 03:24:56 +0000 UTC" pubdate="" itemprop="datePublished" content="2020-05-13 03:24:56 +0000 UTC"&gt;13. mai 2020&lt;/time&gt;&lt;/article&gt;&lt;div dir="ltr"&gt;&lt;p dir="ltr"&gt;Filed under &lt;a href="https://erik.itland.no/tag:ux" rel="nofollow" dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;/span&gt;&lt;span dir="ltr"&gt;ux&lt;/span&gt;&lt;/a&gt;&lt;/p&gt;
+cmake --build build --target &lt;span dir="ltr"&gt;test&lt;/span&gt;&lt;/PRE&gt;&lt;h3&gt;Build with make&lt;/h3&gt;&lt;p&gt;Alternatively, you can build using provided Makefiles:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;make -f Makefile.manual
+&lt;/code&gt;&lt;/PRE&gt;</description><pubDate>Wed, 13 May 2020 15:57:06 -0500</pubDate></item><item><title>Small, sharp tools can cut you</title><link>https://lobste.rs/s/knhykm</link><description>&lt;img width="446" height="335" src="https://i1.wp.com/avdi.codes/wp-content/uploads/2020/05/IMG_20200506_102552-scaled.jpg?resize=1000%2C750&amp;amp;ssl=1" alt="" srcset="https://i1.wp.com/avdi.codes/wp-content/uploads/2020/05/IMG_20200506_102552-scaled.jpg?w=2560&amp;amp;ssl=1 2560w, https://i1.wp.com/avdi.codes/wp-content/uploads/2020/05/IMG_20200506_102552-scaled.jpg?resize=300%2C225&amp;amp;ssl=1 300w, https://i1.wp.com/avdi.codes/wp-content/uploads/2020/05/IMG_20200506_102552-scaled.jpg?resize=1024%2C768&amp;amp;ssl=1 1024w, https://i1.wp.com/avdi.codes/wp-content/uploads/2020/05/IMG_20200506_102552-scaled.jpg?resize=768%2C576&amp;amp;ssl=1 768w, https://i1.wp.com/avdi.codes/wp-content/uploads/2020/05/IMG_20200506_102552-scaled.jpg?resize=1536%2C1152&amp;amp;ssl=1 1536w, https://i1.wp.com/avdi.codes/wp-content/uploads/2020/05/IMG_20200506_102552-scaled.jpg?resize=2048%2C1536&amp;amp;ssl=1 2048w, https://i1.wp.com/avdi.codes/wp-content/uploads/2020/05/IMG_20200506_102552-scaled.jpg?resize=600%2C450&amp;amp;ssl=1 600w, https://i1.wp.com/avdi.codes/wp-content/uploads/2020/05/IMG_20200506_102552-scaled.jpg?resize=1000%2C750&amp;amp;ssl=1 1000w, https://i1.wp.com/avdi.codes/wp-content/uploads/2020/05/IMG_20200506_102552-scaled.jpg?w=2310&amp;amp;ssl=1 2310w"&gt;&lt;p&gt;The household where I’ve been spending stay-at-home has one of the most pragmatic kitchen organization schemes I’ve ever run across. For instance, there’s “the drawer of things that scoop”, and the “the drawer of things that cut or stab”. As a result I rarely have to ask someone where to find a tool.&lt;/p&gt;&lt;p dir="ltr"&gt;I’m told that the “drawer of things that cut or stab” was once “the drawer of things that cut or stab &lt;strong dir="ltr"&gt;or burn&lt;/strong&gt;”. This posed problems during power outages, however. When you’re rummaging around in the dark for a candle and a lighter, you’d rather it not be in a drawer full of blades and sharp points.&lt;/p&gt;&lt;p dir="ltr"&gt;The UNIX command-line philosophy is famously to provide a drawer full of &lt;a href="https://www.brandur.org/small-sharp-tools" dir="ltr"&gt;small, sharp tools&lt;/a&gt;. Years ago, in one of my many iterations of building an ebook-construction toolchain, I decided to pose myself a challenge: lean fully into the UNIX command-line model. Build the toolchain using only single-purpose command-line tools, using each one for what it does best.&lt;/p&gt;&lt;p dir="ltr"&gt;For text replacements and munging: &lt;a href="https://en.wikipedia.org/wiki/Sed" dir="ltr"&gt;sed&lt;/a&gt;. For linewise filtering and splicing: &lt;a href="https://en.wikipedia.org/wiki/AWK" dir="ltr"&gt;awk&lt;/a&gt;. For macro expansion, &lt;a href="https://en.wikipedia.org/wiki/M4_(computer_language)" dir="ltr"&gt;m4&lt;/a&gt;. For XML extraction and transformation, &lt;a href="http://xmlstar.sourceforge.net/" dir="ltr"&gt;xmlstarlet&lt;/a&gt;. For HTTP downloads and uploads, &lt;a href="https://curl.haxx.se/" dir="ltr"&gt;curl&lt;/a&gt;. For document conversions, &lt;a href="https://pandoc.org/" dir="ltr"&gt;pandoc&lt;/a&gt; and &lt;a href="https://calibre-ebook.com/" dir="ltr"&gt;Calibre&lt;/a&gt;. Tying it all together: &lt;a href="https://en.wikipedia.org/wiki/Make_(software)" dir="ltr"&gt;make&lt;/a&gt; and &lt;a href="https://en.wikipedia.org/wiki/Bash_%28Unix_shell%29" dir="ltr"&gt;bash&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;It was a nightmare. You don’t realize how much you take string-interpolation and concatenation for granted in your programming language of choice until you have to deal with a half a dozen text processing tools each of which has just &lt;em dir="ltr"&gt;slightly&lt;/em&gt; different syntactical rules for expanding variables.&lt;/p&gt;&lt;p dir="ltr"&gt;And then there’s all the character escaping. Working with a conglomeration of UNIX text tools inevitably means that at some point you will need to tunnel some code or annotated data &lt;em dir="ltr"&gt;through&lt;/em&gt; one tool into another, so that it will be expanded in the right context. Which means escaping, and double-escaping, and oh… does double-escaping cancel out the escaping in this dialect?&lt;/p&gt;&lt;p dir="ltr"&gt;This mess is exactly why Perl was created. By the time &lt;em dir="ltr"&gt;I&lt;/em&gt; came to Perl it was a general-purpose programming language that came highly recommended for chewing through large text-munging jobs. But for its original audience, Perl was a way to have &lt;code dir="ltr"&gt;sed&lt;/code&gt; and &lt;code dir="ltr"&gt;awk&lt;/code&gt; and &lt;code dir="ltr"&gt;m4&lt;/code&gt; and &lt;code dir="ltr"&gt;grep&lt;/code&gt; and &lt;code dir="ltr"&gt;cat&lt;/code&gt; and &lt;code dir="ltr"&gt;cut&lt;/code&gt; all with one &lt;em dir="ltr"&gt;consistent&lt;/em&gt; programming model, with consistent data types and consistent variable scoping and consistent expansion and interpolation rules.&lt;/p&gt;&lt;p dir="ltr"&gt;And then there was Ruby, which was just Perl but undergirded with Smalltalk’s object model instead of being constructed on a foundation of &lt;a href="https://lovecraft.fandom.com/wiki/Azathoth" dir="ltr"&gt;creeping chaos&lt;/a&gt;. And Ruby begat &lt;a href="https://github.com/ruby/rake" dir="ltr"&gt;Rake&lt;/a&gt;, and when it came time to build yet &lt;em dir="ltr"&gt;another&lt;/em&gt; ebook construction toolchain I built it in Rake, and all was well.&lt;/p&gt;&lt;p dir="ltr"&gt;Getting back to the original point… drawers full of small, sharp, self-contained tools are fine in well-lit kitchens when all you need is to pick out &lt;em dir="ltr"&gt;one&lt;/em&gt; and use it by itself. When a project requires a half a dozen of those capabilities together, with rapid context-switching between them… well, keep a box of band-aids handy.&lt;/p&gt;&lt;p dir="ltr"&gt;At that point you don’t want to treat those capabilities as separate tasks anymore. You want them to be verbs and nouns in a larger, cohesive language of construction. A monolith. A food-processor.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;img alt="" width="222" height="222" title="MVIMG_20190508_175746" src="https://i2.wp.com/avdi.codes/wp-content/uploads/2019/05/MVIMG_20190508_175746.jpg?resize=770%2C770&amp;amp;ssl=1"&gt;&lt;p data-css="tve-u-115e72540adfccd"&gt;Let's correspond!&lt;/p&gt;&lt;p data-css="tve-u-125e72540adfd0b"&gt;May I write to you? Every week or so you'll get a SIGAVDI newsletter with a few handpicked links to interesting articles, talks, or resources; an update on what I've published lately; and some reflections at the intersection of software and life. Replies go directly to me, and I try to respond to every single one (eventually!)&lt;/p&gt;&lt;div data-css="tve-u-155e72540adfdc7" data-button-style="" data-tcb_hover_state_parent=""&gt;&lt;button type="submit"&gt;Subscribe&lt;/button&gt;&lt;/div&gt;</description><pubDate>Tue, 12 May 2020 16:15:57 -0500</pubDate></item><item><title>When the sum of two actual ux improvements becomes a bigger ux problem</title><link>https://lobste.rs/s/33dxd1</link><description>&lt;article&gt;&lt;time datetime="2020-05-13 03:24:56 +0000 UTC" pubdate="" itemprop="datePublished" content="2020-05-13 03:24:56 +0000 UTC"&gt;13. mai 2020&lt;/time&gt;&lt;/article&gt;&lt;div dir="ltr"&gt;&lt;p dir="ltr"&gt;Filed under &lt;a href="https://erik.itland.no/tag:ux" rel="nofollow" dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;/span&gt;&lt;span dir="ltr"&gt;ux&lt;/span&gt;&lt;/a&gt;&lt;/p&gt;
 
 &lt;p dir="ltr"&gt;A week or two ago I bought some brake parts for my car.&lt;/p&gt;
 
@@ -2091,28 +2112,7 @@ configuration.
 &lt;p dir="ltr"&gt;[0]: and here I realize call forwarding might be a good starting point for a new post on ux problems, they seem notoriously hard to get right).&lt;/p&gt;
 
 &lt;p dir="ltr"&gt;[1]: he could also tell me that I wasn't the first to report this problem and their dev team had already gotten it on their plate.&lt;/p&gt;
-&lt;/div&gt;</description><pubDate>Tue, 12 May 2020 23:43:22 -0500</pubDate></item><item><title>fortran-lang/stdlib - Fortran Standard Library</title><link>https://lobste.rs/s/dw50d4</link><description>&lt;img src="https://github.com/fortran-lang/stdlib/workflows/CI/badge.svg" alt="Actions Status" width="90" height="20"&gt;&lt;img src="https://github.com/fortran-lang/stdlib/workflows/CI_windows/badge.svg" alt="Actions Status" width="144" height="20"&gt;&lt;h2&gt;Goals and Motivation&lt;/h2&gt;&lt;p dir="ltr"&gt;The Fortran Standard, as published by the ISO (&lt;a href="https://wg5-fortran.org/" rel="nofollow" dir="ltr"&gt;https://wg5-fortran.org/&lt;/a&gt;), does
-not have a Standard Library. The goal of this project is to provide a community
-driven and agreed upon &lt;em dir="ltr"&gt;de facto&lt;/em&gt; "standard" library for Fortran, called a
-Fortran Standard Library (&lt;code dir="ltr"&gt;stdlib&lt;/code&gt;). We have a rigorous process how &lt;code dir="ltr"&gt;stdlib&lt;/code&gt; is
-developed as documented in our &lt;a href="https://github.com/fortran-lang/stdlib/blob/master/WORKFLOW.md" dir="ltr"&gt;Workflow&lt;/a&gt;. &lt;code dir="ltr"&gt;stdlib&lt;/code&gt; is both a
-specification and a reference implementation. We are cooperating with the
-Fortran Standards Committee (e.g., the effort
-&lt;a href="https://github.com/j3-fortran/fortran_proposals/issues/104" dir="ltr"&gt;started&lt;/a&gt; at the J3
-committee repository) and the plan is to continue working with the Committee in
-the future (such as in the step 5. in the &lt;a href="https://github.com/fortran-lang/stdlib/blob/master/WORKFLOW.md" dir="ltr"&gt;Workflow&lt;/a&gt; document), so
-that if the Committee wants to standardize some feature already available in &lt;code dir="ltr"&gt;stdlib&lt;/code&gt;, it would
-base it on &lt;code dir="ltr"&gt;stdlib&lt;/code&gt;'s implementation.&lt;/p&gt;&lt;h2&gt;Scope&lt;/h2&gt;&lt;p&gt;The goal of the Fortran Standard Library is to achieve the following general scope:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Utilities (containers, strings, files, OS/environment integration, unit
-testing &amp;amp; assertions, logging,  ...)&lt;/LI&gt;&lt;LI&gt;Algorithms (searching and sorting, merging, ...)&lt;/LI&gt;&lt;LI&gt;Mathematics (linear algebra, sparse matrices, special functions, fast Fourier
-transform, random numbers, statistics, ordinary differential equations,
-numerical integration, optimization, ...)&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Getting started&lt;/h2&gt;&lt;h3&gt;Get the code&lt;/h3&gt;&lt;PRE&gt;git clone https://github.com/fortran-lang/stdlib
-&lt;span dir="ltr"&gt;cd&lt;/span&gt; stdlib&lt;/PRE&gt;&lt;h3&gt;Requirements&lt;/h3&gt;&lt;p dir="ltr"&gt;The preprocessor &lt;code dir="ltr"&gt;fypp&lt;/code&gt; (&lt;a href="https://github.com/aradi/fypp" dir="ltr"&gt;https://github.com/aradi/fypp&lt;/a&gt;) is needed because metaprogramming is used.
-It can be installed using the command line installer &lt;code dir="ltr"&gt;pip&lt;/code&gt;.&lt;/p&gt;&lt;PRE&gt;pip install fypp&lt;/PRE&gt;&lt;h3&gt;Build with CMake&lt;/h3&gt;&lt;PRE&gt;cmake -B build
-
-cmake --build build
-
-cmake --build build --target &lt;span dir="ltr"&gt;test&lt;/span&gt;&lt;/PRE&gt;&lt;h3&gt;Build with make&lt;/h3&gt;&lt;p&gt;Alternatively, you can build using provided Makefiles:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;make -f Makefile.manual
-&lt;/code&gt;&lt;/PRE&gt;</description><pubDate>Wed, 13 May 2020 15:57:06 -0500</pubDate></item><item><title>Optimizing UTC to Unix Time Conversion For Size And Speed</title><link>https://lobste.rs/s/liiofg</link><description>&lt;p&gt;&lt;time datetime="2020-05-12T00:00:00+00:00" itemprop="datePublished"&gt;May 12, 2020&lt;/time&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;How do you convert a UTC timestamp to &lt;a href="https://en.wikipedia.org/wiki/Unix_time" dir="ltr"&gt;Unix
+&lt;/div&gt;</description><pubDate>Tue, 12 May 2020 23:43:22 -0500</pubDate></item><item><title>Optimizing UTC to Unix Time Conversion For Size And Speed</title><link>https://lobste.rs/s/liiofg</link><description>&lt;p&gt;&lt;time datetime="2020-05-12T00:00:00+00:00" itemprop="datePublished"&gt;May 12, 2020&lt;/time&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;How do you convert a UTC timestamp to &lt;a href="https://en.wikipedia.org/wiki/Unix_time" dir="ltr"&gt;Unix
 Time&lt;/a&gt; (seconds since the
 epoch)?&lt;/p&gt;&lt;PRE&gt;&lt;code&gt; "2020-04-29 04:48:15" → 1588135695
 &lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Of course the right answer is “you use a standard library function.”
