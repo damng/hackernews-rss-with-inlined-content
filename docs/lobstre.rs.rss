@@ -293,7 +293,248 @@ naturally as part of the horizontal additions. I will update the benchmark
 numbers and update this post in the next few days.&lt;/LI&gt;&lt;LI&gt;Also turns out a smart fellow &lt;a href="http://0x80.pl/articles/simd-parsing-int-sequences.html" dir="ltr"&gt;Wojciech Muła already thought of
 this!&lt;/a&gt; . I’m quite
 happy that we converged on the same methods - down to the same SSE
-instructions.&lt;/LI&gt;&lt;/UL&gt;&lt;UL&gt;&lt;LI&gt;c++&lt;/LI&gt;&lt;LI&gt;simd&lt;/LI&gt;&lt;LI&gt;optimization&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Wed, 27 May 2020 00:16:11 -0500</pubDate></item><item><title>A tiny language called Z</title><link>https://lobste.rs/s/fugrlj</link><description>&lt;div dir="ltr"&gt;
+instructions.&lt;/LI&gt;&lt;/UL&gt;&lt;UL&gt;&lt;LI&gt;c++&lt;/LI&gt;&lt;LI&gt;simd&lt;/LI&gt;&lt;LI&gt;optimization&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Wed, 27 May 2020 00:16:11 -0500</pubDate></item><item><title>OpenSSH 8.3 released</title><link>https://lobste.rs/s/fradsh</link><description>&lt;PRE&gt;OpenSSH 8.3 has just been released. It will be available from the
+mirrors listed at https://www.openssh.com/ shortly.
+
+OpenSSH is a 100% complete SSH protocol 2.0 implementation and
+includes sftp client and server support.
+
+Once again, we would like to thank the OpenSSH community for their
+continued support of the project, especially those who contributed
+code or patches, reported bugs, tested snapshots or donated to the
+project. More information on donations may be found at:
+https://www.openssh.com/donations.html
+
+Future deprecation notice
+=========================
+
+It is now possible[1] to perform chosen-prefix attacks against the
+SHA-1 algorithm for less than USD$50K. For this reason, we will be
+disabling the "ssh-rsa" public key signature algorithm by default in a
+near-future release.
+
+This algorithm is unfortunately still used widely despite the
+existence of better alternatives, being the only remaining public key
+signature algorithm specified by the original SSH RFCs.
+
+The better alternatives include:
+
+ * The RFC8332 RSA SHA-2 signature algorithms rsa-sha2-256/512. These
+   algorithms have the advantage of using the same key type as
+   "ssh-rsa" but use the safe SHA-2 hash algorithms. These have been
+   supported since OpenSSH 7.2 and are already used by default if the
+   client and server support them.
+
+ * The ssh-ed25519 signature algorithm. It has been supported in
+   OpenSSH since release 6.5.
+
+ * The RFC5656 ECDSA algorithms: ecdsa-sha2-nistp256/384/521. These
+   have been supported by OpenSSH since release 5.7.
+
+To check whether a server is using the weak ssh-rsa public key
+algorithm, for host authentication, try to connect to it after
+removing the ssh-rsa algorithm from ssh(1)'s allowed list:
+
+    ssh -oHostKeyAlgorithms=-ssh-rsa user@host
+
+If the host key verification fails and no other supported host key
+types are available, the server software on that host should be
+upgraded.
+
+A future release of OpenSSH will enable UpdateHostKeys by default
+to allow the client to automatically migrate to better algorithms.
+Users may consider enabling this option manually. Vendors of devices
+that implement the SSH protocol should ensure that they support the
+new signature algorithms for RSA keys.
+
+[1] "SHA-1 is a Shambles: First Chosen-Prefix Collision on SHA-1 and
+    Application to the PGP Web of Trust" Leurent, G and Peyrin, T
+    (2020) https://eprint.iacr.org/2020/014.pdf
+
+Security
+========
+
+ * scp(1): when receiving files, scp(1) could be become desynchronised
+   if a utimes(2) system call failed. This could allow file contents
+   to be interpreted as file metadata and thereby permit an adversary
+   to craft a file system that, when copied with scp(1) in a
+   configuration that caused utimes(2) to fail (e.g. under a SELinux
+   policy or syscall sandbox), transferred different file names and
+   contents to the actual file system layout.
+
+   Exploitation of this is not likely as utimes(2) does not fail under
+   normal circumstances. Successful exploitation is not silent - the
+   output of scp(1) would show transfer errors followed by the actual
+   file(s) that were received.
+
+   Finally, filenames returned from the peer are (since openssh-8.0)
+   matched against the user's requested destination, thereby
+   disallowing a successful exploit from writing files outside the
+   user's selected target glob (or directory, in the case of a
+   recursive transfer). This ensures that this attack can achieve no
+   more than a hostile peer is already able to achieve within the scp
+   protocol.
+
+Potentially-incompatible changes
+================================
+
+This release includes a number of changes that may affect existing
+configurations:
+
+ * sftp(1): reject an argument of "-1" in the same way as ssh(1) and
+   scp(1) do instead of accepting and silently ignoring it.
+
+Changes since OpenSSH 8.2
+=========================
+
+The focus of this release is bug fixing.
+
+New Features
+------------
+
+ * sshd(8): make IgnoreRhosts a tri-state option: "yes" to ignore
+   rhosts/shosts, "no" allow rhosts/shosts or (new) "shosts-only"
+   to allow .shosts files but not .rhosts.
+
+ * sshd(8): allow the IgnoreRhosts directive to appear anywhere in a
+   sshd_config, not just before any Match blocks; bz3148
+
+ * ssh(1): add %TOKEN percent expansion for the LocalFoward and
+   RemoteForward keywords when used for Unix domain socket forwarding.
+   bz#3014
+
+ * all: allow loading public keys from the unencrypted envelope of a
+   private key file if no corresponding public key file is present.
+    
+ * ssh(1), sshd(8): prefer to use chacha20 from libcrypto where
+   possible instead of the (slower) portable C implementation included
+   in OpenSSH.
+
+ * ssh-keygen(1): add ability to dump the contents of a binary key
+   revocation list via "ssh-keygen -lQf /path" bz#3132
+
+Bugfixes
+--------
+
+ * ssh(1): fix IdentitiesOnly=yes to also apply to keys loaded from
+   a PKCS11Provider; bz#3141
+
+ * ssh-keygen(1): avoid NULL dereference when trying to convert an
+   invalid RFC4716 private key.
+
+ * scp(1): when performing remote-to-remote copies using "scp -3",
+   start the second ssh(1) channel with BatchMode=yes enabled to
+   avoid confusing and non-deterministic ordering of prompts.
+
+ * ssh(1), ssh-keygen(1): when signing a challenge using a FIDO token,
+   perform hashing of the message to be signed in the middleware layer
+   rather than in OpenSSH code. This permits the use of security key
+   middlewares that perform the hashing implicitly, such as Windows
+   Hello.
+
+ * ssh(1): fix incorrect error message for "too many known hosts
+   files." bz#3149
+
+ * ssh(1): make failures when establishing "Tunnel" forwarding
+   terminate the connection when ExitOnForwardFailure is enabled;
+   bz#3116
+
+ * ssh-keygen(1): fix printing of fingerprints on private keys and add
+   a regression test for same.
+
+ * sshd(8): document order of checking AuthorizedKeysFile (first) and
+   AuthorizedKeysCommand (subsequently, if the file doesn't match);
+   bz#3134
+
+ * sshd(8): document that /etc/hosts.equiv and /etc/shosts.equiv are
+   not considered for HostbasedAuthentication when the target user is
+   root; bz#3148
+ 
+ * ssh(1), ssh-keygen(1): fix NULL dereference in private certificate
+   key parsing (oss-fuzz #20074).
+
+ * ssh(1), sshd(8): more consistency between sets of %TOKENS are
+   accepted in various configuration options.
+
+ * ssh(1), ssh-keygen(1): improve error messages for some common
+   PKCS#11 C_Login failure cases; bz#3130
+
+ * ssh(1), sshd(8): make error messages for problems during SSH banner
+   exchange consistent with other SSH transport-layer error messages
+   and ensure they include the relevant IP addresses bz#3129
+
+ * various: fix a number of spelling errors in comments and debug/error
+   messages
+
+ * ssh-keygen(1), ssh-add(1): when downloading FIDO2 resident keys
+   from a token, don't prompt for a PIN until the token has told us
+   that it needs one. Avoids double-prompting on devices that
+   implement on-device authentication.
+
+ * sshd(8), ssh-keygen(1): no-touch-required FIDO certificate option
+   should be an extension, not a critical option.
+    
+ * ssh(1), ssh-keygen(1), ssh-add(1): offer a better error message
+   when trying to use a FIDO key function and SecurityKeyProvider is
+   empty.
+
+ * ssh-add(1), ssh-agent(8): ensure that a key lifetime fits within
+   the values allowed by the wire format (u32). Prevents integer
+   wraparound of the timeout values. bz#3119
+
+ * ssh(1): detect and prevent trivial configuration loops when using
+    ProxyJump. bz#3057.
+    
+Portability
+-----------
+
+ * Detect systems where signals flagged with SA_RESTART will interrupt
+   select(2). POSIX permits implementations to choose whether
+   select(2) will return when interrupted with a SA_RESTART-flagged
+   signal, but OpenSSH requires interrupting behaviour.
+
+ * Several compilation fixes for HP/UX and AIX.
+
+ * On platforms that do not support setting process-wide routing
+   domains (all excepting OpenBSD at present), fail to accept a
+   configuration attempts to set one at process start time rather than
+   fatally erroring at run time. bz#3126
+
+ * Improve detection of egrep (used in regression tests) on platforms
+   that offer a poor default one (e.g. Solaris).
+
+ * A number of shell portability fixes for the regression tests.
+
+ * Fix theoretical infinite loop in the glob(3) replacement
+   implementation.
+
+ * Fix seccomp sandbox compilation problems for some Linux
+   configurations bz#3085
+
+ * Improved detection of libfido2 and some compilation fixes for some
+   configurations when --with-security-key-builtin is selected.
+
+Checksums:
+==========
+
+ - SHA1 (openssh-8.3.tar.gz) = 46c63b7ddbe46a0666222f7988c993866c31fcca
+ - SHA256 (openssh-8.3.tar.gz) = M6CnZ+duGs4bzDio8hQNLwyLQChV+3wkUEO8HWLV35c=
+
+ - SHA1 (/openssh-8.3p1.tar.gz) = 04c7adb9986f16746588db8988b910530c589819
+ - SHA256 (openssh-8.3p1.tar.gz) = 8r774Ecv5+t10jNA6xdTHLazqsJAdeIGa0H4FOEjh7I=
+
+Please note that the SHA256 signatures are base64 encoded and not
+hexadecimal (which is the default for most checksum tools). The PGP
+key used to sign the releases is available as RELEASE_KEY.asc from
+the mirror sites.
+
+Reporting Bugs:
+===============
+
+- Please read https://www.openssh.com/report.html
+  Security bugs should be reported directly to openssh@openssh.com
+
+&lt;/PRE&gt;</description><pubDate>Wed, 27 May 2020 02:46:47 -0500</pubDate></item><item><title>A tiny language called Z</title><link>https://lobste.rs/s/fugrlj</link><description>&lt;div dir="ltr"&gt;
     &lt;em dir="ltr"&gt;“The main idea seems clever, but also too clever” — reddit&lt;/em&gt;
     &lt;/div&gt;&lt;p&gt;A tiny, strict, impure, curried, dynamically typed (although
       that may change), partially
@@ -581,248 +822,7 @@ other expressions of the same order. For that, a math macro is
     you, I'd just look at it, and try to imagine the bodacious vibes
       kicking off it. Alright?&lt;/p&gt;&lt;p&gt;© 2013-01-01 Chris Done &amp;lt;chrisdone@gmail.com&amp;gt;&lt;/p&gt;</description><pubDate>Tue, 26 May 2020 18:58:30 -0500</pubDate></item><item><title>Flipper Zero — Multi-tool Device for Hackers</title><link>https://lobste.rs/s/3gcjqm</link><description>&lt;div field="tn_text_1584804660575"&gt;What is Flipper Zero&lt;/div&gt;&lt;div field="tn_text_1584804764040" dir="ltr"&gt;Flipper Zero is a tiny piece of hardware that has a curious personality of a cyber dolphin who really loves to hack. It can interact with digital systems in real life and grow while you are hacking. Flip any kind of access control system, RFID, radio protocol and perform any kind of hardware hacks using GPIO pins.&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;The main idea of Flipper Zero is to combine all the phreaking hardware tools that you could need for hacking on the go. Flipper was inspired by pwnagotchi project, but unlike all the other DIY boards for hackers, Flipper is designed with the convenience of everyday usage in mind — it has a robust case, handy buttons and shape, so there are no dirty PCBs or scratchy pins. Flipper turns hacking into a game, reminding you that hacking always should be fun. &lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;&lt;/div&gt;&lt;div field="tn_text_1585135534442"&gt;Your hacking buddy&lt;/div&gt;&lt;div field="tn_text_1584793651335" dir="ltr"&gt;1.4" monochrome LCD display&lt;br dir="ltr"&gt;126x64 px, ultra-low power&lt;br dir="ltr"&gt;Sunlight readable &lt;br dir="ltr"&gt;&lt;/div&gt;&lt;div field="tn_text_1584793710291"&gt;5 button directional pad for menu navigation&lt;/div&gt;&lt;div field="tn_text_1584793882526"&gt;Status LED&lt;/div&gt;&lt;div field="tn_text_1584793913147" dir="ltr"&gt;Exit/back button&lt;br dir="ltr"&gt;&lt;/div&gt;&lt;div field="tn_text_1584793970411"&gt;3.3V and 5V power&lt;/div&gt;&lt;div field="tn_text_1584794093290" dir="ltr"&gt;Flipper Zero is completely autonomous and could be controlled from a 5-position directional pad without additional devices, such as a computer or smartphone. The main scripts and popular attacks are available from the menu.&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;For more control, you can connect Flipper to USB. We decided to build in a cool old-school LCD screen, not TFT / IPS / OLED, which is perfectly visible in sunlight and has an ultra-low power 400nA consumption with the backlight turned off.&lt;/div&gt;&lt;div field="tn_text_1584794219548" dir="ltr"&gt;GPIO pins&lt;br dir="ltr"&gt;3.3V logic levels (5V tolerant)&lt;/div&gt;&lt;div field="tn_text_1584794358347"&gt;Infrared transceiver&lt;/div&gt;&lt;div field="tn_text_1584795211704" dir="ltr"&gt;Hand strap hole&lt;br dir="ltr"&gt;&lt;/div&gt;&lt;div field="tn_text_1584795219026" dir="ltr"&gt;USB Type-C &lt;br dir="ltr"&gt;Power and battery charging&lt;br dir="ltr"&gt;Firmware update&lt;br dir="ltr"&gt;&lt;/div&gt;&lt;div field="tn_text_1584193069002"&gt;433/868 MHz Transceiver&lt;/div&gt;&lt;div field="tn_text_1584997336276" dir="ltr"&gt;&lt;br&gt; This is the operating range for a wide class of devices and access control systems, such as garage doors remotes, boom barriers, IoT sensors and remote keyless systems. &lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt; Flipper has a built-in CC1101 chip that can both transmit and receive, and an integrated 433MHz frequencies antenna, which makes it a powerful transceiver capable of &lt;strong dir="ltr"&gt;up to 100 meters range&lt;/strong&gt;. &lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;&lt;/div&gt;&lt;div field="tn_text_1584997347783"&gt;Sub-1 GHz Range&lt;/div&gt;&lt;div field="tn_text_1585002038993"&gt;Smart sockets &amp;amp; bulbs&lt;/div&gt;&lt;div field="tn_text_1585002183887"&gt;IoT sensors &amp;amp; doorbells&lt;/div&gt;&lt;div field="tn_text_1585005838982"&gt;Signal Analyzer&lt;/div&gt;&lt;div field="tn_text_1585007202943" dir="ltr"&gt; Flipper Zero has an integrated decoder for popular remote control algorithms: Keeloq, Came, Doorhan and others. So you can analyze an unknown radio system to figure out the underhood protocol. &lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt; It can record the samples of radio protocols to analyze it later on the computer, as well as replay saved samples. Many remotes and IoT devices such as doorbells, sensors and radio sockets don't use any encryption at all — in this case, Flipper can replay the signal&lt;strong dir="ltr"&gt;,&lt;/strong&gt; even if the protocol wasn't recognized. &lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt; Oh, and one more thing — Flipper uses 433 MHz to communicate with other Flippers out there as Tamagotchi, so you can make some cyber dolphin friends :) &lt;br dir="ltr"&gt;&lt;/div&gt;&lt;div field="tn_text_1585147670056" dir="ltr"&gt;CC1101 is a universal transceiver designed for very low-power wireless applications. It supports various types of digital modulations such as 2-FSK, 4-FSK, GFSK and MSK, as well as OOK and flexible ASK shaping. You can perform any digital communication in your applications such as connecting with IoT devices and access systems.&lt;br dir="ltr"&gt;&lt;/div&gt;&lt;div field="tn_text_1585148141874"&gt;Customizable radio platform&lt;/div&gt;&lt;div field="tn_text_1586801744983"&gt;Garage doors &amp;amp; barriers&lt;/div&gt;&lt;div field="tn_text_1584198714440"&gt;125kHz RFID&lt;/div&gt;&lt;div field="tn_text_1584198714447"&gt;Low-frequency proximity cards&lt;/div&gt;&lt;div field="tn_text_1584198714453" dir="ltr"&gt;This type of card is widely used in old access control systems around the world. It's pretty dumb, keeps only N-byte ID and has no authentication mechanism, allowing it to be read, cloned and emulated by anyone. A 125 kHz antenna is located on the bottom of Flipper — it can read the EM-4100 and HID Prox cards, save them to memory and emulate any of the saved cards choosing it from the menu.&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; You can also emulate the card entering its ID manually, so you can easily send it to your friend in text format. Thus, Flipper owners can exchange card dumps with each other remotely. &lt;br dir="ltr"&gt;&lt;/div&gt;&lt;div field="tn_text_1584198714458" dir="ltr"&gt;EM-4100 cards reader / writer / emulator&lt;br dir="ltr"&gt;&lt;/div&gt;&lt;div field="tn_text_1584182616916" dir="ltr"&gt;The infrared transmitter can transmit any signal to control electronics such as TV, air conditioners, stereo systems and others.&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;Flipper has a built-in library of common TV vendors commands like turning off, volume UP/DOWN and so on.
 This library is constantly updated by Flipper community users that upload new signals to IR remote Flipper database.&lt;/div&gt;&lt;div field="tn_text_1584197489713"&gt;InfraRed transmitter&lt;/div&gt;&lt;div field="tn_text_1584738123500"&gt;Flipper Zero has an IR receiver that can receive signals and save it to the library, so you can store any of your existing remotes and transmit it later, as well as upload it to the public database to share with other Flipper users.&lt;/div&gt;&lt;div field="tn_text_1584804127943"&gt;Infrared learning feature&lt;/div&gt;&lt;div field="tn_text_1585329573596"&gt;InfraRed Transceiver&lt;/div&gt;&lt;div field="tn_text_1585393590011"&gt;Infrared reciever&lt;/div&gt;&lt;div field="tn_text_1584184830733"&gt;Arduino IDE Compatible&lt;/div&gt;&lt;div field="tn_text_1584811489618" dir="ltr"&gt;You can extend Flipper Zero functionality by writing your own code using familiar &lt;a href="https://www.arduino.cc/en/main/software" dir="ltr"&gt;Arduino IDE&lt;/a&gt; or &lt;a href="https://platformio.org/" dir="ltr"&gt;PlatformIO&lt;/a&gt; software. Uploading sketches is as easy as to the regular Arduino board. &lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt; All built-in Flipper hardware can be used in your programs, such as a built-in display to print text and draw images, buttons to navigate, radio module for Sub-1Ghz communication, RFID for proximity card, IR for infrared applications and GPIO for extending the functionality with your own modules. &lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;And don't worry about bloating the memory — Flipper has four times more flash than Arduino Mega.&lt;br dir="ltr"&gt;&lt;/div&gt;&lt;div field="tn_text_1584192727095"&gt;Extend with your own plugins&lt;/div&gt;&lt;div field="tn_text_1584814550633" dir="ltr"&gt;Flipper Zero can run your code as a separate plugin without losing its own firmware, so unlike other basic Arduino boards, Flipper can store multiple programs at the same time without losing its main firmware. Thus, you can run any specific code from the plugins menu without uploading it every time you need it. And don't be afraid to break something — you can always reboot to original firmware if your code freezes.&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;&lt;/div&gt;&lt;div field="tn_text_1584814552081"&gt;Hand strap hole&lt;/div&gt;&lt;div field="tn_text_1584183060992"&gt;Tool for Hardware Hacking&lt;/div&gt;&lt;div field="tn_text_1584687109951"&gt;Hand strap hole&lt;/div&gt;&lt;div field="tn_text_1584694359186"&gt;Flipper Zero can be used as a versatile tool for hardware hacking, firmware flashing, debugging and fuzzing. You can connect it to any piece of hardware using GPIO and run your own code, control it with buttons and print debug messages to the LCD display. It can also be used as regular USB to UART/SPI/I2C/etc adapter connected to PC.&lt;/div&gt;&lt;div field="tn_text_1584709567370" dir="ltr"&gt;&lt;strong dir="ltr"&gt;SPI/UART/I2C to USB converter&lt;/strong&gt;&lt;br dir="ltr"&gt;&lt;/div&gt;&lt;div field="tn_text_1584710473247"&gt;Communicate with hardware from your desktop application.&lt;/div&gt;&lt;div field="tn_text_1584710491758"&gt;&lt;strong&gt;Firmware flasher&lt;/strong&gt;&lt;/div&gt;&lt;div field="tn_text_1584710505150"&gt;Use it to flash any kind of SPI memory, such as EEPROM.&lt;/div&gt;&lt;div field="tn_text_1584710523367"&gt;&lt;strong&gt;Fuzzing tool&lt;/strong&gt;&lt;/div&gt;&lt;div field="tn_text_1584710551671"&gt;Test any protocols and signals.&lt;/div&gt;&lt;div field="tn_text_1586517638984"&gt;Built-in 5V and 3.3V power source. Control from built-in buttons and display, no PC required.&lt;/div&gt;&lt;div field="tn_text_1586517643055"&gt;&lt;strong&gt;Completely Autonomous&lt;/strong&gt;&lt;/div&gt;&lt;div field="tn_text_1584213806858"&gt;Bad USB Mode&lt;/div&gt;&lt;div field="tn_text_1585136892142" dir="ltr"&gt;Flipper Zero can emulate USB slave devices and connect to the computer like a regular input device, such as an HID keyboard or Ethernet adapter, just as USB Ducky. You can write your own payload for the keyboard to type any key sequence, as well as fuzzing USB stack on a target device.&lt;br dir="ltr"&gt;&lt;/div&gt;&lt;div field="tn_text_1585136955683" dir="ltr"&gt;Acting as USB slave device &lt;br dir="ltr"&gt;&lt;/div&gt;&lt;div field="tn_text_1585136962605"&gt;Hand strap hole&lt;/div&gt;&lt;div field="tn_text_1584182616916" dir="ltr"&gt;Flipper Zero has a built-in 1-wire connector to read iButton (DS1990A) contact keys. This technology is quite old but still widely used around the world. It is also known as TouchMemory or Dallas keys. They work on the 1-Wire protocol and don't have any authentication, so they could be easily read. Flipper can read these keys, save IDs into the memory, write IDs to blank keys and emulate the key itself.&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;Flipper Zero has a unique contact pad design on the corner — its shape works as a reader and simulator at the same time. The central pad of iButton keys is positive contact and the outer ring is ground, so you need to lay the key in the correct position.
-The same contact pad can be used to simulate keys from the memory — just touch the reader with it. This mode could also be handy to silently intercept the 1-Wire data line.&lt;br dir="ltr"&gt;&lt;/div&gt;&lt;div field="tn_text_1584194767180"&gt;iButton&lt;/div&gt;&lt;div field="tn_text_1585072758638"&gt;1-Wire&lt;/div&gt;&lt;div field="tn_text_1585072813931"&gt;+&lt;/div&gt;&lt;div field="tn_text_1585072844404"&gt;_&lt;/div&gt;&lt;div field="tn_text_1585393992181"&gt;1-Wire keys (Touch Memory)&lt;/div&gt;</description><pubDate>Tue, 26 May 2020 03:24:23 -0500</pubDate></item><item><title>OpenSSH 8.3 released</title><link>https://lobste.rs/s/fradsh</link><description>&lt;PRE&gt;OpenSSH 8.3 has just been released. It will be available from the
-mirrors listed at https://www.openssh.com/ shortly.
-
-OpenSSH is a 100% complete SSH protocol 2.0 implementation and
-includes sftp client and server support.
-
-Once again, we would like to thank the OpenSSH community for their
-continued support of the project, especially those who contributed
-code or patches, reported bugs, tested snapshots or donated to the
-project. More information on donations may be found at:
-https://www.openssh.com/donations.html
-
-Future deprecation notice
-=========================
-
-It is now possible[1] to perform chosen-prefix attacks against the
-SHA-1 algorithm for less than USD$50K. For this reason, we will be
-disabling the "ssh-rsa" public key signature algorithm by default in a
-near-future release.
-
-This algorithm is unfortunately still used widely despite the
-existence of better alternatives, being the only remaining public key
-signature algorithm specified by the original SSH RFCs.
-
-The better alternatives include:
-
- * The RFC8332 RSA SHA-2 signature algorithms rsa-sha2-256/512. These
-   algorithms have the advantage of using the same key type as
-   "ssh-rsa" but use the safe SHA-2 hash algorithms. These have been
-   supported since OpenSSH 7.2 and are already used by default if the
-   client and server support them.
-
- * The ssh-ed25519 signature algorithm. It has been supported in
-   OpenSSH since release 6.5.
-
- * The RFC5656 ECDSA algorithms: ecdsa-sha2-nistp256/384/521. These
-   have been supported by OpenSSH since release 5.7.
-
-To check whether a server is using the weak ssh-rsa public key
-algorithm, for host authentication, try to connect to it after
-removing the ssh-rsa algorithm from ssh(1)'s allowed list:
-
-    ssh -oHostKeyAlgorithms=-ssh-rsa user@host
-
-If the host key verification fails and no other supported host key
-types are available, the server software on that host should be
-upgraded.
-
-A future release of OpenSSH will enable UpdateHostKeys by default
-to allow the client to automatically migrate to better algorithms.
-Users may consider enabling this option manually. Vendors of devices
-that implement the SSH protocol should ensure that they support the
-new signature algorithms for RSA keys.
-
-[1] "SHA-1 is a Shambles: First Chosen-Prefix Collision on SHA-1 and
-    Application to the PGP Web of Trust" Leurent, G and Peyrin, T
-    (2020) https://eprint.iacr.org/2020/014.pdf
-
-Security
-========
-
- * scp(1): when receiving files, scp(1) could be become desynchronised
-   if a utimes(2) system call failed. This could allow file contents
-   to be interpreted as file metadata and thereby permit an adversary
-   to craft a file system that, when copied with scp(1) in a
-   configuration that caused utimes(2) to fail (e.g. under a SELinux
-   policy or syscall sandbox), transferred different file names and
-   contents to the actual file system layout.
-
-   Exploitation of this is not likely as utimes(2) does not fail under
-   normal circumstances. Successful exploitation is not silent - the
-   output of scp(1) would show transfer errors followed by the actual
-   file(s) that were received.
-
-   Finally, filenames returned from the peer are (since openssh-8.0)
-   matched against the user's requested destination, thereby
-   disallowing a successful exploit from writing files outside the
-   user's selected target glob (or directory, in the case of a
-   recursive transfer). This ensures that this attack can achieve no
-   more than a hostile peer is already able to achieve within the scp
-   protocol.
-
-Potentially-incompatible changes
-================================
-
-This release includes a number of changes that may affect existing
-configurations:
-
- * sftp(1): reject an argument of "-1" in the same way as ssh(1) and
-   scp(1) do instead of accepting and silently ignoring it.
-
-Changes since OpenSSH 8.2
-=========================
-
-The focus of this release is bug fixing.
-
-New Features
-------------
-
- * sshd(8): make IgnoreRhosts a tri-state option: "yes" to ignore
-   rhosts/shosts, "no" allow rhosts/shosts or (new) "shosts-only"
-   to allow .shosts files but not .rhosts.
-
- * sshd(8): allow the IgnoreRhosts directive to appear anywhere in a
-   sshd_config, not just before any Match blocks; bz3148
-
- * ssh(1): add %TOKEN percent expansion for the LocalFoward and
-   RemoteForward keywords when used for Unix domain socket forwarding.
-   bz#3014
-
- * all: allow loading public keys from the unencrypted envelope of a
-   private key file if no corresponding public key file is present.
-    
- * ssh(1), sshd(8): prefer to use chacha20 from libcrypto where
-   possible instead of the (slower) portable C implementation included
-   in OpenSSH.
-
- * ssh-keygen(1): add ability to dump the contents of a binary key
-   revocation list via "ssh-keygen -lQf /path" bz#3132
-
-Bugfixes
---------
-
- * ssh(1): fix IdentitiesOnly=yes to also apply to keys loaded from
-   a PKCS11Provider; bz#3141
-
- * ssh-keygen(1): avoid NULL dereference when trying to convert an
-   invalid RFC4716 private key.
-
- * scp(1): when performing remote-to-remote copies using "scp -3",
-   start the second ssh(1) channel with BatchMode=yes enabled to
-   avoid confusing and non-deterministic ordering of prompts.
-
- * ssh(1), ssh-keygen(1): when signing a challenge using a FIDO token,
-   perform hashing of the message to be signed in the middleware layer
-   rather than in OpenSSH code. This permits the use of security key
-   middlewares that perform the hashing implicitly, such as Windows
-   Hello.
-
- * ssh(1): fix incorrect error message for "too many known hosts
-   files." bz#3149
-
- * ssh(1): make failures when establishing "Tunnel" forwarding
-   terminate the connection when ExitOnForwardFailure is enabled;
-   bz#3116
-
- * ssh-keygen(1): fix printing of fingerprints on private keys and add
-   a regression test for same.
-
- * sshd(8): document order of checking AuthorizedKeysFile (first) and
-   AuthorizedKeysCommand (subsequently, if the file doesn't match);
-   bz#3134
-
- * sshd(8): document that /etc/hosts.equiv and /etc/shosts.equiv are
-   not considered for HostbasedAuthentication when the target user is
-   root; bz#3148
- 
- * ssh(1), ssh-keygen(1): fix NULL dereference in private certificate
-   key parsing (oss-fuzz #20074).
-
- * ssh(1), sshd(8): more consistency between sets of %TOKENS are
-   accepted in various configuration options.
-
- * ssh(1), ssh-keygen(1): improve error messages for some common
-   PKCS#11 C_Login failure cases; bz#3130
-
- * ssh(1), sshd(8): make error messages for problems during SSH banner
-   exchange consistent with other SSH transport-layer error messages
-   and ensure they include the relevant IP addresses bz#3129
-
- * various: fix a number of spelling errors in comments and debug/error
-   messages
-
- * ssh-keygen(1), ssh-add(1): when downloading FIDO2 resident keys
-   from a token, don't prompt for a PIN until the token has told us
-   that it needs one. Avoids double-prompting on devices that
-   implement on-device authentication.
-
- * sshd(8), ssh-keygen(1): no-touch-required FIDO certificate option
-   should be an extension, not a critical option.
-    
- * ssh(1), ssh-keygen(1), ssh-add(1): offer a better error message
-   when trying to use a FIDO key function and SecurityKeyProvider is
-   empty.
-
- * ssh-add(1), ssh-agent(8): ensure that a key lifetime fits within
-   the values allowed by the wire format (u32). Prevents integer
-   wraparound of the timeout values. bz#3119
-
- * ssh(1): detect and prevent trivial configuration loops when using
-    ProxyJump. bz#3057.
-    
-Portability
------------
-
- * Detect systems where signals flagged with SA_RESTART will interrupt
-   select(2). POSIX permits implementations to choose whether
-   select(2) will return when interrupted with a SA_RESTART-flagged
-   signal, but OpenSSH requires interrupting behaviour.
-
- * Several compilation fixes for HP/UX and AIX.
-
- * On platforms that do not support setting process-wide routing
-   domains (all excepting OpenBSD at present), fail to accept a
-   configuration attempts to set one at process start time rather than
-   fatally erroring at run time. bz#3126
-
- * Improve detection of egrep (used in regression tests) on platforms
-   that offer a poor default one (e.g. Solaris).
-
- * A number of shell portability fixes for the regression tests.
-
- * Fix theoretical infinite loop in the glob(3) replacement
-   implementation.
-
- * Fix seccomp sandbox compilation problems for some Linux
-   configurations bz#3085
-
- * Improved detection of libfido2 and some compilation fixes for some
-   configurations when --with-security-key-builtin is selected.
-
-Checksums:
-==========
-
- - SHA1 (openssh-8.3.tar.gz) = 46c63b7ddbe46a0666222f7988c993866c31fcca
- - SHA256 (openssh-8.3.tar.gz) = M6CnZ+duGs4bzDio8hQNLwyLQChV+3wkUEO8HWLV35c=
-
- - SHA1 (/openssh-8.3p1.tar.gz) = 04c7adb9986f16746588db8988b910530c589819
- - SHA256 (openssh-8.3p1.tar.gz) = 8r774Ecv5+t10jNA6xdTHLazqsJAdeIGa0H4FOEjh7I=
-
-Please note that the SHA256 signatures are base64 encoded and not
-hexadecimal (which is the default for most checksum tools). The PGP
-key used to sign the releases is available as RELEASE_KEY.asc from
-the mirror sites.
-
-Reporting Bugs:
-===============
-
-- Please read https://www.openssh.com/report.html
-  Security bugs should be reported directly to openssh@openssh.com
-
-&lt;/PRE&gt;</description><pubDate>Wed, 27 May 2020 02:46:47 -0500</pubDate></item><item><title>Delores Source Code Released</title><link>https://lobste.rs/s/v0vkd4</link><description>&lt;p&gt;Oh crap!&lt;/p&gt;&lt;p dir="ltr"&gt;I accidentally pushed the wrong button and made the &lt;a href="https://github.com/grumpygamer/DeloresDev" dir="ltr"&gt;Delores source code available on GitHub&lt;/a&gt;.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;I guess there is no putting Delores back in the bottle now...&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p&gt;(wait for laughter)&lt;/p&gt;&lt;p dir="ltr"&gt;I'm only half kidding.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p&gt;(wait for Todd in the third row, who laughs at anything, to stop laughing)&lt;/p&gt;&lt;p dir="ltr"&gt;I did publish all the &lt;a href="https://github.com/grumpygamer/DeloresDev" dir="ltr"&gt;source code to Delores on GitHub&lt;/a&gt;, but it wasn't an accident. It was a well planned endeavor to give you even more to do during pandemic lock-down. I'm sure everyone is getting tired of playing Animal Crossing, and what better way to exercise your grey-matter than modding your favorite game.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;But wait... there's more...&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p&gt;(wait for oohs and ahhs)&lt;/p&gt;&lt;p dir="ltr"&gt;Not only did I upload all the source, but I also uploaded all the art and the entire FMOD project (many thanks to FMOD).&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;But wait... don't hit the back button yet...&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;I also uploaded the dev build of the Delores engine (including the complete debugger) so you can run all your edits and changes. Also included is Wimpy, the executable that allows you to add and edit objects in Rooms.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p&gt;&lt;i&gt;"Holy crap-a-reno! What's the catch Ron?"&lt;/i&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;While you can do pretty much anything you want to the game, including writing a whole new UI, or translating into any language, or returning it to the verb matrix, you can't release or publish a game. &lt;b dir="ltr"&gt;This is intended for personal and hobby use only.&lt;/b&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;The other downside is these really are the dev tools we used to make the game, and like most in-house dev tools, they are poorly documented and very crude around the edges. While I do provide some help documentation it is mostly limited to an index of Dinky commands, not a tutorial.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;What? You want a Hello World example? OK, fine.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p&gt;&lt;span&gt;local image = createTextImage(FONT_SYSTEM, "Hello World", 48)&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;There is a fairly high degree of technical and programming knowledge needed. I've always skewed away from visual programming and dialogue engines. While they are great for beginners, getting real work done is problematic. Again, these are the real tools we used, not watered down "consumer" tools.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;I've been using Git for 10+ years, but this is the first time I've ever had a public repo and had to deal with pull requests, etc. This will be a big learning curve for both of us.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;I generally won't be accepting pull requests just for modifications to the game unless they fix bugs related to getting this repo working. I might accept pull requests for documentation and new translations and if they are good they maybe-might be integrated into the shipping game.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p&gt;&lt;i&gt;"But Ron, why won't you accept my bug fixes and improvements to the game?"&lt;/i&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Good question little Timmy... let's dive into that...&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;A game that goes on Steam, Epic, or GOG requires a great deal of testing. Delores had/has two full-time paid testers and before any build was uploaded to a store, it got a good deal of testing around the fix, plus a complete play through of 30 photos was required on each platform. Each of the stores uses the same "bits", but we still had to download each platform from each store and do a run through.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;And that was for an easy fix. If the fix was more involved or changed logic significantly it could require 20-40 hours of testing. If we broke a store build, it would be hours of tech support emails.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;I believe a lot in testing and testers and much of that came from my time at Lucasfilm and dealing with hard media. To even put a build of Monkey Island into test required over an hour of work as I made and verified 5+ floppies. Just rebuilding the SCUMM scripts to Monkey Island took over an hour (a job that takes a fraction of a second for Delores).&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Releasing a build going to manufacture was nerve wracking and very expensive. If you introduced a stupid bug, you'd remake 200,000 floppies. While Monkey Island was in final testing, any change had to live in test for two weeks. If we found a bug and made a new build, we'd reset the clock.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Today it's easy. I start a shell script, wait 15 minutes for the CI machine to build the new engines and 5 seconds later it's on Steam and I can push the "publish" button. It's too easy.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;BONUS NOTE: Don't believe the myth that programmers can test their own code. They can't. Programmers will test for all the conditions they can imagine, but a good tester will imagine many many more and players will try things programmers never even considered. Knowledge of their code is the achilles heel of programmers. I've had code I was 100% sure was rock solid, only to have one of our testers reduce me to tears. A good tester excels at poking your code in places you never considered. I'm not talking about your unit tested sort routine, I'm talking about complex puzzle logic and odd UI uses. It's the stuff unit tests will never catch, but a good tester will. Testers are the unsung heroes of your team, treat them very well.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Every time you do a build, you also run the risk of accidentally introducing an error. Once I did a build from the wrong branch, everything looked fine but after a few bugs came in, I realized something was very wrong. I'm glad I didn't just build and hit "publish". Even fixing a typo requires testing.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p&gt;&lt;i&gt;"Hey Ron, little Timmy again... why don't you release the source to the engine?"&lt;/i&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Another great question.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Releasing the engine source (c++) is problematic for a few reasons. The first is that it uses a very large library of mine, most of which is not used in this engine, so I'd have to go though and cull out all the cruft, not to mention all the proprietary console crap.  I also use some third party source I don't have the rights to release.  It's a big job and would split my main engine off from the released engine, which becomes a merge catastrophe (either that or a million #if's).&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p&gt;&lt;i&gt;"Little Timmy again, I have a followup question... Why don't you license the executable for us to use in our shipping games?"&lt;/i&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Allowing others to release games using the engine is a support nightmare for me.   A game would be released and then customers would have issues, or it wouldn't work on specific hardware, and then I'd be stuck (indirectly) supporting it.  I could charge money, but unless hundreds (if not thousands) of people licensed the engine, I fear the cost would be more than a game is likely to make.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;But the most important reason is that I like to make games and want to dedicate most of my time to making new ones, not supporting an engine.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Once you've had a chance to look at all the source, I think you'll realize there is no "secret sauce" here.  It's just an adventure game engine. Why did I create a new one? Because I enjoy it.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;This post ended up being longer than I expected.  I hope you enjoy looking through my and David's crappy code. Happy modding.  I'm excited to see what you do.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p&gt;(wait for laughter from todd)&lt;/p&gt;&lt;p dir="ltr"&gt;Keep in mind, the Delores source is intended solely for personal use to learn and explore. Please respect our choice to release the source by using it as intended.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;P.S. The dev engine has all the same limitations as the game, so Mac 10.10, Win 10 (dx12) and unfortunately (at this time) no Linux build. As soon as the Linux version is done, I will upload that as well. It might be a month, or months, or longer.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;P.P.S If you have questions or want to help others out, visit &lt;a href="https://forums.thimbleweedpark.com/c/delores-engine/18" dir="ltr"&gt;the Thimbleweed Park Forums&lt;/a&gt;&lt;/p&gt;&lt;img src="https://secure.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?d=blank&amp;amp;size=32" width="32" height="32"&gt;&lt;h4&gt;Gaby&lt;/h4&gt;&lt;div nortreblig="1590518404"&gt;11h ago&lt;/div&gt;&lt;h4&gt;Mauricio E. Silva&lt;/h4&gt;&lt;div nortreblig="1590521303"&gt;11h ago&lt;/div&gt;&lt;div dir="ltr"&gt;
+The same contact pad can be used to simulate keys from the memory — just touch the reader with it. This mode could also be handy to silently intercept the 1-Wire data line.&lt;br dir="ltr"&gt;&lt;/div&gt;&lt;div field="tn_text_1584194767180"&gt;iButton&lt;/div&gt;&lt;div field="tn_text_1585072758638"&gt;1-Wire&lt;/div&gt;&lt;div field="tn_text_1585072813931"&gt;+&lt;/div&gt;&lt;div field="tn_text_1585072844404"&gt;_&lt;/div&gt;&lt;div field="tn_text_1585393992181"&gt;1-Wire keys (Touch Memory)&lt;/div&gt;</description><pubDate>Tue, 26 May 2020 03:24:23 -0500</pubDate></item><item><title>Delores Source Code Released</title><link>https://lobste.rs/s/v0vkd4</link><description>&lt;p&gt;Oh crap!&lt;/p&gt;&lt;p dir="ltr"&gt;I accidentally pushed the wrong button and made the &lt;a href="https://github.com/grumpygamer/DeloresDev" dir="ltr"&gt;Delores source code available on GitHub&lt;/a&gt;.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;I guess there is no putting Delores back in the bottle now...&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p&gt;(wait for laughter)&lt;/p&gt;&lt;p dir="ltr"&gt;I'm only half kidding.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p&gt;(wait for Todd in the third row, who laughs at anything, to stop laughing)&lt;/p&gt;&lt;p dir="ltr"&gt;I did publish all the &lt;a href="https://github.com/grumpygamer/DeloresDev" dir="ltr"&gt;source code to Delores on GitHub&lt;/a&gt;, but it wasn't an accident. It was a well planned endeavor to give you even more to do during pandemic lock-down. I'm sure everyone is getting tired of playing Animal Crossing, and what better way to exercise your grey-matter than modding your favorite game.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;But wait... there's more...&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p&gt;(wait for oohs and ahhs)&lt;/p&gt;&lt;p dir="ltr"&gt;Not only did I upload all the source, but I also uploaded all the art and the entire FMOD project (many thanks to FMOD).&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;But wait... don't hit the back button yet...&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;I also uploaded the dev build of the Delores engine (including the complete debugger) so you can run all your edits and changes. Also included is Wimpy, the executable that allows you to add and edit objects in Rooms.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p&gt;&lt;i&gt;"Holy crap-a-reno! What's the catch Ron?"&lt;/i&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;While you can do pretty much anything you want to the game, including writing a whole new UI, or translating into any language, or returning it to the verb matrix, you can't release or publish a game. &lt;b dir="ltr"&gt;This is intended for personal and hobby use only.&lt;/b&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;The other downside is these really are the dev tools we used to make the game, and like most in-house dev tools, they are poorly documented and very crude around the edges. While I do provide some help documentation it is mostly limited to an index of Dinky commands, not a tutorial.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;What? You want a Hello World example? OK, fine.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p&gt;&lt;span&gt;local image = createTextImage(FONT_SYSTEM, "Hello World", 48)&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;There is a fairly high degree of technical and programming knowledge needed. I've always skewed away from visual programming and dialogue engines. While they are great for beginners, getting real work done is problematic. Again, these are the real tools we used, not watered down "consumer" tools.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;I've been using Git for 10+ years, but this is the first time I've ever had a public repo and had to deal with pull requests, etc. This will be a big learning curve for both of us.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;I generally won't be accepting pull requests just for modifications to the game unless they fix bugs related to getting this repo working. I might accept pull requests for documentation and new translations and if they are good they maybe-might be integrated into the shipping game.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p&gt;&lt;i&gt;"But Ron, why won't you accept my bug fixes and improvements to the game?"&lt;/i&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Good question little Timmy... let's dive into that...&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;A game that goes on Steam, Epic, or GOG requires a great deal of testing. Delores had/has two full-time paid testers and before any build was uploaded to a store, it got a good deal of testing around the fix, plus a complete play through of 30 photos was required on each platform. Each of the stores uses the same "bits", but we still had to download each platform from each store and do a run through.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;And that was for an easy fix. If the fix was more involved or changed logic significantly it could require 20-40 hours of testing. If we broke a store build, it would be hours of tech support emails.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;I believe a lot in testing and testers and much of that came from my time at Lucasfilm and dealing with hard media. To even put a build of Monkey Island into test required over an hour of work as I made and verified 5+ floppies. Just rebuilding the SCUMM scripts to Monkey Island took over an hour (a job that takes a fraction of a second for Delores).&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Releasing a build going to manufacture was nerve wracking and very expensive. If you introduced a stupid bug, you'd remake 200,000 floppies. While Monkey Island was in final testing, any change had to live in test for two weeks. If we found a bug and made a new build, we'd reset the clock.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Today it's easy. I start a shell script, wait 15 minutes for the CI machine to build the new engines and 5 seconds later it's on Steam and I can push the "publish" button. It's too easy.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;BONUS NOTE: Don't believe the myth that programmers can test their own code. They can't. Programmers will test for all the conditions they can imagine, but a good tester will imagine many many more and players will try things programmers never even considered. Knowledge of their code is the achilles heel of programmers. I've had code I was 100% sure was rock solid, only to have one of our testers reduce me to tears. A good tester excels at poking your code in places you never considered. I'm not talking about your unit tested sort routine, I'm talking about complex puzzle logic and odd UI uses. It's the stuff unit tests will never catch, but a good tester will. Testers are the unsung heroes of your team, treat them very well.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Every time you do a build, you also run the risk of accidentally introducing an error. Once I did a build from the wrong branch, everything looked fine but after a few bugs came in, I realized something was very wrong. I'm glad I didn't just build and hit "publish". Even fixing a typo requires testing.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p&gt;&lt;i&gt;"Hey Ron, little Timmy again... why don't you release the source to the engine?"&lt;/i&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Another great question.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Releasing the engine source (c++) is problematic for a few reasons. The first is that it uses a very large library of mine, most of which is not used in this engine, so I'd have to go though and cull out all the cruft, not to mention all the proprietary console crap.  I also use some third party source I don't have the rights to release.  It's a big job and would split my main engine off from the released engine, which becomes a merge catastrophe (either that or a million #if's).&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p&gt;&lt;i&gt;"Little Timmy again, I have a followup question... Why don't you license the executable for us to use in our shipping games?"&lt;/i&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Allowing others to release games using the engine is a support nightmare for me.   A game would be released and then customers would have issues, or it wouldn't work on specific hardware, and then I'd be stuck (indirectly) supporting it.  I could charge money, but unless hundreds (if not thousands) of people licensed the engine, I fear the cost would be more than a game is likely to make.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;But the most important reason is that I like to make games and want to dedicate most of my time to making new ones, not supporting an engine.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Once you've had a chance to look at all the source, I think you'll realize there is no "secret sauce" here.  It's just an adventure game engine. Why did I create a new one? Because I enjoy it.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;This post ended up being longer than I expected.  I hope you enjoy looking through my and David's crappy code. Happy modding.  I'm excited to see what you do.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p&gt;(wait for laughter from todd)&lt;/p&gt;&lt;p dir="ltr"&gt;Keep in mind, the Delores source is intended solely for personal use to learn and explore. Please respect our choice to release the source by using it as intended.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;P.S. The dev engine has all the same limitations as the game, so Mac 10.10, Win 10 (dx12) and unfortunately (at this time) no Linux build. As soon as the Linux version is done, I will upload that as well. It might be a month, or months, or longer.&lt;br dir="ltr"&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;P.P.S If you have questions or want to help others out, visit &lt;a href="https://forums.thimbleweedpark.com/c/delores-engine/18" dir="ltr"&gt;the Thimbleweed Park Forums&lt;/a&gt;&lt;/p&gt;&lt;img src="https://secure.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?d=blank&amp;amp;size=32" width="32" height="32"&gt;&lt;h4&gt;Gaby&lt;/h4&gt;&lt;div nortreblig="1590518404"&gt;11h ago&lt;/div&gt;&lt;h4&gt;Mauricio E. Silva&lt;/h4&gt;&lt;div nortreblig="1590521303"&gt;11h ago&lt;/div&gt;&lt;div dir="ltr"&gt;
     Is this your way to tell us that you couldn't find a Linux laptop that you like and we need to port it our self?.&lt;br dir="ltr"&gt;
   &lt;/div&gt;&lt;img src="https://secure.gravatar.com/avatar/d41d8cd98f00b204e9800998ecf8427e?d=blank&amp;amp;size=32" width="32" height="32"&gt;&lt;h4&gt;Lautaro &lt;/h4&gt;&lt;div nortreblig="1590521681"&gt;11h ago&lt;/div&gt;&lt;h4&gt;Chadwyk&lt;/h4&gt;&lt;div nortreblig="1590521781"&gt;11h ago&lt;/div&gt;&lt;div dir="ltr"&gt;
     Wow this is awesome! I always wondered what the Wimpy tool looked like! A cool peak under the hood for your scripting language! I wish I could see your code in the engine executable to see how you handle lower level things like walkbox algorithms, inputs, rendering, etc. but I totally understand why you aren't releasing the code for that. Thanks for this! I know what I'll be playing with today!&lt;br dir="ltr"&gt;
@@ -1412,106 +1412,4 @@ az aks show -n myaks2020 -g rg-demo qId
 &lt;/code&gt;&lt;/PRE&gt;&lt;h2 dir="ltr"&gt;Conclusion 
 &lt;/h2&gt;&lt;p&gt;You have seen five different types of ZSH aliases (counting os-specific aliases as dedicated type) that will boost your productivity. Foud different types of aliases used to achieve almost everything in your shell.&lt;/p&gt;&lt;p&gt;Take your time. Do some research. Identify the command-line tools you are using daily or regularly, find patterns, and create corresponding aliases that increase your productivity by reducing keystrokes.&lt;/p&gt;&lt;p&gt;Having powerful shells on all operating systems (finally including windows using WSL 2.0), you should care about your shell performance. Make ZSH your own.&lt;/p&gt;&lt;p dir="ltr"&gt;I do a lot of conference speaking; if you are presenting at conferences or meetups too, you should start your presentation by quickly explaining the aliases you will use throughout the talk to onboard your audience. Maybe they are using &lt;code dir="ltr"&gt;kc&lt;/code&gt; instead of &lt;code dir="ltr"&gt;k&lt;/code&gt; for &lt;code dir="ltr"&gt;kubectl&lt;/code&gt;. 😂&lt;/p&gt;&lt;p dir="ltr"&gt;Special thanks to &lt;a href="https://github.com/learnbyexample" rel="noopener noreferrer" dir="ltr"&gt;Sundeep Agarwal&lt;/a&gt; for pointing me to some typos and to &lt;a href="https://github.com/smhmd" rel="noopener noreferrer" dir="ltr"&gt;simohamed&lt;/a&gt; for the tip regarding bulk association for suffix aliases.&lt;/p&gt;</description><pubDate>Wed, 27 May 2020 00:27:31 -0500</pubDate></item><item><title>How do you organize your photos?</title><link>https://lobste.rs/s/dmsavh</link><description>&lt;p dir="ltr"&gt;Personally I store all photos at home on external USB storage and access to them using geeqie (popular photo viewer). Now looking for self-hosted solutions like &lt;a href="https://github.com/photoprism/photoprism" rel="ugc" dir="ltr"&gt;Photoprism&lt;/a&gt; or &lt;a href="https://simonwillison.net/2020/May/21/dogsheep-photos/" rel="ugc" dir="ltr"&gt;dogsheep-photos&lt;/a&gt;. I’m curious what people use nowadays for this purpose.&lt;/p&gt;</description><pubDate>Tue, 26 May 2020 03:36:40 -0500</pubDate></item><item><title>Terminal interface for checking IPv6 exposed local ports</title><link>https://lobste.rs/s/nghs2k</link><description>&lt;h1&gt;ipv6shell&lt;/h1&gt;&lt;p&gt;Connect with netcat from your terminal from any computer
 to check if you have unintended ports open to internet via IPv6.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;nc ipv6shell.jackelmanuel.xyz 1
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Implemented with async rust and tokio.&lt;/p&gt;&lt;img src="https://github.com/vvilhonen/ipv6shell/raw/master/doc/screenshot.png" alt="image of operation" width="914" height="1553"&gt;</description><pubDate>Tue, 26 May 2020 06:56:02 -0500</pubDate></item><item><title>Oil 0.8.pre5 - Progress in C++</title><link>https://lobste.rs/s/alwwgb</link><description>&lt;div&gt;
-  2020-05-25
-&lt;/div&gt;&lt;p&gt;This is the latest version of Oil, a Unix shell:&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="http://www.oilshell.org/release/0.8.pre5/" dir="ltr"&gt;Oil version 0.8.pre5&lt;/a&gt; - Source tarballs and documentation.&lt;/p&gt;&lt;p dir="ltr"&gt;To build and run it, follow the instructions in &lt;a href="http://www.oilshell.org/release/0.8.pre5/doc/INSTALL.html" dir="ltr"&gt;INSTALL.txt&lt;/a&gt;.  If you're new
-to the project, see &lt;a href="http://www.oilshell.org/blog/2018/01/28.html" dir="ltr"&gt;Why Create a New Shell?&lt;/a&gt; and the &lt;a href="http://www.oilshell.org/blog/2019/06/17.html" dir="ltr"&gt;2019
-FAQ&lt;/a&gt;.&lt;/p&gt;&lt;div&gt;Table of Contents&lt;/div&gt;&lt;h2&gt;Highlights&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;As of this release, we run &lt;a href="http://www.oilshell.org/cross-ref.html?tag=spec-test#spec-test" dir="ltr"&gt;spec tests&lt;/a&gt; against the
-&lt;a href="http://www.oilshell.org/cross-ref.html?tag=oil-native#oil-native" dir="ltr"&gt;oil-native&lt;/a&gt; binary!  In other words, we're measuring how well the
-semi-automatic &lt;strong dir="ltr"&gt;translation to C++&lt;/strong&gt; works.
-&lt;UL&gt;&lt;LI&gt;Here are &lt;a href="http://www.oilshell.org/release/0.8.pre5/test/spec.wwz/cpp/osh-summary.html" dir="ltr"&gt;the results&lt;/a&gt;.  The Python version of OSH passes
-&lt;strong dir="ltr"&gt;1560&lt;/strong&gt; tests (+), while the C++ version passes &lt;strong dir="ltr"&gt;420&lt;/strong&gt; tests.  This is
-significant progress, but there's more to do, which I discuss below.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;Koichi Murase made &lt;strong dir="ltr"&gt;over a dozen&lt;/strong&gt; fixes to OSH, motivated by running
-&lt;a href="http://www.oilshell.org/cross-ref.html?tag=ble.sh#ble.sh" dir="ltr"&gt;ble.sh&lt;/a&gt; (&lt;a href="http://www.oilshell.org/release/0.8.pre5/changelog.html" dir="ltr"&gt;full changelog&lt;/a&gt;).&lt;/LI&gt;&lt;LI&gt;I made a few fixes to &lt;a href="https://github.com/oilshell/oil/issues/752" dir="ltr"&gt;run the ShellSpec project&lt;/a&gt;.  Notably,
-&lt;code dir="ltr"&gt;shopt -s extglob&lt;/code&gt; is now respected.&lt;/LI&gt;&lt;LI&gt;Internal: we have proper C++ unit tests and run them on &lt;a href="http://www.oilshell.org/blog/2020/03/release-0.8.pre3.html#shell-the-good-parts" dir="ltr"&gt;our continuous
-build&lt;/a&gt;.
-I started using the &lt;a href="https://github.com/silentbicycle/greatest" dir="ltr"&gt;greatest.h&lt;/a&gt;
-test framework, and it's simple and effective (&lt;a href="https://oilshell.zulipchat.com/#narrow/stream/121539-oil-dev/topic/C.2B.2B.20Unit.20Tests.3A.20Framework.20and.20Automated.20Runs" dir="ltr"&gt;Zulip thread&lt;/a&gt;).&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;I'd still like more bug reports!  See &lt;a href="https://github.com/oilshell/oil/wiki/How-To-Test-OSH" dir="ltr"&gt;How To Test OSH&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;(+) Test harness bug that will be fixed: 1539
-should be 1560.&lt;/p&gt;&lt;h2&gt;Semi-Automatic Translation to C++&lt;/h2&gt;&lt;h3&gt;Two Analogies: Go Compiler and TeX&lt;/h3&gt;&lt;p&gt;What's all this about C++?  Here are two analogies to help explain what's going
-on.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://www.youtube.com/watch?v=QIE5nV5fDwA" dir="ltr"&gt;GopherCon 2014: Go from C to Go by Russ
-Cox&lt;/a&gt; (YouTube, 31 minutes).
-&lt;em dir="ltr"&gt;It's time for the Go compilers to be written in Go, not in C. I'll talk
-about the unusual process the Go team has adopted to make that happen:
-&lt;strong dir="ltr"&gt;mechanical conversion of the existing C compilers&lt;/strong&gt; into idiomatic Go
-code.&lt;/em&gt;
-(&lt;a href="https://github.com/rsc/grind" dir="ltr"&gt;Grind&lt;/a&gt; is the one-off tool that helped with
-translation, analogous to &lt;a href="http://www.oilshell.org/cross-ref.html?tag=mycpp#mycpp" dir="ltr"&gt;mycpp&lt;/a&gt;.)&lt;/p&gt;&lt;p dir="ltr"&gt;The flavor of the work is similar to what I'm doing with Oil, but there's a
-key difference: Oil's source will remain in statically typed Python and DSLs
-like &lt;a href="http://www.oilshell.org/cross-ref.html?tag=zephyr-asdl#zephyr-asdl" dir="ltr"&gt;Zephyr ASDL&lt;/a&gt; for the forseeable future.  We won't be writing C++
-by hand.&lt;/p&gt;&lt;p&gt;Static types play an important role in both translations.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://tex.stackexchange.com/questions/111332/how-to-compile-the-source-code-of-tex" dir="ltr"&gt;How to compile the source code of
-TeX&lt;/a&gt;.
-Knuth wrote TeX in a dialect of Pascal, but it's &lt;strong dir="ltr"&gt;not&lt;/strong&gt; compiled with a
-Pascal compiler.  Instead, it's translated to C and compiled with a C
-compiler.&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;The common thread is that we want to &lt;strong dir="ltr"&gt;preserve the correctness&lt;/strong&gt; of an
-existing codebase.  Oil runs &lt;a href="http://www.oilshell.org/blog/2019/02/05.html" dir="ltr"&gt;thousands of lines&lt;/a&gt; of
-existing &lt;a href="http://www.oilshell.org/cross-ref.html?tag=bash#bash" dir="ltr"&gt;bash&lt;/a&gt; scripts, including some of &lt;a href="http://www.oilshell.org/blog/2020/04/release-0.8.pre4.html" dir="ltr"&gt;the biggest shell programs in the
-world&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;Rewriting by hand would introduce a lot of bugs, so instead we write a custom
-translator and apply it to the codebase.  In Oil's case, there are more code
-generators to remove dynamic typing and reflection, discussed below.&lt;/p&gt;&lt;h3&gt;Recap&lt;/h3&gt;&lt;p&gt;In addition to the new spec test metrics, these line counts give a feel for
-recent progress:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The &lt;a href="http://www.oilshell.org/blog/2019/12/09.html" dir="ltr"&gt;0.7.pre9&lt;/a&gt; release in December.
-&lt;/LI&gt;&lt;LI&gt;The &lt;a href="http://www.oilshell.org/blog/2020/03/release-metrics.html" dir="ltr"&gt;0.8.pre2&lt;/a&gt; release in March.
-&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;osh_eval.cc&lt;/code&gt; has &lt;strong dir="ltr"&gt;16,491&lt;/strong&gt; lines of code.  In addition to the parser, we
-translate the word and arithmetic evaluators.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;osh_eval.cc&lt;/code&gt; has &lt;strong dir="ltr"&gt;20,875&lt;/strong&gt; lines of code.  We translate the command
-evaluator, including assignments.  So the resulting C++ interpreter can run
-code like &lt;code dir="ltr"&gt;readonly x=y; echo $x&lt;/code&gt;.  Details below.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;For comparison, the slow OSH interpreter consists of about &lt;strong dir="ltr"&gt;30K&lt;/strong&gt; lines of
-Python code.  This doesn't include the &lt;a href="http://www.oilshell.org/cross-ref.html?tag=oil-language#oil-language" dir="ltr"&gt;Oil language&lt;/a&gt;,
-which I haven't started translating.&lt;/p&gt;&lt;p&gt;The translation isn't going as quickly as I'd like it to, but it's working, and
-I'm solving interesting technical problems along the way.&lt;/p&gt;&lt;p dir="ltr"&gt;As far as I can tell, this unusual process is the shortest path to a fast
-shell.  (As mentioned in January, I &lt;a href="http://www.oilshell.org/blog/2020/01/blog-roadmap.html#backup-plans" dir="ltr"&gt;encourage parallel
-efforts&lt;/a&gt;.  Feel free to ask me about
-this.)&lt;/p&gt;&lt;h3&gt;Details&lt;/h3&gt;&lt;p dir="ltr"&gt;I keep a log of the translation process on &lt;a href="http://www.oilshell.org/cross-ref.html?tag=zulip#zulip" dir="ltr"&gt;Zulip&lt;/a&gt;.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Static typing of &lt;strong dir="ltr"&gt;flag parsing&lt;/strong&gt; was a big deal (&lt;a href="https://oilshell.zulipchat.com/#narrow/stream/121539-oil-dev/topic/Static.20Typing.20of.20flag.20parsing.20code" dir="ltr"&gt;Zulip thread&lt;/a&gt;).
-A common theme of translation is  turning Python reflection into textual code
-generation, and this was another instance of it.
-&lt;UL&gt;&lt;LI&gt;Assignment builtins like &lt;code dir="ltr"&gt;declare -g foo=bar&lt;/code&gt; now work, so we have a path
-to translate more &lt;a href="http://www.oilshell.org/cross-ref.html?tag=shell-builtin#shell-builtin" dir="ltr"&gt;shell builtins&lt;/a&gt; to C++.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;a href="http://www.oilshell.org/cross-ref.html?tag=zephyr-asdl#zephyr-asdl" dir="ltr"&gt;Zephyr ASDL&lt;/a&gt; is turning into half of a programming language (&lt;a href="https://oilshell.zulipchat.com/#narrow/stream/121539-oil-dev/topic/ASDL.20is.20evolving.20into.20a.20programming.20language" dir="ltr"&gt;Zulip
-thread&lt;/a&gt;).  Specifically, it's a language for describing &lt;strong dir="ltr"&gt;typed
-data&lt;/strong&gt;, which Python is missing.  It now supports dicts/maps with the syntax
-&lt;code dir="ltr"&gt;map[string, int]&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;&lt;a href="http://www.oilshell.org/blog/2020/04/release-0.8.pre4.html#dependency-inversion-leads-to-pure-interpreters" dir="ltr"&gt;The interpreter is still
-"pure"&lt;/a&gt;,
-which is why only &lt;strong dir="ltr"&gt;420&lt;/strong&gt; tests pass.  The nascent &lt;code dir="ltr"&gt;osh_eval.cc&lt;/code&gt; doesn't even
-run &lt;code dir="ltr"&gt;ls&lt;/code&gt;, because it's external process!  But it understands the hairy
-details of word evaluation &lt;code dir="ltr"&gt;${}&lt;/code&gt;, arithmetic evaluation &lt;code dir="ltr"&gt;$(( ))&lt;/code&gt;, brace
-expansion &lt;code dir="ltr"&gt;{a,b}&lt;/code&gt;, and more.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;More background: the March recap had a similar section with Zulip threads:
-&lt;a href="http://www.oilshell.org/blog/2020/03/recap.html#mycpp-the-good-the-bad-and-the-ugly" dir="ltr"&gt;mycpp: The Good, the Bad, and the
-Ugly&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;TODO on Translation&lt;/h2&gt;&lt;p&gt;Even though about two-thirds of OSH translates to C++ and compiles, and much of
-it runs correctly, there's still a lot of work left.&lt;/p&gt;&lt;p dir="ltr"&gt;Oil is simply a big project: recall that &lt;a href="http://www.oilshell.org/cross-ref.html?tag=bash#bash" dir="ltr"&gt;bash&lt;/a&gt; consists of &lt;a href="http://www.oilshell.org/blog/2019/06/17.html#why-is-it-written-in-python" dir="ltr"&gt;over 140K lines
-of code&lt;/a&gt;.  I estimate that
-OSH implements 80% of &lt;a href="http://www.oilshell.org/cross-ref.html?tag=bash#bash" dir="ltr"&gt;bash&lt;/a&gt;, with significant fixes.  And Oil is a new
-language with many features on top.&lt;/p&gt;&lt;h3&gt;DSLs and Code Generation&lt;/h3&gt;&lt;p&gt;Oil's source code will remain in high-level languages for the forseeable
-future, so we need to enhance the code generators to produce correct and fast
-C++.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The &lt;a href="http://www.oilshell.org/cross-ref.html?tag=pgen2#pgen2" dir="ltr"&gt;pgen2&lt;/a&gt; parser generator
-&lt;UL&gt;&lt;LI&gt;The syntax of the &lt;a href="http://www.oilshell.org/cross-ref.html?tag=Oil%20language#Oil%20language" dir="ltr"&gt;Oil language&lt;/a&gt; is expressed with &lt;a href="http://www.oilshell.org/cross-ref.html?tag=pgen2#pgen2" dir="ltr"&gt;pgen2&lt;/a&gt;,
-and we don't have a C++ code generator for it yet.  After discussion with
-Jason Miller, I think we should borrow the original code generator and
-runtime from &lt;a href="http://www.oilshell.org/cross-ref.html?tag=cpython#cpython" dir="ltr"&gt;CPython&lt;/a&gt; rather than try to translate the slow
-Python implementation.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;Wrapping Shell Dependencies&lt;/h3&gt;&lt;p dir="ltr"&gt;In the &lt;a href="http://www.oilshell.org/blog/2020/01/blog-roadmap.html#plans-for-oil" dir="ltr"&gt;January blog roadmap&lt;/a&gt;, I
-mentioned that there are &lt;strong dir="ltr"&gt;two technical problems&lt;/strong&gt; with translation.&lt;/p&gt;&lt;p&gt;One of them was wrapping native C code, which I no longer see as a risk.  It's
-just work.  The shell has three main dependencies:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;a href="http://www.oilshell.org/cross-ref.html?tag=libc#libc" dir="ltr"&gt;libc&lt;/a&gt;.  I've wrapped pure functions like &lt;code dir="ltr"&gt;fnmatch()&lt;/code&gt; in C++, and
-this is straightforward.&lt;/LI&gt;&lt;LI&gt;The Unix kernel.  Wrapping functions like &lt;code dir="ltr"&gt;execve()&lt;/code&gt; is similar to wrapping
-&lt;a href="http://www.oilshell.org/cross-ref.html?tag=libc#libc" dir="ltr"&gt;libc&lt;/a&gt;, but &lt;code dir="ltr"&gt;errno&lt;/code&gt; handling is an issue I want to revisit.  (&lt;a href="http://www.oilshell.org/blog/2020/04/comics.html" dir="ltr"&gt;These
-Unix comics&lt;/a&gt; are relevant.)&lt;/LI&gt;&lt;LI&gt;GNU &lt;a href="http://www.oilshell.org/cross-ref.html?tag=readline#readline" dir="ltr"&gt;readline&lt;/a&gt; for interactive features.  To be honest, I'd rather punt
-interactive features to Oil code, analogous to &lt;a href="http://www.oilshell.org/cross-ref.html?tag=ble.sh#ble.sh" dir="ltr"&gt;ble.sh&lt;/a&gt;.  But Oil should
-have basic readline support.&lt;/LI&gt;&lt;/OL&gt;&lt;h3&gt;Open Problems&lt;/h3&gt;&lt;UL&gt;&lt;LI&gt;The interpreter's memory management is probably the biggest open issue.  I
-have ideas, but I haven't tested them with an implementation.&lt;/LI&gt;&lt;LI&gt;The &lt;a href="http://www.oilshell.org/blog/2020/01/history-and-completion.html" dir="ltr"&gt;autocompletion&lt;/a&gt; code makes good use
-of Python's &lt;code dir="ltr"&gt;yield&lt;/code&gt;, which I can't (or don't want to) use in C++.  I might
-rewrite it with &lt;code dir="ltr"&gt;fork()&lt;/code&gt; and &lt;code dir="ltr"&gt;write()&lt;/code&gt; to a pipe.
-&lt;UL&gt;&lt;LI&gt;On a related note, Doug McIlroy, the co-inventor of pipes, thought of them
-as a mechanism for allowing coroutines (like Python's &lt;code dir="ltr"&gt;yield&lt;/code&gt;).  A few
-weeks ago, I played with the shell and C code in his &lt;a href="https://www.cs.dartmouth.edu/~doug/sieve/sieve.pdf" dir="ltr"&gt;2014 explanation of
-the coroutine prime number sieve&lt;/a&gt; (PDF).&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Plan for 2020&lt;/h2&gt;&lt;p dir="ltr"&gt;As &lt;a href="http://www.oilshell.org/blog/2020/01/ambitions.html#three-levels" dir="ltr"&gt;mentioned in January&lt;/a&gt;, the bare minimum
-for "success" is when OSH to replaces &lt;a href="http://www.oilshell.org/cross-ref.html?tag=bash#bash" dir="ltr"&gt;bash&lt;/a&gt; for my own use.&lt;/p&gt;&lt;p&gt;After reviewing all this work, I still feel like OSH can be "finished" in 2020.
-I won't be extremely surprised if isn't, but it seems reasonable.&lt;/p&gt;&lt;p&gt;On the other hand, it seems clear that the Oil language will remain a prototype
-for all of 2020.  I haven't gotten much feedback on it, probably because there
-isn't much documentation.&lt;/p&gt;&lt;p&gt;This is disappointing, but I don't have a solution to this problem.&lt;/p&gt;&lt;p dir="ltr"&gt;In short, the &lt;strong dir="ltr"&gt;project's focus has necessarily narrowed&lt;/strong&gt;.  The only two goals
-on my radar are:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;The OSH language should be translated to C++, tested, and optimized.&lt;/LI&gt;&lt;LI&gt;The Oil language should be divorced from the Python runtime and similarly
-translated.  This will almost certainly bleed into 2021.&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;I should write a longer blog post about this, but &lt;strong dir="ltr"&gt;almost everything else is
-cut&lt;/strong&gt;.  Oil will be more like a &lt;strong dir="ltr"&gt;library&lt;/strong&gt; than a shell.  (As mentioned, I'll
-need basic GNU &lt;a href="http://www.oilshell.org/cross-ref.html?tag=readline#readline" dir="ltr"&gt;readline&lt;/a&gt; support for my own use.)&lt;/p&gt;&lt;p&gt;The docs are another sore point.  I've mostly been writing them "on demand"
-(whenever anyone asks).  It seems like that pattern will continue, given all
-the other work that needs to be done.&lt;/p&gt;&lt;h2&gt;Appendix: Selected Metrics&lt;/h2&gt;&lt;p dir="ltr"&gt;Let's compare this release with the previous one, version
-&lt;a href="http://www.oilshell.org/release/0.8.pre4" dir="ltr"&gt;0.8.pre4&lt;/a&gt;.&lt;/p&gt;&lt;h4&gt;Native Code Metrics&lt;/h4&gt;&lt;p dir="ltr"&gt;We have nearly 70K lines of C++ code, including over 20K translated by
-&lt;a href="http://www.oilshell.org/cross-ref.html?tag=mycpp#mycpp" dir="ltr"&gt;mycpp&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;The size of the &lt;code dir="ltr"&gt;osh_eval.opt.stripped&lt;/code&gt; executable differs between GCC and
-Clang, an I don't yet know why.  In any case, the increase is consistent with
-translating and compiling more lines of code.&lt;/p&gt;&lt;h4&gt;Test Results&lt;/h4&gt;&lt;p&gt;OSH spec tests:&lt;/p&gt;&lt;p&gt;There was no work on the Oil language!  I'm a bit concerned by that, which is
-one reason for the scope reduction mentioned above.&lt;/p&gt;&lt;h4&gt;Line Counts&lt;/h4&gt;&lt;p&gt;We have ~300 new significant lines of code in OSH:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;a href="http://www.oilshell.org/release/0.8.pre4/metrics.wwz/line-counts/osh-cloc.txt" dir="ltr"&gt;cloc for 0.8.pre4&lt;/a&gt;:
-&lt;strong dir="ltr"&gt;16,281&lt;/strong&gt; lines of Python and C, &lt;strong dir="ltr"&gt;299&lt;/strong&gt; lines of ASDL&lt;/LI&gt;&lt;LI&gt;&lt;a href="http://www.oilshell.org/release/0.8.pre5/metrics.wwz/line-counts/osh-cloc.txt" dir="ltr"&gt;cloc for 0.8.pre5&lt;/a&gt;: &lt;strong dir="ltr"&gt;16,526&lt;/strong&gt; lines of Python and C, &lt;strong dir="ltr"&gt;312&lt;/strong&gt; lines of ASDL&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;And ~500 new physical lines of code:&lt;/p&gt;&lt;h4&gt;Benchmarks&lt;/h4&gt;&lt;p&gt;The parsing benchmark didn't change much:&lt;/p&gt;&lt;p&gt;Nor did the runtime benchmark:&lt;/p&gt;</description><pubDate>Tue, 26 May 2020 02:14:12 -0500</pubDate></item></channel></rss>
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Implemented with async rust and tokio.&lt;/p&gt;&lt;img src="https://github.com/vvilhonen/ipv6shell/raw/master/doc/screenshot.png" alt="image of operation" width="914" height="1553"&gt;</description><pubDate>Tue, 26 May 2020 06:56:02 -0500</pubDate></item><item><title>Retrofitting Fine Grain Isolation in the Firefox Renderer</title><link>https://arxiv.org/pdf/2003.00572.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/jhj4mk/retrofitting_fine_grain_isolation"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Tue, 26 May 2020 22:40:35 -0500</pubDate></item></channel></rss>
