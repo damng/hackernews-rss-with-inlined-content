@@ -148,7 +148,387 @@ just pointers to other pages. Pages 6, 2818, and 449 are &lt;em dir="ltr"&gt;lea
 and they’re where the data is.&lt;/p&gt;&lt;p&gt;I’m still not super clear on how exactly the interior pages are
 structured and how the pointers to their child pages work. It’s time
 to sleep now, but perhaps that will happen another day!&lt;/p&gt;&lt;p&gt;Modifying open source programs to print out debug information to
-understand their internals better: SO FUN.&lt;/p&gt;</description><pubDate>Sat, 27 Jun 2020 13:47:59 -0500</pubDate></item><item><title>FreeDVDBoot - Hacking the PlayStation 2 through its DVD player</title><link>https://lobste.rs/s/wlgo7x</link><description>&lt;div dir="ltr"&gt;
+understand their internals better: SO FUN.&lt;/p&gt;</description><pubDate>Sat, 27 Jun 2020 13:47:59 -0500</pubDate></item><item><title>Using Zig to Provide Stack Traces on Kernel Panic for a Bare Bones Operating System - Andrew Kelley</title><link>https://lobste.rs/s/mbpil5</link><description>&lt;p dir="ltr"&gt;Last week, I reached an exciting milestone in my career as a programmer.
+&lt;a href="https://www.youtube.com/watch?v=gihdpLtHi9Q" dir="ltr"&gt;For the first time in my life, I ran code directly on hardware&lt;/a&gt;, with no Operating System sitting between the bare metal and my code.
+&lt;/p&gt;&lt;p&gt;
+For some context, the goal of this side project is to create a 2-4 player arcade game
+running directly on a Raspberry Pi 3+.
+&lt;/p&gt;&lt;img src="https://andrewkelley.me/img/clashos-button-small.jpg" width="445" height="352"&gt;&lt;p&gt;
+Having just gotten Hello World working, this software can do
+little more than send a message over the serial uART on bootup:
+&lt;/p&gt;&lt;PRE&gt;Hello World! ClashOS 0.0
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+So what's the next step? Bootloader? File system? &lt;em dir="ltr"&gt;Graphics?!&lt;/em&gt;
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Well, when coding all of these things, I'm inevitably going to run into bugs
+and crashes. And when this happens, I want to quickly understand what's gone
+wrong. Normally, in Zig, when something goes wrong, you get a nice
+&lt;a href="https://ziglang.org/download/0.3.0/release-notes.html#stack-traces" dir="ltr"&gt;stack trace&lt;/a&gt;,
+like this:
+&lt;/p&gt;&lt;img src="https://ziglang.org/download/0.3.0/stack-traces-linux.png" width="445" height="399"&gt;&lt;p dir="ltr"&gt;This example, however, is targeting Linux, whereas this arcade game project is
+&lt;em dir="ltr"&gt;freestanding&lt;/em&gt;. The equivalent code in freestanding actually just hangs
+the CPU:
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;--- a/src/main.zig
++++ b/src/main.zig
+     serial.log("Hello World! ClashOS 0.0\n");
+&lt;span dir="ltr"&gt;+    var x: u8 = 255;
++    x += 1;
++    serial.log("got here\n");&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;When run, you'll see we never get to the "got here" message, but also
+we don't get any kind of error message printed or anything.&lt;/p&gt;&lt;PRE&gt;Hello World! ClashOS 0.0
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;To understand this, we can look at the &lt;strong dir="ltr"&gt;default panic handler&lt;/strong&gt;.
+In Zig, you can provide a &lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;pub&lt;/span&gt; &lt;span dir="ltr"&gt;fn&lt;/span&gt; panic&lt;/code&gt; in your
+&lt;a href="https://ziglang.org/documentation/master/#Root-Source-File" dir="ltr"&gt;root source file&lt;/a&gt;
+alongside &lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;pub&lt;/span&gt; &lt;span dir="ltr"&gt;fn&lt;/span&gt; main&lt;/code&gt;. But if you do not provide this
+function, &lt;a href="https://github.com/ziglang/zig/blob/0.3.0/std/special/panic.zig" dir="ltr"&gt;the default&lt;/a&gt;
+is used:
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;pub&lt;/span&gt; &lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;panic&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;msg&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; error_return_trace&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;?&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;builtin&lt;span dir="ltr"&gt;.&lt;/span&gt;StackTrace&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;noreturn&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    @&lt;span dir="ltr"&gt;setCold&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;true&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;switch&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;builtin&lt;span dir="ltr"&gt;.&lt;/span&gt;os&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+        builtin&lt;span dir="ltr"&gt;.&lt;/span&gt;Os&lt;span dir="ltr"&gt;.&lt;/span&gt;freestanding &lt;span dir="ltr"&gt;=&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+            &lt;span dir="ltr"&gt;while&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;true&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;
+        &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+        &lt;span dir="ltr"&gt;else&lt;/span&gt; &lt;span dir="ltr"&gt;=&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+            &lt;span dir="ltr"&gt;const&lt;/span&gt; first_trace_addr &lt;span dir="ltr"&gt;=&lt;/span&gt; @&lt;span dir="ltr"&gt;ptrToInt&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;@&lt;span dir="ltr"&gt;returnAddress&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+            std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;panicExtra&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;error_return_trace&lt;span dir="ltr"&gt;,&lt;/span&gt; first_trace_addr&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;"{}"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; msg&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+        &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+    &lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+Here we can see why the code earlier is hanging - the default panic handler for the
+freestanding target is simply &lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;while&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;true&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/code&gt;.
+&lt;/p&gt;&lt;p&gt;
+So we can make an immediate improvement by creating our own panic handler:
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;pub&lt;/span&gt; &lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;panic&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;message&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; stack_trace&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;?&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;builtin&lt;span dir="ltr"&gt;.&lt;/span&gt;StackTrace&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;noreturn&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    serial&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;write&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;"\n!KERNEL PANIC!\n"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    serial&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;write&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;message&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    serial&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;write&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;"\n"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;while&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;true&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;And now, the output of booting the Raspberry Pi:&lt;/p&gt;&lt;PRE&gt;Hello World! ClashOS 0.0
+
+!KERNEL PANIC!
+integer overflow
+&lt;/PRE&gt;&lt;p&gt;
+Already this is much better. We can see that an integer overflow caused a kernel panic.
+But an integer overflow could occur anywhere. Wouldn't it be nice to have a full stack
+trace printed?
+&lt;/p&gt;&lt;p&gt;
+Yes, yes it would. The first thing I needed to make this work is access to the DWARF
+debugging info from inside the kernel. But I don't even have a file system. How can that work?
+&lt;/p&gt;&lt;p&gt;
+Easy! Just put the DWARF info directly into the kernel's memory. I modified my linker script
+to do just that:
+&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;    .rodata : ALIGN(4K) {
+        *(.rodata)
+        __debug_info_start = .;
+        KEEP(*(.debug_info))
+        __debug_info_end = .;
+        __debug_abbrev_start = .;
+        KEEP(*(.debug_abbrev))
+        __debug_abbrev_end = .;
+        __debug_str_start = .;
+        KEEP(*(.debug_str))
+        __debug_str_end = .;
+        __debug_line_start = .;
+        KEEP(*(.debug_line))
+        __debug_line_end = .;
+        __debug_ranges_start = .;
+        KEEP(*(.debug_ranges))
+        __debug_ranges_end = .;
+    }&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+And to my dismay, these error messages stared back at me:
+&lt;/p&gt;&lt;PRE&gt;lld: error: incompatible section flags for .rodata
+&amp;gt;&amp;gt;&amp;gt; /home/andy/dev/clashos/zig-cache/clashos.o:(.debug_info): 0x0
+&amp;gt;&amp;gt;&amp;gt; output section .rodata: 0x12
+
+lld: error: incompatible section flags for .rodata
+&amp;gt;&amp;gt;&amp;gt; &amp;lt;internal&amp;gt;:(.debug_str): 0x30
+&amp;gt;&amp;gt;&amp;gt; output section .rodata: 0x12
+
+lld: error: incompatible section flags for .rodata
+&amp;gt;&amp;gt;&amp;gt; /home/andy/dev/clashos/zig-cache/clashos.o:(.debug_line): 0x0
+&amp;gt;&amp;gt;&amp;gt; output section .rodata: 0x32
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+After a &lt;a href="https://bugs.llvm.org/show_bug.cgi?id=39862" dir="ltr"&gt;back and forth on a bug report&lt;/a&gt;, 
+George Rimar suggested simply deleting that particular check, as it might have been an
+overly strict enforcement. I tried this in my LLD fork, and it worked! Debug information
+was now linked into my kernel images. After completing the rest of the steps in this blog post,
+I &lt;a href="https://reviews.llvm.org/D55276" dir="ltr"&gt;submitted a patch upstream&lt;/a&gt;,
+which Rui has already merged into LLD. This will be released with
+LLVM 8, and in the meantime Zig's LLD fork has the patch.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+At this point it was a simple matter of writing the glue code between my kernel and the
+Zig Standard Library's stack trace facilities. In Zig, you don't have to intentionally support
+freestanding mode. Code which has no dependencies on a particular operating system will work
+in freestanding mode thanks to Zig's &lt;em dir="ltr"&gt;lazy top level declaration analysis&lt;/em&gt;.
+Because the standard library stack trace code does not call any OS API, it therefore
+supports freestanding mode.
+&lt;/p&gt;&lt;p&gt;
+The Zig std lib API for opening debug information from an ELF file looks like this:
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;pub&lt;/span&gt; &lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;openElfDebugInfo&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;
+    allocator&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;mem&lt;span dir="ltr"&gt;.&lt;/span&gt;Allocator&lt;span dir="ltr"&gt;,&lt;/span&gt;
+    elf_seekable_stream&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;DwarfSeekableStream&lt;span dir="ltr"&gt;,&lt;/span&gt;
+    elf_in_stream&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;DwarfInStream&lt;span dir="ltr"&gt;,&lt;/span&gt;
+&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;!&lt;/span&gt;DwarfInfo&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+But this kernel is so bare bones, it's not even in an ELF file. It's booting directly from a binary blob.
+We just have the debug info sections mapped directly into memory. For that we can use
+a lower level API:
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span spellcheck="true" dir="ltr"&gt;/// Initialize DWARF info. The caller has the responsibility to initialize most
+&lt;/span&gt;&lt;span spellcheck="true" dir="ltr"&gt;/// the DwarfInfo fields before calling. These fields can be left undefined:
+&lt;/span&gt;&lt;span spellcheck="true" dir="ltr"&gt;/// * abbrev_table_list
+&lt;/span&gt;&lt;span spellcheck="true" dir="ltr"&gt;/// * compile_unit_list
+&lt;/span&gt;&lt;span dir="ltr"&gt;pub&lt;/span&gt; &lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;openDwarfDebugInfo&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;di&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;DwarfInfo&lt;span dir="ltr"&gt;,&lt;/span&gt; allocator&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;mem&lt;span dir="ltr"&gt;.&lt;/span&gt;Allocator&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;And &lt;code dir="ltr"&gt;DwarfInfo&lt;/code&gt; is defined like this:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;pub&lt;/span&gt; &lt;span dir="ltr"&gt;const&lt;/span&gt; DwarfInfo &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    dwarf_seekable_stream&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;DwarfSeekableStream&lt;span dir="ltr"&gt;,&lt;/span&gt;
+    dwarf_in_stream&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;DwarfInStream&lt;span dir="ltr"&gt;,&lt;/span&gt;
+    endian&lt;span dir="ltr"&gt;:&lt;/span&gt; builtin&lt;span dir="ltr"&gt;.&lt;/span&gt;Endian&lt;span dir="ltr"&gt;,&lt;/span&gt;
+    debug_info&lt;span dir="ltr"&gt;:&lt;/span&gt; Section&lt;span dir="ltr"&gt;,&lt;/span&gt;
+    debug_abbrev&lt;span dir="ltr"&gt;:&lt;/span&gt; Section&lt;span dir="ltr"&gt;,&lt;/span&gt;
+    debug_str&lt;span dir="ltr"&gt;:&lt;/span&gt; Section&lt;span dir="ltr"&gt;,&lt;/span&gt;
+    debug_line&lt;span dir="ltr"&gt;:&lt;/span&gt; Section&lt;span dir="ltr"&gt;,&lt;/span&gt;
+    debug_ranges&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;?&lt;/span&gt;Section&lt;span dir="ltr"&gt;,&lt;/span&gt;
+    abbrev_table_list&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;ArrayList&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;AbbrevTableHeader&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+    compile_unit_list&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;ArrayList&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;CompileUnit&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+To hook these up, the glue code needs to initialize the fields of
+&lt;code dir="ltr"&gt;DwarfInfo&lt;/code&gt; with the offsets into a
+&lt;code dir="ltr"&gt;std&lt;span dir="ltr"&gt;.&lt;/span&gt;io&lt;span dir="ltr"&gt;.&lt;/span&gt;SeekableStream&lt;/code&gt;, which can
+be implemented as a simple pointer to memory. By declaring &lt;strong dir="ltr"&gt;external variables&lt;/strong&gt;
+and then looking at their &lt;em dir="ltr"&gt;addresses&lt;/em&gt;, we can find out where in memory the symbols
+defined in the linker script are.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+For &lt;code dir="ltr"&gt;.debug_abbrev&lt;/code&gt;, &lt;code dir="ltr"&gt;.debug_str&lt;/code&gt;, and &lt;code dir="ltr"&gt;.debug_ranges&lt;/code&gt;, I had to
+set the offset to 0 to
+&lt;a href="https://bugs.llvm.org/show_bug.cgi?id=39862#c6" dir="ltr"&gt;workaround&lt;/a&gt;
+LLD thinking that the sections start at 0 for some reason.
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;var&lt;/span&gt; kernel_panic_allocator_bytes&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;100&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;1024&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;u8&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;undefined&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;var&lt;/span&gt; kernel_panic_allocator_state &lt;span dir="ltr"&gt;=&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;heap&lt;span dir="ltr"&gt;.&lt;/span&gt;FixedBufferAllocator&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;init&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;kernel_panic_allocator_bytes&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;const&lt;/span&gt; kernel_panic_allocator &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;kernel_panic_allocator_state&lt;span dir="ltr"&gt;.&lt;/span&gt;allocator&lt;span dir="ltr"&gt;;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;extern&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt; __debug_info_start&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;extern&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt; __debug_info_end&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;extern&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt; __debug_abbrev_start&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;extern&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt; __debug_abbrev_end&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;extern&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt; __debug_str_start&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;extern&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt; __debug_str_end&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;extern&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt; __debug_line_start&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;extern&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt; __debug_line_end&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;extern&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt; __debug_ranges_start&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;extern&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt; __debug_ranges_end&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;dwarfSectionFromSymbolAbs&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;start&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; end&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;DwarfInfo&lt;span dir="ltr"&gt;.&lt;/span&gt;Section &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    &lt;span dir="ltr"&gt;return&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;DwarfInfo&lt;span dir="ltr"&gt;.&lt;/span&gt;Section&lt;span dir="ltr"&gt;{&lt;/span&gt;
+        &lt;span dir="ltr"&gt;.&lt;/span&gt;offset &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+        &lt;span dir="ltr"&gt;.&lt;/span&gt;size &lt;span dir="ltr"&gt;=&lt;/span&gt; @&lt;span dir="ltr"&gt;ptrToInt&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;end&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;-&lt;/span&gt; @&lt;span dir="ltr"&gt;ptrToInt&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;start&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+    &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;dwarfSectionFromSymbol&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;start&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; end&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;DwarfInfo&lt;span dir="ltr"&gt;.&lt;/span&gt;Section &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    &lt;span dir="ltr"&gt;return&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;DwarfInfo&lt;span dir="ltr"&gt;.&lt;/span&gt;Section&lt;span dir="ltr"&gt;{&lt;/span&gt;
+        &lt;span dir="ltr"&gt;.&lt;/span&gt;offset &lt;span dir="ltr"&gt;=&lt;/span&gt; @&lt;span dir="ltr"&gt;ptrToInt&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;start&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+        &lt;span dir="ltr"&gt;.&lt;/span&gt;size &lt;span dir="ltr"&gt;=&lt;/span&gt; @&lt;span dir="ltr"&gt;ptrToInt&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;end&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;-&lt;/span&gt; @&lt;span dir="ltr"&gt;ptrToInt&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;start&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+    &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;getSelfDebugInfo&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;DwarfInfo &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    &lt;span dir="ltr"&gt;const&lt;/span&gt; S &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+        &lt;span dir="ltr"&gt;var&lt;/span&gt; have_self_debug_info &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;false&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+        &lt;span dir="ltr"&gt;var&lt;/span&gt; self_debug_info&lt;span dir="ltr"&gt;:&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;DwarfInfo &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;undefined&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+
+        &lt;span dir="ltr"&gt;var&lt;/span&gt; in_stream_state &lt;span dir="ltr"&gt;=&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;io&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;InStream&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;anyerror&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt; &lt;span dir="ltr"&gt;.&lt;/span&gt;readFn &lt;span dir="ltr"&gt;=&lt;/span&gt; readFn &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+        &lt;span dir="ltr"&gt;var&lt;/span&gt; in_stream_pos&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;usize&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+        &lt;span dir="ltr"&gt;const&lt;/span&gt; in_stream &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;in_stream_state&lt;span dir="ltr"&gt;;&lt;/span&gt;
+
+        &lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;readFn&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;self&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;std&lt;span dir="ltr"&gt;.&lt;/span&gt;io&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;InStream&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;anyerror&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; buffer&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; anyerror&lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;usize&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+            &lt;span dir="ltr"&gt;const&lt;/span&gt; ptr &lt;span dir="ltr"&gt;=&lt;/span&gt; @&lt;span dir="ltr"&gt;intToPtr&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; in_stream_pos&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+            @&lt;span dir="ltr"&gt;memcpy&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;buffer&lt;span dir="ltr"&gt;.&lt;/span&gt;ptr&lt;span dir="ltr"&gt;,&lt;/span&gt; ptr&lt;span dir="ltr"&gt;,&lt;/span&gt; buffer&lt;span dir="ltr"&gt;.&lt;/span&gt;len&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+            in_stream_pos &lt;span dir="ltr"&gt;+&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt; buffer&lt;span dir="ltr"&gt;.&lt;/span&gt;len&lt;span dir="ltr"&gt;;&lt;/span&gt;
+            &lt;span dir="ltr"&gt;return&lt;/span&gt; buffer&lt;span dir="ltr"&gt;.&lt;/span&gt;len&lt;span dir="ltr"&gt;;&lt;/span&gt;
+        &lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+        &lt;span dir="ltr"&gt;const&lt;/span&gt; SeekableStream &lt;span dir="ltr"&gt;=&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;io&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;SeekableStream&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;anyerror&lt;span dir="ltr"&gt;,&lt;/span&gt; anyerror&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+        &lt;span dir="ltr"&gt;var&lt;/span&gt; seekable_stream_state &lt;span dir="ltr"&gt;=&lt;/span&gt; SeekableStream&lt;span dir="ltr"&gt;{&lt;/span&gt;
+            &lt;span dir="ltr"&gt;.&lt;/span&gt;seekToFn &lt;span dir="ltr"&gt;=&lt;/span&gt; seekToFn&lt;span dir="ltr"&gt;,&lt;/span&gt;
+            &lt;span dir="ltr"&gt;.&lt;/span&gt;seekForwardFn &lt;span dir="ltr"&gt;=&lt;/span&gt; seekForwardFn&lt;span dir="ltr"&gt;,&lt;/span&gt;
+
+            &lt;span dir="ltr"&gt;.&lt;/span&gt;getPosFn &lt;span dir="ltr"&gt;=&lt;/span&gt; getPosFn&lt;span dir="ltr"&gt;,&lt;/span&gt;
+            &lt;span dir="ltr"&gt;.&lt;/span&gt;getEndPosFn &lt;span dir="ltr"&gt;=&lt;/span&gt; getEndPosFn&lt;span dir="ltr"&gt;,&lt;/span&gt;
+        &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+        &lt;span dir="ltr"&gt;const&lt;/span&gt; seekable_stream &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;seekable_stream_state&lt;span dir="ltr"&gt;;&lt;/span&gt;
+
+        &lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;seekToFn&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;self&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;SeekableStream&lt;span dir="ltr"&gt;,&lt;/span&gt; pos&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;usize&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; anyerror&lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+            in_stream_pos &lt;span dir="ltr"&gt;=&lt;/span&gt; pos&lt;span dir="ltr"&gt;;&lt;/span&gt;
+        &lt;span dir="ltr"&gt;}&lt;/span&gt;
+        &lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;seekForwardFn&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;self&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;SeekableStream&lt;span dir="ltr"&gt;,&lt;/span&gt; pos&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;isize&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; anyerror&lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+            in_stream_pos &lt;span dir="ltr"&gt;=&lt;/span&gt; @&lt;span dir="ltr"&gt;bitCast&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;usize&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; @&lt;span dir="ltr"&gt;bitCast&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;isize&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; in_stream_pos&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;+&lt;/span&gt;&lt;span dir="ltr"&gt;%&lt;/span&gt; pos&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+        &lt;span dir="ltr"&gt;}&lt;/span&gt;
+        &lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;getPosFn&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;self&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;SeekableStream&lt;span dir="ltr"&gt;)&lt;/span&gt; anyerror&lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;usize&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+            &lt;span dir="ltr"&gt;return&lt;/span&gt; in_stream_pos&lt;span dir="ltr"&gt;;&lt;/span&gt;
+        &lt;span dir="ltr"&gt;}&lt;/span&gt;
+        &lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;getEndPosFn&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;self&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;SeekableStream&lt;span dir="ltr"&gt;)&lt;/span&gt; anyerror&lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;usize&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+            &lt;span dir="ltr"&gt;return&lt;/span&gt; @&lt;span dir="ltr"&gt;ptrToInt&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_ranges_end&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+        &lt;span dir="ltr"&gt;}&lt;/span&gt;
+    &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;S&lt;span dir="ltr"&gt;.&lt;/span&gt;have_self_debug_info&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;S&lt;span dir="ltr"&gt;.&lt;/span&gt;self_debug_info&lt;span dir="ltr"&gt;;&lt;/span&gt;
+
+    S&lt;span dir="ltr"&gt;.&lt;/span&gt;self_debug_info &lt;span dir="ltr"&gt;=&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;DwarfInfo&lt;span dir="ltr"&gt;{&lt;/span&gt;
+        &lt;span dir="ltr"&gt;.&lt;/span&gt;dwarf_seekable_stream &lt;span dir="ltr"&gt;=&lt;/span&gt; S&lt;span dir="ltr"&gt;.&lt;/span&gt;seekable_stream&lt;span dir="ltr"&gt;,&lt;/span&gt;
+        &lt;span dir="ltr"&gt;.&lt;/span&gt;dwarf_in_stream &lt;span dir="ltr"&gt;=&lt;/span&gt; S&lt;span dir="ltr"&gt;.&lt;/span&gt;in_stream&lt;span dir="ltr"&gt;,&lt;/span&gt;
+        &lt;span dir="ltr"&gt;.&lt;/span&gt;endian &lt;span dir="ltr"&gt;=&lt;/span&gt; builtin&lt;span dir="ltr"&gt;.&lt;/span&gt;Endian&lt;span dir="ltr"&gt;.&lt;/span&gt;Little&lt;span dir="ltr"&gt;,&lt;/span&gt;
+        &lt;span dir="ltr"&gt;.&lt;/span&gt;debug_info &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;dwarfSectionFromSymbol&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_info_start&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_info_end&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+        &lt;span dir="ltr"&gt;.&lt;/span&gt;debug_abbrev &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;dwarfSectionFromSymbolAbs&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_abbrev_start&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_abbrev_end&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+        &lt;span dir="ltr"&gt;.&lt;/span&gt;debug_str &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;dwarfSectionFromSymbolAbs&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_str_start&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_str_end&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+        &lt;span dir="ltr"&gt;.&lt;/span&gt;debug_line &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;dwarfSectionFromSymbol&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_line_start&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_line_end&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+        &lt;span dir="ltr"&gt;.&lt;/span&gt;debug_ranges &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;dwarfSectionFromSymbolAbs&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_ranges_start&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_ranges_end&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+        &lt;span dir="ltr"&gt;.&lt;/span&gt;abbrev_table_list &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;undefined&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+        &lt;span dir="ltr"&gt;.&lt;/span&gt;compile_unit_list &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;undefined&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+    &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;try&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;openDwarfDebugInfo&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;S&lt;span dir="ltr"&gt;.&lt;/span&gt;self_debug_info&lt;span dir="ltr"&gt;,&lt;/span&gt; kernel_panic_allocator&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;S&lt;span dir="ltr"&gt;.&lt;/span&gt;self_debug_info&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+You can see that the Zig common practice of accepting an allocator as an argument when
+allocation is needed comes in extremely handy for kernel development. We simply statically
+allocate a 100 KiB buffer and pass that along as the debug info allocator. If this ever
+becomes too small, it can be adjusted.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+And now it's just a matter of wiring up the &lt;code dir="ltr"&gt;panic&lt;/code&gt; function:
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;pub&lt;/span&gt; &lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;panic&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;message&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; stack_trace&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;?&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;builtin&lt;span dir="ltr"&gt;.&lt;/span&gt;StackTrace&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;noreturn&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    serial&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;log&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;"\n!KERNEL PANIC! {}\n"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; message&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;const&lt;/span&gt; dwarf_info &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;getSelfDebugInfo&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;catch&lt;/span&gt; &lt;span dir="ltr"&gt;|&lt;/span&gt;err&lt;span dir="ltr"&gt;|&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+        serial&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;log&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;"unable to get debug info: {}\n"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; @&lt;span dir="ltr"&gt;errorName&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;err&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+        &lt;span dir="ltr"&gt;hang&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;const&lt;/span&gt; first_trace_addr &lt;span dir="ltr"&gt;=&lt;/span&gt; @&lt;span dir="ltr"&gt;ptrToInt&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;@&lt;span dir="ltr"&gt;returnAddress&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;var&lt;/span&gt; it &lt;span dir="ltr"&gt;=&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;StackIterator&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;init&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;first_trace_addr&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;while&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;it&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;next&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;|&lt;/span&gt;return_address&lt;span dir="ltr"&gt;|&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+        std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;printSourceAtAddressDwarf&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;
+            dwarf_info&lt;span dir="ltr"&gt;,&lt;/span&gt;
+            serial_out_stream&lt;span dir="ltr"&gt;,&lt;/span&gt;
+            return_address&lt;span dir="ltr"&gt;,&lt;/span&gt;
+            &lt;span dir="ltr"&gt;true&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span spellcheck="true" dir="ltr"&gt; // tty color on
+&lt;/span&gt;            printLineFromFile&lt;span dir="ltr"&gt;,&lt;/span&gt;
+        &lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;catch&lt;/span&gt; &lt;span dir="ltr"&gt;|&lt;/span&gt;err&lt;span dir="ltr"&gt;|&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+            serial&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;log&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;"missed a stack frame: {}\n"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; @&lt;span dir="ltr"&gt;errorName&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;err&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+            &lt;span dir="ltr"&gt;continue&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+        &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;}&lt;/span&gt;
+    &lt;span dir="ltr"&gt;hang&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;hang&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;noreturn&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    &lt;span dir="ltr"&gt;while&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;true&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;printLineFromFile&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;out_stream&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; line_info&lt;span dir="ltr"&gt;:&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;LineInfo&lt;span dir="ltr"&gt;)&lt;/span&gt; anyerror&lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    serial&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;log&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;"TODO print line from the file\n"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+Here it is in action:
+&lt;/p&gt;&lt;PRE&gt;Hello World! ClashOS 0.0
+
+!KERNEL PANIC! integer overflow
+/home/andy/dev/clashos/src/main.zig:166:7: 0x15e0 in ??? (clashos)
+TODO print line from the file
+      ^
+???:?:?: 0x1c in ??? (???)
+&lt;/PRE&gt;&lt;p&gt;
+Great progress.
+&lt;/p&gt;&lt;p&gt;That last line is coming from the startup assembly code, which has no
+source mapping. But we can see that it's correct, by looking at
+the disassembly of the kernel:&lt;/p&gt;&lt;PRE&gt;0000000000000000 &amp;lt;_start&amp;gt;:
+       0:	d53800a0 	mrs	x0, mpidr_el1
+       4:	d2b82001 	mov	x1, #0xc1000000
+       8:	8a210000 	bic	x0, x0, x1
+       c:	b4000040 	cbz	x0, 14 &amp;lt;master&amp;gt;
+      10:	14000003 	b	1c &amp;lt;__hang&amp;gt;
+
+0000000000000014 &amp;lt;master&amp;gt;:
+      14:	b26503ff 	mov	sp, #0x8000000
+      18:	9400054b 	bl	1544 &amp;lt;kernel_main&amp;gt;
+
+000000000000001c &amp;lt;__hang&amp;gt;:
+      1c:	d503205f 	wfe
+      20:	17ffffff 	b	1c &amp;lt;__hang&amp;gt;
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;You can see that &lt;code dir="ltr"&gt;0x1c&lt;/code&gt; is indeed the return address
+(the next instruction that will be executed when the function returns)
+of the function call to &lt;code dir="ltr"&gt;kernel_main&lt;/code&gt;.
+&lt;/p&gt;&lt;p&gt;
+Let's shuffle the code around into more files and make that trace longer.
+&lt;/p&gt;&lt;PRE&gt;Hello World! ClashOS 0.0
+
+!KERNEL PANIC!
+integer overflow
+/home/andy/dev/clashos/src/serial.zig:42:7: 0x1b10 in ??? (clashos)
+TODO print line from the file
+      ^
+/home/andy/dev/clashos/src/main.zig:58:16: 0x1110 in ??? (clashos)
+TODO print line from the file
+               ^
+/home/andy/dev/clashos/src/main.zig:67:18: 0xecc in ??? (clashos)
+TODO print line from the file
+                 ^
+???:?:?: 0x1c in ??? (???)
+&lt;/PRE&gt;&lt;p&gt;
+It's looking good. But can we add a cherry on top, and make it print the source
+lines?
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Again we don't have a file system. How can the &lt;code dir="ltr"&gt;printLineFromFile&lt;/code&gt; function
+have access to source files?
+&lt;/p&gt;&lt;p&gt;
+Sometimes the simplest solution is the best one. How about the kernel just has its own
+source code in memory?
+&lt;/p&gt;&lt;p&gt;
+That's really easy to hook up in Zig:
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; source_files &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;
+    &lt;span dir="ltr"&gt;"src/debug.zig"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+    &lt;span dir="ltr"&gt;"src/main.zig"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+    &lt;span dir="ltr"&gt;"src/mmio.zig"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+    &lt;span dir="ltr"&gt;"src/serial.zig"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;printLineFromFile&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;out_stream&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; line_info&lt;span dir="ltr"&gt;:&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;LineInfo&lt;span dir="ltr"&gt;)&lt;/span&gt; anyerror&lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    &lt;span dir="ltr"&gt;inline&lt;/span&gt; &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;source_files&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;|&lt;/span&gt;src_path&lt;span dir="ltr"&gt;|&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+        &lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;std&lt;span dir="ltr"&gt;.&lt;/span&gt;mem&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;endsWith&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; line_info&lt;span dir="ltr"&gt;.&lt;/span&gt;file_name&lt;span dir="ltr"&gt;,&lt;/span&gt; src_path&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+            &lt;span dir="ltr"&gt;const&lt;/span&gt; contents &lt;span dir="ltr"&gt;=&lt;/span&gt; @&lt;span dir="ltr"&gt;embedFile&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;"../"&lt;/span&gt; &lt;span dir="ltr"&gt;++&lt;/span&gt; src_path&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+            &lt;span dir="ltr"&gt;try&lt;/span&gt; &lt;span dir="ltr"&gt;printLineFromBuffer&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;out_stream&lt;span dir="ltr"&gt;,&lt;/span&gt; contents&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; line_info&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+            &lt;span dir="ltr"&gt;return&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+        &lt;span dir="ltr"&gt;}&lt;/span&gt;
+    &lt;span dir="ltr"&gt;}&lt;/span&gt;
+    &lt;span dir="ltr"&gt;try&lt;/span&gt; out_stream&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;print&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;"(source file {} not added in std/debug.zig)\n"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; line_info&lt;span dir="ltr"&gt;.&lt;/span&gt;file_name&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+Here we take advantage of &lt;a href="https://ziglang.org/documentation/master/#inline-for" dir="ltr"&gt;inline for&lt;/a&gt;
+as well as &lt;a href="https://ziglang.org/documentation/master/#embedFile" dir="ltr"&gt;@embedFile&lt;/a&gt;, and all the sudden
+we can print lines of code from our own source files. &lt;code dir="ltr"&gt;printLineFromBuffer&lt;/code&gt;
+&lt;a href="https://github.com/andrewrk/clashos/blob/bf8e57ac220715d0698ab910d337ea590c4b4e33/src/debug.zig#L133-L152" dir="ltr"&gt;left as an exercise for the reader&lt;/a&gt;.
+&lt;/p&gt;&lt;p&gt;
+So let's see that output again:
+&lt;/p&gt;&lt;PRE&gt;Hello World! ClashOS 0.0
+
+!KERNEL PANIC!
+integer overflow
+/home/andy/dev/clashos/src/serial.zig:42:7: 0x1b10 in ??? (clashos)
+    x += 1;
+      ^
+/home/andy/dev/clashos/src/main.zig:58:16: 0x1110 in ??? (clashos)
+    serial.boom();
+               ^
+/home/andy/dev/clashos/src/main.zig:67:18: 0xecc in ??? (clashos)
+    some_function();
+                 ^
+???:?:?: 0x1c in ??? (???)
+&lt;/PRE&gt;&lt;p&gt;Beautiful. Here's a picture so you can see it with color:&lt;/p&gt;&lt;img src="https://andrewkelley.me/img/clashos-stack-trace.png" width="445" height="226"&gt;&lt;p dir="ltr"&gt;
+And now all of the
+&lt;a href="https://ziglang.org/documentation/master/#Undefined-Behavior" dir="ltr"&gt;protections that Zig offers against undefined behavior&lt;/a&gt;
+will result in output like this.
+&lt;/p&gt;&lt;h3&gt;Conclusion&lt;/h3&gt;&lt;p&gt;
+One of my big goals with Zig is to improve the embedded and OS development
+process. I hope you're as excited as I am about the potential here.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+If this blog post captured your interest, maybe you would like to check out this
+&lt;a href="https://github.com/andrewrk/HellOS" dir="ltr"&gt;Hello World x86 Kernel&lt;/a&gt;, which comes with a
+&lt;a href="https://www.youtube.com/watch?v=yUge-ujPxzQ" dir="ltr"&gt;video of me live coding it&lt;/a&gt;.
+Thanks to an insightful Twitch comment, it works with only Zig code, no assembly required.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+The &lt;a href="https://ziglang.org/" dir="ltr"&gt;Zig Programming Language&lt;/a&gt; is crowd funded,
+and is not beholden to any business or set of businesses. Please consider
+&lt;a href="https://github.com/users/andrewrk/sponsorship" dir="ltr"&gt;sponsoring my work&lt;/a&gt;.
+&lt;/p&gt;</description><pubDate>Sat, 27 Jun 2020 17:59:38 -0500</pubDate></item><item><title>FreeDVDBoot - Hacking the PlayStation 2 through its DVD player</title><link>https://lobste.rs/s/wlgo7x</link><description>&lt;div dir="ltr"&gt;
 &lt;span dir="ltr"&gt;Initial publication: June 27, 2020&lt;/span&gt;
 &lt;/div&gt;&lt;p dir="ltr"&gt;
 	I've &lt;a href="https://cturt.github.io/ps2-yabasic.html" dir="ltr"&gt;previously discussed&lt;/a&gt; how the PlayStation 2 doesn't have any good entry-point software exploits for launching homebrew. You need to either purchase a memory card with an exploit pre-installed, open up the console to block the disc tray sensors, or install a modchip. For the best selling console of all time, it deserves better hacks.
@@ -858,387 +1238,7 @@ to launch a program with a specific controlling terminal —
 or better yet, if MAME’s PTY support included launching a program
 inside the PTY it creates.&lt;/p&gt;&lt;p&gt;Some of those things probably wouldn’t even be too hard to do,
 but right now I’ve spent enough time playing with this stuff,
-and it’s time to move on.&lt;/p&gt;</description><pubDate>Sat, 27 Jun 2020 01:22:06 -0500</pubDate></item><item><title>Using Zig to Provide Stack Traces on Kernel Panic for a Bare Bones Operating System - Andrew Kelley</title><link>https://lobste.rs/s/mbpil5</link><description>&lt;p dir="ltr"&gt;Last week, I reached an exciting milestone in my career as a programmer.
-&lt;a href="https://www.youtube.com/watch?v=gihdpLtHi9Q" dir="ltr"&gt;For the first time in my life, I ran code directly on hardware&lt;/a&gt;, with no Operating System sitting between the bare metal and my code.
-&lt;/p&gt;&lt;p&gt;
-For some context, the goal of this side project is to create a 2-4 player arcade game
-running directly on a Raspberry Pi 3+.
-&lt;/p&gt;&lt;img src="https://andrewkelley.me/img/clashos-button-small.jpg" width="445" height="352"&gt;&lt;p&gt;
-Having just gotten Hello World working, this software can do
-little more than send a message over the serial uART on bootup:
-&lt;/p&gt;&lt;PRE&gt;Hello World! ClashOS 0.0
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-So what's the next step? Bootloader? File system? &lt;em dir="ltr"&gt;Graphics?!&lt;/em&gt;
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Well, when coding all of these things, I'm inevitably going to run into bugs
-and crashes. And when this happens, I want to quickly understand what's gone
-wrong. Normally, in Zig, when something goes wrong, you get a nice
-&lt;a href="https://ziglang.org/download/0.3.0/release-notes.html#stack-traces" dir="ltr"&gt;stack trace&lt;/a&gt;,
-like this:
-&lt;/p&gt;&lt;img src="https://ziglang.org/download/0.3.0/stack-traces-linux.png" width="445" height="399"&gt;&lt;p dir="ltr"&gt;This example, however, is targeting Linux, whereas this arcade game project is
-&lt;em dir="ltr"&gt;freestanding&lt;/em&gt;. The equivalent code in freestanding actually just hangs
-the CPU:
-&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;--- a/src/main.zig
-+++ b/src/main.zig
-     serial.log("Hello World! ClashOS 0.0\n");
-&lt;span dir="ltr"&gt;+    var x: u8 = 255;
-+    x += 1;
-+    serial.log("got here\n");&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;When run, you'll see we never get to the "got here" message, but also
-we don't get any kind of error message printed or anything.&lt;/p&gt;&lt;PRE&gt;Hello World! ClashOS 0.0
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;To understand this, we can look at the &lt;strong dir="ltr"&gt;default panic handler&lt;/strong&gt;.
-In Zig, you can provide a &lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;pub&lt;/span&gt; &lt;span dir="ltr"&gt;fn&lt;/span&gt; panic&lt;/code&gt; in your
-&lt;a href="https://ziglang.org/documentation/master/#Root-Source-File" dir="ltr"&gt;root source file&lt;/a&gt;
-alongside &lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;pub&lt;/span&gt; &lt;span dir="ltr"&gt;fn&lt;/span&gt; main&lt;/code&gt;. But if you do not provide this
-function, &lt;a href="https://github.com/ziglang/zig/blob/0.3.0/std/special/panic.zig" dir="ltr"&gt;the default&lt;/a&gt;
-is used:
-&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;pub&lt;/span&gt; &lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;panic&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;msg&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; error_return_trace&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;?&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;builtin&lt;span dir="ltr"&gt;.&lt;/span&gt;StackTrace&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;noreturn&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    @&lt;span dir="ltr"&gt;setCold&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;true&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;switch&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;builtin&lt;span dir="ltr"&gt;.&lt;/span&gt;os&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-        builtin&lt;span dir="ltr"&gt;.&lt;/span&gt;Os&lt;span dir="ltr"&gt;.&lt;/span&gt;freestanding &lt;span dir="ltr"&gt;=&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-            &lt;span dir="ltr"&gt;while&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;true&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;
-        &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-        &lt;span dir="ltr"&gt;else&lt;/span&gt; &lt;span dir="ltr"&gt;=&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-            &lt;span dir="ltr"&gt;const&lt;/span&gt; first_trace_addr &lt;span dir="ltr"&gt;=&lt;/span&gt; @&lt;span dir="ltr"&gt;ptrToInt&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;@&lt;span dir="ltr"&gt;returnAddress&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-            std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;panicExtra&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;error_return_trace&lt;span dir="ltr"&gt;,&lt;/span&gt; first_trace_addr&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;"{}"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; msg&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-        &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-    &lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-Here we can see why the code earlier is hanging - the default panic handler for the
-freestanding target is simply &lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;while&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;true&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/code&gt;.
-&lt;/p&gt;&lt;p&gt;
-So we can make an immediate improvement by creating our own panic handler:
-&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;pub&lt;/span&gt; &lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;panic&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;message&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; stack_trace&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;?&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;builtin&lt;span dir="ltr"&gt;.&lt;/span&gt;StackTrace&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;noreturn&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    serial&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;write&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;"\n!KERNEL PANIC!\n"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    serial&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;write&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;message&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    serial&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;write&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;"\n"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;while&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;true&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;And now, the output of booting the Raspberry Pi:&lt;/p&gt;&lt;PRE&gt;Hello World! ClashOS 0.0
-
-!KERNEL PANIC!
-integer overflow
-&lt;/PRE&gt;&lt;p&gt;
-Already this is much better. We can see that an integer overflow caused a kernel panic.
-But an integer overflow could occur anywhere. Wouldn't it be nice to have a full stack
-trace printed?
-&lt;/p&gt;&lt;p&gt;
-Yes, yes it would. The first thing I needed to make this work is access to the DWARF
-debugging info from inside the kernel. But I don't even have a file system. How can that work?
-&lt;/p&gt;&lt;p&gt;
-Easy! Just put the DWARF info directly into the kernel's memory. I modified my linker script
-to do just that:
-&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;    .rodata : ALIGN(4K) {
-        *(.rodata)
-        __debug_info_start = .;
-        KEEP(*(.debug_info))
-        __debug_info_end = .;
-        __debug_abbrev_start = .;
-        KEEP(*(.debug_abbrev))
-        __debug_abbrev_end = .;
-        __debug_str_start = .;
-        KEEP(*(.debug_str))
-        __debug_str_end = .;
-        __debug_line_start = .;
-        KEEP(*(.debug_line))
-        __debug_line_end = .;
-        __debug_ranges_start = .;
-        KEEP(*(.debug_ranges))
-        __debug_ranges_end = .;
-    }&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
-And to my dismay, these error messages stared back at me:
-&lt;/p&gt;&lt;PRE&gt;lld: error: incompatible section flags for .rodata
-&amp;gt;&amp;gt;&amp;gt; /home/andy/dev/clashos/zig-cache/clashos.o:(.debug_info): 0x0
-&amp;gt;&amp;gt;&amp;gt; output section .rodata: 0x12
-
-lld: error: incompatible section flags for .rodata
-&amp;gt;&amp;gt;&amp;gt; &amp;lt;internal&amp;gt;:(.debug_str): 0x30
-&amp;gt;&amp;gt;&amp;gt; output section .rodata: 0x12
-
-lld: error: incompatible section flags for .rodata
-&amp;gt;&amp;gt;&amp;gt; /home/andy/dev/clashos/zig-cache/clashos.o:(.debug_line): 0x0
-&amp;gt;&amp;gt;&amp;gt; output section .rodata: 0x32
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-After a &lt;a href="https://bugs.llvm.org/show_bug.cgi?id=39862" dir="ltr"&gt;back and forth on a bug report&lt;/a&gt;, 
-George Rimar suggested simply deleting that particular check, as it might have been an
-overly strict enforcement. I tried this in my LLD fork, and it worked! Debug information
-was now linked into my kernel images. After completing the rest of the steps in this blog post,
-I &lt;a href="https://reviews.llvm.org/D55276" dir="ltr"&gt;submitted a patch upstream&lt;/a&gt;,
-which Rui has already merged into LLD. This will be released with
-LLVM 8, and in the meantime Zig's LLD fork has the patch.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-At this point it was a simple matter of writing the glue code between my kernel and the
-Zig Standard Library's stack trace facilities. In Zig, you don't have to intentionally support
-freestanding mode. Code which has no dependencies on a particular operating system will work
-in freestanding mode thanks to Zig's &lt;em dir="ltr"&gt;lazy top level declaration analysis&lt;/em&gt;.
-Because the standard library stack trace code does not call any OS API, it therefore
-supports freestanding mode.
-&lt;/p&gt;&lt;p&gt;
-The Zig std lib API for opening debug information from an ELF file looks like this:
-&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;pub&lt;/span&gt; &lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;openElfDebugInfo&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;
-    allocator&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;mem&lt;span dir="ltr"&gt;.&lt;/span&gt;Allocator&lt;span dir="ltr"&gt;,&lt;/span&gt;
-    elf_seekable_stream&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;DwarfSeekableStream&lt;span dir="ltr"&gt;,&lt;/span&gt;
-    elf_in_stream&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;DwarfInStream&lt;span dir="ltr"&gt;,&lt;/span&gt;
-&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;!&lt;/span&gt;DwarfInfo&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
-But this kernel is so bare bones, it's not even in an ELF file. It's booting directly from a binary blob.
-We just have the debug info sections mapped directly into memory. For that we can use
-a lower level API:
-&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span spellcheck="true" dir="ltr"&gt;/// Initialize DWARF info. The caller has the responsibility to initialize most
-&lt;/span&gt;&lt;span spellcheck="true" dir="ltr"&gt;/// the DwarfInfo fields before calling. These fields can be left undefined:
-&lt;/span&gt;&lt;span spellcheck="true" dir="ltr"&gt;/// * abbrev_table_list
-&lt;/span&gt;&lt;span spellcheck="true" dir="ltr"&gt;/// * compile_unit_list
-&lt;/span&gt;&lt;span dir="ltr"&gt;pub&lt;/span&gt; &lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;openDwarfDebugInfo&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;di&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;DwarfInfo&lt;span dir="ltr"&gt;,&lt;/span&gt; allocator&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;mem&lt;span dir="ltr"&gt;.&lt;/span&gt;Allocator&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;And &lt;code dir="ltr"&gt;DwarfInfo&lt;/code&gt; is defined like this:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;pub&lt;/span&gt; &lt;span dir="ltr"&gt;const&lt;/span&gt; DwarfInfo &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    dwarf_seekable_stream&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;DwarfSeekableStream&lt;span dir="ltr"&gt;,&lt;/span&gt;
-    dwarf_in_stream&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;DwarfInStream&lt;span dir="ltr"&gt;,&lt;/span&gt;
-    endian&lt;span dir="ltr"&gt;:&lt;/span&gt; builtin&lt;span dir="ltr"&gt;.&lt;/span&gt;Endian&lt;span dir="ltr"&gt;,&lt;/span&gt;
-    debug_info&lt;span dir="ltr"&gt;:&lt;/span&gt; Section&lt;span dir="ltr"&gt;,&lt;/span&gt;
-    debug_abbrev&lt;span dir="ltr"&gt;:&lt;/span&gt; Section&lt;span dir="ltr"&gt;,&lt;/span&gt;
-    debug_str&lt;span dir="ltr"&gt;:&lt;/span&gt; Section&lt;span dir="ltr"&gt;,&lt;/span&gt;
-    debug_line&lt;span dir="ltr"&gt;:&lt;/span&gt; Section&lt;span dir="ltr"&gt;,&lt;/span&gt;
-    debug_ranges&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;?&lt;/span&gt;Section&lt;span dir="ltr"&gt;,&lt;/span&gt;
-    abbrev_table_list&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;ArrayList&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;AbbrevTableHeader&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-    compile_unit_list&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;ArrayList&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;CompileUnit&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-To hook these up, the glue code needs to initialize the fields of
-&lt;code dir="ltr"&gt;DwarfInfo&lt;/code&gt; with the offsets into a
-&lt;code dir="ltr"&gt;std&lt;span dir="ltr"&gt;.&lt;/span&gt;io&lt;span dir="ltr"&gt;.&lt;/span&gt;SeekableStream&lt;/code&gt;, which can
-be implemented as a simple pointer to memory. By declaring &lt;strong dir="ltr"&gt;external variables&lt;/strong&gt;
-and then looking at their &lt;em dir="ltr"&gt;addresses&lt;/em&gt;, we can find out where in memory the symbols
-defined in the linker script are.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-For &lt;code dir="ltr"&gt;.debug_abbrev&lt;/code&gt;, &lt;code dir="ltr"&gt;.debug_str&lt;/code&gt;, and &lt;code dir="ltr"&gt;.debug_ranges&lt;/code&gt;, I had to
-set the offset to 0 to
-&lt;a href="https://bugs.llvm.org/show_bug.cgi?id=39862#c6" dir="ltr"&gt;workaround&lt;/a&gt;
-LLD thinking that the sections start at 0 for some reason.
-&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;var&lt;/span&gt; kernel_panic_allocator_bytes&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;100&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;1024&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;u8&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;undefined&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;var&lt;/span&gt; kernel_panic_allocator_state &lt;span dir="ltr"&gt;=&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;heap&lt;span dir="ltr"&gt;.&lt;/span&gt;FixedBufferAllocator&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;init&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;kernel_panic_allocator_bytes&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;const&lt;/span&gt; kernel_panic_allocator &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;kernel_panic_allocator_state&lt;span dir="ltr"&gt;.&lt;/span&gt;allocator&lt;span dir="ltr"&gt;;&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;extern&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt; __debug_info_start&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;extern&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt; __debug_info_end&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;extern&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt; __debug_abbrev_start&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;extern&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt; __debug_abbrev_end&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;extern&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt; __debug_str_start&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;extern&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt; __debug_str_end&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;extern&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt; __debug_line_start&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;extern&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt; __debug_line_end&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;extern&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt; __debug_ranges_start&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;extern&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt; __debug_ranges_end&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;dwarfSectionFromSymbolAbs&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;start&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; end&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;DwarfInfo&lt;span dir="ltr"&gt;.&lt;/span&gt;Section &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    &lt;span dir="ltr"&gt;return&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;DwarfInfo&lt;span dir="ltr"&gt;.&lt;/span&gt;Section&lt;span dir="ltr"&gt;{&lt;/span&gt;
-        &lt;span dir="ltr"&gt;.&lt;/span&gt;offset &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-        &lt;span dir="ltr"&gt;.&lt;/span&gt;size &lt;span dir="ltr"&gt;=&lt;/span&gt; @&lt;span dir="ltr"&gt;ptrToInt&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;end&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;-&lt;/span&gt; @&lt;span dir="ltr"&gt;ptrToInt&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;start&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-    &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;dwarfSectionFromSymbol&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;start&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; end&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;DwarfInfo&lt;span dir="ltr"&gt;.&lt;/span&gt;Section &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    &lt;span dir="ltr"&gt;return&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;DwarfInfo&lt;span dir="ltr"&gt;.&lt;/span&gt;Section&lt;span dir="ltr"&gt;{&lt;/span&gt;
-        &lt;span dir="ltr"&gt;.&lt;/span&gt;offset &lt;span dir="ltr"&gt;=&lt;/span&gt; @&lt;span dir="ltr"&gt;ptrToInt&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;start&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-        &lt;span dir="ltr"&gt;.&lt;/span&gt;size &lt;span dir="ltr"&gt;=&lt;/span&gt; @&lt;span dir="ltr"&gt;ptrToInt&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;end&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;-&lt;/span&gt; @&lt;span dir="ltr"&gt;ptrToInt&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;start&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-    &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;getSelfDebugInfo&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;DwarfInfo &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    &lt;span dir="ltr"&gt;const&lt;/span&gt; S &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-        &lt;span dir="ltr"&gt;var&lt;/span&gt; have_self_debug_info &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;false&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-        &lt;span dir="ltr"&gt;var&lt;/span&gt; self_debug_info&lt;span dir="ltr"&gt;:&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;DwarfInfo &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;undefined&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-
-        &lt;span dir="ltr"&gt;var&lt;/span&gt; in_stream_state &lt;span dir="ltr"&gt;=&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;io&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;InStream&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;anyerror&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt; &lt;span dir="ltr"&gt;.&lt;/span&gt;readFn &lt;span dir="ltr"&gt;=&lt;/span&gt; readFn &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-        &lt;span dir="ltr"&gt;var&lt;/span&gt; in_stream_pos&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;usize&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-        &lt;span dir="ltr"&gt;const&lt;/span&gt; in_stream &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;in_stream_state&lt;span dir="ltr"&gt;;&lt;/span&gt;
-
-        &lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;readFn&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;self&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;std&lt;span dir="ltr"&gt;.&lt;/span&gt;io&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;InStream&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;anyerror&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; buffer&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; anyerror&lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;usize&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-            &lt;span dir="ltr"&gt;const&lt;/span&gt; ptr &lt;span dir="ltr"&gt;=&lt;/span&gt; @&lt;span dir="ltr"&gt;intToPtr&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; in_stream_pos&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-            @&lt;span dir="ltr"&gt;memcpy&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;buffer&lt;span dir="ltr"&gt;.&lt;/span&gt;ptr&lt;span dir="ltr"&gt;,&lt;/span&gt; ptr&lt;span dir="ltr"&gt;,&lt;/span&gt; buffer&lt;span dir="ltr"&gt;.&lt;/span&gt;len&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-            in_stream_pos &lt;span dir="ltr"&gt;+&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt; buffer&lt;span dir="ltr"&gt;.&lt;/span&gt;len&lt;span dir="ltr"&gt;;&lt;/span&gt;
-            &lt;span dir="ltr"&gt;return&lt;/span&gt; buffer&lt;span dir="ltr"&gt;.&lt;/span&gt;len&lt;span dir="ltr"&gt;;&lt;/span&gt;
-        &lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-        &lt;span dir="ltr"&gt;const&lt;/span&gt; SeekableStream &lt;span dir="ltr"&gt;=&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;io&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;SeekableStream&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;anyerror&lt;span dir="ltr"&gt;,&lt;/span&gt; anyerror&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-        &lt;span dir="ltr"&gt;var&lt;/span&gt; seekable_stream_state &lt;span dir="ltr"&gt;=&lt;/span&gt; SeekableStream&lt;span dir="ltr"&gt;{&lt;/span&gt;
-            &lt;span dir="ltr"&gt;.&lt;/span&gt;seekToFn &lt;span dir="ltr"&gt;=&lt;/span&gt; seekToFn&lt;span dir="ltr"&gt;,&lt;/span&gt;
-            &lt;span dir="ltr"&gt;.&lt;/span&gt;seekForwardFn &lt;span dir="ltr"&gt;=&lt;/span&gt; seekForwardFn&lt;span dir="ltr"&gt;,&lt;/span&gt;
-
-            &lt;span dir="ltr"&gt;.&lt;/span&gt;getPosFn &lt;span dir="ltr"&gt;=&lt;/span&gt; getPosFn&lt;span dir="ltr"&gt;,&lt;/span&gt;
-            &lt;span dir="ltr"&gt;.&lt;/span&gt;getEndPosFn &lt;span dir="ltr"&gt;=&lt;/span&gt; getEndPosFn&lt;span dir="ltr"&gt;,&lt;/span&gt;
-        &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-        &lt;span dir="ltr"&gt;const&lt;/span&gt; seekable_stream &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;seekable_stream_state&lt;span dir="ltr"&gt;;&lt;/span&gt;
-
-        &lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;seekToFn&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;self&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;SeekableStream&lt;span dir="ltr"&gt;,&lt;/span&gt; pos&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;usize&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; anyerror&lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-            in_stream_pos &lt;span dir="ltr"&gt;=&lt;/span&gt; pos&lt;span dir="ltr"&gt;;&lt;/span&gt;
-        &lt;span dir="ltr"&gt;}&lt;/span&gt;
-        &lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;seekForwardFn&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;self&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;SeekableStream&lt;span dir="ltr"&gt;,&lt;/span&gt; pos&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;isize&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; anyerror&lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-            in_stream_pos &lt;span dir="ltr"&gt;=&lt;/span&gt; @&lt;span dir="ltr"&gt;bitCast&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;usize&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; @&lt;span dir="ltr"&gt;bitCast&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;isize&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; in_stream_pos&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;+&lt;/span&gt;&lt;span dir="ltr"&gt;%&lt;/span&gt; pos&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-        &lt;span dir="ltr"&gt;}&lt;/span&gt;
-        &lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;getPosFn&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;self&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;SeekableStream&lt;span dir="ltr"&gt;)&lt;/span&gt; anyerror&lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;usize&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-            &lt;span dir="ltr"&gt;return&lt;/span&gt; in_stream_pos&lt;span dir="ltr"&gt;;&lt;/span&gt;
-        &lt;span dir="ltr"&gt;}&lt;/span&gt;
-        &lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;getEndPosFn&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;self&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;SeekableStream&lt;span dir="ltr"&gt;)&lt;/span&gt; anyerror&lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;usize&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-            &lt;span dir="ltr"&gt;return&lt;/span&gt; @&lt;span dir="ltr"&gt;ptrToInt&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_ranges_end&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-        &lt;span dir="ltr"&gt;}&lt;/span&gt;
-    &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;S&lt;span dir="ltr"&gt;.&lt;/span&gt;have_self_debug_info&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;S&lt;span dir="ltr"&gt;.&lt;/span&gt;self_debug_info&lt;span dir="ltr"&gt;;&lt;/span&gt;
-
-    S&lt;span dir="ltr"&gt;.&lt;/span&gt;self_debug_info &lt;span dir="ltr"&gt;=&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;DwarfInfo&lt;span dir="ltr"&gt;{&lt;/span&gt;
-        &lt;span dir="ltr"&gt;.&lt;/span&gt;dwarf_seekable_stream &lt;span dir="ltr"&gt;=&lt;/span&gt; S&lt;span dir="ltr"&gt;.&lt;/span&gt;seekable_stream&lt;span dir="ltr"&gt;,&lt;/span&gt;
-        &lt;span dir="ltr"&gt;.&lt;/span&gt;dwarf_in_stream &lt;span dir="ltr"&gt;=&lt;/span&gt; S&lt;span dir="ltr"&gt;.&lt;/span&gt;in_stream&lt;span dir="ltr"&gt;,&lt;/span&gt;
-        &lt;span dir="ltr"&gt;.&lt;/span&gt;endian &lt;span dir="ltr"&gt;=&lt;/span&gt; builtin&lt;span dir="ltr"&gt;.&lt;/span&gt;Endian&lt;span dir="ltr"&gt;.&lt;/span&gt;Little&lt;span dir="ltr"&gt;,&lt;/span&gt;
-        &lt;span dir="ltr"&gt;.&lt;/span&gt;debug_info &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;dwarfSectionFromSymbol&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_info_start&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_info_end&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-        &lt;span dir="ltr"&gt;.&lt;/span&gt;debug_abbrev &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;dwarfSectionFromSymbolAbs&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_abbrev_start&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_abbrev_end&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-        &lt;span dir="ltr"&gt;.&lt;/span&gt;debug_str &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;dwarfSectionFromSymbolAbs&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_str_start&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_str_end&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-        &lt;span dir="ltr"&gt;.&lt;/span&gt;debug_line &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;dwarfSectionFromSymbol&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_line_start&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_line_end&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-        &lt;span dir="ltr"&gt;.&lt;/span&gt;debug_ranges &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;dwarfSectionFromSymbolAbs&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_ranges_start&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;__debug_ranges_end&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-        &lt;span dir="ltr"&gt;.&lt;/span&gt;abbrev_table_list &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;undefined&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-        &lt;span dir="ltr"&gt;.&lt;/span&gt;compile_unit_list &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;undefined&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-    &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;try&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;openDwarfDebugInfo&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;S&lt;span dir="ltr"&gt;.&lt;/span&gt;self_debug_info&lt;span dir="ltr"&gt;,&lt;/span&gt; kernel_panic_allocator&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;S&lt;span dir="ltr"&gt;.&lt;/span&gt;self_debug_info&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
-You can see that the Zig common practice of accepting an allocator as an argument when
-allocation is needed comes in extremely handy for kernel development. We simply statically
-allocate a 100 KiB buffer and pass that along as the debug info allocator. If this ever
-becomes too small, it can be adjusted.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-And now it's just a matter of wiring up the &lt;code dir="ltr"&gt;panic&lt;/code&gt; function:
-&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;pub&lt;/span&gt; &lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;panic&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;message&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; stack_trace&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;?&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;builtin&lt;span dir="ltr"&gt;.&lt;/span&gt;StackTrace&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;noreturn&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    serial&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;log&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;"\n!KERNEL PANIC! {}\n"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; message&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;const&lt;/span&gt; dwarf_info &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;getSelfDebugInfo&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;catch&lt;/span&gt; &lt;span dir="ltr"&gt;|&lt;/span&gt;err&lt;span dir="ltr"&gt;|&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-        serial&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;log&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;"unable to get debug info: {}\n"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; @&lt;span dir="ltr"&gt;errorName&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;err&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-        &lt;span dir="ltr"&gt;hang&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;const&lt;/span&gt; first_trace_addr &lt;span dir="ltr"&gt;=&lt;/span&gt; @&lt;span dir="ltr"&gt;ptrToInt&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;@&lt;span dir="ltr"&gt;returnAddress&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;var&lt;/span&gt; it &lt;span dir="ltr"&gt;=&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;StackIterator&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;init&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;first_trace_addr&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;while&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;it&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;next&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;|&lt;/span&gt;return_address&lt;span dir="ltr"&gt;|&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-        std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;printSourceAtAddressDwarf&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;
-            dwarf_info&lt;span dir="ltr"&gt;,&lt;/span&gt;
-            serial_out_stream&lt;span dir="ltr"&gt;,&lt;/span&gt;
-            return_address&lt;span dir="ltr"&gt;,&lt;/span&gt;
-            &lt;span dir="ltr"&gt;true&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span spellcheck="true" dir="ltr"&gt; // tty color on
-&lt;/span&gt;            printLineFromFile&lt;span dir="ltr"&gt;,&lt;/span&gt;
-        &lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;catch&lt;/span&gt; &lt;span dir="ltr"&gt;|&lt;/span&gt;err&lt;span dir="ltr"&gt;|&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-            serial&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;log&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;"missed a stack frame: {}\n"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; @&lt;span dir="ltr"&gt;errorName&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;err&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-            &lt;span dir="ltr"&gt;continue&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-        &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;}&lt;/span&gt;
-    &lt;span dir="ltr"&gt;hang&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;hang&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;noreturn&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    &lt;span dir="ltr"&gt;while&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;true&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;printLineFromFile&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;out_stream&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; line_info&lt;span dir="ltr"&gt;:&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;LineInfo&lt;span dir="ltr"&gt;)&lt;/span&gt; anyerror&lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    serial&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;log&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;"TODO print line from the file\n"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
-Here it is in action:
-&lt;/p&gt;&lt;PRE&gt;Hello World! ClashOS 0.0
-
-!KERNEL PANIC! integer overflow
-/home/andy/dev/clashos/src/main.zig:166:7: 0x15e0 in ??? (clashos)
-TODO print line from the file
-      ^
-???:?:?: 0x1c in ??? (???)
-&lt;/PRE&gt;&lt;p&gt;
-Great progress.
-&lt;/p&gt;&lt;p&gt;That last line is coming from the startup assembly code, which has no
-source mapping. But we can see that it's correct, by looking at
-the disassembly of the kernel:&lt;/p&gt;&lt;PRE&gt;0000000000000000 &amp;lt;_start&amp;gt;:
-       0:	d53800a0 	mrs	x0, mpidr_el1
-       4:	d2b82001 	mov	x1, #0xc1000000
-       8:	8a210000 	bic	x0, x0, x1
-       c:	b4000040 	cbz	x0, 14 &amp;lt;master&amp;gt;
-      10:	14000003 	b	1c &amp;lt;__hang&amp;gt;
-
-0000000000000014 &amp;lt;master&amp;gt;:
-      14:	b26503ff 	mov	sp, #0x8000000
-      18:	9400054b 	bl	1544 &amp;lt;kernel_main&amp;gt;
-
-000000000000001c &amp;lt;__hang&amp;gt;:
-      1c:	d503205f 	wfe
-      20:	17ffffff 	b	1c &amp;lt;__hang&amp;gt;
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;You can see that &lt;code dir="ltr"&gt;0x1c&lt;/code&gt; is indeed the return address
-(the next instruction that will be executed when the function returns)
-of the function call to &lt;code dir="ltr"&gt;kernel_main&lt;/code&gt;.
-&lt;/p&gt;&lt;p&gt;
-Let's shuffle the code around into more files and make that trace longer.
-&lt;/p&gt;&lt;PRE&gt;Hello World! ClashOS 0.0
-
-!KERNEL PANIC!
-integer overflow
-/home/andy/dev/clashos/src/serial.zig:42:7: 0x1b10 in ??? (clashos)
-TODO print line from the file
-      ^
-/home/andy/dev/clashos/src/main.zig:58:16: 0x1110 in ??? (clashos)
-TODO print line from the file
-               ^
-/home/andy/dev/clashos/src/main.zig:67:18: 0xecc in ??? (clashos)
-TODO print line from the file
-                 ^
-???:?:?: 0x1c in ??? (???)
-&lt;/PRE&gt;&lt;p&gt;
-It's looking good. But can we add a cherry on top, and make it print the source
-lines?
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Again we don't have a file system. How can the &lt;code dir="ltr"&gt;printLineFromFile&lt;/code&gt; function
-have access to source files?
-&lt;/p&gt;&lt;p&gt;
-Sometimes the simplest solution is the best one. How about the kernel just has its own
-source code in memory?
-&lt;/p&gt;&lt;p&gt;
-That's really easy to hook up in Zig:
-&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; source_files &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;
-    &lt;span dir="ltr"&gt;"src/debug.zig"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-    &lt;span dir="ltr"&gt;"src/main.zig"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-    &lt;span dir="ltr"&gt;"src/mmio.zig"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-    &lt;span dir="ltr"&gt;"src/serial.zig"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;printLineFromFile&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;out_stream&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;var&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; line_info&lt;span dir="ltr"&gt;:&lt;/span&gt; std&lt;span dir="ltr"&gt;.&lt;/span&gt;debug&lt;span dir="ltr"&gt;.&lt;/span&gt;LineInfo&lt;span dir="ltr"&gt;)&lt;/span&gt; anyerror&lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    &lt;span dir="ltr"&gt;inline&lt;/span&gt; &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;source_files&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;|&lt;/span&gt;src_path&lt;span dir="ltr"&gt;|&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-        &lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;std&lt;span dir="ltr"&gt;.&lt;/span&gt;mem&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;endsWith&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;u8&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; line_info&lt;span dir="ltr"&gt;.&lt;/span&gt;file_name&lt;span dir="ltr"&gt;,&lt;/span&gt; src_path&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-            &lt;span dir="ltr"&gt;const&lt;/span&gt; contents &lt;span dir="ltr"&gt;=&lt;/span&gt; @&lt;span dir="ltr"&gt;embedFile&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;"../"&lt;/span&gt; &lt;span dir="ltr"&gt;++&lt;/span&gt; src_path&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-            &lt;span dir="ltr"&gt;try&lt;/span&gt; &lt;span dir="ltr"&gt;printLineFromBuffer&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;out_stream&lt;span dir="ltr"&gt;,&lt;/span&gt; contents&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; line_info&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-            &lt;span dir="ltr"&gt;return&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-        &lt;span dir="ltr"&gt;}&lt;/span&gt;
-    &lt;span dir="ltr"&gt;}&lt;/span&gt;
-    &lt;span dir="ltr"&gt;try&lt;/span&gt; out_stream&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;print&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;"(source file {} not added in std/debug.zig)\n"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; line_info&lt;span dir="ltr"&gt;.&lt;/span&gt;file_name&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-Here we take advantage of &lt;a href="https://ziglang.org/documentation/master/#inline-for" dir="ltr"&gt;inline for&lt;/a&gt;
-as well as &lt;a href="https://ziglang.org/documentation/master/#embedFile" dir="ltr"&gt;@embedFile&lt;/a&gt;, and all the sudden
-we can print lines of code from our own source files. &lt;code dir="ltr"&gt;printLineFromBuffer&lt;/code&gt;
-&lt;a href="https://github.com/andrewrk/clashos/blob/bf8e57ac220715d0698ab910d337ea590c4b4e33/src/debug.zig#L133-L152" dir="ltr"&gt;left as an exercise for the reader&lt;/a&gt;.
-&lt;/p&gt;&lt;p&gt;
-So let's see that output again:
-&lt;/p&gt;&lt;PRE&gt;Hello World! ClashOS 0.0
-
-!KERNEL PANIC!
-integer overflow
-/home/andy/dev/clashos/src/serial.zig:42:7: 0x1b10 in ??? (clashos)
-    x += 1;
-      ^
-/home/andy/dev/clashos/src/main.zig:58:16: 0x1110 in ??? (clashos)
-    serial.boom();
-               ^
-/home/andy/dev/clashos/src/main.zig:67:18: 0xecc in ??? (clashos)
-    some_function();
-                 ^
-???:?:?: 0x1c in ??? (???)
-&lt;/PRE&gt;&lt;p&gt;Beautiful. Here's a picture so you can see it with color:&lt;/p&gt;&lt;img src="https://andrewkelley.me/img/clashos-stack-trace.png" width="445" height="226"&gt;&lt;p dir="ltr"&gt;
-And now all of the
-&lt;a href="https://ziglang.org/documentation/master/#Undefined-Behavior" dir="ltr"&gt;protections that Zig offers against undefined behavior&lt;/a&gt;
-will result in output like this.
-&lt;/p&gt;&lt;h3&gt;Conclusion&lt;/h3&gt;&lt;p&gt;
-One of my big goals with Zig is to improve the embedded and OS development
-process. I hope you're as excited as I am about the potential here.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-If this blog post captured your interest, maybe you would like to check out this
-&lt;a href="https://github.com/andrewrk/HellOS" dir="ltr"&gt;Hello World x86 Kernel&lt;/a&gt;, which comes with a
-&lt;a href="https://www.youtube.com/watch?v=yUge-ujPxzQ" dir="ltr"&gt;video of me live coding it&lt;/a&gt;.
-Thanks to an insightful Twitch comment, it works with only Zig code, no assembly required.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-The &lt;a href="https://ziglang.org/" dir="ltr"&gt;Zig Programming Language&lt;/a&gt; is crowd funded,
-and is not beholden to any business or set of businesses. Please consider
-&lt;a href="https://github.com/users/andrewrk/sponsorship" dir="ltr"&gt;sponsoring my work&lt;/a&gt;.
-&lt;/p&gt;</description><pubDate>Sat, 27 Jun 2020 17:59:38 -0500</pubDate></item><item><title>Dynamic linking</title><link>https://lobste.rs/s/xvqqvy</link><description>&lt;h2&gt;Do your installed programs share dynamic libraries?&lt;/h2&gt;&lt;p dir="ltr"&gt;
+and it’s time to move on.&lt;/p&gt;</description><pubDate>Sat, 27 Jun 2020 01:22:06 -0500</pubDate></item><item><title>Dynamic linking</title><link>https://lobste.rs/s/xvqqvy</link><description>&lt;h2&gt;Do your installed programs share dynamic libraries?&lt;/h2&gt;&lt;p dir="ltr"&gt;
 Findings: &lt;strong dir="ltr"&gt;not really&lt;/strong&gt;
 
 &lt;/p&gt;&lt;p&gt;
@@ -1944,7 +1944,7 @@ If you found it interesting please consider donating, your contribution will be 
 &lt;span dir="ltr"&gt;-&lt;/span&gt; First public draft finished.
 &lt;span dir="ltr"&gt;-&lt;/span&gt; Thanks &lt;span dir="ltr"&gt;@JayFoxRox&lt;/span&gt; and the other people at &lt;span dir="ltr"&gt;#XboxDev&lt;/span&gt; for their help.
 &lt;span dir="ltr"&gt;-&lt;/span&gt; Cheers &lt;span dir="ltr"&gt;@dpt&lt;/span&gt; for checking out the early draft
-- Carlos, have you seen the chameleon?&lt;/code&gt;&lt;/PRE&gt;</description><pubDate>Sat, 27 Jun 2020 09:24:34 -0500</pubDate></item><item><title>Linux Mint 20 released</title><link>https://lobste.rs/s/aerahi</link><description>&lt;p&gt;The team is proud to announce the release of Linux Mint 20 “Ulyana” Cinnamon Edition.&lt;/p&gt;&lt;img src="https://www.linuxmint.com/pictures/screenshots/ulyana/thumb_cinnamon.png" alt="" width="415" height="267"&gt;&lt;p class="caption"&gt;Linux Mint 20 Ulyana Cinnamon Edition&lt;/p&gt;&lt;p&gt;Linux Mint 20 is a long term support release which will be supported until 2025. It comes with updated software and brings refinements and many new features to make your desktop even more comfortable to use.&lt;/p&gt;&lt;p&gt;&lt;strong&gt;New features:&lt;/strong&gt;&lt;/p&gt;&lt;p&gt;This new version of Linux Mint contains many improvements.&lt;/p&gt;&lt;p&gt;For an overview of the new features please visit:&lt;/p&gt;&lt;p&gt;&lt;strong&gt;Important info:&lt;/strong&gt;&lt;/p&gt;&lt;p&gt;The release notes provide important information about known issues, as well as explanations, workarounds and solutions.&lt;/p&gt;&lt;p&gt;To read the release notes, please visit:&lt;/p&gt;&lt;p&gt;&lt;strong&gt;System requirements:&lt;/strong&gt;&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;1GB RAM (2GB recommended for a comfortable usage).&lt;/LI&gt;&lt;LI&gt;15GB of disk space (20GB recommended).&lt;/LI&gt;&lt;LI&gt;1024×768 resolution (on lower resolutions, press ALT to drag windows with the mouse if they don’t fit in the screen).&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;&lt;strong&gt;Upgrade instructions:&lt;/strong&gt;&lt;/p&gt;&lt;p&gt;Announcements will be made in July with instructions on how to upgrade from Linux Mint 19.3.&lt;/p&gt;&lt;p&gt;If you are running the BETA use the Update Manager to apply available updates.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Download links&lt;/strong&gt;:&lt;/p&gt;&lt;p&gt;Here are the download links:&lt;/p&gt;</description><pubDate>Sat, 27 Jun 2020 12:11:17 -0500</pubDate></item><item><title>The Idea Of Makefile Blog</title><link>https://lobste.rs/s/0skwhg</link><description>&lt;p&gt;last updated 2020-06-26 20:37:30 by met&lt;/p&gt;&lt;figure&gt;&lt;img src="https://metin.nextc.org/static/1/meme.jpg" width="445" height="277"&gt;&lt;figcaption dir="ltr"&gt;The meme about this post, &lt;a href="https://twitter.com/vincentdnl" dir="ltr"&gt;by @vincentdnl&lt;/a&gt;.&lt;/figcaption&gt;&lt;/figure&gt;&lt;div dir="ltr"&gt;
+- Carlos, have you seen the chameleon?&lt;/code&gt;&lt;/PRE&gt;</description><pubDate>Sat, 27 Jun 2020 09:24:34 -0500</pubDate></item><item><title>An Uncomfortable Conversation with a Black Engineer</title><link>https://www.youtube.com/watch?v=OKQ-KA1JgQQ</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/mbywon/uncomfortable_conversation_with_black"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sat, 27 Jun 2020 14:44:45 -0500</pubDate></item><item><title>Linux Mint 20 released</title><link>https://lobste.rs/s/aerahi</link><description>&lt;p&gt;The team is proud to announce the release of Linux Mint 20 “Ulyana” Cinnamon Edition.&lt;/p&gt;&lt;img src="https://www.linuxmint.com/pictures/screenshots/ulyana/thumb_cinnamon.png" alt="" width="415" height="267"&gt;&lt;p class="caption"&gt;Linux Mint 20 Ulyana Cinnamon Edition&lt;/p&gt;&lt;p&gt;Linux Mint 20 is a long term support release which will be supported until 2025. It comes with updated software and brings refinements and many new features to make your desktop even more comfortable to use.&lt;/p&gt;&lt;p&gt;&lt;strong&gt;New features:&lt;/strong&gt;&lt;/p&gt;&lt;p&gt;This new version of Linux Mint contains many improvements.&lt;/p&gt;&lt;p&gt;For an overview of the new features please visit:&lt;/p&gt;&lt;p&gt;&lt;strong&gt;Important info:&lt;/strong&gt;&lt;/p&gt;&lt;p&gt;The release notes provide important information about known issues, as well as explanations, workarounds and solutions.&lt;/p&gt;&lt;p&gt;To read the release notes, please visit:&lt;/p&gt;&lt;p&gt;&lt;strong&gt;System requirements:&lt;/strong&gt;&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;1GB RAM (2GB recommended for a comfortable usage).&lt;/LI&gt;&lt;LI&gt;15GB of disk space (20GB recommended).&lt;/LI&gt;&lt;LI&gt;1024×768 resolution (on lower resolutions, press ALT to drag windows with the mouse if they don’t fit in the screen).&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;&lt;strong&gt;Upgrade instructions:&lt;/strong&gt;&lt;/p&gt;&lt;p&gt;Announcements will be made in July with instructions on how to upgrade from Linux Mint 19.3.&lt;/p&gt;&lt;p&gt;If you are running the BETA use the Update Manager to apply available updates.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Download links&lt;/strong&gt;:&lt;/p&gt;&lt;p&gt;Here are the download links:&lt;/p&gt;</description><pubDate>Sat, 27 Jun 2020 12:11:17 -0500</pubDate></item><item><title>The Idea Of Makefile Blog</title><link>https://lobste.rs/s/0skwhg</link><description>&lt;p&gt;last updated 2020-06-26 20:37:30 by met&lt;/p&gt;&lt;figure&gt;&lt;img src="https://metin.nextc.org/static/1/meme.jpg" width="445" height="277"&gt;&lt;figcaption dir="ltr"&gt;The meme about this post, &lt;a href="https://twitter.com/vincentdnl" dir="ltr"&gt;by @vincentdnl&lt;/a&gt;.&lt;/figcaption&gt;&lt;/figure&gt;&lt;div dir="ltr"&gt;
 Nowadays, even the simplest static website generator are overly complicated and requires too much effort to learn and customize.
 A possible solution to this problem was use of easily accessible tools -if not already shipped with distro- with the power of 
 &lt;code dir="ltr"&gt;GNU Make&lt;/code&gt;. First think I did was searching similar implementations with a makefile but I had no luck except for some generators 
@@ -2032,7 +2032,7 @@ P.S: The project can be found at &lt;a href="https://github.com/ozy/makefile-blo
   had no luck except for some generators which basicly call a       
   script already written in a high level language and it lacked     
   the extensibility theme wise.                                     
-file:///home/met/Desktop/blog/build/                                &lt;/PRE&gt;&lt;figcaption&gt;Result on the links browser with default theme.&lt;/figcaption&gt;</description><pubDate>Fri, 26 Jun 2020 16:15:03 -0500</pubDate></item><item><title>An Uncomfortable Conversation with a Black Engineer</title><link>https://www.youtube.com/watch?v=OKQ-KA1JgQQ</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/mbywon/uncomfortable_conversation_with_black"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sat, 27 Jun 2020 14:44:45 -0500</pubDate></item><item><title>SHAD2: shaders, but more difficult</title><link>https://lobste.rs/s/29gm7w</link><description>&lt;p dir="ltr"&gt;
+file:///home/met/Desktop/blog/build/                                &lt;/PRE&gt;&lt;figcaption&gt;Result on the links browser with default theme.&lt;/figcaption&gt;</description><pubDate>Fri, 26 Jun 2020 16:15:03 -0500</pubDate></item><item><title>SHAD2: shaders, but more difficult</title><link>https://lobste.rs/s/29gm7w</link><description>&lt;p dir="ltr"&gt;
       &lt;time datetime="2020-06-27T00:00:00+00:00" itemprop="datePublished" dir="ltr"&gt;Jun 27, 2020
       &lt;/time&gt;&lt;/p&gt;&lt;img src="https://jmickle66666666.github.io/blog/Content/shad2_title.png" alt="shad2" width="455" height="247"&gt;&lt;p&gt;quick disclaimer before i begin, i’m gonna say a lot of only vaguely accurate stuff, to give a general idea of things instead of trying to perfectly accurately describe How Things Work. i’m not an expert in any kind of low level computer stuff, so everything is based off my vague understanding and shouldn’t be taken as The Truth entirely! to help out a bit i’m gonna put an asterisk after everything that i’m pretty sure is inaccurate. the point is to describe enough to make my point and help give all the info you need for what the article is about. thanks for understanding!!!&lt;/p&gt;&lt;h2&gt;just give me the shader file please&lt;/h2&gt;&lt;p dir="ltr"&gt;modern game engines are Very Good* and its very nice not to have to think about a lot of things when making games. gone are the days that you must know how to handle every aspect of how a game runs before you can even begin your new cool pong mmo*. it’s for precisely this reason i’m &lt;a href="https://www.youtube.com/watch?v=tPzMaMZ5e7M" dir="ltr"&gt;making my own&lt;/a&gt;&lt;/p&gt;&lt;p&gt;i’ll cover DISASTER ENGINE more in the future* but for now i’ve been dealing with one particular gripe; i’m building on top of unity for now so i can focus on the unique features of my engine before tackling the lower end of things, and for 99% of things this is working out very well*. unity is mostly just acting as a window manager, renderer and input handler while i do most of everything else in DISASTER ENGINE*. one of the driving forces behind it is exposing every piece of content the game uses, every texture, model, and script are stored externally, making every game made in the engine inherently moddable* (just start messing with the files).&lt;/p&gt;&lt;p&gt;there is one kind of asset, however, that unity does not let you load externally*. its shaders! (pretty sure ue4 doesn’t either*, but it looks like godot can?* i digress)&lt;/p&gt;&lt;h2&gt;why move forward when we can move backwards&lt;/h2&gt;&lt;p&gt;shaders are computer programs to do complex geometry and other graphical work on the graphics card, which are specialised to process that kinda stuff*, leaving the CPU to keep doing what it’s good at*. the most common cases are transforming 3d models to view space and calculating the correct texture coordinates of every pixels on screen* etc. they’re good at letting you see things*&lt;/p&gt;&lt;p dir="ltr"&gt;shader languages are c-based programming languages that were created to write the programs for your gfx card to run, and they’re very powerful, and reasonably comfortable to learn*. in recent years, there’s been a rise in the creation of &lt;a href="https://jmickle66666666.github.io/blog/2020/02/02/nodes.html" dir="ltr"&gt;node based shader editors&lt;/a&gt;, taking advantage of the specific ways shaders work* and creating awesome easy to use and powerful interfaces for people to create Cool Shaders, without having to touch a line of code.&lt;/p&gt;&lt;p&gt;moving from C-style language to nodes is a very logical and powerful step*, since text-based coding is an often less-intuitive way to think about how shaders work*, while nodes actually give a much better visual representation of a lot of the processes that are happening*.&lt;/p&gt;&lt;p&gt;C itself also followed this trajectory, being a “human-readable” way of writing computer programs, to move away from hand-writing each specific instruction a CPU needs to do things. Writing these instructions manually is called “assembly programming” and it takes a lot more patience and logic to understand and write.* It looks like this*:&lt;/p&gt;&lt;img src="https://jmickle66666666.github.io/blog/Content/shad2_x86.png" alt="shad2x86" width="396" height="256"&gt;&lt;h2&gt;it gets worse&lt;/h2&gt;&lt;p&gt;that image isn’t what cpu code actually looks like*; thats the human readable* format of it lol. in practice, this is converted to a series of bytes that the cpu traverses and interprets to execute programs.* (the middle part of the image kinda represents that)&lt;/p&gt;&lt;p dir="ltr"&gt;in general the format of an assembly program is a list of instructions, each with some amount of arguments eg &lt;code dir="ltr"&gt;MOV a b&lt;/code&gt; (move a to b). if you aren’t familiar with these terms, its basically WHAT to do, then HOW to do it. the cpu reads the instruction, then does the thing with the parameters you give it.*&lt;/p&gt;&lt;p&gt;instructions tend to work on a block of memory* that is being modified and read from, to make calculations etc.*&lt;/p&gt;&lt;p dir="ltr"&gt;while thinking about this, and talking about shaders with cool people on my cool &lt;a href="http://discord.gg/2zgMCYt" dir="ltr"&gt;discord&lt;/a&gt;, i had a terrible terrible idea. what if you encoded assembly instructions into an image, and wrote a shader to interpret and execute the instructions? a single shader that executes arbitrary programs, that are uploaded by providing a new texture to the shader. that sounds awful&lt;/p&gt;&lt;h2&gt;so i did it&lt;/h2&gt;&lt;video controls="true" allowfullscreen="true" height="300px"&gt;&lt;source src="https://jmickle66666666.github.io/blog/Content/shad2_coding.mp4" type="video/mp4"&gt;&lt;/video&gt;&lt;p&gt;welcome to SHAD2; shaders, but much less powerful and much more difficult. able to execute up to 256 unique instructions, with a memory of 256 floats. lets get started&lt;/p&gt;&lt;h2&gt;obviously i need to write an ide first&lt;/h2&gt;&lt;p&gt;to build this system i needed 3 parts: some way to write text to write the program, a system to compile an assembly-like language into a texture to send to the shader, and the shader itself, to interpret the texture as a program. obviously i could just use any text editor but for fun and aesthetics i decided to create a little IDE* to write my programs with.&lt;/p&gt;&lt;p dir="ltr"&gt;to render text to the screen i used the software text rendering created &lt;a href="https://jmickle66666666.github.io/blog/2020/02/15/software-rendering.html" dir="ltr"&gt;here&lt;/a&gt;, and got to work on inputting stuff. the code is stored as a &lt;code dir="ltr"&gt;List&amp;lt;string&amp;gt;&lt;/code&gt;, with the intention of parsing each line as an instruction, to give a clear scope for each one. text editing is never as trivial as i remember but it didn’t take too long to get a lil thing up and running. to give an example here’s what happens when you press any character*&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;Input&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;anyKeyDown&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
     &lt;span dir="ltr"&gt;// when handling a keypress we first need to check for special keys&lt;/span&gt;
