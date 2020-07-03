@@ -4121,7 +4121,562 @@ possible.&lt;/p&gt;</description><pubDate>Thu, 02 Jul 2020 08:36:45 -0500</pubDa
 &lt;strong dir="ltr"&gt;Discord in a flatpak is 13 processes!&lt;/strong&gt;&lt;/p&gt;&lt;p&gt;It basically renders our task manager's process view unusable. All the names are random gibberish, trying to kill the application or setting nice levels becomes a guessing game.  Parent trees can help, but they only get you so far.&lt;/p&gt;&lt;p&gt;It's unusable for me, it's probably unusable for any user and gets in the way of feeling in control of your computer.&lt;/p&gt;&lt;p&gt;We need some metadata.&lt;/p&gt;&lt;h2&gt;Fair resource distribution&lt;/h2&gt;&lt;p&gt;As mentioned above discord in a flatpak is 13 processes. Krita is one process.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;One will be straining the CPU because it is a highly sophisticated application doing highly complicated graphic operations&lt;/LI&gt;&lt;LI&gt;One will be straining the CPU because it's written in electron&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;To a kernel scheduler all it would see are 14 opaque processes. It has no knowledge that they are grouped as two different things. It won't be able to come up with something that's fair.&lt;/p&gt;&lt;p&gt;We need some metadata.&lt;/p&gt;&lt;p&gt;(caveat: Obviously most proceses are idling, and I've ignored threads for the purposes of making a point, don't write about it)&lt;/p&gt;&lt;h2&gt;It's hard to map things&lt;/h2&gt;&lt;p&gt;Currently the only metadata of the "application" is on a window.  To show a user friendly name and icon in ksysguard (or any other system monitor) we have to fetch a list of all processes, fetch a list of all windows and perform a mashup. Coming up with arbitrary heuristics for handling parent PIDs which is unstable and messy.&lt;/p&gt;&lt;p&gt;To give some different real world examples:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;In plasma's task manager we show an audio indicator next to the relevant window, we do this by matching PIDs of what's playing audio to the PID of a window. Easy for the simple case... however as soon as we go multi-process we have to track the parent PID, and each "fix" just alternates between one bug and another.&lt;/LI&gt;&lt;LI&gt;With PID namespaces apps can't correctly report client PIDs anymore.&lt;/LI&gt;&lt;LI&gt;We lose information on what "app" we've spawned. We have bug reports where people have two different taskmanager entries for "Firefox" and "Firefox (nightly)" however once the process is spawned that information is lost - the application reports itself as one consistent name and our taskbar gets confused.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;We need some metadata.&lt;/p&gt;&lt;h1&gt;Solution!&lt;/h1&gt;&lt;h2&gt;This is a solved problem!&lt;/h2&gt;&lt;p&gt;A modern sysadmin doesn't deal in processes, but cgroups. The cgroup manager (which will be typically systemd) spawns each service as one cgroup. It uses cgroups to know what's running, the kernel can see what things belong together. &lt;/p&gt;&lt;p&gt;On the desktop flatpaks will spawn themselves in cgroups so that they can use the relevant namespace features.&lt;/p&gt;&lt;p dir="ltr"&gt;You're probably already using cgroups. As part of a &lt;a href="https://systemd.io/DESKTOP_ENVIRONMENTS" dir="ltr"&gt;cross-desktop effort&lt;/a&gt; we want to bring cgroups to the entire desktop.&lt;/p&gt;&lt;h2&gt;Example&lt;/h2&gt;&lt;p dir="ltr"&gt;Before and after of our system monitor&lt;br dir="ltr"&gt;
 &lt;/p&gt;&lt;img src="http://blog.davidedmundson.co.uk/wp-content/uploads/2020/12/old1.png" alt="" width="410" height="324"&gt;&lt;img src="http://blog.davidedmundson.co.uk/wp-content/uploads/2020/12/ksysguardqml_apps-1024x772.png" alt="" width="410" height="309"&gt;&lt;p&gt;Ultimately the same data but way easier to read..&lt;/p&gt;&lt;h1&gt;Slices&lt;/h1&gt;&lt;p&gt;Another key part of cgroup usage is the concept of slices. Cgroups are based on a heirachical structure, with slices as logical places to split resource usage. We don't adjust resources globally, we adjust resources within our slice, which then provides information to the scheduler.&lt;/p&gt;&lt;img src="http://blog.davidedmundson.co.uk/wp-content/uploads/2020/12/treepie.png" alt="" width="410" height="260"&gt;&lt;p&gt;Conceptually you can imagine that we just adjust resources within our level of a tree. Then the kernel magically takes care of the rest.&lt;/p&gt;&lt;p dir="ltr"&gt;More information can be found on slices in this excellent series &lt;a href="https://www.redhat.com/en/blog/world-domination-cgroups-part-2-turning-knobs" dir="ltr"&gt; World domination with cgroups&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;Default slices&lt;/h2&gt;&lt;p&gt;This means we can set up some predefined slices. Within the relevant user slice this will consist shared of&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;applications&lt;/LI&gt;&lt;LI&gt;the system (kwin/mutter, plasmashell)&lt;/LI&gt;&lt;LI&gt;background services (baloo, tracker)&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Each of these slices can be given some default prioritisations and OOM settings out of the box.&lt;/p&gt;&lt;h2&gt;Dynamic resource shifting&lt;/h2&gt;&lt;p&gt;Now that we are using slices, and only adjusting our relative weight within the slice, we can shift resource priority to the application owning the focused window.&lt;/p&gt;&lt;p&gt;This only has any effect if your system is running at full steam from mulitple sources at once, but it can provide a slicker response at no drawback.&lt;/p&gt;&lt;h2&gt;Why slice, doesn't nice suffice?&lt;/h2&gt;&lt;p&gt;Nice is a single value, global across the entire system. Because of this user processes can only be lowered, but never raised to avoid messing with the system.  With slices we're only adjusting relative weight compared to services within our slice. So it's safe to give the user full control within their slice. Any adjustments to an application, won't impact system services or other users.&lt;/p&gt;&lt;p&gt;It also doesn't conflict with nice values set by the application explicitly. If we set kdevelop to have greater CPU weight, clang won't suddenly take over the whole computer when compiling.&lt;/p&gt;&lt;h1&gt;Fixing things is just the tip of the iceberg&lt;/h1&gt;&lt;h2&gt;CGroup extra features&lt;/h2&gt;&lt;p&gt;CGroup's come with a lot of new features that aren't available on a per-process level. &lt;/p&gt;&lt;p&gt;We can:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Set limits so that a CPU can't use more than N% &lt;/LI&gt;&lt;LI&gt;We can gracefully close processes on logout&lt;/LI&gt;&lt;LI&gt;We can disable networking&lt;/LI&gt;&lt;LI&gt;We can set memory limits&lt;/LI&gt;&lt;LI&gt;We can prevent forkbombs&lt;/LI&gt;&lt;LI&gt;We can provide hints to the OOM killer not just with a weight but with expected ranges that should be considered normal&lt;/LI&gt;&lt;LI&gt;We can freeze groups of processes (which will be useful for Plasma mobile)&lt;br dir="ltr"&gt;
 ... &lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;All of this is easy to add for a user / system administrator. Using drop in's one can just add a .service file [example file link] to ~/.config/systemd/user.control/app-firefox@.service and manipulate any of these.&lt;/p&gt;&lt;p&gt;[caveat, some of those features works for applications created as new transient services, not the lite version using scopes that's currently merged in KDE/Gnome - maybe worth mentioning]&lt;/p&gt;&lt;h1&gt;Steps taken so far&lt;/h1&gt;&lt;p&gt;Plasma 5.19 and recent Gnome now spawn applications into respective cgroups, but we're not yet surfacing the results that we can get from this.&lt;/p&gt;&lt;p&gt;For the KDE devs providing the metadata is easy.&lt;/p&gt;&lt;p dir="ltr"&gt;If spawning a new application from an existing application be sure to use either &lt;a href="https://api.kde.org/frameworks/kio/html/classKIO_1_1ApplicationLauncherJob.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;ApplicationLauncherJob&lt;/code&gt;&lt;/a&gt; or &lt;a href="https://api.kde.org/frameworks/kio/html/classKIO_1_1CommandLauncherJob.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;CommandLauncherJob&lt;/code&gt;&lt;/a&gt; and set the respective service. Everything else is then handled automagically. You should be using these classes anyway for spawning new services.&lt;/p&gt;&lt;p dir="ltr"&gt;For users, you can spawn an application with either &lt;code dir="ltr"&gt;&lt;code dir="ltr"&gt;kstart5 --application foo.desktop"&lt;/code&gt;&lt;/code&gt;&lt;/p&gt;&lt;p&gt;That change to the launching is relatively tiny, but getting to this point in Plasma wasn't easy - there were a lot of edge cases that messed up the grouping correctly.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;kinit, our zygote process really meddled with keeping things grouped correctly&lt;/LI&gt;&lt;LI&gt;drkonqi, our crash handler and application restarter&lt;/LI&gt;&lt;LI&gt;dbus activation has no knowledge of the associated .desktop file if an application is DBus activated (such as spectacle our screenshot tool)&lt;/LI&gt;&lt;LI&gt;and many many more papercuts throughout of different launches&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Also to fully capitalise on slices we need to move all our background processes into managed services and slices. This is worthy of another (equally lengthy) blog post.&lt;/p&gt;&lt;h2&gt;How you can help?&lt;/h2&gt;&lt;p dir="ltr"&gt;It's been a battle to find these edge cases.&lt;br dir="ltr"&gt;
-Whilst running your system, please run systemd-cgls and point out any applications (not background services yet) that are not in their appropriate cgroup.&lt;/p&gt;&lt;h1&gt;What if I don't have an appropriate cgroup controller?&lt;/h1&gt;&lt;p&gt;(e.g BSD users)&lt;/p&gt;&lt;p&gt;As we're just adding metadata, everything used now will continue to work exactly as it does now. All existing tools work exactly the same. Within our task manager we still will keep a process view (it's still useful regardless) and we won't put in any code that relies on the cgroup metadata present. We'll keep the existing heuristics for matching windows with external events, cgroup metadata would just be a strongly influence factor in that. Things won't get worse, but we won't be able to capitalise on the new features discussed here, &lt;/p&gt;&lt;footer&gt;&lt;span&gt;&lt;span&gt;Posted on &lt;/span&gt;&lt;/span&gt;&lt;/footer&gt;</description><pubDate>Wed, 01 Jul 2020 18:51:19 -0500</pubDate></item><item><title>WebGL's cross-engine successor: WebGPU</title><link>https://lobste.rs/s/ltk2be</link><description>&lt;h2&gt;&lt;span dir="ltr"&gt;Editor’s Draft, &lt;time datetime="2020-07-01" dir="ltr"&gt;1 July 2020&lt;/time&gt;&lt;/span&gt;&lt;/h2&gt;&lt;dt&gt;Issue Tracking:
+Whilst running your system, please run systemd-cgls and point out any applications (not background services yet) that are not in their appropriate cgroup.&lt;/p&gt;&lt;h1&gt;What if I don't have an appropriate cgroup controller?&lt;/h1&gt;&lt;p&gt;(e.g BSD users)&lt;/p&gt;&lt;p&gt;As we're just adding metadata, everything used now will continue to work exactly as it does now. All existing tools work exactly the same. Within our task manager we still will keep a process view (it's still useful regardless) and we won't put in any code that relies on the cgroup metadata present. We'll keep the existing heuristics for matching windows with external events, cgroup metadata would just be a strongly influence factor in that. Things won't get worse, but we won't be able to capitalise on the new features discussed here, &lt;/p&gt;&lt;footer&gt;&lt;span&gt;&lt;span&gt;Posted on &lt;/span&gt;&lt;/span&gt;&lt;/footer&gt;</description><pubDate>Wed, 01 Jul 2020 18:51:19 -0500</pubDate></item><item><title>Apple Lightning</title><link>https://lobste.rs/s/lqiydp</link><description>&lt;img src="https://nyansatan.github.io/lightning/resources/cover.jpg" width="485" height="278"&gt;&lt;div&gt;Created on 1.7.20&lt;/div&gt;&lt;div dir="ltr"&gt;
+                    Here's my little article about (almost) everything I know about Apple Lightning and related technologies: &lt;b dir="ltr"&gt;Tristar&lt;/b&gt;, &lt;b dir="ltr"&gt;Hydra&lt;/b&gt;, &lt;b dir="ltr"&gt;HiFive&lt;/b&gt;, &lt;b dir="ltr"&gt;SDQ&lt;/b&gt;, &lt;b dir="ltr"&gt;IDBUS&lt;/b&gt; and etc. But first a tiny warning...
+                &lt;/div&gt;&lt;div dir="ltr"&gt;
+                    &lt;i dir="ltr"&gt;
+                        Read this article on your own &lt;b dir="ltr"&gt;risk&lt;/b&gt;! The information in this artcile is based on a lot of AppleInternal materials (leaked datasheets, schematics, source codes) I read in a diagonal direction. And of course on my own research too. I have to warn you, the reader, that I have never done such a research before. Thus, this write-up might use incorrect or just weird terms and turn out partially or completely &lt;b dir="ltr"&gt;wrong&lt;/b&gt;! 
+                    &lt;/i&gt;
+                &lt;/div&gt;&lt;div dir="ltr"&gt;
+                    Before going &lt;i dir="ltr"&gt;deeper&lt;/i&gt;, let's briefly sort out the terms:
+                &lt;/div&gt;&lt;h2&gt;What's Lightning?&lt;/h2&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/lightning_port_pinout.jpg" width="469" height="143"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    &lt;b dir="ltr"&gt;Lightning&lt;/b&gt; - is a digital interface used in most of the Apple's iOS devices since late 2012. Replaced the old 30-pin connector&lt;br dir="ltr"&gt;
+
+                    &lt;br dir="ltr"&gt;
+
+                    You can see the female port pinout on the picture above and the connector pinout on the picture below:&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/lightning_connector_pinout.jpg" width="469" height="259"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    Please pay attention to the fact that in the connector, pins on both sides of connector aren't wired in exact same order. Thus, a host device have to detect orientation of a cable before doing anything else&lt;br dir="ltr"&gt;
+                    
+                    &lt;br dir="ltr"&gt;
+
+                    Though it's not always applicable. Many Lightning accessories I've played with have mirrored pinouts in their connectors
+                &lt;/div&gt;&lt;h2&gt;What're Tristar and Hydra?&lt;/h2&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/tristar_logo.png" width="469" height="280"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    &lt;b dir="ltr"&gt;Tristar&lt;/b&gt; - is the integrated circuit embedded in every device shipped with Lightning female port. Basically, it's a MUX:&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/tristar_schematic.png" width="469" height="287"&gt;&lt;div dir="ltr"&gt;
+
+                    Among many other things, its main purpose is to communicate with Lightning male connector once one was connected - detect orientation and detect &lt;b dir="ltr"&gt;Accessory ID&lt;/b&gt; and route internal interfaces like USB, UART and SWD accordingly&lt;br dir="ltr"&gt;
+
+                    &lt;br dir="ltr"&gt;
+
+                    &lt;b dir="ltr"&gt;Hydra&lt;/b&gt; - is the new variant of Tristar used since iPhone 8/X. The most significant change appears to be a support of wireless charging, but that's to be verified:&lt;br dir="ltr"&gt;
+                    
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/hydra_schematic.png" width="469" height="336"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    There're 5 major Tristar/Hydra variants known to me:&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;UL&gt;&lt;LI&gt;&lt;b dir="ltr"&gt;TI THS7383&lt;/b&gt; - first-gen Tristar used in iPad mini 1 and iPad 4&lt;/LI&gt;&lt;LI&gt;&lt;b dir="ltr"&gt;NXP CBTL1608A1&lt;/b&gt; - first-gen Tristar used in iPhone 5 and iPod touch 5&lt;/LI&gt;&lt;LI&gt;&lt;b dir="ltr"&gt;NXP CBTL1609A1&lt;/b&gt; - mysterious first-gen Tristar used in iPod nano 7 - &lt;a href="https://www.ifixit.com/Teardown/iPod+Nano+7th+Generation+Teardown/10826#s38931" dir="ltr"&gt;source&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;&lt;b dir="ltr"&gt;NXP CBTL1610Ax&lt;/b&gt; - second-gen Tristar used since iPhone 5C/5S and apparently everything else that doesn't support wireless charging. There're multiple generations of this one (&lt;b dir="ltr"&gt;x&lt;/b&gt; - number of generation)&lt;/LI&gt;&lt;LI&gt;&lt;b dir="ltr"&gt;NXP CBTL1612Ax&lt;/b&gt; - Hydra used since iPhone 8/X and apparently everything else that supports wireless charging (&lt;b dir="ltr"&gt;x&lt;/b&gt; - number of generation)&lt;/LI&gt;&lt;/UL&gt;&lt;div dir="ltr"&gt;
+
+                    From now on, I'll only use the term &lt;b dir="ltr"&gt;Tristar&lt;/b&gt;, but keep in mind that it will also mean &lt;b dir="ltr"&gt;Hydra&lt;/b&gt; as well, as they are very similar in the most of aspects that are gonna be covered in this text
+                &lt;/div&gt;&lt;h2&gt;What's HiFive?&lt;/h2&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/lightning_connector.svg" width="469" height="114"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    &lt;b dir="ltr"&gt;HiFive&lt;/b&gt; - is Lightning slave, i.e. a male connector. It contains a logical element as well - that chip is known as &lt;b dir="ltr"&gt;SN2025&lt;/b&gt;/&lt;b dir="ltr"&gt;BQ2025&lt;/b&gt;
+                &lt;/div&gt;&lt;h2&gt;What're SDQ and IDBUS?&lt;/h2&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/idbus_little.png" width="469" height="130"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    These 2 terms are often referred as kind of synonyms. For convinience, I'll only use term &lt;b dir="ltr"&gt;IDBUS&lt;/b&gt; from now on, as it seems more correct to me (and that's how this technology called in the THS7383 datasheet)&lt;br dir="ltr"&gt;
+
+                    &lt;br dir="ltr"&gt;
+
+                    So, &lt;b dir="ltr"&gt;IDBUS&lt;/b&gt; - is a digital protocol used for negotiations between Tristar and HiFive. Very similar to &lt;a href="https://en.wikipedia.org/wiki/1-Wire" dir="ltr"&gt;Onewire protocol&lt;/a&gt;
+                &lt;/div&gt;&lt;h2&gt;Now we can play&lt;/h2&gt;&lt;div dir="ltr"&gt;
+
+                    Let's sniff the negotiations between Tristar and HiFive. Take a logic analyzer, a Lightning male-to-female passthrough breakout board, some accessory (normal Lightning to USB cable would fit just fine) and of course some device with Lightning port&lt;br dir="ltr"&gt;
+
+                    &lt;br dir="ltr"&gt;
+
+                    First connect logic analyzer's channels to both &lt;b dir="ltr"&gt;ID&lt;/b&gt; lines of the breakout (pins 4 and 8) and connect the breakout to the device, but do not connect the accessory just yet:&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/setup_1.jpg" width="469" height="321"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    Right after that start sampling (any rate from 2 MHz and up should be fine). You'll see something like this:&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/id_lines_activity.png" width="469" height="62"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    As you can see, Tristar polls each ID line by rotation - one after another. But since we didn't connect any accessory, the polling obviously fails. At some point the device will grow tired of this endless stream of failures and stop it. Meanwhile let's examine what exactly happens while polling:&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/polling_explained_1.png" width="469" height="71"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    First, we can see a long interval (~1.1 milliseconds) when the level is just high and nothing else is happening:&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/charge.png" width="469" height="163"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    Apparently that time is used to charge internal HiFive's capacitor - the energy from it will be then used to power-up its internal logic chips&lt;br dir="ltr"&gt;
+
+                    &lt;br dir="ltr"&gt;
+
+                    What happens next is far more interesting:&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/meaningful.png" width="469" height="15"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    Obviously, that's some data flowing. But how to interpret it? How to decode it? Let's virtually split it to almost the least least significant parts - to something that I call &lt;b dir="ltr"&gt;words&lt;/b&gt;:
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/meaningful_splitted.png" width="469" height="15"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    So basically a &lt;b dir="ltr"&gt;word&lt;/b&gt; is a combination of &lt;b dir="ltr"&gt;fall&lt;/b&gt;-&lt;b dir="ltr"&gt;rise&lt;/b&gt;-&lt;b dir="ltr"&gt;fall&lt;/b&gt;:&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/word_splitted.png" width="469" height="310"&gt;&lt;UL&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;Meaningful Stage&lt;/span&gt; - time interval taken by this stage defines meaning of a word&lt;/LI&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;Recovery Stage&lt;/span&gt; - time interval which is apparently required for processing the &lt;span dir="ltr"&gt;Meaningful Stage&lt;/span&gt; on recieving side and/or preparing the next word on sending stage&lt;/LI&gt;&lt;/UL&gt;&lt;div dir="ltr"&gt;
+
+                    Here is a table of known word types with their time intervals for both stages we discussed above (all units are in microseconds):&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;table dir="ltr"&gt;
+                        &lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
+                            &lt;th dir="ltr"&gt;&lt;/th&gt;
+                            &lt;th colspan="3" dir="ltr"&gt;Meaningful&lt;/th&gt;
+                            &lt;th colspan="2" dir="ltr"&gt;Recovery&lt;/th&gt;
+                        &lt;/tr&gt;
+                        &lt;tr dir="ltr"&gt;
+                            &lt;th dir="ltr"&gt;Word&lt;/th&gt;
+                            &lt;th dir="ltr"&gt;Min&lt;/th&gt;
+                            &lt;th dir="ltr"&gt;Typ&lt;/th&gt;
+                            &lt;th dir="ltr"&gt;Max&lt;/th&gt;
+                            &lt;th dir="ltr"&gt;Min&lt;/th&gt;
+                            &lt;th dir="ltr"&gt;Typ&lt;/th&gt;
+                        &lt;/tr&gt;
+                        &lt;tr dir="ltr"&gt;
+                            &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;BREAK&lt;/b&gt;&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;12&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;14&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;16&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;2.5&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;4.5&lt;/td&gt;
+                        &lt;/tr&gt;
+                        &lt;tr dir="ltr"&gt;
+                            &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;WAKE&lt;/b&gt;&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;22&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;24&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;27&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;1100?&lt;/td&gt;
+                        &lt;/tr&gt;
+                        &lt;tr dir="ltr"&gt;
+                            &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;ZERO&lt;/b&gt;&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;6&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;7&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;8&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;3&lt;/td&gt;
+                        &lt;/tr&gt;
+                        &lt;tr dir="ltr"&gt;
+                            &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;ONE&lt;/b&gt;&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;1&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;1.7&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;2.5&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;8.5&lt;/td&gt;
+                        &lt;/tr&gt;
+                        &lt;tr dir="ltr"&gt;
+                            &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;ZERO with STOP*&lt;/b&gt;&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;6&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;7&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;8&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;16&lt;/td&gt;
+                        &lt;/tr&gt;
+                        &lt;tr dir="ltr"&gt;
+                            &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;ONE with STOP*&lt;/b&gt;&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;1&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;1.7&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;2.5&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;21&lt;/td&gt;
+                        &lt;/tr&gt;
+                    &lt;/tbody&gt;&lt;/table&gt;&lt;div dir="ltr"&gt;
+
+                    &lt;br dir="ltr"&gt;
+
+                    * - &lt;b dir="ltr"&gt;STOP&lt;/b&gt; is used when it's a last bit in a byte&lt;br dir="ltr"&gt;
+
+                    &lt;br dir="ltr"&gt;
+
+                    Using the above table we can now build a simple decoder of the protocol:&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/decoded.png" width="469" height="81"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    As you can see, the first word a host sends is &lt;b dir="ltr"&gt;BREAK&lt;/b&gt; - when Tristar wants to send a new request, it always starts with it. Then comes a data stage. Please pay attention to the fact that last (8th) bit of a byte has longer &lt;span dir="ltr"&gt;Recovery Stage&lt;/span&gt;. When a data stage is over, a host sends another &lt;b dir="ltr"&gt;BREAK&lt;/b&gt;. Then a slave must send a reply (after at least a 2.5 us delay - see the table). Tristar will wait for around 2.2 ms for a reply. If it's not issued in this time interval, Tristar will try to poll another ID line&lt;br dir="ltr"&gt;
+
+                    &lt;br dir="ltr"&gt;
+
+                    Now let's examine the data stage on the example above - &lt;span dir="ltr"&gt;0x74 0x00 0x02 0x1f&lt;/span&gt;:
+
+                    &lt;/div&gt;&lt;UL&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;0x74&lt;/span&gt; - request/response type. Always even for request, always odd for response (request type + 1)&lt;/LI&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;0x00 0x02&lt;/span&gt; - actual data. Can be empty&lt;/LI&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;0x1f&lt;/span&gt; - CRC8 of both the request type byte and the whole data (polynomial - 0x31, initial value - 0xff)&lt;/LI&gt;&lt;/UL&gt;&lt;div dir="ltr"&gt;
+
+                    Let's connect some accessory to our setup and see what happens. I'll use Apple's original Lightning to USB cable:&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/setup_2.jpg"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    And here is what appears on IDBUS after a 0x74 request:&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/response_0x75.png"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    HiFive replied! And if you scroll further you'll see a lot of other request/response pairs:&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/response_0x79.png"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    Some requests do not need a response though:
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/request_0x84.png"&gt;&lt;h2&gt;Interpreting IDBUS requests and responses&lt;/h2&gt;&lt;div dir="ltr"&gt;
+
+                    The most important IDBUS request is &lt;b dir="ltr"&gt;0x74&lt;/b&gt; - it is used for two purposes: to tell HiFive enable full current (in case that's supported by an accessory) and to ask it about pin configuration the cable supports and some other metadata&lt;br dir="ltr"&gt;
+
+                    &lt;br dir="ltr"&gt;
+
+                    Not too much is known about how response 0x75's data is encoded. But some bits were available in a certain old Tristar datasheet:&lt;br dir="ltr"&gt;
+
+                    
+                    &lt;/div&gt;&lt;table dir="ltr"&gt;
+                        &lt;caption dir="ltr"&gt;First byte of 0x75 response data&lt;/caption&gt;
+                        &lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
+                            &lt;th dir="ltr"&gt;7&lt;/th&gt;
+                            &lt;th dir="ltr"&gt;6&lt;/th&gt;
+                            &lt;th dir="ltr"&gt;5&lt;/th&gt;
+                            &lt;th dir="ltr"&gt;4&lt;/th&gt;
+                            &lt;th dir="ltr"&gt;3&lt;/th&gt;
+                            &lt;th dir="ltr"&gt;2&lt;/th&gt;
+                            &lt;th dir="ltr"&gt;1&lt;/th&gt;
+                            &lt;th dir="ltr"&gt;0&lt;/th&gt;
+                        &lt;/tr&gt;
+                        &lt;tr dir="ltr"&gt;
+                            &lt;td colspan="2" dir="ltr"&gt;ACCx&lt;/td&gt;
+                            &lt;td colspan="2" dir="ltr"&gt;Dx&lt;/td&gt;
+                            &lt;td colspan="4" dir="ltr"&gt;DATA[43:40]&lt;/td&gt;
+                        &lt;/tr&gt;
+                    &lt;/tbody&gt;&lt;/table&gt;&lt;table dir="ltr"&gt;
+                            &lt;caption dir="ltr"&gt;ACCx configuration when ID is found on ID0&lt;/caption&gt;
+                            &lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
+                                &lt;th dir="ltr"&gt;ACCx[1:0]&lt;/th&gt;
+                                &lt;th dir="ltr"&gt;ACC1&lt;/th&gt;
+                                &lt;th dir="ltr"&gt;ACC2&lt;/th&gt;
+                                &lt;th dir="ltr"&gt;HOST_RESET&lt;/th&gt;
+                            &lt;/tr&gt;
+                            &lt;tr dir="ltr"&gt;
+                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;00&lt;/b&gt;&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z (IDBUS)&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                            &lt;/tr&gt;
+                            &lt;tr dir="ltr"&gt;
+                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;01&lt;/b&gt;&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;UART1_RX&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;UART1_TX&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                            &lt;/tr&gt;
+                            &lt;tr dir="ltr"&gt;
+                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;10&lt;/b&gt;&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;JTAG_DIO&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;JTAG_CLK&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                            &lt;/tr&gt;
+                            &lt;tr dir="ltr"&gt;
+                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;11&lt;/b&gt;&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;HIGH&lt;/td&gt;
+                            &lt;/tr&gt;
+                        &lt;/tbody&gt;&lt;/table&gt;&lt;table dir="ltr"&gt;
+                            &lt;caption dir="ltr"&gt;ACCx configuration when ID is found on ID1&lt;/caption&gt;
+                            &lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
+                                &lt;th dir="ltr"&gt;ACCx[1:0]&lt;/th&gt;
+                                &lt;th dir="ltr"&gt;ACC1&lt;/th&gt;
+                                &lt;th dir="ltr"&gt;ACC2&lt;/th&gt;
+                                &lt;th dir="ltr"&gt;HOST_RESET&lt;/th&gt;
+                            &lt;/tr&gt;
+                            &lt;tr dir="ltr"&gt;
+                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;00&lt;/b&gt;&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z (IDBUS)&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                            &lt;/tr&gt;
+                            &lt;tr dir="ltr"&gt;
+                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;01&lt;/b&gt;&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;UART1_RX&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;UART1_TX&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                            &lt;/tr&gt;
+                            &lt;tr dir="ltr"&gt;
+                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;10&lt;/b&gt;&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;JTAG_DIO&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;JTAG_CLK&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                            &lt;/tr&gt;
+                            &lt;tr dir="ltr"&gt;
+                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;11&lt;/b&gt;&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;HIGH&lt;/td&gt;
+                            &lt;/tr&gt;
+                        &lt;/tbody&gt;&lt;/table&gt;&lt;table dir="ltr"&gt;
+                            &lt;caption dir="ltr"&gt;Dx configuration when ID is found on ID0&lt;/caption&gt;
+                            &lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
+                                &lt;th dir="ltr"&gt;Dx[1:0]&lt;/th&gt;
+                                &lt;th dir="ltr"&gt;DP1&lt;/th&gt;
+                                &lt;th dir="ltr"&gt;DN1&lt;/th&gt;
+                                &lt;th dir="ltr"&gt;DP2&lt;/th&gt;
+                                &lt;th dir="ltr"&gt;DN2&lt;/th&gt;
+                            &lt;/tr&gt;
+                            &lt;tr dir="ltr"&gt;
+                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;00&lt;/b&gt;&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                            &lt;/tr&gt;
+                            &lt;tr dir="ltr"&gt;
+                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;01&lt;/b&gt;&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;USB0_DP&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;USB0_DN&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                            &lt;/tr&gt;
+                            &lt;tr dir="ltr"&gt;
+                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;10&lt;/b&gt;&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;USB0_DP&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;USB0_DN&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;UART1_TX&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;UART1_RX&lt;/td&gt;
+                            &lt;/tr&gt;
+                            &lt;tr dir="ltr"&gt;
+                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;11&lt;/b&gt;&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                            &lt;/tr&gt;
+                        &lt;/tbody&gt;&lt;/table&gt;&lt;table dir="ltr"&gt;
+                            &lt;caption dir="ltr"&gt;Dx configuration when ID is found on ID1&lt;/caption&gt;
+                            &lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
+                                &lt;th dir="ltr"&gt;Dx[1:0]&lt;/th&gt;
+                                &lt;th dir="ltr"&gt;DP1&lt;/th&gt;
+                                &lt;th dir="ltr"&gt;DN1&lt;/th&gt;
+                                &lt;th dir="ltr"&gt;DP2&lt;/th&gt;
+                                &lt;th dir="ltr"&gt;DN2&lt;/th&gt;
+                            &lt;/tr&gt;
+                            &lt;tr dir="ltr"&gt;
+                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;00&lt;/b&gt;&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                            &lt;/tr&gt;
+                            &lt;tr dir="ltr"&gt;
+                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;01&lt;/b&gt;&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;USB0_DP&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;USB0_DN&lt;/td&gt;
+                            &lt;/tr&gt;
+                            &lt;tr dir="ltr"&gt;
+                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;10&lt;/b&gt;&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;USB0_DP&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;USB0_DN&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;UART1_TX&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;UART1_RX&lt;/td&gt;
+                            &lt;/tr&gt;
+                            &lt;tr dir="ltr"&gt;
+                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;11&lt;/b&gt;&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
+                            &lt;/tr&gt;
+                        &lt;/tbody&gt;&lt;/table&gt;&lt;div dir="ltr"&gt;
+                    &lt;br dir="ltr"&gt;
+
+                    Using the tables above let's decode our cable's ID (&lt;span dir="ltr"&gt;10 0C 00 00 00 00&lt;/span&gt;) with keeping in mind that ID line was found on ID0 pin:&lt;br dir="ltr"&gt;
+
+                    h
+                    &lt;/div&gt;&lt;table dir="ltr"&gt;
+                        &lt;caption dir="ltr"&gt;First byte of the cable's 0x75 response data&lt;/caption&gt;
+                        &lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
+                            &lt;th dir="ltr"&gt;7&lt;/th&gt;
+                            &lt;th dir="ltr"&gt;6&lt;/th&gt;
+                            &lt;th dir="ltr"&gt;5&lt;/th&gt;
+                            &lt;th dir="ltr"&gt;4&lt;/th&gt;
+                            &lt;th dir="ltr"&gt;3&lt;/th&gt;
+                            &lt;th dir="ltr"&gt;2&lt;/th&gt;
+                            &lt;th dir="ltr"&gt;1&lt;/th&gt;
+                            &lt;th dir="ltr"&gt;0&lt;/th&gt;
+                        &lt;/tr&gt;
+                        &lt;tr dir="ltr"&gt;
+                            &lt;td colspan="2" dir="ltr"&gt;ACCx&lt;/td&gt;
+                            &lt;td colspan="2" dir="ltr"&gt;Dx&lt;/td&gt;
+                            &lt;td colspan="4" dir="ltr"&gt;DATA[43:40]&lt;/td&gt;
+                        &lt;/tr&gt;
+                        &lt;tr dir="ltr"&gt;
+                            &lt;td dir="ltr"&gt;0&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;0&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;0&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;1&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;0&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;0&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;0&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;0&lt;/td&gt;
+                        &lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;div dir="ltr"&gt;
+    
+                    &lt;br dir="ltr"&gt;
+
+                    So, ACCx is &lt;span dir="ltr"&gt;00&lt;/span&gt; meaning that ID0 pin will just stick with IDBUS, and Dx is &lt;span dir="ltr"&gt;01&lt;/span&gt; meaning that DP1/DN1 pins will be configured as USB0_DP/USB0_DN. Just what we expected from a standard USB cable&lt;br dir="ltr"&gt;
+
+                    &lt;br dir="ltr"&gt;
+
+                    Now let's sniff something more interesting:
+
+                    &lt;/div&gt;&lt;table dir="ltr"&gt;
+                        &lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
+                            &lt;th dir="ltr"&gt;Accessory&lt;/th&gt;
+                            &lt;th dir="ltr"&gt;ID (HOSTID = 1)&lt;/th&gt;
+                        &lt;/tr&gt;
+                        &lt;tr dir="ltr"&gt;
+                            &lt;td dir="ltr"&gt;DCSD&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;20 00 00 00 00 00&lt;/td&gt;
+                        &lt;/tr&gt;
+                        &lt;tr dir="ltr"&gt;
+                            &lt;td dir="ltr"&gt;KongSWD (no Astris running)&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;20 02 00 00 00 00&lt;/td&gt;
+                        &lt;/tr&gt;
+                        &lt;tr dir="ltr"&gt;
+                            &lt;td dir="ltr"&gt;KongSWD (with Astris running)&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;A0 00 00 00 00 00&lt;/td&gt;
+                        &lt;/tr&gt;
+                        &lt;tr dir="ltr"&gt;
+                            &lt;td dir="ltr"&gt;KanziSWD (no Astris running)&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;20 0E 00 00 00 00&lt;/td&gt;
+                        &lt;/tr&gt;
+                        &lt;tr dir="ltr"&gt;
+                            &lt;td dir="ltr"&gt;KanziSWD (with Astris running)&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;A0 0C 00 00 00 00&lt;/td&gt;
+                        &lt;/tr&gt;
+                        &lt;tr dir="ltr"&gt;
+                            &lt;td dir="ltr"&gt;Haywire (HDMI)&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;0B F0 00 00 00 00&lt;/td&gt;
+                        &lt;/tr&gt;
+                        &lt;tr dir="ltr"&gt;
+                            &lt;td dir="ltr"&gt;UART Charge&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;20 00 10 00 00 00&lt;/td&gt;
+                        &lt;/tr&gt;
+                        &lt;tr dir="ltr"&gt;
+                            &lt;td dir="ltr"&gt;Lightning to 3.5 mm/EarPods with Lightning&lt;/td&gt;
+                            &lt;td dir="ltr"&gt;04 F1 00 00 00 00&lt;/td&gt;
+                        &lt;/tr&gt;
+                    &lt;/tbody&gt;&lt;/table&gt;&lt;div dir="ltr"&gt;
+
+                    &lt;br dir="ltr"&gt;
+
+                    Here's a full (?) list of IDBUS requests provided by &lt;a href="https://twitter.com/spbdimka/status/1118597972760125440/photo/1" dir="ltr"&gt;@spbdimka&lt;/a&gt;:&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/idbus_full_list.jpg"&gt;&lt;div dir="ltr"&gt;
+
+                    &lt;b dir="ltr"&gt;Tip #1&lt;/b&gt;: you can easily get accessory's properties including its ID using &lt;b dir="ltr"&gt;accctl&lt;/b&gt;:
+                    
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/accctl.png"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    That's an Apple's internal utility shipped with NonUI/InternalUI builds. But you can easily run it on any jailbroken device&lt;br dir="ltr"&gt;
+
+                    &lt;br dir="ltr"&gt;
+
+                    &lt;b dir="ltr"&gt;Tip #2&lt;/b&gt;: you can easily get cable's pin configuration with diags:
+
+                    &lt;/div&gt;&lt;p&gt;
+                        tristar -p
+                    &lt;/p&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/tristar-p.png"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    Please note that this command is only available on iOS 7+ diags&lt;br dir="ltr"&gt;
+
+                    &lt;br dir="ltr"&gt;
+
+                    &lt;b dir="ltr"&gt;Tip #3&lt;/b&gt;: you can easily track 0x74/0x75 requests/responses generated by SWD-probes by setting &lt;span dir="ltr"&gt;debug&lt;/span&gt; env var to 3:
+
+                    &lt;/div&gt;&lt;p&gt;
+                        astrisctl setenv debug 3
+                    &lt;/p&gt;&lt;div dir="ltr"&gt;
+                    
+                    Then, on cable's virtual COM you'll see something like this:&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/swd_debug.png"&gt;&lt;h4&gt;HOSTID&lt;/h4&gt;&lt;div dir="ltr"&gt;
+
+                    In one of the tables above you could see a mention of a thing called &lt;b dir="ltr"&gt;HOSTID&lt;/b&gt;. It's a 16-bit value carried in a 0x74 request. It appears that it might affect to a response HiFive will reply with. At least, if you set it to invalid value (yes, it's possible with diags), HiFive might stop working with it:&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/kanzi_invalid_sysid.png"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    Though there's an environmental variable called &lt;span dir="ltr"&gt;disableIdCheck&lt;/span&gt; in KongSWD/KanziSWD' firmware you can set to make your probe ignore invalid HOSTID&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;div dir="ltr"&gt;
+                        &lt;b dir="ltr"&gt;Important note&lt;/b&gt;: Kong and Kanzi do not feature HiFive as a dedicated unreprogrammable chip. Instead these accessories emulate it using microcontroller and/or FPGA unit, thus easily updatable/reprogrammable
+                    &lt;/div&gt;&lt;h4&gt;WAKE&lt;/h4&gt;&lt;div dir="ltr"&gt;
+
+                    In the table of Accessory IDs you could see above you could notice that Kong and Kanzi send different responses depending on whether Astris (AppleInternal software designed for debugging with SWD-probes) is launched or not. If you decode those responses using the tables above, you'll find out that when Astris is not launched, a probe will act just like DCSD - USB on D1 and debug UART on D2 lines. But when the debugging software is running, ACCID lines are switched to SWD&lt;br dir="ltr"&gt;
+
+                    &lt;br dir="ltr"&gt;
+
+                    But what if we want to launch Astris after a probe was already connected to a device? What will a cable do? How will it switch ACC lines to SWD? That's where &lt;b dir="ltr"&gt;WAKE&lt;/b&gt; breaks into the game! HiFive (or a device that emulates it) can initiate &lt;b dir="ltr"&gt;WAKE&lt;/b&gt; and IDBUS enumeration process will start again - Tristar will send 0x74 request, Kong/Kanzi will reply with new ID, Tristar will acknowledge that and route ACC lines to internal SWD lines (SoC must have Development fusing or be demoted for SWD to actually work, of course)&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/kanzi_reset_id_response.png"&gt;&lt;h4&gt;Power Handshakes&lt;/h4&gt;&lt;div dir="ltr"&gt;
+
+                    The last thing I'm going to cover in this chapter is Power Handshakes. That's an algorithm based on IDBUS requests/responses that kernel Tristar drivers use before allowing charging from an accessory&lt;br dir="ltr"&gt;
+
+                    &lt;br dir="ltr"&gt;
+
+                    When a Lightning cable is just lying somewhere connected to a charger/computer, but not connected to a device, HiFive limits current on the PWR to a really small value (around 10-15 mA according to my measurements). To enable full current, 0x74 request must be issued by Tristar and processed by HiFive. For SecureROM/iBoot that's enough, but when a kernel is booted additional steps are to be made:
+
+                    &lt;/div&gt;&lt;OL&gt;&lt;LI&gt;Tristar issues 2 0x70 requests&lt;/LI&gt;&lt;LI&gt;As soon as the second one is processed by HiFive and a reply is sent, it disables current at all for around 20 milliseconds&lt;/LI&gt;&lt;LI&gt;After this time is elapsed, Tristar issues another 0x70 request but with 0x80 in its data. HiFive processes it and replies&lt;/LI&gt;&lt;LI&gt;At this point kernel driver responsible for Tristar should allow charging&lt;/LI&gt;&lt;/OL&gt;&lt;div dir="ltr"&gt;
+
+                    &lt;i dir="ltr"&gt;
+                        &lt;b dir="ltr"&gt;Important note&lt;/b&gt;: this is the part I know the least. And this is one of the parts I mostly reversed myself. Thus, be careful with this information
+                    &lt;/i&gt;
+                &lt;/div&gt;&lt;h2&gt;Few words about ESN and Tristar I2C interface&lt;/h2&gt;&lt;div dir="ltr"&gt;
+
+                    Another feature of Tristar I'd like to tell about is ESN. ESN is a little blob that Tristar stores in its EEPROM (on &lt;b dir="ltr"&gt;CBTL1610A2&lt;/b&gt; and later). It can be retrieved over IDBUS using Serial Number Reader cable (or Kanzi, they are basically the same thing, except for a different USB PID and a little bit different enclosure)&lt;br dir="ltr"&gt;
+
+                    &lt;br dir="ltr"&gt;
+
+                    In simple words, by sending this blob to &lt;b dir="ltr"&gt;ttrs.apple.com&lt;/b&gt;, you can get device's serial number. This mechanism is used by Apple Store/Apple Premium Reseller' staff to retrieve SN from dead devices (considering Tristar is still alive though):
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/snr_app.png"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    The things that are happening on IDBUS while retrieving ESN were already documented by &lt;b dir="ltr"&gt;@spbdimka&lt;/b&gt;:&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;div class="embed-placeholder" data-type="twitter" data-id="1118601503881797633"&gt;&lt;/div&gt;&lt;h4&gt;Provisioning&lt;/h4&gt;&lt;div dir="ltr"&gt;
+
+                    The procedure of "flashing" ESN to Tristar is called &lt;b dir="ltr"&gt;provisioning&lt;/b&gt;. Provisioning is done using &lt;b dir="ltr"&gt;diags&lt;/b&gt; on the device side and using &lt;b dir="ltr"&gt;&lt;a href="https://github.com/meylj/HelloWorld/blob/master/EzLink/EzLink%20Specification.pdf" dir="ltr"&gt;EzLink&lt;/a&gt;&lt;/b&gt; on the host side and takes 3 steps&lt;br dir="ltr"&gt;
+
+                    &lt;br dir="ltr"&gt;
+
+                    You can check provisioning status using diags:&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;p&gt;
+                        tristar --prov_stat
+                    &lt;/p&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/diags_prov_stat.png"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    ...and retrieve ESN as well:&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;p&gt;
+                        tristar --esn
+                    &lt;/p&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/diags_esn.png"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    By the way, diags generally has rich set of Tristar commands (available since iOS 7):&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/diags_tristar_help.png"&gt;&lt;h4&gt;Tristar I2C&lt;/h4&gt;&lt;div dir="ltr"&gt;
+
+                    Tristar is available on I2C-bus (address 0x34 - for writing, 0x35 - for reading). That's how diags and kernel drivers communicate with it&lt;br dir="ltr"&gt;
+
+                    &lt;br dir="ltr"&gt;
+
+                    Not much is &lt;i dir="ltr"&gt;publicly&lt;/i&gt; known about the registers. A lot of information about register map itself can be obtained from the leaked iBoot source code (for THS7383 (appears to be backwards compatible with CBTL1608) and CBTL1610 only), but not much about what to write to them to achieve some interesting results&lt;br dir="ltr"&gt;
+
+                    &lt;br dir="ltr"&gt;
+
+                    Another source of knowledge is diags' Tristar module (easily extractable over SWD while it's running). For example, I did manage to reverse algorithms of reading provisioning state and ESN. I then implemented these as an addition to my iBoot payload, &lt;b dir="ltr"&gt;Lina&lt;/b&gt;:&lt;br dir="ltr"&gt;
+
+                    &lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/lina_esn.png"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    I tried to reverse ESN writing algorithm as well, but failed - the mechanism was too complex for my skills. The code snippets from Lina though are available &lt;a href="https://gist.github.com/NyanSatan/128ad7b352469f64294925499224d5fd" dir="ltr"&gt;here&lt;/a&gt;
+                &lt;/div&gt;&lt;h2&gt;Tristar electric characteristics&lt;/h2&gt;&lt;div dir="ltr"&gt;
+
+                    Tristar itself is powered up from a 1.8V source. Lines used for IDBUS are 3.0V-tolerant according to my oscilloscope:&lt;br dir="ltr"&gt;
+
+                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/oscilloscope_sniff.png"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
+
+                    So, better do not try to interact with IDBUS with 5V-tolerant devices like certain models of Arduino without a level shifter
+                &lt;/div&gt;&lt;h2&gt;Credits&lt;/h2&gt;&lt;div dir="ltr"&gt;
+
+                    &lt;b dir="ltr"&gt;@key2fr&lt;/b&gt;, &lt;b dir="ltr"&gt;@_L1ngL1ng_&lt;/b&gt;, &lt;b dir="ltr"&gt;@spbdimka&lt;/b&gt;
+                &lt;/div&gt;</description><pubDate>Wed, 01 Jul 2020 17:06:45 -0500</pubDate></item><item><title>WebGL's cross-engine successor: WebGPU</title><link>https://lobste.rs/s/ltk2be</link><description>&lt;h2&gt;&lt;span dir="ltr"&gt;Editor’s Draft, &lt;time datetime="2020-07-01" dir="ltr"&gt;1 July 2020&lt;/time&gt;&lt;/span&gt;&lt;/h2&gt;&lt;dt&gt;Issue Tracking:
      &lt;/dt&gt;&lt;dt&gt;Editors:
      &lt;/dt&gt;&lt;dt&gt;Participate:
      &lt;/dt&gt;&lt;h2&gt;&lt;span&gt;Abstract&lt;/span&gt;&lt;/h2&gt;&lt;p&gt;WebGPU exposes an API for performing operations, such as rendering and computation, on a Graphics Processing Unit.&lt;/p&gt;&lt;h2&gt;&lt;span&gt;Status of this document&lt;/span&gt;&lt;/h2&gt;&lt;div data-fill-with="status" dir="ltr"&gt;
@@ -5143,560 +5698,5 @@ either &lt;code dir="ltr"&gt;&lt;a data-link-type="idl" href="https://gpuweb.git
     &lt;/div&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;var dir="ltr"&gt;extent&lt;/var&gt;.&lt;dfn data-dfn-for="Extent3D" data-dfn-type="dfn" data-noexport="" dir="ltr"&gt;width&lt;/dfn&gt; refers to
 either &lt;code dir="ltr"&gt;&lt;a data-link-type="idl" href="https://gpuweb.github.io/gpuweb/#dictdef-gpuextent3ddict" dir="ltr"&gt;GPUExtent3DDict&lt;/a&gt;&lt;/code&gt;.&lt;code dir="ltr"&gt;&lt;a data-link-type="idl" href="https://gpuweb.github.io/gpuweb/#dom-gpuextent3ddict-width" dir="ltr"&gt;width&lt;/a&gt;&lt;/code&gt; or the first item of the sequence.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;var dir="ltr"&gt;extent&lt;/var&gt;.&lt;dfn data-dfn-for="Extent3D" data-dfn-type="dfn" data-noexport="" dir="ltr"&gt;height&lt;/dfn&gt; refers to
 either &lt;code dir="ltr"&gt;&lt;a data-link-type="idl" href="https://gpuweb.github.io/gpuweb/#dictdef-gpuextent3ddict" dir="ltr"&gt;GPUExtent3DDict&lt;/a&gt;&lt;/code&gt;.&lt;code dir="ltr"&gt;&lt;a data-link-type="idl" href="https://gpuweb.github.io/gpuweb/#dom-gpuextent3ddict-height" dir="ltr"&gt;height&lt;/a&gt;&lt;/code&gt; or the second item of the sequence.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;var dir="ltr"&gt;extent&lt;/var&gt;.&lt;dfn data-dfn-for="Extent3D" data-dfn-type="dfn" data-noexport="" dir="ltr"&gt;depth&lt;/dfn&gt; refers to
-either &lt;code dir="ltr"&gt;&lt;a data-link-type="idl" href="https://gpuweb.github.io/gpuweb/#dictdef-gpuextent3ddict" dir="ltr"&gt;GPUExtent3DDict&lt;/a&gt;&lt;/code&gt;.&lt;code dir="ltr"&gt;&lt;a data-link-type="idl" href="https://gpuweb.github.io/gpuweb/#dom-gpuextent3ddict-depth" dir="ltr"&gt;depth&lt;/a&gt;&lt;/code&gt; or the third item of the sequence.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2 data-level="22" dir="ltr"&gt;&lt;span dir="ltr"&gt;22. &lt;/span&gt;&lt;span dir="ltr"&gt;Temporary usages of non-exported dfns&lt;/span&gt;&lt;/h2&gt;&lt;p&gt;Eventually all of these should disappear but they are useful to avoid warning while building the specification.&lt;/p&gt;</description><pubDate>Thu, 02 Jul 2020 10:56:05 -0500</pubDate></item><item><title>10 Years of Linux Security - A Report Card</title><link>https://www.youtube.com/watch?v=F_Kza6fdkSU</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/wjhsn7/10_years_linux_security_report_card"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Thu, 02 Jul 2020 19:32:52 -0500</pubDate></item><item><title>Apple Lightning</title><link>https://lobste.rs/s/lqiydp</link><description>&lt;img src="https://nyansatan.github.io/lightning/resources/cover.jpg" width="485" height="278"&gt;&lt;div&gt;Created on 1.7.20&lt;/div&gt;&lt;div dir="ltr"&gt;
-                    Here's my little article about (almost) everything I know about Apple Lightning and related technologies: &lt;b dir="ltr"&gt;Tristar&lt;/b&gt;, &lt;b dir="ltr"&gt;Hydra&lt;/b&gt;, &lt;b dir="ltr"&gt;HiFive&lt;/b&gt;, &lt;b dir="ltr"&gt;SDQ&lt;/b&gt;, &lt;b dir="ltr"&gt;IDBUS&lt;/b&gt; and etc. But first a tiny warning...
-                &lt;/div&gt;&lt;div dir="ltr"&gt;
-                    &lt;i dir="ltr"&gt;
-                        Read this article on your own &lt;b dir="ltr"&gt;risk&lt;/b&gt;! The information in this artcile is based on a lot of AppleInternal materials (leaked datasheets, schematics, source codes) I read in a diagonal direction. And of course on my own research too. I have to warn you, the reader, that I have never done such a research before. Thus, this write-up might use incorrect or just weird terms and turn out partially or completely &lt;b dir="ltr"&gt;wrong&lt;/b&gt;! 
-                    &lt;/i&gt;
-                &lt;/div&gt;&lt;div dir="ltr"&gt;
-                    Before going &lt;i dir="ltr"&gt;deeper&lt;/i&gt;, let's briefly sort out the terms:
-                &lt;/div&gt;&lt;h2&gt;What's Lightning?&lt;/h2&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/lightning_port_pinout.jpg" width="469" height="143"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    &lt;b dir="ltr"&gt;Lightning&lt;/b&gt; - is a digital interface used in most of the Apple's iOS devices since late 2012. Replaced the old 30-pin connector&lt;br dir="ltr"&gt;
-
-                    &lt;br dir="ltr"&gt;
-
-                    You can see the female port pinout on the picture above and the connector pinout on the picture below:&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/lightning_connector_pinout.jpg" width="469" height="259"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    Please pay attention to the fact that in the connector, pins on both sides of connector aren't wired in exact same order. Thus, a host device have to detect orientation of a cable before doing anything else&lt;br dir="ltr"&gt;
-                    
-                    &lt;br dir="ltr"&gt;
-
-                    Though it's not always applicable. Many Lightning accessories I've played with have mirrored pinouts in their connectors
-                &lt;/div&gt;&lt;h2&gt;What're Tristar and Hydra?&lt;/h2&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/tristar_logo.png" width="469" height="280"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    &lt;b dir="ltr"&gt;Tristar&lt;/b&gt; - is the integrated circuit embedded in every device shipped with Lightning female port. Basically, it's a MUX:&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/tristar_schematic.png" width="469" height="287"&gt;&lt;div dir="ltr"&gt;
-
-                    Among many other things, its main purpose is to communicate with Lightning male connector once one was connected - detect orientation and detect &lt;b dir="ltr"&gt;Accessory ID&lt;/b&gt; and route internal interfaces like USB, UART and SWD accordingly&lt;br dir="ltr"&gt;
-
-                    &lt;br dir="ltr"&gt;
-
-                    &lt;b dir="ltr"&gt;Hydra&lt;/b&gt; - is the new variant of Tristar used since iPhone 8/X. The most significant change appears to be a support of wireless charging, but that's to be verified:&lt;br dir="ltr"&gt;
-                    
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/hydra_schematic.png" width="469" height="336"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    There're 5 major Tristar/Hydra variants known to me:&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;UL&gt;&lt;LI&gt;&lt;b dir="ltr"&gt;TI THS7383&lt;/b&gt; - first-gen Tristar used in iPad mini 1 and iPad 4&lt;/LI&gt;&lt;LI&gt;&lt;b dir="ltr"&gt;NXP CBTL1608A1&lt;/b&gt; - first-gen Tristar used in iPhone 5 and iPod touch 5&lt;/LI&gt;&lt;LI&gt;&lt;b dir="ltr"&gt;NXP CBTL1609A1&lt;/b&gt; - mysterious first-gen Tristar used in iPod nano 7 - &lt;a href="https://www.ifixit.com/Teardown/iPod+Nano+7th+Generation+Teardown/10826#s38931" dir="ltr"&gt;source&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;&lt;b dir="ltr"&gt;NXP CBTL1610Ax&lt;/b&gt; - second-gen Tristar used since iPhone 5C/5S and apparently everything else that doesn't support wireless charging. There're multiple generations of this one (&lt;b dir="ltr"&gt;x&lt;/b&gt; - number of generation)&lt;/LI&gt;&lt;LI&gt;&lt;b dir="ltr"&gt;NXP CBTL1612Ax&lt;/b&gt; - Hydra used since iPhone 8/X and apparently everything else that supports wireless charging (&lt;b dir="ltr"&gt;x&lt;/b&gt; - number of generation)&lt;/LI&gt;&lt;/UL&gt;&lt;div dir="ltr"&gt;
-
-                    From now on, I'll only use the term &lt;b dir="ltr"&gt;Tristar&lt;/b&gt;, but keep in mind that it will also mean &lt;b dir="ltr"&gt;Hydra&lt;/b&gt; as well, as they are very similar in the most of aspects that are gonna be covered in this text
-                &lt;/div&gt;&lt;h2&gt;What's HiFive?&lt;/h2&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/lightning_connector.svg" width="469" height="114"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    &lt;b dir="ltr"&gt;HiFive&lt;/b&gt; - is Lightning slave, i.e. a male connector. It contains a logical element as well - that chip is known as &lt;b dir="ltr"&gt;SN2025&lt;/b&gt;/&lt;b dir="ltr"&gt;BQ2025&lt;/b&gt;
-                &lt;/div&gt;&lt;h2&gt;What're SDQ and IDBUS?&lt;/h2&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/idbus_little.png" width="469" height="130"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    These 2 terms are often referred as kind of synonyms. For convinience, I'll only use term &lt;b dir="ltr"&gt;IDBUS&lt;/b&gt; from now on, as it seems more correct to me (and that's how this technology called in the THS7383 datasheet)&lt;br dir="ltr"&gt;
-
-                    &lt;br dir="ltr"&gt;
-
-                    So, &lt;b dir="ltr"&gt;IDBUS&lt;/b&gt; - is a digital protocol used for negotiations between Tristar and HiFive. Very similar to &lt;a href="https://en.wikipedia.org/wiki/1-Wire" dir="ltr"&gt;Onewire protocol&lt;/a&gt;
-                &lt;/div&gt;&lt;h2&gt;Now we can play&lt;/h2&gt;&lt;div dir="ltr"&gt;
-
-                    Let's sniff the negotiations between Tristar and HiFive. Take a logic analyzer, a Lightning male-to-female passthrough breakout board, some accessory (normal Lightning to USB cable would fit just fine) and of course some device with Lightning port&lt;br dir="ltr"&gt;
-
-                    &lt;br dir="ltr"&gt;
-
-                    First connect logic analyzer's channels to both &lt;b dir="ltr"&gt;ID&lt;/b&gt; lines of the breakout (pins 4 and 8) and connect the breakout to the device, but do not connect the accessory just yet:&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/setup_1.jpg" width="469" height="321"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    Right after that start sampling (any rate from 2 MHz and up should be fine). You'll see something like this:&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/id_lines_activity.png" width="469" height="62"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    As you can see, Tristar polls each ID line by rotation - one after another. But since we didn't connect any accessory, the polling obviously fails. At some point the device will grow tired of this endless stream of failures and stop it. Meanwhile let's examine what exactly happens while polling:&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/polling_explained_1.png" width="469" height="71"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    First, we can see a long interval (~1.1 milliseconds) when the level is just high and nothing else is happening:&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/charge.png" width="469" height="163"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    Apparently that time is used to charge internal HiFive's capacitor - the energy from it will be then used to power-up its internal logic chips&lt;br dir="ltr"&gt;
-
-                    &lt;br dir="ltr"&gt;
-
-                    What happens next is far more interesting:&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/meaningful.png" width="469" height="15"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    Obviously, that's some data flowing. But how to interpret it? How to decode it? Let's virtually split it to almost the least least significant parts - to something that I call &lt;b dir="ltr"&gt;words&lt;/b&gt;:
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/meaningful_splitted.png" width="469" height="15"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    So basically a &lt;b dir="ltr"&gt;word&lt;/b&gt; is a combination of &lt;b dir="ltr"&gt;fall&lt;/b&gt;-&lt;b dir="ltr"&gt;rise&lt;/b&gt;-&lt;b dir="ltr"&gt;fall&lt;/b&gt;:&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/word_splitted.png" width="469" height="310"&gt;&lt;UL&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;Meaningful Stage&lt;/span&gt; - time interval taken by this stage defines meaning of a word&lt;/LI&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;Recovery Stage&lt;/span&gt; - time interval which is apparently required for processing the &lt;span dir="ltr"&gt;Meaningful Stage&lt;/span&gt; on recieving side and/or preparing the next word on sending stage&lt;/LI&gt;&lt;/UL&gt;&lt;div dir="ltr"&gt;
-
-                    Here is a table of known word types with their time intervals for both stages we discussed above (all units are in microseconds):&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;table dir="ltr"&gt;
-                        &lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
-                            &lt;th dir="ltr"&gt;&lt;/th&gt;
-                            &lt;th colspan="3" dir="ltr"&gt;Meaningful&lt;/th&gt;
-                            &lt;th colspan="2" dir="ltr"&gt;Recovery&lt;/th&gt;
-                        &lt;/tr&gt;
-                        &lt;tr dir="ltr"&gt;
-                            &lt;th dir="ltr"&gt;Word&lt;/th&gt;
-                            &lt;th dir="ltr"&gt;Min&lt;/th&gt;
-                            &lt;th dir="ltr"&gt;Typ&lt;/th&gt;
-                            &lt;th dir="ltr"&gt;Max&lt;/th&gt;
-                            &lt;th dir="ltr"&gt;Min&lt;/th&gt;
-                            &lt;th dir="ltr"&gt;Typ&lt;/th&gt;
-                        &lt;/tr&gt;
-                        &lt;tr dir="ltr"&gt;
-                            &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;BREAK&lt;/b&gt;&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;12&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;14&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;16&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;2.5&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;4.5&lt;/td&gt;
-                        &lt;/tr&gt;
-                        &lt;tr dir="ltr"&gt;
-                            &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;WAKE&lt;/b&gt;&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;22&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;24&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;27&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;1100?&lt;/td&gt;
-                        &lt;/tr&gt;
-                        &lt;tr dir="ltr"&gt;
-                            &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;ZERO&lt;/b&gt;&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;6&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;7&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;8&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;3&lt;/td&gt;
-                        &lt;/tr&gt;
-                        &lt;tr dir="ltr"&gt;
-                            &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;ONE&lt;/b&gt;&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;1&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;1.7&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;2.5&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;8.5&lt;/td&gt;
-                        &lt;/tr&gt;
-                        &lt;tr dir="ltr"&gt;
-                            &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;ZERO with STOP*&lt;/b&gt;&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;6&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;7&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;8&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;16&lt;/td&gt;
-                        &lt;/tr&gt;
-                        &lt;tr dir="ltr"&gt;
-                            &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;ONE with STOP*&lt;/b&gt;&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;1&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;1.7&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;2.5&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;21&lt;/td&gt;
-                        &lt;/tr&gt;
-                    &lt;/tbody&gt;&lt;/table&gt;&lt;div dir="ltr"&gt;
-
-                    &lt;br dir="ltr"&gt;
-
-                    * - &lt;b dir="ltr"&gt;STOP&lt;/b&gt; is used when it's a last bit in a byte&lt;br dir="ltr"&gt;
-
-                    &lt;br dir="ltr"&gt;
-
-                    Using the above table we can now build a simple decoder of the protocol:&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/decoded.png" width="469" height="81"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    As you can see, the first word a host sends is &lt;b dir="ltr"&gt;BREAK&lt;/b&gt; - when Tristar wants to send a new request, it always starts with it. Then comes a data stage. Please pay attention to the fact that last (8th) bit of a byte has longer &lt;span dir="ltr"&gt;Recovery Stage&lt;/span&gt;. When a data stage is over, a host sends another &lt;b dir="ltr"&gt;BREAK&lt;/b&gt;. Then a slave must send a reply (after at least a 2.5 us delay - see the table). Tristar will wait for around 2.2 ms for a reply. If it's not issued in this time interval, Tristar will try to poll another ID line&lt;br dir="ltr"&gt;
-
-                    &lt;br dir="ltr"&gt;
-
-                    Now let's examine the data stage on the example above - &lt;span dir="ltr"&gt;0x74 0x00 0x02 0x1f&lt;/span&gt;:
-
-                    &lt;/div&gt;&lt;UL&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;0x74&lt;/span&gt; - request/response type. Always even for request, always odd for response (request type + 1)&lt;/LI&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;0x00 0x02&lt;/span&gt; - actual data. Can be empty&lt;/LI&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;0x1f&lt;/span&gt; - CRC8 of both the request type byte and the whole data (polynomial - 0x31, initial value - 0xff)&lt;/LI&gt;&lt;/UL&gt;&lt;div dir="ltr"&gt;
-
-                    Let's connect some accessory to our setup and see what happens. I'll use Apple's original Lightning to USB cable:&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/setup_2.jpg"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    And here is what appears on IDBUS after a 0x74 request:&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/response_0x75.png"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    HiFive replied! And if you scroll further you'll see a lot of other request/response pairs:&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/response_0x79.png"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    Some requests do not need a response though:
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/request_0x84.png"&gt;&lt;h2&gt;Interpreting IDBUS requests and responses&lt;/h2&gt;&lt;div dir="ltr"&gt;
-
-                    The most important IDBUS request is &lt;b dir="ltr"&gt;0x74&lt;/b&gt; - it is used for two purposes: to tell HiFive enable full current (in case that's supported by an accessory) and to ask it about pin configuration the cable supports and some other metadata&lt;br dir="ltr"&gt;
-
-                    &lt;br dir="ltr"&gt;
-
-                    Not too much is known about how response 0x75's data is encoded. But some bits were available in a certain old Tristar datasheet:&lt;br dir="ltr"&gt;
-
-                    
-                    &lt;/div&gt;&lt;table dir="ltr"&gt;
-                        &lt;caption dir="ltr"&gt;First byte of 0x75 response data&lt;/caption&gt;
-                        &lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
-                            &lt;th dir="ltr"&gt;7&lt;/th&gt;
-                            &lt;th dir="ltr"&gt;6&lt;/th&gt;
-                            &lt;th dir="ltr"&gt;5&lt;/th&gt;
-                            &lt;th dir="ltr"&gt;4&lt;/th&gt;
-                            &lt;th dir="ltr"&gt;3&lt;/th&gt;
-                            &lt;th dir="ltr"&gt;2&lt;/th&gt;
-                            &lt;th dir="ltr"&gt;1&lt;/th&gt;
-                            &lt;th dir="ltr"&gt;0&lt;/th&gt;
-                        &lt;/tr&gt;
-                        &lt;tr dir="ltr"&gt;
-                            &lt;td colspan="2" dir="ltr"&gt;ACCx&lt;/td&gt;
-                            &lt;td colspan="2" dir="ltr"&gt;Dx&lt;/td&gt;
-                            &lt;td colspan="4" dir="ltr"&gt;DATA[43:40]&lt;/td&gt;
-                        &lt;/tr&gt;
-                    &lt;/tbody&gt;&lt;/table&gt;&lt;table dir="ltr"&gt;
-                            &lt;caption dir="ltr"&gt;ACCx configuration when ID is found on ID0&lt;/caption&gt;
-                            &lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
-                                &lt;th dir="ltr"&gt;ACCx[1:0]&lt;/th&gt;
-                                &lt;th dir="ltr"&gt;ACC1&lt;/th&gt;
-                                &lt;th dir="ltr"&gt;ACC2&lt;/th&gt;
-                                &lt;th dir="ltr"&gt;HOST_RESET&lt;/th&gt;
-                            &lt;/tr&gt;
-                            &lt;tr dir="ltr"&gt;
-                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;00&lt;/b&gt;&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z (IDBUS)&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                            &lt;/tr&gt;
-                            &lt;tr dir="ltr"&gt;
-                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;01&lt;/b&gt;&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;UART1_RX&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;UART1_TX&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                            &lt;/tr&gt;
-                            &lt;tr dir="ltr"&gt;
-                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;10&lt;/b&gt;&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;JTAG_DIO&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;JTAG_CLK&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                            &lt;/tr&gt;
-                            &lt;tr dir="ltr"&gt;
-                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;11&lt;/b&gt;&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;HIGH&lt;/td&gt;
-                            &lt;/tr&gt;
-                        &lt;/tbody&gt;&lt;/table&gt;&lt;table dir="ltr"&gt;
-                            &lt;caption dir="ltr"&gt;ACCx configuration when ID is found on ID1&lt;/caption&gt;
-                            &lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
-                                &lt;th dir="ltr"&gt;ACCx[1:0]&lt;/th&gt;
-                                &lt;th dir="ltr"&gt;ACC1&lt;/th&gt;
-                                &lt;th dir="ltr"&gt;ACC2&lt;/th&gt;
-                                &lt;th dir="ltr"&gt;HOST_RESET&lt;/th&gt;
-                            &lt;/tr&gt;
-                            &lt;tr dir="ltr"&gt;
-                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;00&lt;/b&gt;&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z (IDBUS)&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                            &lt;/tr&gt;
-                            &lt;tr dir="ltr"&gt;
-                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;01&lt;/b&gt;&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;UART1_RX&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;UART1_TX&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                            &lt;/tr&gt;
-                            &lt;tr dir="ltr"&gt;
-                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;10&lt;/b&gt;&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;JTAG_DIO&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;JTAG_CLK&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                            &lt;/tr&gt;
-                            &lt;tr dir="ltr"&gt;
-                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;11&lt;/b&gt;&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;HIGH&lt;/td&gt;
-                            &lt;/tr&gt;
-                        &lt;/tbody&gt;&lt;/table&gt;&lt;table dir="ltr"&gt;
-                            &lt;caption dir="ltr"&gt;Dx configuration when ID is found on ID0&lt;/caption&gt;
-                            &lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
-                                &lt;th dir="ltr"&gt;Dx[1:0]&lt;/th&gt;
-                                &lt;th dir="ltr"&gt;DP1&lt;/th&gt;
-                                &lt;th dir="ltr"&gt;DN1&lt;/th&gt;
-                                &lt;th dir="ltr"&gt;DP2&lt;/th&gt;
-                                &lt;th dir="ltr"&gt;DN2&lt;/th&gt;
-                            &lt;/tr&gt;
-                            &lt;tr dir="ltr"&gt;
-                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;00&lt;/b&gt;&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                            &lt;/tr&gt;
-                            &lt;tr dir="ltr"&gt;
-                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;01&lt;/b&gt;&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;USB0_DP&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;USB0_DN&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                            &lt;/tr&gt;
-                            &lt;tr dir="ltr"&gt;
-                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;10&lt;/b&gt;&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;USB0_DP&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;USB0_DN&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;UART1_TX&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;UART1_RX&lt;/td&gt;
-                            &lt;/tr&gt;
-                            &lt;tr dir="ltr"&gt;
-                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;11&lt;/b&gt;&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                            &lt;/tr&gt;
-                        &lt;/tbody&gt;&lt;/table&gt;&lt;table dir="ltr"&gt;
-                            &lt;caption dir="ltr"&gt;Dx configuration when ID is found on ID1&lt;/caption&gt;
-                            &lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
-                                &lt;th dir="ltr"&gt;Dx[1:0]&lt;/th&gt;
-                                &lt;th dir="ltr"&gt;DP1&lt;/th&gt;
-                                &lt;th dir="ltr"&gt;DN1&lt;/th&gt;
-                                &lt;th dir="ltr"&gt;DP2&lt;/th&gt;
-                                &lt;th dir="ltr"&gt;DN2&lt;/th&gt;
-                            &lt;/tr&gt;
-                            &lt;tr dir="ltr"&gt;
-                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;00&lt;/b&gt;&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                            &lt;/tr&gt;
-                            &lt;tr dir="ltr"&gt;
-                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;01&lt;/b&gt;&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;USB0_DP&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;USB0_DN&lt;/td&gt;
-                            &lt;/tr&gt;
-                            &lt;tr dir="ltr"&gt;
-                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;10&lt;/b&gt;&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;USB0_DP&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;USB0_DN&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;UART1_TX&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;UART1_RX&lt;/td&gt;
-                            &lt;/tr&gt;
-                            &lt;tr dir="ltr"&gt;
-                                &lt;td dir="ltr"&gt;&lt;b dir="ltr"&gt;11&lt;/b&gt;&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                                &lt;td dir="ltr"&gt;Hi-Z&lt;/td&gt;
-                            &lt;/tr&gt;
-                        &lt;/tbody&gt;&lt;/table&gt;&lt;div dir="ltr"&gt;
-                    &lt;br dir="ltr"&gt;
-
-                    Using the tables above let's decode our cable's ID (&lt;span dir="ltr"&gt;10 0C 00 00 00 00&lt;/span&gt;) with keeping in mind that ID line was found on ID0 pin:&lt;br dir="ltr"&gt;
-
-                    h
-                    &lt;/div&gt;&lt;table dir="ltr"&gt;
-                        &lt;caption dir="ltr"&gt;First byte of the cable's 0x75 response data&lt;/caption&gt;
-                        &lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
-                            &lt;th dir="ltr"&gt;7&lt;/th&gt;
-                            &lt;th dir="ltr"&gt;6&lt;/th&gt;
-                            &lt;th dir="ltr"&gt;5&lt;/th&gt;
-                            &lt;th dir="ltr"&gt;4&lt;/th&gt;
-                            &lt;th dir="ltr"&gt;3&lt;/th&gt;
-                            &lt;th dir="ltr"&gt;2&lt;/th&gt;
-                            &lt;th dir="ltr"&gt;1&lt;/th&gt;
-                            &lt;th dir="ltr"&gt;0&lt;/th&gt;
-                        &lt;/tr&gt;
-                        &lt;tr dir="ltr"&gt;
-                            &lt;td colspan="2" dir="ltr"&gt;ACCx&lt;/td&gt;
-                            &lt;td colspan="2" dir="ltr"&gt;Dx&lt;/td&gt;
-                            &lt;td colspan="4" dir="ltr"&gt;DATA[43:40]&lt;/td&gt;
-                        &lt;/tr&gt;
-                        &lt;tr dir="ltr"&gt;
-                            &lt;td dir="ltr"&gt;0&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;0&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;0&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;1&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;0&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;0&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;0&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;0&lt;/td&gt;
-                        &lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;div dir="ltr"&gt;
-    
-                    &lt;br dir="ltr"&gt;
-
-                    So, ACCx is &lt;span dir="ltr"&gt;00&lt;/span&gt; meaning that ID0 pin will just stick with IDBUS, and Dx is &lt;span dir="ltr"&gt;01&lt;/span&gt; meaning that DP1/DN1 pins will be configured as USB0_DP/USB0_DN. Just what we expected from a standard USB cable&lt;br dir="ltr"&gt;
-
-                    &lt;br dir="ltr"&gt;
-
-                    Now let's sniff something more interesting:
-
-                    &lt;/div&gt;&lt;table dir="ltr"&gt;
-                        &lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
-                            &lt;th dir="ltr"&gt;Accessory&lt;/th&gt;
-                            &lt;th dir="ltr"&gt;ID (HOSTID = 1)&lt;/th&gt;
-                        &lt;/tr&gt;
-                        &lt;tr dir="ltr"&gt;
-                            &lt;td dir="ltr"&gt;DCSD&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;20 00 00 00 00 00&lt;/td&gt;
-                        &lt;/tr&gt;
-                        &lt;tr dir="ltr"&gt;
-                            &lt;td dir="ltr"&gt;KongSWD (no Astris running)&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;20 02 00 00 00 00&lt;/td&gt;
-                        &lt;/tr&gt;
-                        &lt;tr dir="ltr"&gt;
-                            &lt;td dir="ltr"&gt;KongSWD (with Astris running)&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;A0 00 00 00 00 00&lt;/td&gt;
-                        &lt;/tr&gt;
-                        &lt;tr dir="ltr"&gt;
-                            &lt;td dir="ltr"&gt;KanziSWD (no Astris running)&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;20 0E 00 00 00 00&lt;/td&gt;
-                        &lt;/tr&gt;
-                        &lt;tr dir="ltr"&gt;
-                            &lt;td dir="ltr"&gt;KanziSWD (with Astris running)&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;A0 0C 00 00 00 00&lt;/td&gt;
-                        &lt;/tr&gt;
-                        &lt;tr dir="ltr"&gt;
-                            &lt;td dir="ltr"&gt;Haywire (HDMI)&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;0B F0 00 00 00 00&lt;/td&gt;
-                        &lt;/tr&gt;
-                        &lt;tr dir="ltr"&gt;
-                            &lt;td dir="ltr"&gt;UART Charge&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;20 00 10 00 00 00&lt;/td&gt;
-                        &lt;/tr&gt;
-                        &lt;tr dir="ltr"&gt;
-                            &lt;td dir="ltr"&gt;Lightning to 3.5 mm/EarPods with Lightning&lt;/td&gt;
-                            &lt;td dir="ltr"&gt;04 F1 00 00 00 00&lt;/td&gt;
-                        &lt;/tr&gt;
-                    &lt;/tbody&gt;&lt;/table&gt;&lt;div dir="ltr"&gt;
-
-                    &lt;br dir="ltr"&gt;
-
-                    Here's a full (?) list of IDBUS requests provided by &lt;a href="https://twitter.com/spbdimka/status/1118597972760125440/photo/1" dir="ltr"&gt;@spbdimka&lt;/a&gt;:&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/idbus_full_list.jpg"&gt;&lt;div dir="ltr"&gt;
-
-                    &lt;b dir="ltr"&gt;Tip #1&lt;/b&gt;: you can easily get accessory's properties including its ID using &lt;b dir="ltr"&gt;accctl&lt;/b&gt;:
-                    
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/accctl.png"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    That's an Apple's internal utility shipped with NonUI/InternalUI builds. But you can easily run it on any jailbroken device&lt;br dir="ltr"&gt;
-
-                    &lt;br dir="ltr"&gt;
-
-                    &lt;b dir="ltr"&gt;Tip #2&lt;/b&gt;: you can easily get cable's pin configuration with diags:
-
-                    &lt;/div&gt;&lt;p&gt;
-                        tristar -p
-                    &lt;/p&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/tristar-p.png"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    Please note that this command is only available on iOS 7+ diags&lt;br dir="ltr"&gt;
-
-                    &lt;br dir="ltr"&gt;
-
-                    &lt;b dir="ltr"&gt;Tip #3&lt;/b&gt;: you can easily track 0x74/0x75 requests/responses generated by SWD-probes by setting &lt;span dir="ltr"&gt;debug&lt;/span&gt; env var to 3:
-
-                    &lt;/div&gt;&lt;p&gt;
-                        astrisctl setenv debug 3
-                    &lt;/p&gt;&lt;div dir="ltr"&gt;
-                    
-                    Then, on cable's virtual COM you'll see something like this:&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/swd_debug.png"&gt;&lt;h4&gt;HOSTID&lt;/h4&gt;&lt;div dir="ltr"&gt;
-
-                    In one of the tables above you could see a mention of a thing called &lt;b dir="ltr"&gt;HOSTID&lt;/b&gt;. It's a 16-bit value carried in a 0x74 request. It appears that it might affect to a response HiFive will reply with. At least, if you set it to invalid value (yes, it's possible with diags), HiFive might stop working with it:&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/kanzi_invalid_sysid.png"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    Though there's an environmental variable called &lt;span dir="ltr"&gt;disableIdCheck&lt;/span&gt; in KongSWD/KanziSWD' firmware you can set to make your probe ignore invalid HOSTID&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;div dir="ltr"&gt;
-                        &lt;b dir="ltr"&gt;Important note&lt;/b&gt;: Kong and Kanzi do not feature HiFive as a dedicated unreprogrammable chip. Instead these accessories emulate it using microcontroller and/or FPGA unit, thus easily updatable/reprogrammable
-                    &lt;/div&gt;&lt;h4&gt;WAKE&lt;/h4&gt;&lt;div dir="ltr"&gt;
-
-                    In the table of Accessory IDs you could see above you could notice that Kong and Kanzi send different responses depending on whether Astris (AppleInternal software designed for debugging with SWD-probes) is launched or not. If you decode those responses using the tables above, you'll find out that when Astris is not launched, a probe will act just like DCSD - USB on D1 and debug UART on D2 lines. But when the debugging software is running, ACCID lines are switched to SWD&lt;br dir="ltr"&gt;
-
-                    &lt;br dir="ltr"&gt;
-
-                    But what if we want to launch Astris after a probe was already connected to a device? What will a cable do? How will it switch ACC lines to SWD? That's where &lt;b dir="ltr"&gt;WAKE&lt;/b&gt; breaks into the game! HiFive (or a device that emulates it) can initiate &lt;b dir="ltr"&gt;WAKE&lt;/b&gt; and IDBUS enumeration process will start again - Tristar will send 0x74 request, Kong/Kanzi will reply with new ID, Tristar will acknowledge that and route ACC lines to internal SWD lines (SoC must have Development fusing or be demoted for SWD to actually work, of course)&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/kanzi_reset_id_response.png"&gt;&lt;h4&gt;Power Handshakes&lt;/h4&gt;&lt;div dir="ltr"&gt;
-
-                    The last thing I'm going to cover in this chapter is Power Handshakes. That's an algorithm based on IDBUS requests/responses that kernel Tristar drivers use before allowing charging from an accessory&lt;br dir="ltr"&gt;
-
-                    &lt;br dir="ltr"&gt;
-
-                    When a Lightning cable is just lying somewhere connected to a charger/computer, but not connected to a device, HiFive limits current on the PWR to a really small value (around 10-15 mA according to my measurements). To enable full current, 0x74 request must be issued by Tristar and processed by HiFive. For SecureROM/iBoot that's enough, but when a kernel is booted additional steps are to be made:
-
-                    &lt;/div&gt;&lt;OL&gt;&lt;LI&gt;Tristar issues 2 0x70 requests&lt;/LI&gt;&lt;LI&gt;As soon as the second one is processed by HiFive and a reply is sent, it disables current at all for around 20 milliseconds&lt;/LI&gt;&lt;LI&gt;After this time is elapsed, Tristar issues another 0x70 request but with 0x80 in its data. HiFive processes it and replies&lt;/LI&gt;&lt;LI&gt;At this point kernel driver responsible for Tristar should allow charging&lt;/LI&gt;&lt;/OL&gt;&lt;div dir="ltr"&gt;
-
-                    &lt;i dir="ltr"&gt;
-                        &lt;b dir="ltr"&gt;Important note&lt;/b&gt;: this is the part I know the least. And this is one of the parts I mostly reversed myself. Thus, be careful with this information
-                    &lt;/i&gt;
-                &lt;/div&gt;&lt;h2&gt;Few words about ESN and Tristar I2C interface&lt;/h2&gt;&lt;div dir="ltr"&gt;
-
-                    Another feature of Tristar I'd like to tell about is ESN. ESN is a little blob that Tristar stores in its EEPROM (on &lt;b dir="ltr"&gt;CBTL1610A2&lt;/b&gt; and later). It can be retrieved over IDBUS using Serial Number Reader cable (or Kanzi, they are basically the same thing, except for a different USB PID and a little bit different enclosure)&lt;br dir="ltr"&gt;
-
-                    &lt;br dir="ltr"&gt;
-
-                    In simple words, by sending this blob to &lt;b dir="ltr"&gt;ttrs.apple.com&lt;/b&gt;, you can get device's serial number. This mechanism is used by Apple Store/Apple Premium Reseller' staff to retrieve SN from dead devices (considering Tristar is still alive though):
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/snr_app.png"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    The things that are happening on IDBUS while retrieving ESN were already documented by &lt;b dir="ltr"&gt;@spbdimka&lt;/b&gt;:&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;div class="embed-placeholder" data-type="twitter" data-id="1118601503881797633"&gt;&lt;/div&gt;&lt;h4&gt;Provisioning&lt;/h4&gt;&lt;div dir="ltr"&gt;
-
-                    The procedure of "flashing" ESN to Tristar is called &lt;b dir="ltr"&gt;provisioning&lt;/b&gt;. Provisioning is done using &lt;b dir="ltr"&gt;diags&lt;/b&gt; on the device side and using &lt;b dir="ltr"&gt;&lt;a href="https://github.com/meylj/HelloWorld/blob/master/EzLink/EzLink%20Specification.pdf" dir="ltr"&gt;EzLink&lt;/a&gt;&lt;/b&gt; on the host side and takes 3 steps&lt;br dir="ltr"&gt;
-
-                    &lt;br dir="ltr"&gt;
-
-                    You can check provisioning status using diags:&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;p&gt;
-                        tristar --prov_stat
-                    &lt;/p&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/diags_prov_stat.png"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    ...and retrieve ESN as well:&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;p&gt;
-                        tristar --esn
-                    &lt;/p&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/diags_esn.png"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    By the way, diags generally has rich set of Tristar commands (available since iOS 7):&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/diags_tristar_help.png"&gt;&lt;h4&gt;Tristar I2C&lt;/h4&gt;&lt;div dir="ltr"&gt;
-
-                    Tristar is available on I2C-bus (address 0x34 - for writing, 0x35 - for reading). That's how diags and kernel drivers communicate with it&lt;br dir="ltr"&gt;
-
-                    &lt;br dir="ltr"&gt;
-
-                    Not much is &lt;i dir="ltr"&gt;publicly&lt;/i&gt; known about the registers. A lot of information about register map itself can be obtained from the leaked iBoot source code (for THS7383 (appears to be backwards compatible with CBTL1608) and CBTL1610 only), but not much about what to write to them to achieve some interesting results&lt;br dir="ltr"&gt;
-
-                    &lt;br dir="ltr"&gt;
-
-                    Another source of knowledge is diags' Tristar module (easily extractable over SWD while it's running). For example, I did manage to reverse algorithms of reading provisioning state and ESN. I then implemented these as an addition to my iBoot payload, &lt;b dir="ltr"&gt;Lina&lt;/b&gt;:&lt;br dir="ltr"&gt;
-
-                    &lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/lina_esn.png"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    I tried to reverse ESN writing algorithm as well, but failed - the mechanism was too complex for my skills. The code snippets from Lina though are available &lt;a href="https://gist.github.com/NyanSatan/128ad7b352469f64294925499224d5fd" dir="ltr"&gt;here&lt;/a&gt;
-                &lt;/div&gt;&lt;h2&gt;Tristar electric characteristics&lt;/h2&gt;&lt;div dir="ltr"&gt;
-
-                    Tristar itself is powered up from a 1.8V source. Lines used for IDBUS are 3.0V-tolerant according to my oscilloscope:&lt;br dir="ltr"&gt;
-
-                    &lt;/div&gt;&lt;img src="https://nyansatan.github.io/lightning/resources/oscilloscope_sniff.png"&gt;&lt;div dir="ltr"&gt;&lt;br&gt;
-
-                    So, better do not try to interact with IDBUS with 5V-tolerant devices like certain models of Arduino without a level shifter
-                &lt;/div&gt;&lt;h2&gt;Credits&lt;/h2&gt;&lt;div dir="ltr"&gt;
-
-                    &lt;b dir="ltr"&gt;@key2fr&lt;/b&gt;, &lt;b dir="ltr"&gt;@_L1ngL1ng_&lt;/b&gt;, &lt;b dir="ltr"&gt;@spbdimka&lt;/b&gt;
-                &lt;/div&gt;</description><pubDate>Wed, 01 Jul 2020 17:06:45 -0500</pubDate></item><item><title>OpenAI Code Completion Demo</title><link>https://lobste.rs/s/dnsxqu</link><description>&lt;img src="https://i.vimeocdn.com/video/905391077_750x421.875.jpg?q=60" alt="Code Completion Demo" width="360" height="202"&gt;&lt;img src="https://i.vimeocdn.com/portrait/33487010_70x70?q=70" srcset="https://i.vimeocdn.com/portrait/33487010_140x140?q=60 2x, https://i.vimeocdn.com/portrait/33487010_280x280?q=60 3x" width="44" height="44"&gt;&lt;UL&gt;&lt;LI&gt;&lt;span href="/426819809/208d3c9b41/description" data-breeze-ignore="" dir="ltr"&gt;
+either &lt;code dir="ltr"&gt;&lt;a data-link-type="idl" href="https://gpuweb.github.io/gpuweb/#dictdef-gpuextent3ddict" dir="ltr"&gt;GPUExtent3DDict&lt;/a&gt;&lt;/code&gt;.&lt;code dir="ltr"&gt;&lt;a data-link-type="idl" href="https://gpuweb.github.io/gpuweb/#dom-gpuextent3ddict-depth" dir="ltr"&gt;depth&lt;/a&gt;&lt;/code&gt; or the third item of the sequence.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2 data-level="22" dir="ltr"&gt;&lt;span dir="ltr"&gt;22. &lt;/span&gt;&lt;span dir="ltr"&gt;Temporary usages of non-exported dfns&lt;/span&gt;&lt;/h2&gt;&lt;p&gt;Eventually all of these should disappear but they are useful to avoid warning while building the specification.&lt;/p&gt;</description><pubDate>Thu, 02 Jul 2020 10:56:05 -0500</pubDate></item><item><title>10 Years of Linux Security - A Report Card</title><link>https://www.youtube.com/watch?v=F_Kza6fdkSU</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/wjhsn7/10_years_linux_security_report_card"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Thu, 02 Jul 2020 19:32:52 -0500</pubDate></item><item><title>OpenAI Code Completion Demo</title><link>https://lobste.rs/s/dnsxqu</link><description>&lt;img src="https://i.vimeocdn.com/video/905391077_750x421.875.jpg?q=60" alt="Code Completion Demo" width="360" height="202"&gt;&lt;img src="https://i.vimeocdn.com/portrait/33487010_70x70?q=70" srcset="https://i.vimeocdn.com/portrait/33487010_140x140?q=60 2x, https://i.vimeocdn.com/portrait/33487010_280x280?q=60 3x" width="44" height="44"&gt;&lt;UL&gt;&lt;LI&gt;&lt;span href="/426819809/208d3c9b41/description" data-breeze-ignore="" dir="ltr"&gt;
                     &lt;span dir="ltr"&gt;Description&lt;/span&gt;                &lt;/span&gt;&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Thu, 02 Jul 2020 14:55:06 -0500</pubDate></item><item><title>JRuby 9.2.12.0 Released</title><link>https://lobste.rs/s/jlwrmz</link><description>&lt;p&gt;The JRuby community is pleased to announce the release of JRuby 9.2.12.0&lt;/p&gt;&lt;p&gt;JRuby 9.2.x is compatible with Ruby 2.5.x and stays in sync with C Ruby.  As always there is a mix of miscellaneous fixes so be sure to read the issue list below.  All users are encouraged to upgrade.&lt;/p&gt;&lt;p&gt;As we are still actively working on 9.3.0.0 we decided to put out another 9.2.x release to fix some of the more recently reported issues.&lt;/p&gt;&lt;h2&gt;Java Integration&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;The last remaining triggers of the "Illegal access" warnings and errors in JRuby core have been fixed. JRuby will avoid accessing Java modules and packages that have not been exported or opened. (&lt;a href="https://github.com/jruby/jruby/pull/6195" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6195/hovercard" dir="ltr"&gt;#6195&lt;/a&gt;, &lt;a href="https://github.com/jruby/jruby/issues/6287" data-hovercard-type="issue" data-hovercard-url="/jruby/jruby/issues/6287/hovercard" dir="ltr"&gt;#6287&lt;/a&gt;, &lt;a href="https://github.com/jruby/jruby/pull/6298" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6298/hovercard" dir="ltr"&gt;#6298&lt;/a&gt;, &lt;a href="https://github.com/jruby/jruby/issues/6299" data-hovercard-type="issue" data-hovercard-url="/jruby/jruby/issues/6299/hovercard" dir="ltr"&gt;#6299&lt;/a&gt;)&lt;/LI&gt;&lt;LI&gt;A new option is added to work around the &lt;a href="https://bugs.openjdk.java.net/browse/JDK-8246714" rel="nofollow" dir="ltr"&gt;OpenJDK URLClassLoader concurrency bug&lt;/a&gt; we recently reported. Set Java property &lt;code dir="ltr"&gt;jruby.ji.close.classloader&lt;/code&gt; to &lt;code dir="ltr"&gt;false&lt;/code&gt; when embedding JRuby in a JVM application to avoid "zip file closed" errors. This will be the default setting in JRuby 9.3. (&lt;a href="https://github.com/jruby/jruby/issues/6218" data-hovercard-type="issue" data-hovercard-url="/jruby/jruby/issues/6218/hovercard" dir="ltr"&gt;#6218&lt;/a&gt;, &lt;a href="https://github.com/jruby/jruby/pull/6307" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6307/hovercard" dir="ltr"&gt;#6307&lt;/a&gt;)&lt;/LI&gt;&lt;LI&gt;Support for calling Kotlin has improved, avoiding warniings for companion objects. This also avoids a warning when accessing Java code where a static final field is named the same as an inner class. (&lt;a href="https://github.com/jruby/jruby/issues/6196" data-hovercard-type="issue" data-hovercard-url="/jruby/jruby/issues/6196/hovercard" dir="ltr"&gt;#6196&lt;/a&gt;, &lt;a href="https://github.com/jruby/jruby/pull/6289" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6289/hovercard" dir="ltr"&gt;#6289&lt;/a&gt;)&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Concurrency&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;An issue affecting concurrent generation of Java interface implementations has been fixed. (&lt;a href="https://github.com/jruby/jruby/issues/6160" data-hovercard-type="issue" data-hovercard-url="/jruby/jruby/issues/6160/hovercard" dir="ltr"&gt;#6160&lt;/a&gt;, &lt;a href="https://github.com/jruby/jruby/pull/6167" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6167/hovercard" dir="ltr"&gt;#6167&lt;/a&gt;)&lt;/LI&gt;&lt;LI&gt;Internal optimization of Ruby code has been improved to avoid concurrency issues. (&lt;a href="https://github.com/jruby/jruby/issues/6210" data-hovercard-type="issue" data-hovercard-url="/jruby/jruby/issues/6210/hovercard" dir="ltr"&gt;6210&lt;/a&gt;, &lt;a href="https://github.com/jruby/jruby/issues/6230" data-hovercard-type="issue" data-hovercard-url="/jruby/jruby/issues/6230/hovercard" dir="ltr"&gt;#6230&lt;/a&gt;, &lt;a href="https://github.com/jruby/jruby/pull/6275" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6275/hovercard" dir="ltr"&gt;#6275&lt;/a&gt;, &lt;a href="https://github.com/jruby/jruby/issues/6282" data-hovercard-type="issue" data-hovercard-url="/jruby/jruby/issues/6282/hovercard" dir="ltr"&gt;6282&lt;/a&gt;, &lt;a href="https://github.com/jruby/jruby/pull/6288" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6288/hovercard" dir="ltr"&gt;#6288&lt;/a&gt;)&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Security&lt;/h2&gt;&lt;p dir="ltr"&gt;A few minor security issues have been fixed. We do not consider them high risk, but we recommend users update. (&lt;a href="https://github.com/jruby/jruby/issues/6304" data-hovercard-type="issue" data-hovercard-url="/jruby/jruby/issues/6304/hovercard" dir="ltr"&gt;#6304&lt;/a&gt;)&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Numeric objects now use a per-runtime random seed to generate hash values (CVE-2011-4815). The existing JRuby property &lt;code dir="ltr"&gt;jruby.consistent.hashing&lt;/code&gt; can be set to &lt;code dir="ltr"&gt;true&lt;/code&gt; to restore predictable hash values, as for other core types. (&lt;a href="https://github.com/jruby/jruby/pull/6305" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6305/hovercard" dir="ltr"&gt;6305&lt;/a&gt;)&lt;/LI&gt;&lt;LI&gt;String#unpack raised the wrong error for invalid input related to CVE-2018-8778. There was no security issue. (&lt;a href="https://github.com/jruby/jruby/pull/6306" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6306/hovercard" dir="ltr"&gt;#6306&lt;/a&gt;)&lt;/LI&gt;&lt;LI&gt;The WEBrick HTTP server provided in the Ruby standard library has been updated to 1.6.0, to address two issues with response-splitting and header injection (CVE-2017-17742 and CVE-2019-16254). This server is not typically used in production, so the exposure is limited. (&lt;a href="https://github.com/jruby/jruby/pull/6308" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6308/hovercard" dir="ltr"&gt;#6308&lt;/a&gt;)&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;24 Github Issues resolved for 9.2.12.0&lt;/h3&gt;&lt;UL&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/pull/6308" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6308/hovercard" dir="ltr"&gt;#6308&lt;/a&gt; - Update WEBrick to 1.6.0&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/pull/6307" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6307/hovercard" dir="ltr"&gt;#6307&lt;/a&gt; - Only close temporary jars to avoid poisoning global jar file cache&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/pull/6306" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6306/hovercard" dir="ltr"&gt;#6306&lt;/a&gt; - Raise RangeError for out of bounds unpack_at&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/pull/6305" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6305/hovercard" dir="ltr"&gt;#6305&lt;/a&gt; - Mimic CRuby's numeric hashing&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/issues/6304" data-hovercard-type="issue" data-hovercard-url="/jruby/jruby/issues/6304/hovercard" dir="ltr"&gt;#6304&lt;/a&gt; - Align behavior with CRuby for security specs&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/issues/6299" data-hovercard-type="issue" data-hovercard-url="/jruby/jruby/issues/6299/hovercard" dir="ltr"&gt;#6299&lt;/a&gt; - Reflective access on Java 11&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/pull/6298" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6298/hovercard" dir="ltr"&gt;#6298&lt;/a&gt; - Do not bind methods from classes that are not exported&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/pull/6289" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6289/hovercard" dir="ltr"&gt;#6289&lt;/a&gt; - Only define static field constant when inner class collides&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/pull/6288" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6288/hovercard" dir="ltr"&gt;#6288&lt;/a&gt; - Always treat non-full IC as not having protocol&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/issues/6287" data-hovercard-type="issue" data-hovercard-url="/jruby/jruby/issues/6287/hovercard" dir="ltr"&gt;#6287&lt;/a&gt; - com.sun.javafx.collections not exported in javafx.base&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/pull/6285" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6285/hovercard" dir="ltr"&gt;#6285&lt;/a&gt; - Backport 9.3 fixes for 9.2.12&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/issues/6282" data-hovercard-type="issue" data-hovercard-url="/jruby/jruby/issues/6282/hovercard" dir="ltr"&gt;#6282&lt;/a&gt; - NPE in ruby block called concurrently from Java&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/pull/6275" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6275/hovercard" dir="ltr"&gt;#6275&lt;/a&gt; - Do lazy instruction deserialization against dup'ed reader&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/pull/6256" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6256/hovercard" dir="ltr"&gt;#6256&lt;/a&gt; - Raise proper error for missing URLResource target&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/issues/6230" data-hovercard-type="issue" data-hovercard-url="/jruby/jruby/issues/6230/hovercard" dir="ltr"&gt;#6230&lt;/a&gt; - CompiledScript throws weird exception that doesn't happen with Invocable&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/issues/6219" data-hovercard-type="issue" data-hovercard-url="/jruby/jruby/issues/6219/hovercard" dir="ltr"&gt;#6219&lt;/a&gt; - JRuby thrown NullPointerException on File.open of nonexistent uri&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/issues/6218" data-hovercard-type="issue" data-hovercard-url="/jruby/jruby/issues/6218/hovercard" dir="ltr"&gt;#6218&lt;/a&gt; - Errors running multiple independent ScriptingContainers in parallel&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/issues/6210" data-hovercard-type="issue" data-hovercard-url="/jruby/jruby/issues/6210/hovercard" dir="ltr"&gt;#6210&lt;/a&gt; - Multithreaded code with function calls fail in precompiled JRuby classes&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/issues/6196" data-hovercard-type="issue" data-hovercard-url="/jruby/jruby/issues/6196/hovercard" dir="ltr"&gt;#6196&lt;/a&gt; - "warning: already initialized constant Companion" with Kotlin companion objects&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/pull/6195" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6195/hovercard" dir="ltr"&gt;#6195&lt;/a&gt; - Use all the tricks to properly eliminate illegal access warnings&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/pull/6167" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6167/hovercard" dir="ltr"&gt;#6167&lt;/a&gt; - [fix][ji] handle concurrent proxy iface impl init&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/issues/6160" data-hovercard-type="issue" data-hovercard-url="/jruby/jruby/issues/6160/hovercard" dir="ltr"&gt;#6160&lt;/a&gt; - interface proxy generation is race-y&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/pull/6112" data-hovercard-type="pull_request" data-hovercard-url="/jruby/jruby/pull/6112/hovercard" dir="ltr"&gt;#6112&lt;/a&gt; - [fix] Enumerable#any? does not require an arg&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/jruby/jruby/issues/5968" data-hovercard-type="issue" data-hovercard-url="/jruby/jruby/issues/5968/hovercard" dir="ltr"&gt;#5968&lt;/a&gt; - Enumerator#any? is wrong for sequence of empty arrays&lt;/LI&gt;&lt;/UL&gt;&lt;div&gt;&lt;span&gt;Assets&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span&gt;6&lt;/span&gt;&lt;/div&gt;</description><pubDate>Thu, 02 Jul 2020 09:56:31 -0500</pubDate></item></channel></rss>
