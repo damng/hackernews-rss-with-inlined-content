@@ -1584,7 +1584,137 @@ This does not necessarily imply that legacy code is insecure, but complexity and
 &lt;/h2&gt;&lt;p&gt;I picked a pixel (443, 234) and graphed its RGB values over time as it goes through the animation.&lt;/p&gt;&lt;img src="https://res.cloudinary.com/practicaldev/image/fetch/s--yiQQHU44--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://dev-to-uploads.s3.amazonaws.com/i/hrfnp5kcswgzt5qumrwj.png" alt="Graph before" width="461" height="27"&gt;&lt;p&gt;I can think of two possible reasons this may happen:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Kap &lt;a href="https://github.com/wulkano/kap/blob/f901ef4a4d85b0059f9cf5c2f7604dd6d7db1c4c/main/common/aperture.js" dir="ltr"&gt;uses&lt;/a&gt; &lt;a href="https://www.npmjs.com/package/aperture" dir="ltr"&gt;aperture-node&lt;/a&gt; which in turn &lt;a href="https://github.com/wulkano/aperture-node/blob/e09011c4e3c2dbd51c45a4c466809828de7c03d9/Sources/ApertureCLI/main.swift" dir="ltr"&gt;uses&lt;/a&gt; the &lt;a href="https://developer.apple.com/av-foundation/" dir="ltr"&gt;AVFoundation&lt;/a&gt; framework to record the screen. The result is an H264 video, which is lossy. The noise you see may therefore be the H264 compression artifact.&lt;/LI&gt;&lt;LI&gt;When a video file is converted to GIF, the color palette is reduced to 256 colors. Dithering can also cause the pixel colors to change periodically. Kap &lt;a href="https://github.com/wulkano/kap/blob/a2e9b761cf81fa4848d5b946044ab788909dd748/main/convert.js#L213" dir="ltr"&gt;uses&lt;/a&gt; FFmpeg’s default dithering algorithm, &lt;a href="https://ffmpeg.org/ffmpeg-filters.html#paletteuse" dir="ltr"&gt;which is &lt;code dir="ltr"&gt;sierra2_4a&lt;/code&gt;&lt;/a&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;…so let’s fix this.&lt;/p&gt;&lt;img src="https://res.cloudinary.com/practicaldev/image/fetch/s--eKjMPk8X--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_auto%2Cw_880/https://dev-to-uploads.s3.amazonaws.com/i/mvq62c8610koa4s6cl39.png" alt="Graph after" width="461" height="27"&gt;&lt;p&gt;This looks much better, but how?&lt;/p&gt;&lt;p dir="ltr"&gt;The basic idea is that we identify the &lt;strong dir="ltr"&gt;segments&lt;/strong&gt; inside the animation, and for each segment, we assign a single color to be used for the duration of that segment. A new segment will be created when the new frame’s color exceeds the threshold (RGB-Euclidean distance ≥ 18, arbitrarily chosen) compared to the color of the frame at the beginning of the segment. This is done for each pixel in the animation.&lt;/p&gt;&lt;p&gt;As a result, there is substantially less noise.&lt;/p&gt;&lt;img src="https://res.cloudinary.com/practicaldev/image/fetch/s--K7MvFp6z--/c_limit%2Cf_auto%2Cfl_progressive%2Cq_66%2Cw_880/https://dev-to-uploads.s3.amazonaws.com/i/2xo0clkk9em9z18dp4rd.gif" alt="Raw GIF frames after" width="461" height="27"&gt;&lt;p dir="ltr"&gt;You can &lt;a href="https://github.com/dtinth/a-gif-frame-sequence-optimizer-optimized-for-screen-recordings" dir="ltr"&gt;find the code that does this segmentation on GitHub&lt;/a&gt;. It is written in JavaScript and uses the &lt;a href="https://www.npmjs.com/package/jimp" dir="ltr"&gt;Jimp&lt;/a&gt; library to process the animation data.&lt;/p&gt;&lt;p&gt;Finally, I performed a lossy optimization (using Gifsicle) and reduced the palette to 48 colors, resulting in the final 986 KB image.&lt;/p&gt;&lt;h2 dir="ltr"&gt;
   
   Final thoughts
-&lt;/h2&gt;&lt;p dir="ltr"&gt;This has been a fun project and I got to learn about how screen recordings are captured in Kap, how GIF files work and how they are compressed, and how to use the &lt;a href="https://www.npmjs.com/package/jimp" dir="ltr"&gt;Jimp&lt;/a&gt; library to work with pixel data inside image files. I also got to publish a web-based GIF file inspector.&lt;/p&gt;&lt;p&gt;There are many places that can be improved further. The optimization script is not optimized at all and runs very slowly (about 10x slower, compared to FFmpeg), due to its inefficiency (both time and space). There are still some noise in the final GIF image. But my curiosity has been satisfied, so I’ll leave it here.&lt;/p&gt;</description><pubDate>Fri, 03 Jul 2020 18:12:29 -0500</pubDate></item><item><title>Deep Integration of Filesystem Extended Attribute Support</title><link>https://lobste.rs/s/7idzfo</link><description>&lt;p&gt;I've been working on integrating filesystem extended attribute support in tmpfs, libarchive, and pkg(8).&lt;/p&gt;&lt;p&gt;Other operating systems tag ELF objects with various flags. We in HardenedBSD prefer not to use such a heavy-handed approach. Making use of filesystem extended attributes enables out-of-band (OOB) management of security flags. HardenedBSD makes use of extended attributes to toggle exploit mitigations on a per-binary basis. Using an OOB method provides flexibility along with an easy avenue for future growth.&lt;/p&gt;&lt;p dir="ltr"&gt;I've made changes to libarchive in the base OS and have &lt;a href="https://github.com/libarchive/libarchive/pull/1409" dir="ltr"&gt;submitted&lt;/a&gt; a patch upstream. The patch takes a best-effort approach to restoring system-level extended attributes. Setting system-level extended attributes is a privileged operation. If an archive entry contains a systeam-level extended attribute and the extraction process is not privileged, setting the extended attribute will fail. The failure will  be ignored and the extraction process will continue as normal. (The  same holds true today without the patch.)&lt;/p&gt;&lt;p&gt;Extended attribute support in tmpfs is a bare minimum, with the ability to add and list, but not remove extended attributes. Anyone desiring to provide complete extended attribute support is welcome to provide a patch.&lt;/p&gt;&lt;p&gt;Finally, HardenedBSD forked FreeBSD's package manager, aptly named pkg. The package manager must be aware of filesystem extended attributes. pkg can now include any filesystem extended attribute and is not limited to HardenedBSD's use. I will make some attempt at upstreaming the changes to pkg after the changes to libarchive have  been upstreamed.&lt;/p&gt;&lt;p&gt;The future is bright for filesystem extended attributes. One could imagine a future in which pkg stores the hash of files as extended attributes, and the kernel checks the hash against the stored attribute. The sky is the limit.&lt;/p&gt;&lt;p&gt;I am now integrating exploit mitigation toggling into the ports tree  such that HardenedBSD ships packages with exploit mitigations toggled for those misbehaving applications (like firefox, java, nodejs, etc.)&lt;/p&gt;</description><pubDate>Fri, 03 Jul 2020 14:14:03 -0500</pubDate></item><item><title>Guietta — Python module to create simple GUIs</title><link>https://lobste.rs/s/d7pkoi</link><description>&lt;h1&gt;guietta&lt;/h1&gt;&lt;p&gt;A tool for making simple Python GUIs&lt;/p&gt;&lt;p dir="ltr"&gt;Guietta is a tool that makes simple GUIs &lt;em dir="ltr"&gt;simple&lt;/em&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;from guietta import _, Gui, Quit
+&lt;/h2&gt;&lt;p dir="ltr"&gt;This has been a fun project and I got to learn about how screen recordings are captured in Kap, how GIF files work and how they are compressed, and how to use the &lt;a href="https://www.npmjs.com/package/jimp" dir="ltr"&gt;Jimp&lt;/a&gt; library to work with pixel data inside image files. I also got to publish a web-based GIF file inspector.&lt;/p&gt;&lt;p&gt;There are many places that can be improved further. The optimization script is not optimized at all and runs very slowly (about 10x slower, compared to FFmpeg), due to its inefficiency (both time and space). There are still some noise in the final GIF image. But my curiosity has been satisfied, so I’ll leave it here.&lt;/p&gt;</description><pubDate>Fri, 03 Jul 2020 18:12:29 -0500</pubDate></item><item><title>Discovering the hypocrisy gap in reliability the hard way</title><link>https://lobste.rs/s/rlkgxa</link><description>&lt;p&gt;
+I like the model of having a weekly meeting, preferably Friday morning, 
+where the company sits down and talks about what broke recently.  You 
+might call it "SEV Review" or "Incident Management Review" or something 
+else of the sort.  It's "the best meeting of the week", as someone else 
+once put it.
+&lt;/p&gt;&lt;p&gt;
+Such a meeting only really works if it's attended by the right people.  
+What do I mean by that?  Well, obviously, whoever worked on fixing 
+things probably needs to be there.  Whoever broke it (if that's someone 
+else) probably needs to be there.  Then, whoever *was broken by it* 
+might need to be there.  (That's how you find out the actual impact.)
+&lt;/p&gt;&lt;p&gt;
+Then you need some people who go every week, who I call my "usual 
+suspects".  It should be a good mix of management and non-management 
+types who go often, learn how things work, and keep track of patterns 
+that emerge.  They ask questions and don't settle until they know 
+what actually happened.  They don't necessarily take the report at face 
+value.  They should also know a lot of good contacts in the company in 
+order to send people in the right direction -- "go talk to so and so, 
+since they already solved for this and it'll save you a lot of time".
+&lt;/p&gt;&lt;p&gt;
+This meeting also needs a couple of people who have technical chops and 
+are able to convince people to actually do their damn jobs to deliver on 
+the commitments to fix things.  This, unfortunately, almost always comes 
+in the form of upper management - VP and above, usually.  It's not just 
+enough for them to attend, either.  They have to be there and be willing 
+to wield the big stick and shut down teams which are reckless, 
+foolhardy, and which don't give a crap about keeping things from 
+breaking.
+&lt;/p&gt;&lt;p&gt;
+One of the best instances of one of these meetings I can remember is 
+when the resident VP told a team to just stop.  They were no longer 
+allowed to work on features or whatever shiny stuff they thought wanted 
+to do.  They had to stop right there and clean up the messes which had 
+been breaking the site and bringing them to the review week after week.
+&lt;/p&gt;&lt;p&gt;
+It was epic.  Nobody forgot that meeting.  Just reading about it will 
+probably remind some of my coworkers from back then about it.
+&lt;/p&gt;&lt;p&gt;
+Why does this matter?  Well, first of all, you have to stop the clowns 
+from setting the rest of the circus on fire.  Fixing the reliability 
+issue is a big deal.  Second, actions like this show to the rest of the 
+company that you can't just screw around forever, and that eventually, 
+teams will answer for their recklessness and disregard for safe
+practices.  Nobody gets a pass at this kind of thing.
+&lt;/p&gt;&lt;p&gt;
+Some of the worst instances of these meetings I've seen are where there 
+is no enforcement from on high.  There are zero consequences for blowing 
+it off and not taking it seriously.  You can ignore the best practices.  
+You can fail to deliver on the requested changes that have been shown to 
+work in the past and that should keep a problem from happening again.
+&lt;/p&gt;&lt;p&gt;
+Oh, there might even be a VP in the loop, but if they don't get 
+involved, it doesn't matter.  The whole process is a sham and should be 
+shut down.  Sometimes they make it obvious by just not attending any 
+more.  That should be your hint that they really don't care about 
+reliability, any work in that dimension is folly, and you should find 
+something else to do post haste.
+&lt;/p&gt;&lt;p&gt;
+It took me a while to figure this out.  I realized that there is what 
+upper management is willing to SAY they care about, and then there is 
+what those same people are willing to ACT ON by leaning on teams, and 
+yes, firing people who get in the way.
+&lt;/p&gt;&lt;p&gt;
+If you draw these out on a marker board, it might look like this:
+&lt;/p&gt;&lt;PRE&gt;              ---       &amp;lt;-- what they say they care about
+ 
+ 
+ 
+ 
+              ---       &amp;lt;-- what they actually deliver on
+&lt;/PRE&gt;&lt;p&gt;
+That space in the middle?  I called it the hypocrisy gap.
+&lt;/p&gt;&lt;p&gt;
+So then, what happens if you're just a high-level non-manager type who's 
+tasked with improving this stuff?  You probably have your own "level", 
+too.  What happens next depends on whether it syncs up with upper 
+management or not.
+&lt;/p&gt;&lt;p&gt;
+If you're delivering *exactly* what they actually deliver on, you're a 
+top-tier engineer.  You'll go far.  You are perfectly aligned with their 
+hypocrisy.
+&lt;/p&gt;&lt;p&gt;
+If you're below that point, well, then you're not so great, obviously.
+&lt;/p&gt;&lt;p&gt;
+If you're somewhere in the hypocrisy gap, they'll probably be very happy 
+with you, but not understand why you're plowing energy into something 
+that they are not.  Can't they see that you don't actually care about it 
+that much?  You should be more like them and save your effort for 
+something else, like coming up with new ways to spend the VC money.
+&lt;/p&gt;&lt;p&gt;
+And finally, if you're somehow managing to come in above their top line 
+(what they say they care about), then ... well, you're just nuts.  
+They'll see you as being completely insane, since you care about 
+something beyond even the point that they CLAIM to care about.  Only a 
+maniac would want something like that.
+&lt;/p&gt;&lt;p&gt;
+One key thing about this: I haven't mentioned the absolute levels of any 
+of this yet.  Whether you are seen as good, bad, or crazy is entirely 
+relative to the powers that be in your organization.  It doesn't matter 
+if terrible things are happening.  If they don't care about it, YOU 
+caring about it will not be seen as valuable, and indeed, will turn into 
+a liability.
+&lt;/p&gt;&lt;p&gt;
+Here, let me invent some scenarios that should seem terrible to you.
+&lt;/p&gt;&lt;p&gt;
+"The entire company's database credentials were committed to a 
+public GitHub repository!"
+&lt;/p&gt;&lt;p&gt;
+"People are using public gists to store sensitive customer information!"
+&lt;/p&gt;&lt;p&gt;
+"Anyone can open this door with a plastic library card and a potato!"
+&lt;/p&gt;&lt;p&gt;
+"People are setting up vendor relationships to get kickbacks!"
+&lt;/p&gt;&lt;p&gt;
+"Middle management is inventing situations that didn't happen in order 
+to get HR to intimidate them into shutting up about actual problems!"
+&lt;/p&gt;&lt;p&gt;
+Guess what?  If they don't think those are problems to the point of 
+acting on it, then they don't actually care.  If they don't, and you do, 
+that makes YOU the problem.  Congratulations!  You are in for a rough 
+ride.
+&lt;/p&gt;&lt;p&gt;
+Unless you report directly to the CEO or Board of Directors, don't think 
+you can do anything about it.  Pack it up and get out of there.
+&lt;/p&gt;&lt;p&gt;
+Otherwise, well, prepare to be put out to pasture.
+&lt;/p&gt;&lt;p&gt;
+Moooooo.
+&lt;/p&gt;</description><pubDate>Fri, 03 Jul 2020 22:36:12 -0500</pubDate></item><item><title>Deep Integration of Filesystem Extended Attribute Support</title><link>https://lobste.rs/s/7idzfo</link><description>&lt;p&gt;I've been working on integrating filesystem extended attribute support in tmpfs, libarchive, and pkg(8).&lt;/p&gt;&lt;p&gt;Other operating systems tag ELF objects with various flags. We in HardenedBSD prefer not to use such a heavy-handed approach. Making use of filesystem extended attributes enables out-of-band (OOB) management of security flags. HardenedBSD makes use of extended attributes to toggle exploit mitigations on a per-binary basis. Using an OOB method provides flexibility along with an easy avenue for future growth.&lt;/p&gt;&lt;p dir="ltr"&gt;I've made changes to libarchive in the base OS and have &lt;a href="https://github.com/libarchive/libarchive/pull/1409" dir="ltr"&gt;submitted&lt;/a&gt; a patch upstream. The patch takes a best-effort approach to restoring system-level extended attributes. Setting system-level extended attributes is a privileged operation. If an archive entry contains a systeam-level extended attribute and the extraction process is not privileged, setting the extended attribute will fail. The failure will  be ignored and the extraction process will continue as normal. (The  same holds true today without the patch.)&lt;/p&gt;&lt;p&gt;Extended attribute support in tmpfs is a bare minimum, with the ability to add and list, but not remove extended attributes. Anyone desiring to provide complete extended attribute support is welcome to provide a patch.&lt;/p&gt;&lt;p&gt;Finally, HardenedBSD forked FreeBSD's package manager, aptly named pkg. The package manager must be aware of filesystem extended attributes. pkg can now include any filesystem extended attribute and is not limited to HardenedBSD's use. I will make some attempt at upstreaming the changes to pkg after the changes to libarchive have  been upstreamed.&lt;/p&gt;&lt;p&gt;The future is bright for filesystem extended attributes. One could imagine a future in which pkg stores the hash of files as extended attributes, and the kernel checks the hash against the stored attribute. The sky is the limit.&lt;/p&gt;&lt;p&gt;I am now integrating exploit mitigation toggling into the ports tree  such that HardenedBSD ships packages with exploit mitigations toggled for those misbehaving applications (like firefox, java, nodejs, etc.)&lt;/p&gt;</description><pubDate>Fri, 03 Jul 2020 14:14:03 -0500</pubDate></item><item><title>Guietta — Python module to create simple GUIs</title><link>https://lobste.rs/s/d7pkoi</link><description>&lt;h1&gt;guietta&lt;/h1&gt;&lt;p&gt;A tool for making simple Python GUIs&lt;/p&gt;&lt;p dir="ltr"&gt;Guietta is a tool that makes simple GUIs &lt;em dir="ltr"&gt;simple&lt;/em&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;from guietta import _, Gui, Quit
 
 gui = Gui(
     
@@ -4673,137 +4803,7 @@ paper knowledge that you get after finishing a certain course or degree.
 While there are professions in which you simply cannot work without
 finishing such course and obtaining that paper,
 the software industry is not one of those.&lt;/p&gt;&lt;p dir="ltr"&gt;[5] Some say it takes 10 years or 10’000 hours to become proficient in the subject, see
-&lt;a href="https://www.norvig.com/21-days.html" dir="ltr"&gt;https://www.norvig.com/21-days.html&lt;/a&gt;.&lt;/p&gt;</description><pubDate>Sat, 04 Jul 2020 00:44:09 -0500</pubDate></item><item><title>Discovering the hypocrisy gap in reliability the hard way</title><link>https://lobste.rs/s/rlkgxa</link><description>&lt;p&gt;
-I like the model of having a weekly meeting, preferably Friday morning, 
-where the company sits down and talks about what broke recently.  You 
-might call it "SEV Review" or "Incident Management Review" or something 
-else of the sort.  It's "the best meeting of the week", as someone else 
-once put it.
-&lt;/p&gt;&lt;p&gt;
-Such a meeting only really works if it's attended by the right people.  
-What do I mean by that?  Well, obviously, whoever worked on fixing 
-things probably needs to be there.  Whoever broke it (if that's someone 
-else) probably needs to be there.  Then, whoever *was broken by it* 
-might need to be there.  (That's how you find out the actual impact.)
-&lt;/p&gt;&lt;p&gt;
-Then you need some people who go every week, who I call my "usual 
-suspects".  It should be a good mix of management and non-management 
-types who go often, learn how things work, and keep track of patterns 
-that emerge.  They ask questions and don't settle until they know 
-what actually happened.  They don't necessarily take the report at face 
-value.  They should also know a lot of good contacts in the company in 
-order to send people in the right direction -- "go talk to so and so, 
-since they already solved for this and it'll save you a lot of time".
-&lt;/p&gt;&lt;p&gt;
-This meeting also needs a couple of people who have technical chops and 
-are able to convince people to actually do their damn jobs to deliver on 
-the commitments to fix things.  This, unfortunately, almost always comes 
-in the form of upper management - VP and above, usually.  It's not just 
-enough for them to attend, either.  They have to be there and be willing 
-to wield the big stick and shut down teams which are reckless, 
-foolhardy, and which don't give a crap about keeping things from 
-breaking.
-&lt;/p&gt;&lt;p&gt;
-One of the best instances of one of these meetings I can remember is 
-when the resident VP told a team to just stop.  They were no longer 
-allowed to work on features or whatever shiny stuff they thought wanted 
-to do.  They had to stop right there and clean up the messes which had 
-been breaking the site and bringing them to the review week after week.
-&lt;/p&gt;&lt;p&gt;
-It was epic.  Nobody forgot that meeting.  Just reading about it will 
-probably remind some of my coworkers from back then about it.
-&lt;/p&gt;&lt;p&gt;
-Why does this matter?  Well, first of all, you have to stop the clowns 
-from setting the rest of the circus on fire.  Fixing the reliability 
-issue is a big deal.  Second, actions like this show to the rest of the 
-company that you can't just screw around forever, and that eventually, 
-teams will answer for their recklessness and disregard for safe
-practices.  Nobody gets a pass at this kind of thing.
-&lt;/p&gt;&lt;p&gt;
-Some of the worst instances of these meetings I've seen are where there 
-is no enforcement from on high.  There are zero consequences for blowing 
-it off and not taking it seriously.  You can ignore the best practices.  
-You can fail to deliver on the requested changes that have been shown to 
-work in the past and that should keep a problem from happening again.
-&lt;/p&gt;&lt;p&gt;
-Oh, there might even be a VP in the loop, but if they don't get 
-involved, it doesn't matter.  The whole process is a sham and should be 
-shut down.  Sometimes they make it obvious by just not attending any 
-more.  That should be your hint that they really don't care about 
-reliability, any work in that dimension is folly, and you should find 
-something else to do post haste.
-&lt;/p&gt;&lt;p&gt;
-It took me a while to figure this out.  I realized that there is what 
-upper management is willing to SAY they care about, and then there is 
-what those same people are willing to ACT ON by leaning on teams, and 
-yes, firing people who get in the way.
-&lt;/p&gt;&lt;p&gt;
-If you draw these out on a marker board, it might look like this:
-&lt;/p&gt;&lt;PRE&gt;              ---       &amp;lt;-- what they say they care about
- 
- 
- 
- 
-              ---       &amp;lt;-- what they actually deliver on
-&lt;/PRE&gt;&lt;p&gt;
-That space in the middle?  I called it the hypocrisy gap.
-&lt;/p&gt;&lt;p&gt;
-So then, what happens if you're just a high-level non-manager type who's 
-tasked with improving this stuff?  You probably have your own "level", 
-too.  What happens next depends on whether it syncs up with upper 
-management or not.
-&lt;/p&gt;&lt;p&gt;
-If you're delivering *exactly* what they actually deliver on, you're a 
-top-tier engineer.  You'll go far.  You are perfectly aligned with their 
-hypocrisy.
-&lt;/p&gt;&lt;p&gt;
-If you're below that point, well, then you're not so great, obviously.
-&lt;/p&gt;&lt;p&gt;
-If you're somewhere in the hypocrisy gap, they'll probably be very happy 
-with you, but not understand why you're plowing energy into something 
-that they are not.  Can't they see that you don't actually care about it 
-that much?  You should be more like them and save your effort for 
-something else, like coming up with new ways to spend the VC money.
-&lt;/p&gt;&lt;p&gt;
-And finally, if you're somehow managing to come in above their top line 
-(what they say they care about), then ... well, you're just nuts.  
-They'll see you as being completely insane, since you care about 
-something beyond even the point that they CLAIM to care about.  Only a 
-maniac would want something like that.
-&lt;/p&gt;&lt;p&gt;
-One key thing about this: I haven't mentioned the absolute levels of any 
-of this yet.  Whether you are seen as good, bad, or crazy is entirely 
-relative to the powers that be in your organization.  It doesn't matter 
-if terrible things are happening.  If they don't care about it, YOU 
-caring about it will not be seen as valuable, and indeed, will turn into 
-a liability.
-&lt;/p&gt;&lt;p&gt;
-Here, let me invent some scenarios that should seem terrible to you.
-&lt;/p&gt;&lt;p&gt;
-"The entire company's database credentials were committed to a 
-public GitHub repository!"
-&lt;/p&gt;&lt;p&gt;
-"People are using public gists to store sensitive customer information!"
-&lt;/p&gt;&lt;p&gt;
-"Anyone can open this door with a plastic library card and a potato!"
-&lt;/p&gt;&lt;p&gt;
-"People are setting up vendor relationships to get kickbacks!"
-&lt;/p&gt;&lt;p&gt;
-"Middle management is inventing situations that didn't happen in order 
-to get HR to intimidate them into shutting up about actual problems!"
-&lt;/p&gt;&lt;p&gt;
-Guess what?  If they don't think those are problems to the point of 
-acting on it, then they don't actually care.  If they don't, and you do, 
-that makes YOU the problem.  Congratulations!  You are in for a rough 
-ride.
-&lt;/p&gt;&lt;p&gt;
-Unless you report directly to the CEO or Board of Directors, don't think 
-you can do anything about it.  Pack it up and get out of there.
-&lt;/p&gt;&lt;p&gt;
-Otherwise, well, prepare to be put out to pasture.
-&lt;/p&gt;&lt;p&gt;
-Moooooo.
-&lt;/p&gt;</description><pubDate>Fri, 03 Jul 2020 22:36:12 -0500</pubDate></item><item><title>FDEU-CVE-2019-10222</title><link>https://lobste.rs/s/1w69ro</link><description>&lt;h1&gt;Summary&lt;/h1&gt;&lt;p&gt;Multiple vulnerabilities could allow running arbitrary code on an intranet server and gain root access on all the customers' routers&lt;/p&gt;&lt;h1&gt;Who is Telia&lt;/h1&gt;&lt;p&gt;Telia is a Swedish multinational telecommunications company. It also operates in Lithuania and provides mobile service, FTTH internet, DSL internet and IPTV. Telia rents and sells custom routers and set-top tv boxes to customers which have limited or almost no administration access left to them.&lt;/p&gt;&lt;h1&gt;What is Telia backdoor&lt;/h1&gt;&lt;p dir="ltr"&gt;Every Telia router or tv box has a backdoor or "management interface". It is an &lt;code dir="ltr"&gt;SSH&lt;/code&gt; server running on VLAN 5 and/or WAN. Usually, it is running on port &lt;code dir="ltr"&gt;8022&lt;/code&gt;. Older models, like &lt;code dir="ltr"&gt;ADB&lt;/code&gt;, have password login enabled. The recent newer models, like &lt;code dir="ltr"&gt;Technicolor&lt;/code&gt;, have password login disabled and only use ssh with public key authentication (spoiler: it is still vulnerable).&lt;/p&gt;&lt;h1&gt;What is Telia Savitarna&lt;/h1&gt;&lt;p dir="ltr"&gt;Savitarna (in Lithuanian "Self service") - is a web service &lt;a href="https://www.telia.lt/mano/sso" dir="ltr"&gt;https://www.telia.lt/mano/sso&lt;/a&gt; that allows Telia customers to order and manage services, get invoices, pay bills etc. It uses password authentication or external authority logins such as Facebook, Google, banking, digital signature etc. One of the new features: changing your router's wifi password. Sounds interesting, right? An internet web service that is able to change your local router's wifi password.&lt;/p&gt;&lt;p&gt;Login page:&lt;/p&gt;&lt;img src="https://full-disclosure.eu/reports/2019/FDEU-CVE-2019-10222-telia-savitarna-web-login.jpg" alt="Telia Savitarna web login page" width="455" height="314"&gt;&lt;p&gt;Change wifi settings:&lt;/p&gt;&lt;img src="https://full-disclosure.eu/reports/2019/FDEU-CVE-2019-10222-telia-savitarna-web-wifi-settings.jpg" alt="Telia Savitarna WiFi setting change feature" width="377" height="232"&gt;&lt;h1&gt;How Savitarna uses the backdoor&lt;/h1&gt;&lt;p dir="ltr"&gt;How that works. When a user wants to change the password, the web service calls the backend to initiate an SSH connection to the user's associated router. Depending on the router it will be either password authentication or RSA public key. After a successful login a PHP script on the backend will issue some commands in the router's shell, parse the result and output some of the data to the user in the web UI, like wireless network name. &lt;strong dir="ltr"&gt;Telia knows your WIFI password in plain text&lt;/strong&gt;, keep it in mind and do not reuse this password anywhere. Overall scheme:&lt;/p&gt;&lt;img src="https://full-disclosure.eu/reports/2019/FDEU-CVE-2019-10222-telia-savitarna-backdoor-scheme.jpg" alt="Overall scheme of Telia backdoor" width="455" height="155"&gt;&lt;h1&gt;Under the hood&lt;/h1&gt;&lt;p&gt;Let's take a look at how the SSH connection is established. Network capture shows an SSH client banner and the remote IP that initiated the connection:&lt;/p&gt;&lt;p&gt;&lt;code&gt;SSH-2.0-libssh2_1.4.2 PHP 10.0.98.251&lt;/code&gt;&lt;/p&gt;&lt;p&gt;What is important here:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Vulnerable &lt;code dir="ltr"&gt;libssh2&lt;/code&gt; version &lt;code dir="ltr"&gt;1.4.2&lt;/code&gt; &lt;a href="https://www.libssh2.org/security.html" dir="ltr"&gt;https://www.libssh2.org/security.html&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;Weak and deprecated key exchange &lt;code dir="ltr"&gt;diffie-hellman-group1-sha1&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;The client does not verify &lt;code dir="ltr"&gt;remote SSH server public key&lt;/code&gt; (see below)&lt;/LI&gt;&lt;LI&gt;&lt;code&gt;PHP&lt;/code&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;And, yes, it turns out that Telia's client does not attempt to verify the remote server's public key. We were able to start a custom SSH server on the same port 8022 and Savitarna successfully established a connection without even trying to verify for a man-in-the-middle. This means that we can see the password used and could try to create a malicious SSH server that exploits public vulnerabilities on Telia's side.&lt;/p&gt;&lt;h1&gt;Administrator password leak&lt;/h1&gt;&lt;p&gt;That was an easy task. As soon as Telia's client connected to our malicious SSH server we got the universal router credentials:&lt;/p&gt;&lt;PRE&gt;User: tadmin
+&lt;a href="https://www.norvig.com/21-days.html" dir="ltr"&gt;https://www.norvig.com/21-days.html&lt;/a&gt;.&lt;/p&gt;</description><pubDate>Sat, 04 Jul 2020 00:44:09 -0500</pubDate></item><item><title>FDEU-CVE-2019-10222</title><link>https://lobste.rs/s/1w69ro</link><description>&lt;h1&gt;Summary&lt;/h1&gt;&lt;p&gt;Multiple vulnerabilities could allow running arbitrary code on an intranet server and gain root access on all the customers' routers&lt;/p&gt;&lt;h1&gt;Who is Telia&lt;/h1&gt;&lt;p&gt;Telia is a Swedish multinational telecommunications company. It also operates in Lithuania and provides mobile service, FTTH internet, DSL internet and IPTV. Telia rents and sells custom routers and set-top tv boxes to customers which have limited or almost no administration access left to them.&lt;/p&gt;&lt;h1&gt;What is Telia backdoor&lt;/h1&gt;&lt;p dir="ltr"&gt;Every Telia router or tv box has a backdoor or "management interface". It is an &lt;code dir="ltr"&gt;SSH&lt;/code&gt; server running on VLAN 5 and/or WAN. Usually, it is running on port &lt;code dir="ltr"&gt;8022&lt;/code&gt;. Older models, like &lt;code dir="ltr"&gt;ADB&lt;/code&gt;, have password login enabled. The recent newer models, like &lt;code dir="ltr"&gt;Technicolor&lt;/code&gt;, have password login disabled and only use ssh with public key authentication (spoiler: it is still vulnerable).&lt;/p&gt;&lt;h1&gt;What is Telia Savitarna&lt;/h1&gt;&lt;p dir="ltr"&gt;Savitarna (in Lithuanian "Self service") - is a web service &lt;a href="https://www.telia.lt/mano/sso" dir="ltr"&gt;https://www.telia.lt/mano/sso&lt;/a&gt; that allows Telia customers to order and manage services, get invoices, pay bills etc. It uses password authentication or external authority logins such as Facebook, Google, banking, digital signature etc. One of the new features: changing your router's wifi password. Sounds interesting, right? An internet web service that is able to change your local router's wifi password.&lt;/p&gt;&lt;p&gt;Login page:&lt;/p&gt;&lt;img src="https://full-disclosure.eu/reports/2019/FDEU-CVE-2019-10222-telia-savitarna-web-login.jpg" alt="Telia Savitarna web login page" width="455" height="314"&gt;&lt;p&gt;Change wifi settings:&lt;/p&gt;&lt;img src="https://full-disclosure.eu/reports/2019/FDEU-CVE-2019-10222-telia-savitarna-web-wifi-settings.jpg" alt="Telia Savitarna WiFi setting change feature" width="377" height="232"&gt;&lt;h1&gt;How Savitarna uses the backdoor&lt;/h1&gt;&lt;p dir="ltr"&gt;How that works. When a user wants to change the password, the web service calls the backend to initiate an SSH connection to the user's associated router. Depending on the router it will be either password authentication or RSA public key. After a successful login a PHP script on the backend will issue some commands in the router's shell, parse the result and output some of the data to the user in the web UI, like wireless network name. &lt;strong dir="ltr"&gt;Telia knows your WIFI password in plain text&lt;/strong&gt;, keep it in mind and do not reuse this password anywhere. Overall scheme:&lt;/p&gt;&lt;img src="https://full-disclosure.eu/reports/2019/FDEU-CVE-2019-10222-telia-savitarna-backdoor-scheme.jpg" alt="Overall scheme of Telia backdoor" width="455" height="155"&gt;&lt;h1&gt;Under the hood&lt;/h1&gt;&lt;p&gt;Let's take a look at how the SSH connection is established. Network capture shows an SSH client banner and the remote IP that initiated the connection:&lt;/p&gt;&lt;p&gt;&lt;code&gt;SSH-2.0-libssh2_1.4.2 PHP 10.0.98.251&lt;/code&gt;&lt;/p&gt;&lt;p&gt;What is important here:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Vulnerable &lt;code dir="ltr"&gt;libssh2&lt;/code&gt; version &lt;code dir="ltr"&gt;1.4.2&lt;/code&gt; &lt;a href="https://www.libssh2.org/security.html" dir="ltr"&gt;https://www.libssh2.org/security.html&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;Weak and deprecated key exchange &lt;code dir="ltr"&gt;diffie-hellman-group1-sha1&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;The client does not verify &lt;code dir="ltr"&gt;remote SSH server public key&lt;/code&gt; (see below)&lt;/LI&gt;&lt;LI&gt;&lt;code&gt;PHP&lt;/code&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;And, yes, it turns out that Telia's client does not attempt to verify the remote server's public key. We were able to start a custom SSH server on the same port 8022 and Savitarna successfully established a connection without even trying to verify for a man-in-the-middle. This means that we can see the password used and could try to create a malicious SSH server that exploits public vulnerabilities on Telia's side.&lt;/p&gt;&lt;h1&gt;Administrator password leak&lt;/h1&gt;&lt;p&gt;That was an easy task. As soon as Telia's client connected to our malicious SSH server we got the universal router credentials:&lt;/p&gt;&lt;PRE&gt;User: tadmin
 Password: hqMV8Wps
 &lt;/PRE&gt;&lt;p&gt;Do you still own an ADB router? Just go ahead and login over the web interface with this user. You are now an admin. You can do some restricted stuff now, great! But what about the root shell? We were able to connect with those credentials locally and got a limited shell. That's nice too. This gave us a lot of additional information that was hidden inside the router, many more vulnerabilities. Using one of them we were able to escalate to root and got full access over the device. The newer models like Technicolor require some additional exploits chained to gain full root access, but all are publicly available and so - easily doable.&lt;/p&gt;&lt;h1&gt;Using malicious SSH server to trigger server side RCE&lt;/h1&gt;&lt;p&gt;In order to exploit RCE we needed to build a virtual test environment that fully copies Telia's PHP client. Step by step we have gone through the sequence of Telia's commands sent over the SSH. And finally we got a malicious SSH server and a test libssh2 client running in our test lab. With this server we could fully control the protocol and start fuzzing.&lt;/p&gt;&lt;p&gt;In the first few days of the fuzzing we got some crashes and partially confirmed that RCE may be exploited. Here is a sample GIF video that demonstrates two kinds of the issues the fuzzer found for us. Same php file was executed twice, but the malicious SSH server sent different payloads which caused:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Segfault (stack corruption)&lt;/LI&gt;&lt;LI&gt;Infinite loop with high CPU&lt;/LI&gt;&lt;/UL&gt;&lt;img src="https://full-disclosure.eu/reports/2019/FDEU-CVE-2019-10222-telia-savitarna-poc.gif" alt="GIF PoC video" width="455" height="371"&gt;&lt;p&gt;However, at the time of the report we couldn't find an easy way to exploit the stack corruption. It may require more time, longer and more sophisticated fuzzing and more knowledge about the server. As Lithuanian law prohibits exploit testing on the real server, we could only fingerprint the Windows OS, but nothing more.&lt;/p&gt;&lt;h1&gt;DoS&lt;/h1&gt;&lt;p&gt;The backend seems to run only 5 php processes, so it is fairly easy to perform DoS by keeping stalled ssh connections. When SSH connections stay active for too long filling all the 5 php processes (there seems to be no timeout reading the remote shell), the Savitarna will show a strange "Maintenance" message:&lt;/p&gt;&lt;p&gt;Translation:&lt;/p&gt;&lt;PRE&gt;An update is in progress
 Too many of you are trying to access the new Telia webpage.
