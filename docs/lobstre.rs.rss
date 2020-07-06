@@ -1334,521 +1334,7 @@ Latency(ns), Start Timestamp(ns), End TimeStamp(ns), Event, Overhead, Domain ID
 &lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;We can locate the event which causes maximun latency with the help of the
 script. Fixing the event may improve the throughput of the program.&lt;/p&gt;&lt;p dir="ltr"&gt;Performace debugging can be quite tricky at times. If you could use some help in
 debugging your Multicore OCaml code, feel free to create an issue in the
-Multicore OCaml &lt;a href="https://github.com/ocaml-multicore/ocaml-multicore/issues" dir="ltr"&gt;issue tracker&lt;/a&gt; along with a minimal code example.&lt;/p&gt;</description><pubDate>Sun, 05 Jul 2020 16:43:16 -0500</pubDate></item><item><title>The myth of NoSQL (vs. RDBMS) "joins dont scale"</title><link>https://lobste.rs/s/zsgpxp</link><description>&lt;h2&gt;By Franck Pachot&lt;/h2&gt;&lt;p dir="ltr"&gt;.&lt;br dir="ltr"&gt;
-I’ll reference &lt;a href="https://twitter.com/alexbdebrie" rel="noopener noreferrer" dir="ltr"&gt;Alex DeBrie&lt;/a&gt; article “&lt;a href="https://www.alexdebrie.com/posts/dynamodb-no-bad-queries/#sql-joins-have-bad-time-complexity" rel="noopener noreferrer" dir="ltr"&gt;SQL, NoSQL, and Scale: How DynamoDB scales where relational databases don’t&lt;/a&gt;“, especially the paragraph about &lt;em dir="ltr"&gt;“Why relational databases don’t scale”&lt;/em&gt;. But I want to make clear that my post here is not against this article, but against a very common myth that even precedes NoSQL databases. Actually, I’m taking this article as reference because the author, in his &lt;a href="https://www.dynamodbguide.com/" rel="noopener noreferrer" dir="ltr"&gt;website&lt;/a&gt; and &lt;a href="https://www.dynamodbbook.com/" rel="noopener noreferrer" dir="ltr"&gt;book&lt;/a&gt;, has really good points about data modeling in NoSQL. And because AWS DynamoDB is probably the strongest NoSQL database today. I’m challenging some widespread assertions and better do it based on good quality content and product.&lt;/p&gt;&lt;p&gt;There are many use cases where NoSQL is a correct alternative, but moving from a relational database system to a key-value store because you heard that “joins don’t scale” is probably not a good reason. You should choose a solution for the features it offers (the problem it solves), and not because you ignore what you current platform is capable of.&lt;/p&gt;&lt;h3&gt;&lt;em&gt;time complexity of joins&lt;/em&gt;&lt;/h3&gt;&lt;p dir="ltr"&gt;The idea in this article, taken from the popular Rick Houlihan talk, is that, by joining tables, you read more data. And that it is a CPU intensive operation. And the time complexity of joins is &lt;em dir="ltr"&gt;“( O (M + N) ) or worse”&lt;/em&gt; according to Alex DeBrie article or “&lt;em dir="ltr"&gt;O(log(N))+Nlog(M)&lt;/em&gt;” according to Rick Houlihan slide. This makes reference to “time complexity” and “Big O” notation. You can read about it. But this supposes that the cost of a join depends on the size of the tables involved (represented by N and M). That would be right with non-partitioned table full scan. But all relational databases come with B*Tree indexes. And when we compare to a key-value store we are obviously retrieving few rows and the join method will be a Nested Loop with Index Range Scan. This access method is actually not dependent at all on the size of the tables. That’s why relational database are the king of OTLP applications.&lt;/p&gt;&lt;h3&gt;Let’s test it&lt;/h3&gt;&lt;p dir="ltr"&gt;The article claims that &lt;em dir="ltr"&gt;“there’s one big problem with relational databases: performance is like a black box. There are a ton of factors that impact how quickly your queries will return.”&lt;/em&gt; with an example on a query like: &lt;em dir="ltr"&gt;“SELECT * FROM orders JOIN users ON … WHERE user.id = … GROUP BY … LIMIT 20”&lt;/em&gt;. It says that &lt;em dir="ltr"&gt;“As the size of your tables grow, these operations will get slower and slower.”&lt;/em&gt;&lt;/p&gt;&lt;p&gt;I will build those tables, in PostgreSQL here, because that’s my preferred Open Source RDBMS, and show that:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Performance is &lt;strong dir="ltr"&gt;not&lt;/strong&gt; a black box: all RDBMS have an EXPLAIN command that display exactly the algorithm used (even CPU and memory access) and you can estimate the cost easily from it.&lt;/LI&gt;&lt;LI&gt;Join and Group By here do &lt;strong dir="ltr"&gt;not&lt;/strong&gt; depend on the size of the table at all but only the rows selected. You will multiply your tables by several orders of magnitude before the number of rows impact the response time by a 1/10s of millisecond.&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;Create the tables&lt;/h3&gt;&lt;p&gt;I will create small tables here. Because when reading the execution plan, I don’t need large tables to estimate the cost and the response-time scalability. You can run the same with larger tables if you want to see how it scales. And then maybe investigate further the features for big tables (partitioning, parallel query,…). But let’s start with very simple tables without specific optimization.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;
-\timing
-create table USERS ( USER_ID bigserial primary key, FIRST_NAME text, LAST_NAME text)
-;
-CREATE TABLE
-create table ORDERS ( ORDER_ID bigserial primary key, ORDER_DATE timestamp, AMOUNT numeric(10,2), USER_ID bigint, DESCRIPTION text)
-;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;I have created the two tables that I’ll join. Both with an auto-generated primary key for simplicity.&lt;/p&gt;&lt;h3&gt;Insert test data&lt;/h3&gt;&lt;p&gt;It is important to build the table as they would be in real life. USERS probably come without specific order. ORDERS come by date. This means that ORDERS from one USER are scattered throughout the table. The query would be much faster with clustered data, and each RDBMS has some ways to achieve this, but I want to show the cost of joining two tables here without specific optimisation.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;
-insert into  USERS (FIRST_NAME, LAST_NAME)
- with
-  random_words as (
-
-  select generate_series id,
-   translate(md5(random()::text),'-0123456789','aeioughij') as word
-
-  from generate_series(1,100)
-
-  )
- select
-  words1.word ,words2.word
-
-  from
-   random_words words1
-  cross join
-   random_words words2
-  order by words1.id+words2.id
-
-;
-INSERT 0 10000
-Time: 28.641 ms
-
-select * from USERS order by user_id fetch first 10 rows only;
- user_id |           first_name           |           last_name
----------+--------------------------------+--------------------------------
-       1 | iooifgiicuiejiaeduciuccuiogib  | iooifgiicuiejiaeduciuccuiogib
-       2 | iooifgiicuiejiaeduciuccuiogib  | dgdfeeiejcohfhjgcoigiedeaubjbg
-       3 | dgdfeeiejcohfhjgcoigiedeaubjbg | iooifgiicuiejiaeduciuccuiogib
-       4 | ueuedijchudifefoedbuojuoaudec  | iooifgiicuiejiaeduciuccuiogib
-       5 | iooifgiicuiejiaeduciuccuiogib  | ueuedijchudifefoedbuojuoaudec
-       6 | dgdfeeiejcohfhjgcoigiedeaubjbg | dgdfeeiejcohfhjgcoigiedeaubjbg
-       7 | iooifgiicuiejiaeduciuccuiogib  | jbjubjcidcgugubecfeejidhoigdob
-       8 | jbjubjcidcgugubecfeejidhoigdob | iooifgiicuiejiaeduciuccuiogib
-       9 | ueuedijchudifefoedbuojuoaudec  | dgdfeeiejcohfhjgcoigiedeaubjbg
-      10 | dgdfeeiejcohfhjgcoigiedeaubjbg | ueuedijchudifefoedbuojuoaudec
-(10 rows)
-
-Time: 0.384 ms
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This generated 10000 users in the USERS table with random names.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;
-insert into ORDERS ( ORDER_DATE, AMOUNT, USER_ID, DESCRIPTION)
- with
-  random_amounts as (
-      ------------&amp;gt; this generates 10 random order amounts
-  select
-   1e6*random() as AMOUNT
-  from generate_series(1,10)
- )
- ,random_dates as (
-      ------------&amp;gt; this generates 10 random order dates
-  select
-   now() - random() * interval '1 year' as ORDER_DATE
-  from generate_series(1,10)
- )
-select ORDER_DATE, AMOUNT, USER_ID, md5(random()::text) DESCRIPTION from
-  random_dates
- cross join
-  random_amounts
- cross join
-  users
- order by ORDER_DATE
-      ------------&amp;gt; I sort this by date because that's what happens in real life. Clustering by users would not be a fair test.
-;
-INSERT 0 1000000
-Time: 4585.767 ms (00:04.586)
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;I have now one million orders generated as 100 orders for each users in the last year. You can play with the numbers to generate more and see how it scales. This is fast: 5 seconds to generate 1 million orders here, and there are many way to load faster if you feel the need to test on very large data sets. But the point is not there.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;
-create index ORDERS_BY_USER on ORDERS(USER_ID);
-CREATE INDEX
-Time: 316.322 ms
-alter table ORDERS add constraint ORDERS_BY_USER foreign key (USER_ID) references USERS;
-ALTER TABLE
-Time: 194.505 ms
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;As, in my data model, I want to navigate from USERS to ORDERS I add an index for it. And I declare the referential integrity to avoid logical corruptions in case there is a bug in my application, or a human mistake during some ad-hoc fixes. As soon as the constraint is declared, I have no need to check this assertion in my code anymore. The constraint also informs the query planner know about this one-to-many relationship as it may open some optimizations. That’s the relational database beauty: we declare those things rather than having to code their implementation. &lt;/p&gt;&lt;PRE&gt;&lt;code&gt;
-vacuum analyze;
-VACUUM
-Time: 429.165 ms
-
-select version();
-                                                 version
----------------------------------------------------------------------------------------------------------
- PostgreSQL 12.3 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 4.8.5 20150623 (Red Hat 4.8.5-39), 64-bit
-(1 row)
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;I’m in PostgreSQL, version 12, on a Linux box with 2 CPUs only. I’ve run a manual VACUUM to get a reproducible testcase rather than relying on autovacuum kicking-in after those table loading.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;
-select relkind,relname,reltuples,relpages,lpad(pg_size_pretty(relpages::bigint*8*1024),20) "relpages * 8k" from pg_class natural join (select oid relnamespace,nspname from pg_namespace) nsp where nspname='public' order by relpages;
-
- relkind |       relname       | reltuples | relpages |    relpages * 8k
----------+---------------------+-----------+----------+----------------------
- S       | orders_order_id_seq |         1 |        1 |           8192 bytes
- S       | users_user_id_seq   |         1 |        1 |           8192 bytes
- i       | users_pkey          |     10000 |       30 |               240 kB
- r       | users               |     10000 |      122 |               976 kB
- i       | orders_pkey         |     1e+06 |     2745 |                21 MB
- i       | orders_by_user      |     1e+06 |     2749 |                21 MB
- r       | orders              |     1e+06 |    13334 |               104 MB
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Here are the sizes of my tables: The 1 million orders take 104MB and the 10 thousand users is 1MB. I’ll increase it later, but I don’t need this to understand the performance predictability.&lt;/p&gt;&lt;p&gt;When understanding the size, remember that the size of the table is only the size of data. Metadata (like column names) are not repeated for each row. They are stored once in the RDBMS catalog describing the table. As PostgreSQL has a native JSON datatype you can also test with a non-relational model here.&lt;/p&gt;&lt;h3&gt;Execute the query&lt;/h3&gt;&lt;PRE&gt;&lt;code&gt;
-select order_month,sum(amount),count(*)
-from
-  (
-  select date_trunc('month',ORDER_DATE) order_month, USER_ID, AMOUNT
-  from ORDERS join USERS using(USER_ID)
-  ) user_orders
-where USER_ID=42
-group by order_month
-;
-
-     order_month     |     sum     | count
----------------------+-------------+-------
- 2019-11-01 00:00:00 |  5013943.57 |    10
- 2019-09-01 00:00:00 |  5013943.57 |    10
- 2020-04-01 00:00:00 |  5013943.57 |    10
- 2019-08-01 00:00:00 | 15041830.71 |    30
- 2020-02-01 00:00:00 | 10027887.14 |    20
- 2020-06-01 00:00:00 |  5013943.57 |    10
- 2019-07-01 00:00:00 |  5013943.57 |    10
-(7 rows)
-
-Time: 2.863 ms
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Here is the query mentioned in the article: get all orders for one user, and do some aggregation on them. Looking at the time is not really interesting as it depends on the RAM to cache the buffers at database or filesystem level, and disk latency. But we are developers and, by looking at the operations and loops that were executed, we can understand how it scales and where we are in the “time complexity” and “Big O” order of magnitude.&lt;/p&gt;&lt;h3&gt;Explain the execution&lt;/h3&gt;&lt;p&gt;This is as easy as running the query with EXPLAIN:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;
-explain (analyze,verbose,costs,buffers)
-select order_month,sum(amount)
-from
-  (
-  select date_trunc('month',ORDER_DATE) order_month, USER_ID, AMOUNT
-  from ORDERS join USERS using(USER_ID)
-  ) user_orders
-where USER_ID=42
-group by order_month
-;
-                                                                   QUERY PLAN
-
-------------------------------------------------------------------------------------------------------------------------------------------------
- GroupAggregate  (cost=389.34..390.24 rows=10 width=40) (actual time=0.112..0.136 rows=7 loops=1)
-   Output: (date_trunc('month'::text, orders.order_date)), sum(orders.amount)
-   Group Key: (date_trunc('month'::text, orders.order_date))
-   Buffers: shared hit=19
-   -&amp;gt;  Sort  (cost=389.34..389.59 rows=100 width=17) (actual time=0.104..0.110 rows=100 loops=1)
-         Output: (date_trunc('month'::text, orders.order_date)), orders.amount
-         Sort Key: (date_trunc('month'::text, orders.order_date))
-         Sort Method: quicksort  Memory: 32kB
-         Buffers: shared hit=19
-         -&amp;gt;  Nested Loop  (cost=5.49..386.02 rows=100 width=17) (actual time=0.022..0.086 rows=100 loops=1)
-               Output: date_trunc('month'::text, orders.order_date), orders.amount
-               Buffers: shared hit=19
-               -&amp;gt;  Index Only Scan using users_pkey on public.users  (cost=0.29..4.30 rows=1 width=8) (actual time=0.006..0.006 rows=1 loops=1)
-                     Output: users.user_id
-                     Index Cond: (users.user_id = 42)
-                     Heap Fetches: 0
-                     Buffers: shared hit=3
-               -&amp;gt;  Bitmap Heap Scan on public.orders  (cost=5.20..380.47 rows=100 width=25) (actual time=0.012..0.031 rows=100 loops=1)
-                     Output: orders.order_id, orders.order_date, orders.amount, orders.user_id, orders.description
-                     Recheck Cond: (orders.user_id = 42)
-                     Heap Blocks: exact=13
-                     Buffers: shared hit=16
-                     -&amp;gt;  Bitmap Index Scan on orders_by_user  (cost=0.00..5.17 rows=100 width=0) (actual time=0.008..0.008 rows=100 loops=1)
-                           Index Cond: (orders.user_id = 42)
-                           Buffers: shared hit=3
- Planning Time: 0.082 ms
- Execution Time: 0.161 ms
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Here is the execution plan with the execution statistics. We have read 3 pages from USERS to get our USER_ID (Index Only Scan) and navigated, with Nested Loop, to ORDERS and get the 100 orders for this user. This has read 3 pages from the index (Bitmap Index Scan) and 13 pages from the table. That’s a total of 19 pages. Those pages are 8k blocks.&lt;/p&gt;&lt;h3&gt;4x initial size scales with same performance: 19 page reads&lt;/h3&gt;&lt;p&gt;Let’s increase the size of the tables by a factor 4. I change the “generate_series(1,100)” to “generate_series(1,200)” in the USERS generations and run the same. That generates 40000 users and 4 million orders.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;
-select relkind,relname,reltuples,relpages,lpad(pg_size_pretty(relpages::bigint*8*1024),20) "relpages * 8k" from pg_class natural join (select
-oid relnamespace,nspname from pg_namespace) nsp where nspname='public' order by relpages;
-
- relkind |       relname       |  reltuples   | relpages |    relpages * 8k
----------+---------------------+--------------+----------+----------------------
- S       | orders_order_id_seq |            1 |        1 |           8192 bytes
- S       | users_user_id_seq   |            1 |        1 |           8192 bytes
- i       | users_pkey          |        40000 |      112 |               896 kB
- r       | users               |        40000 |      485 |              3880 kB
- i       | orders_pkey         |        4e+06 |    10969 |                86 MB
- i       | orders_by_user      |        4e+06 |    10985 |                86 MB
- r       | orders              | 3.999995e+06 |    52617 |               411 MB
-
-explain (analyze,verbose,costs,buffers)
-select order_month,sum(amount)
-from
-  (
-  select date_trunc('month',ORDER_DATE) order_month, USER_ID, AMOUNT
-  from ORDERS join USERS using(USER_ID)
-  ) user_orders
-where USER_ID=42
-group by order_month
-;
-explain (analyze,verbose,costs,buffers)
-select order_month,sum(amount)
-from
-  (
-  select date_trunc('month',ORDER_DATE) order_month, USER_ID, AMOUNT
-  from ORDERS join USERS using(USER_ID)
-  ) user_orders
-where USER_ID=42
-group by order_month
-;
-                                                                   QUERY PLAN                                                                 
-------------------------------------------------------------------------------------------------------------------------------------------------
- GroupAggregate  (cost=417.76..418.69 rows=10 width=40) (actual time=0.116..0.143 rows=9 loops=1)
-   Output: (date_trunc('month'::text, orders.order_date)), sum(orders.amount)
-   Group Key: (date_trunc('month'::text, orders.order_date))
-   Buffers: shared hit=19
-   -&amp;gt;  Sort  (cost=417.76..418.02 rows=104 width=16) (actual time=0.108..0.115 rows=100 loops=1)
-         Output: (date_trunc('month'::text, orders.order_date)), orders.amount
-         Sort Key: (date_trunc('month'::text, orders.order_date))
-         Sort Method: quicksort  Memory: 32kB
-         Buffers: shared hit=19
-         -&amp;gt;  Nested Loop  (cost=5.53..414.27 rows=104 width=16) (actual time=0.044..0.091 rows=100 loops=1)
-               Output: date_trunc('month'::text, orders.order_date), orders.amount
-               Buffers: shared hit=19
-               -&amp;gt;  Index Only Scan using users_pkey on public.users  (cost=0.29..4.31 rows=1 width=8) (actual time=0.006..0.007 rows=1 loops=1)
-                     Output: users.user_id
-                     Index Cond: (users.user_id = 42)
-                     Heap Fetches: 0
-                     Buffers: shared hit=3
-               -&amp;gt;  Bitmap Heap Scan on public.orders  (cost=5.24..408.66 rows=104 width=24) (actual time=0.033..0.056 rows=100 loops=1)
-                     Output: orders.order_id, orders.order_date, orders.amount, orders.user_id, orders.description
-                     Recheck Cond: (orders.user_id = 42)
-                     Heap Blocks: exact=13
-                     Buffers: shared hit=16
-                     -&amp;gt;  Bitmap Index Scan on orders_by_user  (cost=0.00..5.21 rows=104 width=0) (actual time=0.029..0.029 rows=100 loops=1)
-                           Index Cond: (orders.user_id = 42)
-                           Buffers: shared hit=3
- Planning Time: 0.084 ms
- Execution Time: 0.168 ms
-(27 rows)
-
-Time: 0.532 ms
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Look how we scaled here: I multiplied the size of the tables by 4x and I have exactly the same cost: 3 pages from each index and 13 from the table. This is the beauty of B*Tree: the cost depends only on the height of the tree and not the size of the table. And you can increase the table exponentially before the height of the index increases.&lt;/p&gt;&lt;h3&gt;16x initial size scales with 21/19=1.1 cost factor&lt;/h3&gt;&lt;p&gt;Let’s go further and x4 the size of the tables again. I run with “generate_series(1,400)” in the USERS generations and run the same. That generates 160 thousand users and 16 million orders.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;
-select relkind,relname,reltuples,relpages,lpad(pg_size_pretty(relpages::bigint*8*1024),20) "relpages * 8k" from pg_class natural join (select
-oid relnamespace,nspname from pg_namespace) nsp where nspname='public' order by relpages;
- relkind |       relname       |  reltuples   | relpages |    relpages * 8k
----------+---------------------+--------------+----------+----------------------
- S       | orders_order_id_seq |            1 |        1 |           8192 bytes
- S       | users_user_id_seq   |            1 |        1 |           8192 bytes
- i       | users_pkey          |       160000 |      442 |              3536 kB
- r       | users               |       160000 |     1925 |                15 MB
- i       | orders_pkey         |      1.6e+07 |    43871 |               343 MB
- i       | orders_by_user      |      1.6e+07 |    43935 |               343 MB
- r       | orders              | 1.600005e+07 |   213334 |              1667 MB
-
-explain (analyze,verbose,costs,buffers)
-select order_month,sum(amount)
-from
-  (
-  select date_trunc('month',ORDER_DATE) order_month, USER_ID, AMOUNT
-  from ORDERS join USERS using(USER_ID)
-  ) user_orders
-where USER_ID=42
-group by order_month
-;
-                                                                   QUERY PLAN                                                                 
-------------------------------------------------------------------------------------------------------------------------------------------------
- GroupAggregate  (cost=567.81..569.01 rows=10 width=40) (actual time=0.095..0.120 rows=8 loops=1)
-   Output: (date_trunc('month'::text, orders.order_date)), sum(orders.amount)
-   Group Key: (date_trunc('month'::text, orders.order_date))
-   Buffers: shared hit=21
-   -&amp;gt;  Sort  (cost=567.81..568.16 rows=140 width=17) (actual time=0.087..0.093 rows=100 loops=1)
-         Output: (date_trunc('month'::text, orders.order_date)), orders.amount
-         Sort Key: (date_trunc('month'::text, orders.order_date))
-         Sort Method: quicksort  Memory: 32kB
-         Buffers: shared hit=21
-         -&amp;gt;  Nested Loop  (cost=6.06..562.82 rows=140 width=17) (actual time=0.026..0.070 rows=100 loops=1)
-               Output: date_trunc('month'::text, orders.order_date), orders.amount
-               Buffers: shared hit=21
-               -&amp;gt;  Index Only Scan using users_pkey on public.users  (cost=0.42..4.44 rows=1 width=8) (actual time=0.007..0.007 rows=1 loops=1)
-                     Output: users.user_id
-                     Index Cond: (users.user_id = 42)
-                     Heap Fetches: 0
-                     Buffers: shared hit=4
-               -&amp;gt;  Bitmap Heap Scan on public.orders  (cost=5.64..556.64 rows=140 width=25) (actual time=0.014..0.035 rows=100 loops=1)
-                     Output: orders.order_id, orders.order_date, orders.amount, orders.user_id, orders.description
-                     Recheck Cond: (orders.user_id = 42)
-                     Heap Blocks: exact=13
-                     Buffers: shared hit=17
-                     -&amp;gt;  Bitmap Index Scan on orders_by_user  (cost=0.00..5.61 rows=140 width=0) (actual time=0.010..0.010 rows=100 loops=1)
-                           Index Cond: (orders.user_id = 42)
-                           Buffers: shared hit=4
- Planning Time: 0.082 ms
- Execution Time: 0.159 ms
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Yes, by increasing the table size a lot the index may have to split the root block to add a new branch level. The consequence is minimal: two additional pages to read here. The additional execution time is in tens of microseconds when cached in RAM, up to milliseconds if from mechanical disk. With 10x or 100x larger tables, you will do some physical I/O and only the top index branches will be in memory. You can expect about about 20 I/O calls then. With SSD on Fiber Channel (like with AWS RDS PostgreSQL for example), this will still be in single-digit millisecond. The cheapest AWS EBS Provisioned IOPS for RDS is 1000 IOPS then you can estimate the number of queries per second you can run. The number of pages here (“Buffers”) is the right metric to estimate the cost of the query. To be compared with DynamoDB RCU. &lt;/p&gt;&lt;h3&gt;64x initial size scales with 23/19=1.2 cost factor&lt;/h3&gt;&lt;p&gt;Last test for me, but you can go further, I change to “generate_series(1,800)” in the USERS generations and run the same. That generates 640 thousand users and 64 million orders.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;
-
-select relkind,relname,reltuples,relpages,lpad(pg_size_pretty(relpages::bigint*8*1024),20) "relpages * 8k" from pg_class natural join (select
-oid relnamespace,nspname from pg_namespace) nsp where nspname='public' order by relpages;
-
- relkind |       relname       |   reltuples   | relpages |    relpages * 8k
----------+---------------------+---------------+----------+----------------------
- S       | orders_order_id_seq |             1 |        1 |           8192 bytes
- S       | users_user_id_seq   |             1 |        1 |           8192 bytes
- i       | users_pkey          |        640000 |     1757 |                14 MB
- r       | users               |        640000 |     7739 |                60 MB
- i       | orders_pkey         |       6.4e+07 |   175482 |              1371 MB
- i       | orders_by_user      |       6.4e+07 |   175728 |              1373 MB
- r       | orders              | 6.4000048e+07 |   853334 |              6667 MB
-
-
-explain (analyze,verbose,costs,buffers)
-select order_month,sum(amount)
-from
-  (
-  select date_trunc('month',ORDER_DATE) order_month, USER_ID, AMOUNT
-  from ORDERS join USERS using(USER_ID)
-  ) user_orders
-where USER_ID=42
-group by order_month
-;
-                                                                QUERY PLAN
-------------------------------------------------------------------------------------------------------------------------------------------
- HashAggregate  (cost=1227.18..1227.33 rows=10 width=40) (actual time=0.102..0.105 rows=7 loops=1)
-   Output: (date_trunc('month'::text, orders.order_date)), sum(orders.amount)
-   Group Key: date_trunc('month'::text, orders.order_date)
-   Buffers: shared hit=23
-   -&amp;gt;  Nested Loop  (cost=7.36..1225.65 rows=306 width=17) (actual time=0.027..0.072 rows=100 loops=1)
-         Output: date_trunc('month'::text, orders.order_date), orders.amount
-         Buffers: shared hit=23
-         -&amp;gt;  Index Only Scan using users_pkey on public.users  (cost=0.42..4.44 rows=1 width=8) (actual time=0.007..0.008 rows=1 loops=1)
-               Output: users.user_id
-               Index Cond: (users.user_id = 42)
-               Heap Fetches: 0
-               Buffers: shared hit=4
-         -&amp;gt;  Bitmap Heap Scan on public.orders  (cost=6.94..1217.38 rows=306 width=25) (actual time=0.015..0.037 rows=100 loops=1)
-               Output: orders.order_id, orders.order_date, orders.amount, orders.user_id, orders.description
-               Recheck Cond: (orders.user_id = 42)
-               Heap Blocks: exact=15
-               Buffers: shared hit=19
-               -&amp;gt;  Bitmap Index Scan on orders_by_user  (cost=0.00..6.86 rows=306 width=0) (actual time=0.011..0.011 rows=100 loops=1)
-                     Index Cond: (orders.user_id = 42)
-                     Buffers: shared hit=4
- Planning Time: 0.086 ms
- Execution Time: 0.134 ms
-(22 rows)
-
-Time: 0.521 ms
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;You see how the cost increases slowly, with two additional pages to read here.&lt;/p&gt;&lt;p dir="ltr"&gt;Please, test with more rows. When looking at the time (less than 1 millisecond), keep in mind that it is CPU time here as all pages are in memory cache. On purpose, because the article mentions CPU and RAM (&lt;em dir="ltr"&gt;“joins require a lot of CPU and memory”&lt;/em&gt;). Anyway, 20 disk reads will still be within the millisecond on modern storage.&lt;br dir="ltr"&gt;
-&lt;/p&gt;&lt;img src="https://blog.dbi-services.com/wp-insides/uploads/sites/2/2020/07/SQL-Join-Scale-1024x625.jpg" alt="" width="420" height="256" srcset="https://blog.dbi-services.com/wp-insides/uploads/sites/2/2020/07/SQL-Join-Scale-1024x625.jpg 1024w, https://blog.dbi-services.com/wp-insides/uploads/sites/2/2020/07/SQL-Join-Scale-300x183.jpg 300w, https://blog.dbi-services.com/wp-insides/uploads/sites/2/2020/07/SQL-Join-Scale-768x468.jpg 768w, https://blog.dbi-services.com/wp-insides/uploads/sites/2/2020/07/SQL-Join-Scale-1536x937.jpg 1536w, https://blog.dbi-services.com/wp-insides/uploads/sites/2/2020/07/SQL-Join-Scale-2048x1249.jpg 2048w"&gt;&lt;h3&gt;Time complexity of B*Tree is actually very light&lt;/h3&gt;&lt;p&gt;Let’s get back to the “Big O” notation. We are definitely not “O (M + N)”. This would have been without any index, where all pages from all tables would have been full scanned. Any database maintains hashed or sorted structures to improve high selectivity queries. This has nothing to do with SQL vs. NoSQL or with RDBMS vs. Hierarchichal DB. In DynamoDB this structure on primary key is HASH partitioning (and additional sorting). In RDBMS the most common structure is a sorted index (with the possibility of additional partitioning, zone maps, clustering,…). We are not in “O(log(N))+Nlog(M)” but more like “O(log(N))+log(M)” because the size of the driving table (N) has nothing to do on the inner loop cost. The first filtering, the one with “O(log(N))”, has filtered out those N rows. Using “N” and ignoring the outer selectivity is a mistake. Anyway, this O(log) for B*Tree is really scalable as we have seen because the base of this log() function is really small (thanks to large branch blocks – 8KB).&lt;/p&gt;&lt;p&gt;Anyway, the point is not there. As you have seen, the cost of Nested Loop is in the blocks that are fetched from the inner loop, and this depends on the selectivity and the clustering factor (the table physical order correlation with the index order), and some prefetching techniques. This O(log) for going through the index is often insignificant on Range Scans.&lt;/p&gt;&lt;h3&gt;40 years of RDBMS optimizations&lt;/h3&gt;&lt;p&gt;If you have a database size that is several order of magnitude from those million rows, and where this millisecond latency is a problem, the major RDBMS offer many features and structures to go further in performance and predictability of response time. As we have seen, the cost of this query is not about Index, Nested Loop or Group By. It is about the scattered items: ingested by date but queried by user.&lt;/p&gt;&lt;p dir="ltr"&gt;Through its 40 years of optimizing OLTP applications, the &lt;strong dir="ltr"&gt;Oracle Database&lt;/strong&gt; have a lot of features, with their popularity depending on the IT trends. From the first versions, in the 80’s, because the hierarchical databases were still in people’s mind, and the fear of “joins are expensive” was already there, Oracle has implemented a structure to store the tables together, pre-joined. This is called &lt;a href="https://docs.oracle.com/en/database/oracle/oracle-database/20/sqlrf/CREATE-CLUSTER.html#GUID-4DBC701F-AFC3-486D-AA32-B5CB1D6946F7" rel="noopener noreferrer" dir="ltr"&gt;CLUSTER&lt;/a&gt;. It was, from the beginning, indexed with a sorted structure (INDEX CLUSTER) or a hashed structure (HASH CLUSTER). Parallel Query was quickly implemented to scale-up and, with Parallel Server now known as RAC, to scale-out. Partitioning was introduced to scale further, again with sorted (PARTITION by RANGE) or hashed (PARTITION BY HASH) segments. This can scale further the index access (LOCAL INDEX with partition pruning). And it also scales joins (PARTITION-WISE JOIN) to reduce CPU and RAM to join large datasets. When more agility was needed, B*Tree sorted structures were the winner and Index Organized Tables were introduced to cluster data (to avoid the most expensive operation as we have seen in the examples above). But Heap Tables and B*Tree are still the winners given their agility and because the Join operations were rarely a bottleneck. Currently, partitioning has improved (even scaling horizontally beyond the clusters with sharding), as well as data clustering (&lt;a href="https://blog.dbi-services.com/oracle-12c-clustering/" rel="noopener noreferrer" dir="ltr"&gt;Attribute Clustering&lt;/a&gt;, Zone Maps and Storage Index). And there’s always the possibility for Index Only access, just by adding more columns to the index, removing the major cost of table access. And materialized views can also act as &lt;a href="https://blog.dbi-services.com/oracle-index-on-joins/" rel="noopener noreferrer" dir="ltr"&gt;pre-built join index&lt;/a&gt; and will also reduce the CPU and RAM required for GROUP BY aggregation.&lt;/p&gt;&lt;p dir="ltr"&gt;I listed a lot of Oracle features, but Microsoft &lt;strong dir="ltr"&gt;SQL Server&lt;/strong&gt; has also many similar features. Clustered tables, covering indexes, Indexed Views, and of course partitioning. Open source databases are evolving a lot. &lt;strong dir="ltr"&gt;PostgreSQL&lt;/strong&gt; has partitioning, parallel query, clustering,.. Still Open Source, you can web-scale it to a distributed database with &lt;strong dir="ltr"&gt;YugabyteDB&lt;/strong&gt;. &lt;strong dir="ltr"&gt;MySQL&lt;/strong&gt; is evolving a lot recently. I’ll not list all databases and all features. You can port the testcase to other databases easily.&lt;/p&gt;&lt;p dir="ltr"&gt;Oh, and by the way, if you want to test it on &lt;strong dir="ltr"&gt;Oracle Database&lt;/strong&gt; you will quickly realize that the query from the article may not even do any Join operation. Because when you query with the USER_ID you probably don’t need to get back to the USERS table. And thanks to the declared foreign key, the optimizer knows that the join is not necessary: &lt;a href="https://dbfiddle.uk/?rdbms=oracle_18&amp;amp;fiddle=a5afeba2fdb27dec7533545ab0a6eb0e" rel="noopener noreferrer" dir="ltr"&gt;https://dbfiddle.uk/?rdbms=oracle_18&amp;amp;fiddle=a5afeba2fdb27dec7533545ab0a6eb0e&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;NoSQL databases are good for many use-cases. But remember that it is a key-value optimized data store. When you start to split a document into multiple entities with their own keys, remember that relational databases were invented for that. I blogged about another myth recently: &lt;a href="https://blog.dbi-services.com/the-myth-of-nosql-vs-rdbms-agility-adding-attributes/" rel="noopener noreferrer" dir="ltr"&gt;The myth of NoSQL (vs. RDBMS) agility: adding attributes&lt;/a&gt;. All feedback welcome, here or on Twitter:&lt;/p&gt;&lt;div class="embed-placeholder" data-type="twitter" data-id="1279864643029291010"&gt;&lt;/div&gt;</description><pubDate>Sun, 05 Jul 2020 19:55:34 -0500</pubDate></item><item><title>Beginner’s Guide To Abstraction</title><link>https://lobste.rs/s/covli0</link><description>&lt;h1&gt;Beginner’s Guide To Abstraction&lt;/h1&gt;&lt;p dir="ltr"&gt;In &lt;em dir="ltr"&gt;The Pragmatic Programmer&lt;/em&gt;, Andrew Hunt and David Thomas introduced the DRY (Don't Repeat Yourself) principle. The rationale being that if you see the same code copy+pasted 10 times you should probably factor that code into its own method/class.&lt;/p&gt;&lt;p dir="ltr"&gt;But then Sandi Metz came along and &lt;a href="https://www.sandimetz.com/blog/2016/1/20/the-wrong-abstraction" dir="ltr"&gt;said&lt;/a&gt;:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Duplication is far cheaper than the wrong abstraction.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;And so the eternal war began.&lt;/p&gt;&lt;h3&gt;What is abstraction?&lt;/h3&gt;&lt;p dir="ltr"&gt;Abstraction is hard to define but the process typically goes like this:&lt;br dir="ltr"&gt;
-1) you identify different chunks of code that you think are all basically doing the same thing&lt;br dir="ltr"&gt;
-2) you create a method or a class with a narrow interface which can be substituted in for all the chunks of code you found&lt;br dir="ltr"&gt;
-3) you go and swap out the chunks of code with a call to your method/class&lt;/p&gt;&lt;h3&gt;The right/wrong abstraction&lt;/h3&gt;&lt;p dir="ltr"&gt;You'll know that you've made the &lt;em dir="ltr"&gt;right&lt;/em&gt; abstraction when a long time passes and you haven't needed to expand the interface (an example of expanding the interface is adding an optional flag argument). You'll also know you've made the right abstraction when another developer doesn't find it that much harder to understand how the code behaves for a given use case than if somebody had written the code to satisfy the use case without the abstraction.&lt;/p&gt;&lt;p dir="ltr"&gt;You'll know you've made the &lt;em dir="ltr"&gt;wrong&lt;/em&gt; abstraction when after a while the interface has been expanded to support various optional flags, each for a different use case, and you need to be a genius to reason about what the code will actually do for a given use case. By the way, if you have a string arg that merely gets fed into a switch statement inside a method and for each new use case you come up with a new accepted value for it, you &lt;em dir="ltr"&gt;are&lt;/em&gt; expanding the implicit interface, even if that fact isn't captured in your type system.&lt;/p&gt;&lt;p&gt;There is a lot of grey area inbetween the perfect abstraction and the completely wrong abstraction, and so the point of this section isn't to prescribe how much you should be abstracting, but to encourage you to think about both perspectives and be able to make a case in a PR review for why you think an abstraction should/should-not exist.&lt;/p&gt;&lt;h3&gt;Do you over or under-abstract?&lt;/h3&gt;&lt;p&gt;Given it is impossible to make the right decision with regards to abstraction every time, you are probably either somebody who over-abstracts or somebody who under-abstracts.&lt;/p&gt;&lt;p&gt;If common feedback on your PR reviews is that you should DRY up your code, you could probably benefit from doing a scan for duplicated code before submitting a PR and considering whether it belongs in its own method/class.&lt;/p&gt;&lt;p&gt;If you commonly get feedback that your methods are hard to understand because they support too many use cases at once, you are probaby over-abstracting and should consider whether you should increase your tolerance for duplication.&lt;/p&gt;&lt;p&gt;Note that it's not always as simple as under-abstracting vs over-abstracting. Sometimes abstraction is appropriate, but you might take the wrong approach. If an abstraction is deemed wrong by the team, that doesn't mean no abstraction is necessarily the best alternative.&lt;/p&gt;&lt;h3&gt;Under-abstraction examples&lt;/h3&gt;&lt;p&gt;The main sign that you could be under-abstracting is that you have a heap of code doing the exact same thing called in a heap of places with no obvious reason why anybody would want the code to diverge.&lt;/p&gt;&lt;h4&gt;Example: Hard-coded formulas&lt;/h4&gt;&lt;h5&gt;Bad:&lt;/h5&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span spellcheck="true" dir="ltr"&gt;# sphere has radius of 11&lt;/span&gt;
-sphere_volume &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;4&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;Math&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;:PI&lt;/span&gt;&lt;span dir="ltr"&gt;/&lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;11&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;
-puts &lt;span dir="ltr"&gt;"the volume of the sphere is &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#{&lt;/span&gt;sphere_volume&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt; cm^3"&lt;/span&gt;
-&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;
-
-radius &lt;span dir="ltr"&gt;=&lt;/span&gt; calculate_radius
-volume &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;4&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;Math&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;:PI&lt;/span&gt;&lt;span dir="ltr"&gt;/&lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;radius&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;
-sphere&lt;span dir="ltr"&gt;.&lt;/span&gt;volume &lt;span dir="ltr"&gt;=&lt;/span&gt; volume&lt;/code&gt;&lt;/PRE&gt;&lt;h5&gt;Good:&lt;/h5&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;def&lt;/span&gt; &lt;span dir="ltr"&gt;sphere_volume&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;radius&lt;span dir="ltr"&gt;)&lt;/span&gt;
-  &lt;span dir="ltr"&gt;4&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;Math&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;:PI&lt;/span&gt;&lt;span dir="ltr"&gt;/&lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;radius&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;
-&lt;span dir="ltr"&gt;end&lt;/span&gt;
-
-&lt;span spellcheck="true" dir="ltr"&gt;# sphere has radius of 11&lt;/span&gt;
-sphere_volume &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;sphere_volume&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;11&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-puts &lt;span dir="ltr"&gt;"the volume of the sphere is &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#{&lt;/span&gt;sphere_volume&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt; cm^3"&lt;/span&gt;
-&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;
-
-radius &lt;span dir="ltr"&gt;=&lt;/span&gt; calculate_radius
-volume &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;sphere_volume&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;radius&lt;span dir="ltr"&gt;)&lt;/span&gt;
-sphere&lt;span dir="ltr"&gt;.&lt;/span&gt;volume &lt;span dir="ltr"&gt;=&lt;/span&gt; volume&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Why is it a good idea to abstract the formula for a sphere's volume into its own method? Because if mathematicians ever found out they got the formula wrong, you would want to go through all the places in your code that you used the formula and update it to be correct. That is, we know ahead of time that we want the code to be in lockstep.&lt;/p&gt;&lt;h3&gt;Over-abstraction examples&lt;/h3&gt;&lt;p&gt;The main sign that you're over-abstracting is that your method accepts a bunch of optional args:&lt;/p&gt;&lt;h4&gt;Example: Bloated method&lt;/h4&gt;&lt;h5&gt;Bad:&lt;/h5&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;def&lt;/span&gt; &lt;span dir="ltr"&gt;average&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;arr&lt;span dir="ltr"&gt;,&lt;/span&gt; type &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;Integer&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; ignore_nulls &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;false&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-  &lt;span dir="ltr"&gt;if&lt;/span&gt; arr&lt;span dir="ltr"&gt;.&lt;/span&gt;any&lt;span dir="ltr"&gt;?&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;:nil?&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-    &lt;span dir="ltr"&gt;if&lt;/span&gt; ignore_nulls
-      arr &lt;span dir="ltr"&gt;=&lt;/span&gt; arr&lt;span dir="ltr"&gt;.&lt;/span&gt;compact
-    &lt;span dir="ltr"&gt;else&lt;/span&gt;
-      &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;
-    &lt;span dir="ltr"&gt;end&lt;/span&gt;
-  &lt;span dir="ltr"&gt;end&lt;/span&gt;
-
-  &lt;span dir="ltr"&gt;if&lt;/span&gt; type &lt;span dir="ltr"&gt;==&lt;/span&gt; &lt;span dir="ltr"&gt;String&lt;/span&gt;
-    arr &lt;span dir="ltr"&gt;=&lt;/span&gt; arr&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;map&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;:to_i&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-  &lt;span dir="ltr"&gt;end&lt;/span&gt;
-
-  arr&lt;span dir="ltr"&gt;.&lt;/span&gt;sum &lt;span dir="ltr"&gt;/&lt;/span&gt; arr&lt;span dir="ltr"&gt;.&lt;/span&gt;size
-&lt;span dir="ltr"&gt;end&lt;/span&gt;
-
-puts &lt;span dir="ltr"&gt;average&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;
-
-puts &lt;span dir="ltr"&gt;average&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;'1'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;'2'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;'3'&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;String&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;
-
-puts &lt;span dir="ltr"&gt;average&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;'1'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;'2'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;'3'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;String&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;true&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;
-
-puts &lt;span dir="ltr"&gt;average&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;Integer&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;false&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;If you want to know how the &lt;code dir="ltr"&gt;average&lt;/code&gt; method behaves when you're dealing with an array of strings with no &lt;code dir="ltr"&gt;nil&lt;/code&gt; values, you have to read through the first if condition which has nothing to do with your use case before reaching the code that does. Likewise if you want to know how the &lt;code dir="ltr"&gt;average&lt;/code&gt; method behaves when the array contains either nils or integers, the second if condition is irrelevant, but you'll still need to read through that to understand how the whole thing works.&lt;/p&gt;&lt;p&gt;If each of the use cases came up dozens or hundreds of times, maybe then it would make sense to retain the abstraction, but when the number of optional arguments is roughly equal to the number of different use cases, chances are you've got the wrong abstraction.&lt;/p&gt;&lt;h5&gt;Good:&lt;/h5&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;def&lt;/span&gt; &lt;span dir="ltr"&gt;average&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;arr&lt;span dir="ltr"&gt;)&lt;/span&gt;
-  arr&lt;span dir="ltr"&gt;.&lt;/span&gt;sum &lt;span dir="ltr"&gt;/&lt;/span&gt; arr&lt;span dir="ltr"&gt;.&lt;/span&gt;size
-&lt;span dir="ltr"&gt;end&lt;/span&gt;
-
-puts &lt;span dir="ltr"&gt;average&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;
-
-arr &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;'1'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;'2'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;'3'&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;map&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;:to_i&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-puts &lt;span dir="ltr"&gt;average&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;arr&lt;span dir="ltr"&gt;)&lt;/span&gt;
-&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;
-
-arr &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;'1'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;'2'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;'3'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;compact&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;map&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;:to_i&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-puts &lt;span dir="ltr"&gt;average&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;arr&lt;span dir="ltr"&gt;)&lt;/span&gt;
-&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;
-
-arr &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;
-&lt;span dir="ltr"&gt;if&lt;/span&gt; arr&lt;span dir="ltr"&gt;.&lt;/span&gt;any&lt;span dir="ltr"&gt;?&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;:nil?&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-  puts &lt;span dir="ltr"&gt;nil&lt;/span&gt;
-&lt;span dir="ltr"&gt;else&lt;/span&gt;
-  puts &lt;span dir="ltr"&gt;average&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;arr&lt;span dir="ltr"&gt;)&lt;/span&gt;
-&lt;span dir="ltr"&gt;end&lt;/span&gt;
-&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;In this case we're not removing the abstraction altogether: we're just keeping the part that actually applies to all cases. Now understanding the logic of any one invocation of our &lt;code dir="ltr"&gt;average&lt;/code&gt; method is trivial.&lt;/p&gt;&lt;p dir="ltr"&gt;We now have &lt;code dir="ltr"&gt;.map(&amp;amp;:to_i)&lt;/code&gt; being duplicated whereas it only appeared once in the &lt;code dir="ltr"&gt;Bad&lt;/code&gt; alternative, but it's a small cost for a vast improvement.&lt;/p&gt;&lt;p dir="ltr"&gt;Note that looking at the &lt;code dir="ltr"&gt;Good&lt;/code&gt; variant, it's clear that the behaviour is quite different from one use case to the next, but that is not at all clear in the &lt;code dir="ltr"&gt;Bad&lt;/code&gt; variant because the method calls all look so simple and it was anybody's guess how much code inside &lt;code dir="ltr"&gt;average&lt;/code&gt; applied to each use case.&lt;/p&gt;&lt;p&gt;This is why abstractions go bad over time: because as you expand the interface more and more, it becomes harder and harder to judge how appropriate the abstraction is to any given use case, and developers end up assuming that all that convoluted code is vaguely relevant to the majority of use cases when in fact it's not.&lt;/p&gt;&lt;h4&gt;Example: Awkward class&lt;/h4&gt;&lt;h5&gt;Bad:&lt;/h5&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;class&lt;/span&gt; &lt;span dir="ltr"&gt;Shape&lt;/span&gt;
-  &lt;span dir="ltr"&gt;def&lt;/span&gt; &lt;span dir="ltr"&gt;initialize&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;radius&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; width&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; type&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-    &lt;span dir="ltr"&gt;@radius&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; radius
-    &lt;span dir="ltr"&gt;@width&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; width
-    &lt;span dir="ltr"&gt;@type&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; type
-  &lt;span dir="ltr"&gt;end&lt;/span&gt;
-
-  &lt;span dir="ltr"&gt;def&lt;/span&gt; area
-    &lt;span dir="ltr"&gt;case&lt;/span&gt; &lt;span dir="ltr"&gt;@type&lt;/span&gt;
-    &lt;span dir="ltr"&gt;when&lt;/span&gt; &lt;span dir="ltr"&gt;:square&lt;/span&gt;
-      &lt;span dir="ltr"&gt;@width&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;
-    &lt;span dir="ltr"&gt;when&lt;/span&gt; &lt;span dir="ltr"&gt;:circle&lt;/span&gt;
-      &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;@radius&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;Math&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;:PI&lt;/span&gt;
-    &lt;span dir="ltr"&gt;end&lt;/span&gt;
-  &lt;span dir="ltr"&gt;end&lt;/span&gt;
-
-  &lt;span dir="ltr"&gt;def&lt;/span&gt; perimeter
-    &lt;span dir="ltr"&gt;case&lt;/span&gt; &lt;span dir="ltr"&gt;@type&lt;/span&gt;
-    &lt;span dir="ltr"&gt;when&lt;/span&gt; &lt;span dir="ltr"&gt;:square&lt;/span&gt;
-      &lt;span dir="ltr"&gt;@width&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;4&lt;/span&gt;
-    &lt;span dir="ltr"&gt;when&lt;/span&gt; &lt;span dir="ltr"&gt;:circle&lt;/span&gt;
-      &lt;span dir="ltr"&gt;@radius&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;Math&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;:PI&lt;/span&gt;
-    &lt;span dir="ltr"&gt;end&lt;/span&gt;
-  &lt;span dir="ltr"&gt;end&lt;/span&gt;
-
-  &lt;span dir="ltr"&gt;def&lt;/span&gt; diameter
-    &lt;span dir="ltr"&gt;case&lt;/span&gt; &lt;span dir="ltr"&gt;@type&lt;/span&gt;
-    &lt;span dir="ltr"&gt;when&lt;/span&gt; &lt;span dir="ltr"&gt;:square&lt;/span&gt;
-      &lt;span dir="ltr"&gt;nil&lt;/span&gt;
-    &lt;span dir="ltr"&gt;when&lt;/span&gt; &lt;span dir="ltr"&gt;:circle&lt;/span&gt;
-      &lt;span dir="ltr"&gt;@radius&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;
-    &lt;span dir="ltr"&gt;end&lt;/span&gt;
-  &lt;span dir="ltr"&gt;end&lt;/span&gt;
-&lt;span dir="ltr"&gt;end&lt;/span&gt;
-
-square &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;Shape&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;new&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;type&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;:square&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; width&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-square&lt;span dir="ltr"&gt;.&lt;/span&gt;area
-&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;100&lt;/span&gt;
-
-circle &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;Shape&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;new&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;type&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;:circle&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; radius&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-circle&lt;span dir="ltr"&gt;.&lt;/span&gt;area
-&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;314.159&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Code smells:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;switching on type in several places&lt;/LI&gt;&lt;LI&gt;returning nil or raising for a specific type when the method is non-applicable&lt;/LI&gt;&lt;LI&gt;optional arguments in initializer where you're expected to use one or the other&lt;/LI&gt;&lt;/UL&gt;&lt;h5&gt;Good&lt;/h5&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;class&lt;/span&gt; &lt;span dir="ltr"&gt;Circle&lt;/span&gt;
-  &lt;span dir="ltr"&gt;def&lt;/span&gt; &lt;span dir="ltr"&gt;initialize&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;radius&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-    &lt;span dir="ltr"&gt;@radius&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; radius
-  &lt;span dir="ltr"&gt;end&lt;/span&gt;
-
-  &lt;span dir="ltr"&gt;def&lt;/span&gt; area
-    &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;@radius&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;Math&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;:PI&lt;/span&gt;
-  &lt;span dir="ltr"&gt;end&lt;/span&gt;
-
-  &lt;span dir="ltr"&gt;def&lt;/span&gt; perimeter
-    &lt;span dir="ltr"&gt;@radius&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;Math&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;:PI&lt;/span&gt;
-  &lt;span dir="ltr"&gt;end&lt;/span&gt;
-
-  &lt;span dir="ltr"&gt;def&lt;/span&gt; diameter
-    &lt;span dir="ltr"&gt;@radius&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;
-  &lt;span dir="ltr"&gt;end&lt;/span&gt;
-&lt;span dir="ltr"&gt;end&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;class&lt;/span&gt; &lt;span dir="ltr"&gt;Square&lt;/span&gt;
-  &lt;span dir="ltr"&gt;def&lt;/span&gt; &lt;span dir="ltr"&gt;initialize&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;width&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-    &lt;span dir="ltr"&gt;@width&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; width
-  &lt;span dir="ltr"&gt;end&lt;/span&gt;
-
-  &lt;span dir="ltr"&gt;def&lt;/span&gt; area
-    &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;@width&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-  &lt;span dir="ltr"&gt;end&lt;/span&gt;
-
-  &lt;span dir="ltr"&gt;def&lt;/span&gt; perimeter
-    &lt;span dir="ltr"&gt;@width&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;4&lt;/span&gt;
-  &lt;span dir="ltr"&gt;end&lt;/span&gt;
-&lt;span dir="ltr"&gt;end&lt;/span&gt;
-
-square &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;Square&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;new&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;width&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-square&lt;span dir="ltr"&gt;.&lt;/span&gt;area
-&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;100&lt;/span&gt;
-
-circle &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;Circle&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;new&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;radius&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-circle&lt;span dir="ltr"&gt;.&lt;/span&gt;area
-&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;314.159&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Just because squares and circles each have an area and a perimeter doesn't mean they should be the same class when there is literally zero overlap in how we obtain those two things. Likewise the &lt;code dir="ltr"&gt;diameter&lt;/code&gt; method only applies to circles, not squares. In a typed language, we may want to define a Shape interface containing the area/perimeter methods but there is no good reason to combine the classes.&lt;/p&gt;&lt;h4&gt;Example: React Notice components&lt;/h4&gt;&lt;h5&gt;Option 1&lt;/h5&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; SuccessNotice &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt; message &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;Box&lt;/span&gt; &lt;span dir="ltr"&gt;color&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;green&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;`Success: &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;message&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;`&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;/&lt;/span&gt;Box&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;
-&lt;span dir="ltr"&gt;const&lt;/span&gt; WarningNotice &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt; message &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;Box&lt;/span&gt; &lt;span dir="ltr"&gt;color&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;yellow&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;`Warning: &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;message&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;`&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;/&lt;/span&gt;Box&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;
-&lt;span dir="ltr"&gt;const&lt;/span&gt; ErrorNotice &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt; message &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;Box&lt;/span&gt; &lt;span dir="ltr"&gt;color&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;red&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;`Error: &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;message&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;`&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;/&lt;/span&gt;Box&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;
-&lt;span dir="ltr"&gt;...&lt;/span&gt;
-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;SuccessNotice&lt;/span&gt; &lt;span dir="ltr"&gt;message&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;You win!&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;/&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;h5&gt;Option 2&lt;/h5&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; Notice &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt; type&lt;span dir="ltr"&gt;,&lt;/span&gt; message &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-  &lt;span dir="ltr"&gt;switch&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;type&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    &lt;span dir="ltr"&gt;case&lt;/span&gt; &lt;span dir="ltr"&gt;'success'&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
-      &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;Box&lt;/span&gt; &lt;span dir="ltr"&gt;color&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;green&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;`Success: &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;message&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;`&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;/&lt;/span&gt;Box&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;case&lt;/span&gt; &lt;span dir="ltr"&gt;'warning'&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
-      &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;Box&lt;/span&gt; &lt;span dir="ltr"&gt;color&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;yellow&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;`Warning: &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;message&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;`&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;/&lt;/span&gt;Box&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;case&lt;/span&gt; &lt;span dir="ltr"&gt;'error'&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
-      &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;Box&lt;/span&gt; &lt;span dir="ltr"&gt;color&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;red&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;`Error: &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;message&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;`&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;/&lt;/span&gt;Box&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;
-  &lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-  &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;null&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;span dir="ltr"&gt;...&lt;/span&gt;
-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;Notice&lt;/span&gt; &lt;span dir="ltr"&gt;type&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;success&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;message&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;You win!&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;/&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;h5&gt;Option 3&lt;/h5&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; noticeMap &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-  success&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt; color&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;'green'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; prefix&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;'Success: '&lt;/span&gt; &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-  warning&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt; color&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;'yellow'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; prefix&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;'Warning: '&lt;/span&gt; &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-  error&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt; color&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;'red'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; prefix&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;'Error: '&lt;/span&gt; &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;const&lt;/span&gt; ReallyAbstractedNotice &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt; type&lt;span dir="ltr"&gt;,&lt;/span&gt; message &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-  &lt;span dir="ltr"&gt;const&lt;/span&gt; options &lt;span dir="ltr"&gt;=&lt;/span&gt; noticeMap&lt;span dir="ltr"&gt;[&lt;/span&gt;type&lt;span dir="ltr"&gt;]&lt;/span&gt;
-
-  &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;Box&lt;/span&gt; &lt;span dir="ltr"&gt;color&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;options&lt;span dir="ltr"&gt;.&lt;/span&gt;color&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;`&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;options&lt;span dir="ltr"&gt;.&lt;/span&gt;prefix&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;message&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;`&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;/&lt;/span&gt;Box&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;span dir="ltr"&gt;...&lt;/span&gt;
-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;ReallyAbstractedNotice&lt;/span&gt; &lt;span dir="ltr"&gt;type&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;success&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;message&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;You win!&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;/&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;What advantage does option 2 have over option 1? Not much. The only possible advantage is that we might actually receive &lt;code dir="ltr"&gt;type&lt;/code&gt; and &lt;code dir="ltr"&gt;message&lt;/code&gt; props and need to map that to the right JSX, however we typically know at compile time whether we're dealing with an error or a success message. If, at compile time, we already know we need to show an error notice, why force the programmer to pass an arbitrary &lt;code dir="ltr"&gt;type&lt;/code&gt; prop to the &lt;code dir="ltr"&gt;Notice&lt;/code&gt; component? That's just adding complexity that is not intrinsic to the behaviour we want.&lt;/p&gt;&lt;p&gt;Option 2 recognises that our various use cases share an interface, but then does nothing more than jam them into a component with a switch statement. Option 2 makes the same mistake as we saw in the example with the Shape class; in thinking that classes with similar interfaces should necessarily all be in the same class.&lt;/p&gt;&lt;p&gt;Option 3 takes what option 2 did and justifies the abstraction by pulling out the differences between our use cases into a single mapping object, so that the similarities don't need to be duplicated. It identifies that the only difference between our three notices is the color of the Box and the prefix message.&lt;/p&gt;&lt;p&gt;So which is better between options 1 and 3? Two questions to ask:&lt;/p&gt;&lt;h6&gt;Which is easier to read?&lt;/h6&gt;&lt;p&gt;Option 1 hands down&lt;/p&gt;&lt;h6&gt;Which is better equipped to handle new/evolving use cases?&lt;/h6&gt;&lt;p dir="ltr"&gt;The answer to this question comes down to our confidence that new use cases will conform to the current behaviour. If we need to add a new &lt;code dir="ltr"&gt;info&lt;/code&gt; variant, it's easier in option 3 because you can just add the colour/prefix in the noticeMap object.&lt;/p&gt;&lt;p&gt;On the other hand, what if we want the success case to disappear after a certain amount of time, but for the error and warning cases to require acknowledging by the user? Easy to handle when each case is its own component: less-so when it's all wrapped up into one. What if we don't need prefixes for errors because they typically come with their own? That would mean the prefix key in the noticeMap now only applies to 2 out of 3 use cases. What if we want to pass more props to the Box component if we're dealing with a warning? We would need to add a new option in our noticeMap object, and have logic for not passing that prop in our other cases.&lt;/p&gt;&lt;p&gt;In this situation, just go with option 1. Much easier to switch to option 3 if over time it turns out these things really do evolve in lockstep, but we can't know that at the beginning.&lt;/p&gt;&lt;h3&gt;Tips:&lt;/h3&gt;&lt;h4&gt;Minimise complexity&lt;/h4&gt;&lt;p dir="ltr"&gt;For any behaviour we want to encode, there is a certain level of intrinsic complexity required. Yet we often end up writing code that is far more complex than that. We should always be asking 'does this abstraction make the code &lt;em dir="ltr"&gt;more&lt;/em&gt; complex or &lt;em dir="ltr"&gt;less&lt;/em&gt; complex?'. And even if an abstraction is less complex theoretically, is it cognitively simple enough that another person can understand it?&lt;/p&gt;&lt;h4&gt;Just because an abstraction is right now doesn't mean it won't be wrong later:&lt;/h4&gt;&lt;p&gt;If your abstraction works great for three use cases but doesn't quite fit the fourth as snugly, be very careful about extending the interface. With enough new use cases you might find the abstraction is making life harder than if it didn't exist.&lt;/p&gt;&lt;h4&gt;Don't be afraid to dismantle the wrong abstraction:&lt;/h4&gt;&lt;p dir="ltr"&gt;If you come across an abstraction that is only used in three places and already has two optional flags, do not be afraid to simply copy+paste its code back into the places that call it and then in each of those places, strip away the code that is irrelevant to the use case (see &lt;code dir="ltr"&gt;average&lt;/code&gt; method, above). You will be left with some duplicated code but as Sandi Metz says, 'Duplication is cheaper than the wrong abstraction'. Be prepared to defend the decision in a PR review.&lt;/p&gt;&lt;h4&gt;When in doubt, do not abstract:&lt;/h4&gt;&lt;p&gt;If you've found two files that each share a chunk of code, but you're not sure that you would always want the code to evolve in lockstep, don't abstract. It's much easier to abstract than to de-abstract, so there is no harm in waiting until some more use cases pop up and you get a better idea of what a good interface might look like.&lt;/p&gt;&lt;h4&gt;When not in doubt, defend your decision:&lt;/h4&gt;&lt;p&gt;If you have a single chunk of code that you think should be abstracted for the sake of future use cases, prepare for pushback in a PR review. The onus is on you to explain why this abstraction makes sense given how little evidence there is in the codebase for why it should exist.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p&gt;Different people need to hear different messages here. Maybe your code isn't DRY enough. Maybe you seize the opportunity to abstract too readily and it causes headaches down the line. Maybe you've struck a good balance. No matter where you stand, it's important to know that there are no clear cut right answers with the majority of debates around abstractions. So long as you can consider the pros/cons of abstracting more, less, and differently, and you make your case clear in a PR review, you should be fine. Happy coding!&lt;/p&gt;&lt;footer&gt;&lt;span&gt;&lt;span&gt;Posted on &lt;/span&gt;&lt;/span&gt;&lt;/footer&gt;</description><pubDate>Sun, 05 Jul 2020 10:46:44 -0500</pubDate></item><item><title>Modern Object Pascal Introduction for Programmers</title><link>https://lobste.rs/s/tbz7i9</link><description>&lt;div&gt;&lt;span&gt;Michalis Kamburelis and contributors: Maciej Izak&lt;/span&gt;&lt;/div&gt;&lt;h2&gt;1. Why&lt;/h2&gt;&lt;div&gt;Note&lt;/div&gt;&lt;td dir="ltr"&gt;
+Multicore OCaml &lt;a href="https://github.com/ocaml-multicore/ocaml-multicore/issues" dir="ltr"&gt;issue tracker&lt;/a&gt; along with a minimal code example.&lt;/p&gt;</description><pubDate>Sun, 05 Jul 2020 16:43:16 -0500</pubDate></item><item><title>Modern Object Pascal Introduction for Programmers</title><link>https://lobste.rs/s/tbz7i9</link><description>&lt;div&gt;&lt;span&gt;Michalis Kamburelis and contributors: Maciej Izak&lt;/span&gt;&lt;/div&gt;&lt;h2&gt;1. Why&lt;/h2&gt;&lt;div&gt;Note&lt;/div&gt;&lt;td dir="ltr"&gt;
 This is a modified version of the original document from Michalis, because we (authors of &lt;a href="http://newpascal.org/" dir="ltr"&gt;http://newpascal.org/&lt;/a&gt; and &lt;a href="http://synopse.info/" dir="ltr"&gt;http://synopse.info/&lt;/a&gt; ) prefer the "mode delphi" without the "generic" / "specialize" keywords.
 &lt;/td&gt;&lt;p&gt;There are many books and resources about Pascal out there, but too many of them talk about the old Pascal, without classes, units or generics.&lt;/p&gt;&lt;p dir="ltr"&gt;So I wrote this quick introduction to what I call &lt;strong dir="ltr"&gt;modern Object Pascal&lt;/strong&gt;. Most of the programmers using it don’t really call it &lt;em dir="ltr"&gt;"modern Object Pascal"&lt;/em&gt;, we just call it  &lt;em dir="ltr"&gt;"our Pascal"&lt;/em&gt;. But when introducing the language, I feel it’s important to emphasize that it’s a modern, object-oriented language. It evolved a &lt;strong dir="ltr"&gt;lot&lt;/strong&gt; since the old (Turbo) Pascal that many people learned in schools long time ago. Feature-wise, it’s quite similar to C++ or Java or C#.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;It has all the modern features you expect — classes, units, interfaces, generics…​&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;It’s compiled to a fast, native code,&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;It’s very type safe,&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;High-level but can also be low-level if you need it to be.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;It also has excellent, portable and open-source compiler called the &lt;em dir="ltr"&gt;Free Pascal Compiler&lt;/em&gt;, &lt;a href="http://freepascal.org/" dir="ltr"&gt;http://freepascal.org/&lt;/a&gt; . And an accompanying IDE (editor, debugger, a library of visual components, form designer) called &lt;em dir="ltr"&gt;Lazarus&lt;/em&gt; &lt;a href="http://lazarus.freepascal.org/" dir="ltr"&gt;http://lazarus.freepascal.org/&lt;/a&gt; . Myself, I’m the creator of &lt;em dir="ltr"&gt;Castle Game Engine&lt;/em&gt;, &lt;a href="https://castle-engine.io/" dir="ltr"&gt;https://castle-engine.io/&lt;/a&gt; , which is a cool portable 3D and 2D game engine using this language to create games on many platforms (Windows, Linux, MacOSX, Android, iOS, web plugin).&lt;/p&gt;&lt;p dir="ltr"&gt;This introduction is mostly directed at programmers who already have experience in other languages. We will not cover here the meanings of some universal concepts, like &lt;em dir="ltr"&gt;"what is a class"&lt;/em&gt;, we’ll only show how to do them in Pascal.&lt;/p&gt;&lt;h2&gt;2. Basics&lt;/h2&gt;&lt;h3&gt;2.1. "Hello world" program&lt;/h3&gt;&lt;PRE&gt;&lt;code data-lang="pascal" dir="ltr"&gt;&lt;span dir="ltr"&gt;{$mode delphi}&lt;/span&gt; &lt;span dir="ltr"&gt;// Just use this line in all modern sources&lt;/span&gt;
 
@@ -3745,7 +3231,521 @@ you create &lt;em dir="ltr"&gt;COM interfaces&lt;/em&gt;. This can be stated exp
     FreeAndNil(C2);
     FreeAndNil(C3);
   &lt;span dir="ltr"&gt;end&lt;/span&gt;;
-&lt;span dir="ltr"&gt;end&lt;/span&gt;.&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;9.6. Typecasting interfaces without "as" operator&lt;/h3&gt;&lt;p dir="ltr"&gt;This section applies to both &lt;em dir="ltr"&gt;CORBA&lt;/em&gt; and &lt;em dir="ltr"&gt;COM&lt;/em&gt; interfaces.&lt;/p&gt;&lt;p dir="ltr"&gt;Casting to an interface type using the &lt;code dir="ltr"&gt;as&lt;/code&gt; operator makes a check at run-time. Consider this code:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="pascal" dir="ltr"&gt;UseThroughInterface(Cx &lt;span dir="ltr"&gt;as&lt;/span&gt; IMyInterface);&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;It works for all &lt;code dir="ltr"&gt;C1&lt;/code&gt;, &lt;code dir="ltr"&gt;C2&lt;/code&gt;, &lt;code dir="ltr"&gt;C3&lt;/code&gt; instances in the examples in previous sections. If executed, it would make a run-time error in case of &lt;code dir="ltr"&gt;C3&lt;/code&gt;, that does not implement &lt;code dir="ltr"&gt;IMyInterface&lt;/code&gt; (but we avoid the error by checking &lt;code dir="ltr"&gt;Cx is IMyInterface&lt;/code&gt; before doing the cast).&lt;/p&gt;&lt;p&gt;You can instead cast the instance as an interface implicitly:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="pascal"&gt;UseThroughInterface(Cx);&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;In this case, the typecast must be valid at compile-time. So this will compile for &lt;code dir="ltr"&gt;C1&lt;/code&gt; and &lt;code dir="ltr"&gt;C2&lt;/code&gt; (that are declared as classes that implement &lt;code dir="ltr"&gt;IMyInterface&lt;/code&gt;). But it will not compile for &lt;code dir="ltr"&gt;C3&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;In essence, this typecast looks and works just like for regular classes. Wherever an instance of a class &lt;code dir="ltr"&gt;TMyClass&lt;/code&gt; is required, you can always use there a variable that is declared with a class of &lt;code dir="ltr"&gt;TMyClass&lt;/code&gt;, &lt;strong dir="ltr"&gt;or &lt;code dir="ltr"&gt;TMyClass&lt;/code&gt; descendant&lt;/strong&gt;. The same rule applies to interfaces. No need for any explicit typecast in such situations.&lt;/p&gt;&lt;p&gt;An equivalent is also&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="pascal"&gt;UseThroughInterface(IMyInterface(Cx));&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This is also a typecast that must be valid at compile-time. Note that this syntax is inconsistent with classes typecasts. In case of classes, writing &lt;code dir="ltr"&gt;TMyClass(C)&lt;/code&gt; is an &lt;em dir="ltr"&gt;unsafe, unchecked&lt;/em&gt; typecast. In case of interfaces, writing &lt;code dir="ltr"&gt;IMyInterface(C)&lt;/code&gt; is a safe, fast (checked at compile-time) typecast.&lt;/p&gt;&lt;h2&gt;10. About this document&lt;/h2&gt;&lt;p&gt;Copyright Michalis Kamburelis.&lt;/p&gt;&lt;p dir="ltr"&gt;The source code of this document is in AsciiDoc on &lt;a href="https://github.com/michaliskambi/modern-pascal-introduction" dir="ltr"&gt;https://github.com/michaliskambi/modern-pascal-introduction&lt;/a&gt;. Suggestions for corrections and additions, and patches and pull requests, are always very welcome:) You can reach me through GitHub or email &lt;a href="mailto:michalis.kambi@gmail.com" dir="ltr"&gt;michalis.kambi@gmail.com&lt;/a&gt;. My homepage is &lt;a href="https://michalis.ii.uni.wroc.pl/~michalis/" dir="ltr"&gt;https://michalis.ii.uni.wroc.pl/~michalis/&lt;/a&gt;. This document is linked under the &lt;em dir="ltr"&gt;Documentation&lt;/em&gt; section of the &lt;em dir="ltr"&gt;Castle Game Engine&lt;/em&gt; website &lt;a href="https://castle-engine.io/" dir="ltr"&gt;https://castle-engine.io/&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;The source code of this document without the "generic" / "specialize" keywords on &lt;a href="https://github.com/maciej-izak/modern-pascal-introduction" dir="ltr"&gt;https://github.com/maciej-izak/modern-pascal-introduction&lt;/a&gt; .&lt;/p&gt;&lt;p dir="ltr"&gt;You can redistribute and even modify this document freely, under the same licenses as Wikipedia &lt;a href="https://en.wikipedia.org/wiki/Wikipedia:Copyrights" dir="ltr"&gt;https://en.wikipedia.org/wiki/Wikipedia:Copyrights&lt;/a&gt; :&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;&lt;em&gt;Creative Commons Attribution-ShareAlike 3.0 Unported License (CC BY-SA)&lt;/em&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;or the &lt;em dir="ltr"&gt;GNU Free Documentation License (GFDL) (unversioned, with no invariant sections, front-cover texts, or back-cover texts)&lt;/em&gt; .&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Thank you for reading!&lt;/p&gt;</description><pubDate>Sun, 05 Jul 2020 18:15:23 -0500</pubDate></item><item><title>Generative Artistry Tutorials</title><link>https://generativeartistry.com/tutorials/</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/6fxhrg/generative_artistry_tutorials"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 05 Jul 2020 13:03:35 -0500</pubDate></item><item><title>Remotely upgrading OpenWrt 15.05 to 19.07 on NAND flash boards</title><link>https://lobste.rs/s/fxyj6d</link><description>&lt;div&gt;&lt;a href="https://gir.st/" dir="ltr"&gt;Home&lt;/a&gt; | &lt;a href="https://gir.st/blog" dir="ltr"&gt;Blog&lt;/a&gt; | &lt;a href="https://gir.st/blog/upgrading-openwrt.html" dir="ltr"&gt;&lt;b dir="ltr"&gt;Upgrading OpenWrt (guide)&lt;/b&gt;&lt;/a&gt;
+&lt;span dir="ltr"&gt;end&lt;/span&gt;.&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;9.6. Typecasting interfaces without "as" operator&lt;/h3&gt;&lt;p dir="ltr"&gt;This section applies to both &lt;em dir="ltr"&gt;CORBA&lt;/em&gt; and &lt;em dir="ltr"&gt;COM&lt;/em&gt; interfaces.&lt;/p&gt;&lt;p dir="ltr"&gt;Casting to an interface type using the &lt;code dir="ltr"&gt;as&lt;/code&gt; operator makes a check at run-time. Consider this code:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="pascal" dir="ltr"&gt;UseThroughInterface(Cx &lt;span dir="ltr"&gt;as&lt;/span&gt; IMyInterface);&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;It works for all &lt;code dir="ltr"&gt;C1&lt;/code&gt;, &lt;code dir="ltr"&gt;C2&lt;/code&gt;, &lt;code dir="ltr"&gt;C3&lt;/code&gt; instances in the examples in previous sections. If executed, it would make a run-time error in case of &lt;code dir="ltr"&gt;C3&lt;/code&gt;, that does not implement &lt;code dir="ltr"&gt;IMyInterface&lt;/code&gt; (but we avoid the error by checking &lt;code dir="ltr"&gt;Cx is IMyInterface&lt;/code&gt; before doing the cast).&lt;/p&gt;&lt;p&gt;You can instead cast the instance as an interface implicitly:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="pascal"&gt;UseThroughInterface(Cx);&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;In this case, the typecast must be valid at compile-time. So this will compile for &lt;code dir="ltr"&gt;C1&lt;/code&gt; and &lt;code dir="ltr"&gt;C2&lt;/code&gt; (that are declared as classes that implement &lt;code dir="ltr"&gt;IMyInterface&lt;/code&gt;). But it will not compile for &lt;code dir="ltr"&gt;C3&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;In essence, this typecast looks and works just like for regular classes. Wherever an instance of a class &lt;code dir="ltr"&gt;TMyClass&lt;/code&gt; is required, you can always use there a variable that is declared with a class of &lt;code dir="ltr"&gt;TMyClass&lt;/code&gt;, &lt;strong dir="ltr"&gt;or &lt;code dir="ltr"&gt;TMyClass&lt;/code&gt; descendant&lt;/strong&gt;. The same rule applies to interfaces. No need for any explicit typecast in such situations.&lt;/p&gt;&lt;p&gt;An equivalent is also&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="pascal"&gt;UseThroughInterface(IMyInterface(Cx));&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This is also a typecast that must be valid at compile-time. Note that this syntax is inconsistent with classes typecasts. In case of classes, writing &lt;code dir="ltr"&gt;TMyClass(C)&lt;/code&gt; is an &lt;em dir="ltr"&gt;unsafe, unchecked&lt;/em&gt; typecast. In case of interfaces, writing &lt;code dir="ltr"&gt;IMyInterface(C)&lt;/code&gt; is a safe, fast (checked at compile-time) typecast.&lt;/p&gt;&lt;h2&gt;10. About this document&lt;/h2&gt;&lt;p&gt;Copyright Michalis Kamburelis.&lt;/p&gt;&lt;p dir="ltr"&gt;The source code of this document is in AsciiDoc on &lt;a href="https://github.com/michaliskambi/modern-pascal-introduction" dir="ltr"&gt;https://github.com/michaliskambi/modern-pascal-introduction&lt;/a&gt;. Suggestions for corrections and additions, and patches and pull requests, are always very welcome:) You can reach me through GitHub or email &lt;a href="mailto:michalis.kambi@gmail.com" dir="ltr"&gt;michalis.kambi@gmail.com&lt;/a&gt;. My homepage is &lt;a href="https://michalis.ii.uni.wroc.pl/~michalis/" dir="ltr"&gt;https://michalis.ii.uni.wroc.pl/~michalis/&lt;/a&gt;. This document is linked under the &lt;em dir="ltr"&gt;Documentation&lt;/em&gt; section of the &lt;em dir="ltr"&gt;Castle Game Engine&lt;/em&gt; website &lt;a href="https://castle-engine.io/" dir="ltr"&gt;https://castle-engine.io/&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;The source code of this document without the "generic" / "specialize" keywords on &lt;a href="https://github.com/maciej-izak/modern-pascal-introduction" dir="ltr"&gt;https://github.com/maciej-izak/modern-pascal-introduction&lt;/a&gt; .&lt;/p&gt;&lt;p dir="ltr"&gt;You can redistribute and even modify this document freely, under the same licenses as Wikipedia &lt;a href="https://en.wikipedia.org/wiki/Wikipedia:Copyrights" dir="ltr"&gt;https://en.wikipedia.org/wiki/Wikipedia:Copyrights&lt;/a&gt; :&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;&lt;em&gt;Creative Commons Attribution-ShareAlike 3.0 Unported License (CC BY-SA)&lt;/em&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;or the &lt;em dir="ltr"&gt;GNU Free Documentation License (GFDL) (unversioned, with no invariant sections, front-cover texts, or back-cover texts)&lt;/em&gt; .&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Thank you for reading!&lt;/p&gt;</description><pubDate>Sun, 05 Jul 2020 18:15:23 -0500</pubDate></item><item><title>The myth of NoSQL (vs. RDBMS) "joins dont scale"</title><link>https://lobste.rs/s/zsgpxp</link><description>&lt;h2&gt;By Franck Pachot&lt;/h2&gt;&lt;p dir="ltr"&gt;.&lt;br dir="ltr"&gt;
+I’ll reference &lt;a href="https://twitter.com/alexbdebrie" rel="noopener noreferrer" dir="ltr"&gt;Alex DeBrie&lt;/a&gt; article “&lt;a href="https://www.alexdebrie.com/posts/dynamodb-no-bad-queries/#sql-joins-have-bad-time-complexity" rel="noopener noreferrer" dir="ltr"&gt;SQL, NoSQL, and Scale: How DynamoDB scales where relational databases don’t&lt;/a&gt;“, especially the paragraph about &lt;em dir="ltr"&gt;“Why relational databases don’t scale”&lt;/em&gt;. But I want to make clear that my post here is not against this article, but against a very common myth that even precedes NoSQL databases. Actually, I’m taking this article as reference because the author, in his &lt;a href="https://www.dynamodbguide.com/" rel="noopener noreferrer" dir="ltr"&gt;website&lt;/a&gt; and &lt;a href="https://www.dynamodbbook.com/" rel="noopener noreferrer" dir="ltr"&gt;book&lt;/a&gt;, has really good points about data modeling in NoSQL. And because AWS DynamoDB is probably the strongest NoSQL database today. I’m challenging some widespread assertions and better do it based on good quality content and product.&lt;/p&gt;&lt;p&gt;There are many use cases where NoSQL is a correct alternative, but moving from a relational database system to a key-value store because you heard that “joins don’t scale” is probably not a good reason. You should choose a solution for the features it offers (the problem it solves), and not because you ignore what you current platform is capable of.&lt;/p&gt;&lt;h3&gt;&lt;em&gt;time complexity of joins&lt;/em&gt;&lt;/h3&gt;&lt;p dir="ltr"&gt;The idea in this article, taken from the popular Rick Houlihan talk, is that, by joining tables, you read more data. And that it is a CPU intensive operation. And the time complexity of joins is &lt;em dir="ltr"&gt;“( O (M + N) ) or worse”&lt;/em&gt; according to Alex DeBrie article or “&lt;em dir="ltr"&gt;O(log(N))+Nlog(M)&lt;/em&gt;” according to Rick Houlihan slide. This makes reference to “time complexity” and “Big O” notation. You can read about it. But this supposes that the cost of a join depends on the size of the tables involved (represented by N and M). That would be right with non-partitioned table full scan. But all relational databases come with B*Tree indexes. And when we compare to a key-value store we are obviously retrieving few rows and the join method will be a Nested Loop with Index Range Scan. This access method is actually not dependent at all on the size of the tables. That’s why relational database are the king of OTLP applications.&lt;/p&gt;&lt;h3&gt;Let’s test it&lt;/h3&gt;&lt;p dir="ltr"&gt;The article claims that &lt;em dir="ltr"&gt;“there’s one big problem with relational databases: performance is like a black box. There are a ton of factors that impact how quickly your queries will return.”&lt;/em&gt; with an example on a query like: &lt;em dir="ltr"&gt;“SELECT * FROM orders JOIN users ON … WHERE user.id = … GROUP BY … LIMIT 20”&lt;/em&gt;. It says that &lt;em dir="ltr"&gt;“As the size of your tables grow, these operations will get slower and slower.”&lt;/em&gt;&lt;/p&gt;&lt;p&gt;I will build those tables, in PostgreSQL here, because that’s my preferred Open Source RDBMS, and show that:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Performance is &lt;strong dir="ltr"&gt;not&lt;/strong&gt; a black box: all RDBMS have an EXPLAIN command that display exactly the algorithm used (even CPU and memory access) and you can estimate the cost easily from it.&lt;/LI&gt;&lt;LI&gt;Join and Group By here do &lt;strong dir="ltr"&gt;not&lt;/strong&gt; depend on the size of the table at all but only the rows selected. You will multiply your tables by several orders of magnitude before the number of rows impact the response time by a 1/10s of millisecond.&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;Create the tables&lt;/h3&gt;&lt;p&gt;I will create small tables here. Because when reading the execution plan, I don’t need large tables to estimate the cost and the response-time scalability. You can run the same with larger tables if you want to see how it scales. And then maybe investigate further the features for big tables (partitioning, parallel query,…). But let’s start with very simple tables without specific optimization.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;
+\timing
+create table USERS ( USER_ID bigserial primary key, FIRST_NAME text, LAST_NAME text)
+;
+CREATE TABLE
+create table ORDERS ( ORDER_ID bigserial primary key, ORDER_DATE timestamp, AMOUNT numeric(10,2), USER_ID bigint, DESCRIPTION text)
+;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;I have created the two tables that I’ll join. Both with an auto-generated primary key for simplicity.&lt;/p&gt;&lt;h3&gt;Insert test data&lt;/h3&gt;&lt;p&gt;It is important to build the table as they would be in real life. USERS probably come without specific order. ORDERS come by date. This means that ORDERS from one USER are scattered throughout the table. The query would be much faster with clustered data, and each RDBMS has some ways to achieve this, but I want to show the cost of joining two tables here without specific optimisation.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;
+insert into  USERS (FIRST_NAME, LAST_NAME)
+ with
+  random_words as (
+
+  select generate_series id,
+   translate(md5(random()::text),'-0123456789','aeioughij') as word
+
+  from generate_series(1,100)
+
+  )
+ select
+  words1.word ,words2.word
+
+  from
+   random_words words1
+  cross join
+   random_words words2
+  order by words1.id+words2.id
+
+;
+INSERT 0 10000
+Time: 28.641 ms
+
+select * from USERS order by user_id fetch first 10 rows only;
+ user_id |           first_name           |           last_name
+---------+--------------------------------+--------------------------------
+       1 | iooifgiicuiejiaeduciuccuiogib  | iooifgiicuiejiaeduciuccuiogib
+       2 | iooifgiicuiejiaeduciuccuiogib  | dgdfeeiejcohfhjgcoigiedeaubjbg
+       3 | dgdfeeiejcohfhjgcoigiedeaubjbg | iooifgiicuiejiaeduciuccuiogib
+       4 | ueuedijchudifefoedbuojuoaudec  | iooifgiicuiejiaeduciuccuiogib
+       5 | iooifgiicuiejiaeduciuccuiogib  | ueuedijchudifefoedbuojuoaudec
+       6 | dgdfeeiejcohfhjgcoigiedeaubjbg | dgdfeeiejcohfhjgcoigiedeaubjbg
+       7 | iooifgiicuiejiaeduciuccuiogib  | jbjubjcidcgugubecfeejidhoigdob
+       8 | jbjubjcidcgugubecfeejidhoigdob | iooifgiicuiejiaeduciuccuiogib
+       9 | ueuedijchudifefoedbuojuoaudec  | dgdfeeiejcohfhjgcoigiedeaubjbg
+      10 | dgdfeeiejcohfhjgcoigiedeaubjbg | ueuedijchudifefoedbuojuoaudec
+(10 rows)
+
+Time: 0.384 ms
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This generated 10000 users in the USERS table with random names.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;
+insert into ORDERS ( ORDER_DATE, AMOUNT, USER_ID, DESCRIPTION)
+ with
+  random_amounts as (
+      ------------&amp;gt; this generates 10 random order amounts
+  select
+   1e6*random() as AMOUNT
+  from generate_series(1,10)
+ )
+ ,random_dates as (
+      ------------&amp;gt; this generates 10 random order dates
+  select
+   now() - random() * interval '1 year' as ORDER_DATE
+  from generate_series(1,10)
+ )
+select ORDER_DATE, AMOUNT, USER_ID, md5(random()::text) DESCRIPTION from
+  random_dates
+ cross join
+  random_amounts
+ cross join
+  users
+ order by ORDER_DATE
+      ------------&amp;gt; I sort this by date because that's what happens in real life. Clustering by users would not be a fair test.
+;
+INSERT 0 1000000
+Time: 4585.767 ms (00:04.586)
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;I have now one million orders generated as 100 orders for each users in the last year. You can play with the numbers to generate more and see how it scales. This is fast: 5 seconds to generate 1 million orders here, and there are many way to load faster if you feel the need to test on very large data sets. But the point is not there.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;
+create index ORDERS_BY_USER on ORDERS(USER_ID);
+CREATE INDEX
+Time: 316.322 ms
+alter table ORDERS add constraint ORDERS_BY_USER foreign key (USER_ID) references USERS;
+ALTER TABLE
+Time: 194.505 ms
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;As, in my data model, I want to navigate from USERS to ORDERS I add an index for it. And I declare the referential integrity to avoid logical corruptions in case there is a bug in my application, or a human mistake during some ad-hoc fixes. As soon as the constraint is declared, I have no need to check this assertion in my code anymore. The constraint also informs the query planner know about this one-to-many relationship as it may open some optimizations. That’s the relational database beauty: we declare those things rather than having to code their implementation. &lt;/p&gt;&lt;PRE&gt;&lt;code&gt;
+vacuum analyze;
+VACUUM
+Time: 429.165 ms
+
+select version();
+                                                 version
+---------------------------------------------------------------------------------------------------------
+ PostgreSQL 12.3 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 4.8.5 20150623 (Red Hat 4.8.5-39), 64-bit
+(1 row)
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;I’m in PostgreSQL, version 12, on a Linux box with 2 CPUs only. I’ve run a manual VACUUM to get a reproducible testcase rather than relying on autovacuum kicking-in after those table loading.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;
+select relkind,relname,reltuples,relpages,lpad(pg_size_pretty(relpages::bigint*8*1024),20) "relpages * 8k" from pg_class natural join (select oid relnamespace,nspname from pg_namespace) nsp where nspname='public' order by relpages;
+
+ relkind |       relname       | reltuples | relpages |    relpages * 8k
+---------+---------------------+-----------+----------+----------------------
+ S       | orders_order_id_seq |         1 |        1 |           8192 bytes
+ S       | users_user_id_seq   |         1 |        1 |           8192 bytes
+ i       | users_pkey          |     10000 |       30 |               240 kB
+ r       | users               |     10000 |      122 |               976 kB
+ i       | orders_pkey         |     1e+06 |     2745 |                21 MB
+ i       | orders_by_user      |     1e+06 |     2749 |                21 MB
+ r       | orders              |     1e+06 |    13334 |               104 MB
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Here are the sizes of my tables: The 1 million orders take 104MB and the 10 thousand users is 1MB. I’ll increase it later, but I don’t need this to understand the performance predictability.&lt;/p&gt;&lt;p&gt;When understanding the size, remember that the size of the table is only the size of data. Metadata (like column names) are not repeated for each row. They are stored once in the RDBMS catalog describing the table. As PostgreSQL has a native JSON datatype you can also test with a non-relational model here.&lt;/p&gt;&lt;h3&gt;Execute the query&lt;/h3&gt;&lt;PRE&gt;&lt;code&gt;
+select order_month,sum(amount),count(*)
+from
+  (
+  select date_trunc('month',ORDER_DATE) order_month, USER_ID, AMOUNT
+  from ORDERS join USERS using(USER_ID)
+  ) user_orders
+where USER_ID=42
+group by order_month
+;
+
+     order_month     |     sum     | count
+---------------------+-------------+-------
+ 2019-11-01 00:00:00 |  5013943.57 |    10
+ 2019-09-01 00:00:00 |  5013943.57 |    10
+ 2020-04-01 00:00:00 |  5013943.57 |    10
+ 2019-08-01 00:00:00 | 15041830.71 |    30
+ 2020-02-01 00:00:00 | 10027887.14 |    20
+ 2020-06-01 00:00:00 |  5013943.57 |    10
+ 2019-07-01 00:00:00 |  5013943.57 |    10
+(7 rows)
+
+Time: 2.863 ms
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Here is the query mentioned in the article: get all orders for one user, and do some aggregation on them. Looking at the time is not really interesting as it depends on the RAM to cache the buffers at database or filesystem level, and disk latency. But we are developers and, by looking at the operations and loops that were executed, we can understand how it scales and where we are in the “time complexity” and “Big O” order of magnitude.&lt;/p&gt;&lt;h3&gt;Explain the execution&lt;/h3&gt;&lt;p&gt;This is as easy as running the query with EXPLAIN:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;
+explain (analyze,verbose,costs,buffers)
+select order_month,sum(amount)
+from
+  (
+  select date_trunc('month',ORDER_DATE) order_month, USER_ID, AMOUNT
+  from ORDERS join USERS using(USER_ID)
+  ) user_orders
+where USER_ID=42
+group by order_month
+;
+                                                                   QUERY PLAN
+
+------------------------------------------------------------------------------------------------------------------------------------------------
+ GroupAggregate  (cost=389.34..390.24 rows=10 width=40) (actual time=0.112..0.136 rows=7 loops=1)
+   Output: (date_trunc('month'::text, orders.order_date)), sum(orders.amount)
+   Group Key: (date_trunc('month'::text, orders.order_date))
+   Buffers: shared hit=19
+   -&amp;gt;  Sort  (cost=389.34..389.59 rows=100 width=17) (actual time=0.104..0.110 rows=100 loops=1)
+         Output: (date_trunc('month'::text, orders.order_date)), orders.amount
+         Sort Key: (date_trunc('month'::text, orders.order_date))
+         Sort Method: quicksort  Memory: 32kB
+         Buffers: shared hit=19
+         -&amp;gt;  Nested Loop  (cost=5.49..386.02 rows=100 width=17) (actual time=0.022..0.086 rows=100 loops=1)
+               Output: date_trunc('month'::text, orders.order_date), orders.amount
+               Buffers: shared hit=19
+               -&amp;gt;  Index Only Scan using users_pkey on public.users  (cost=0.29..4.30 rows=1 width=8) (actual time=0.006..0.006 rows=1 loops=1)
+                     Output: users.user_id
+                     Index Cond: (users.user_id = 42)
+                     Heap Fetches: 0
+                     Buffers: shared hit=3
+               -&amp;gt;  Bitmap Heap Scan on public.orders  (cost=5.20..380.47 rows=100 width=25) (actual time=0.012..0.031 rows=100 loops=1)
+                     Output: orders.order_id, orders.order_date, orders.amount, orders.user_id, orders.description
+                     Recheck Cond: (orders.user_id = 42)
+                     Heap Blocks: exact=13
+                     Buffers: shared hit=16
+                     -&amp;gt;  Bitmap Index Scan on orders_by_user  (cost=0.00..5.17 rows=100 width=0) (actual time=0.008..0.008 rows=100 loops=1)
+                           Index Cond: (orders.user_id = 42)
+                           Buffers: shared hit=3
+ Planning Time: 0.082 ms
+ Execution Time: 0.161 ms
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Here is the execution plan with the execution statistics. We have read 3 pages from USERS to get our USER_ID (Index Only Scan) and navigated, with Nested Loop, to ORDERS and get the 100 orders for this user. This has read 3 pages from the index (Bitmap Index Scan) and 13 pages from the table. That’s a total of 19 pages. Those pages are 8k blocks.&lt;/p&gt;&lt;h3&gt;4x initial size scales with same performance: 19 page reads&lt;/h3&gt;&lt;p&gt;Let’s increase the size of the tables by a factor 4. I change the “generate_series(1,100)” to “generate_series(1,200)” in the USERS generations and run the same. That generates 40000 users and 4 million orders.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;
+select relkind,relname,reltuples,relpages,lpad(pg_size_pretty(relpages::bigint*8*1024),20) "relpages * 8k" from pg_class natural join (select
+oid relnamespace,nspname from pg_namespace) nsp where nspname='public' order by relpages;
+
+ relkind |       relname       |  reltuples   | relpages |    relpages * 8k
+---------+---------------------+--------------+----------+----------------------
+ S       | orders_order_id_seq |            1 |        1 |           8192 bytes
+ S       | users_user_id_seq   |            1 |        1 |           8192 bytes
+ i       | users_pkey          |        40000 |      112 |               896 kB
+ r       | users               |        40000 |      485 |              3880 kB
+ i       | orders_pkey         |        4e+06 |    10969 |                86 MB
+ i       | orders_by_user      |        4e+06 |    10985 |                86 MB
+ r       | orders              | 3.999995e+06 |    52617 |               411 MB
+
+explain (analyze,verbose,costs,buffers)
+select order_month,sum(amount)
+from
+  (
+  select date_trunc('month',ORDER_DATE) order_month, USER_ID, AMOUNT
+  from ORDERS join USERS using(USER_ID)
+  ) user_orders
+where USER_ID=42
+group by order_month
+;
+explain (analyze,verbose,costs,buffers)
+select order_month,sum(amount)
+from
+  (
+  select date_trunc('month',ORDER_DATE) order_month, USER_ID, AMOUNT
+  from ORDERS join USERS using(USER_ID)
+  ) user_orders
+where USER_ID=42
+group by order_month
+;
+                                                                   QUERY PLAN                                                                 
+------------------------------------------------------------------------------------------------------------------------------------------------
+ GroupAggregate  (cost=417.76..418.69 rows=10 width=40) (actual time=0.116..0.143 rows=9 loops=1)
+   Output: (date_trunc('month'::text, orders.order_date)), sum(orders.amount)
+   Group Key: (date_trunc('month'::text, orders.order_date))
+   Buffers: shared hit=19
+   -&amp;gt;  Sort  (cost=417.76..418.02 rows=104 width=16) (actual time=0.108..0.115 rows=100 loops=1)
+         Output: (date_trunc('month'::text, orders.order_date)), orders.amount
+         Sort Key: (date_trunc('month'::text, orders.order_date))
+         Sort Method: quicksort  Memory: 32kB
+         Buffers: shared hit=19
+         -&amp;gt;  Nested Loop  (cost=5.53..414.27 rows=104 width=16) (actual time=0.044..0.091 rows=100 loops=1)
+               Output: date_trunc('month'::text, orders.order_date), orders.amount
+               Buffers: shared hit=19
+               -&amp;gt;  Index Only Scan using users_pkey on public.users  (cost=0.29..4.31 rows=1 width=8) (actual time=0.006..0.007 rows=1 loops=1)
+                     Output: users.user_id
+                     Index Cond: (users.user_id = 42)
+                     Heap Fetches: 0
+                     Buffers: shared hit=3
+               -&amp;gt;  Bitmap Heap Scan on public.orders  (cost=5.24..408.66 rows=104 width=24) (actual time=0.033..0.056 rows=100 loops=1)
+                     Output: orders.order_id, orders.order_date, orders.amount, orders.user_id, orders.description
+                     Recheck Cond: (orders.user_id = 42)
+                     Heap Blocks: exact=13
+                     Buffers: shared hit=16
+                     -&amp;gt;  Bitmap Index Scan on orders_by_user  (cost=0.00..5.21 rows=104 width=0) (actual time=0.029..0.029 rows=100 loops=1)
+                           Index Cond: (orders.user_id = 42)
+                           Buffers: shared hit=3
+ Planning Time: 0.084 ms
+ Execution Time: 0.168 ms
+(27 rows)
+
+Time: 0.532 ms
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Look how we scaled here: I multiplied the size of the tables by 4x and I have exactly the same cost: 3 pages from each index and 13 from the table. This is the beauty of B*Tree: the cost depends only on the height of the tree and not the size of the table. And you can increase the table exponentially before the height of the index increases.&lt;/p&gt;&lt;h3&gt;16x initial size scales with 21/19=1.1 cost factor&lt;/h3&gt;&lt;p&gt;Let’s go further and x4 the size of the tables again. I run with “generate_series(1,400)” in the USERS generations and run the same. That generates 160 thousand users and 16 million orders.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;
+select relkind,relname,reltuples,relpages,lpad(pg_size_pretty(relpages::bigint*8*1024),20) "relpages * 8k" from pg_class natural join (select
+oid relnamespace,nspname from pg_namespace) nsp where nspname='public' order by relpages;
+ relkind |       relname       |  reltuples   | relpages |    relpages * 8k
+---------+---------------------+--------------+----------+----------------------
+ S       | orders_order_id_seq |            1 |        1 |           8192 bytes
+ S       | users_user_id_seq   |            1 |        1 |           8192 bytes
+ i       | users_pkey          |       160000 |      442 |              3536 kB
+ r       | users               |       160000 |     1925 |                15 MB
+ i       | orders_pkey         |      1.6e+07 |    43871 |               343 MB
+ i       | orders_by_user      |      1.6e+07 |    43935 |               343 MB
+ r       | orders              | 1.600005e+07 |   213334 |              1667 MB
+
+explain (analyze,verbose,costs,buffers)
+select order_month,sum(amount)
+from
+  (
+  select date_trunc('month',ORDER_DATE) order_month, USER_ID, AMOUNT
+  from ORDERS join USERS using(USER_ID)
+  ) user_orders
+where USER_ID=42
+group by order_month
+;
+                                                                   QUERY PLAN                                                                 
+------------------------------------------------------------------------------------------------------------------------------------------------
+ GroupAggregate  (cost=567.81..569.01 rows=10 width=40) (actual time=0.095..0.120 rows=8 loops=1)
+   Output: (date_trunc('month'::text, orders.order_date)), sum(orders.amount)
+   Group Key: (date_trunc('month'::text, orders.order_date))
+   Buffers: shared hit=21
+   -&amp;gt;  Sort  (cost=567.81..568.16 rows=140 width=17) (actual time=0.087..0.093 rows=100 loops=1)
+         Output: (date_trunc('month'::text, orders.order_date)), orders.amount
+         Sort Key: (date_trunc('month'::text, orders.order_date))
+         Sort Method: quicksort  Memory: 32kB
+         Buffers: shared hit=21
+         -&amp;gt;  Nested Loop  (cost=6.06..562.82 rows=140 width=17) (actual time=0.026..0.070 rows=100 loops=1)
+               Output: date_trunc('month'::text, orders.order_date), orders.amount
+               Buffers: shared hit=21
+               -&amp;gt;  Index Only Scan using users_pkey on public.users  (cost=0.42..4.44 rows=1 width=8) (actual time=0.007..0.007 rows=1 loops=1)
+                     Output: users.user_id
+                     Index Cond: (users.user_id = 42)
+                     Heap Fetches: 0
+                     Buffers: shared hit=4
+               -&amp;gt;  Bitmap Heap Scan on public.orders  (cost=5.64..556.64 rows=140 width=25) (actual time=0.014..0.035 rows=100 loops=1)
+                     Output: orders.order_id, orders.order_date, orders.amount, orders.user_id, orders.description
+                     Recheck Cond: (orders.user_id = 42)
+                     Heap Blocks: exact=13
+                     Buffers: shared hit=17
+                     -&amp;gt;  Bitmap Index Scan on orders_by_user  (cost=0.00..5.61 rows=140 width=0) (actual time=0.010..0.010 rows=100 loops=1)
+                           Index Cond: (orders.user_id = 42)
+                           Buffers: shared hit=4
+ Planning Time: 0.082 ms
+ Execution Time: 0.159 ms
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Yes, by increasing the table size a lot the index may have to split the root block to add a new branch level. The consequence is minimal: two additional pages to read here. The additional execution time is in tens of microseconds when cached in RAM, up to milliseconds if from mechanical disk. With 10x or 100x larger tables, you will do some physical I/O and only the top index branches will be in memory. You can expect about about 20 I/O calls then. With SSD on Fiber Channel (like with AWS RDS PostgreSQL for example), this will still be in single-digit millisecond. The cheapest AWS EBS Provisioned IOPS for RDS is 1000 IOPS then you can estimate the number of queries per second you can run. The number of pages here (“Buffers”) is the right metric to estimate the cost of the query. To be compared with DynamoDB RCU. &lt;/p&gt;&lt;h3&gt;64x initial size scales with 23/19=1.2 cost factor&lt;/h3&gt;&lt;p&gt;Last test for me, but you can go further, I change to “generate_series(1,800)” in the USERS generations and run the same. That generates 640 thousand users and 64 million orders.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;
+
+select relkind,relname,reltuples,relpages,lpad(pg_size_pretty(relpages::bigint*8*1024),20) "relpages * 8k" from pg_class natural join (select
+oid relnamespace,nspname from pg_namespace) nsp where nspname='public' order by relpages;
+
+ relkind |       relname       |   reltuples   | relpages |    relpages * 8k
+---------+---------------------+---------------+----------+----------------------
+ S       | orders_order_id_seq |             1 |        1 |           8192 bytes
+ S       | users_user_id_seq   |             1 |        1 |           8192 bytes
+ i       | users_pkey          |        640000 |     1757 |                14 MB
+ r       | users               |        640000 |     7739 |                60 MB
+ i       | orders_pkey         |       6.4e+07 |   175482 |              1371 MB
+ i       | orders_by_user      |       6.4e+07 |   175728 |              1373 MB
+ r       | orders              | 6.4000048e+07 |   853334 |              6667 MB
+
+
+explain (analyze,verbose,costs,buffers)
+select order_month,sum(amount)
+from
+  (
+  select date_trunc('month',ORDER_DATE) order_month, USER_ID, AMOUNT
+  from ORDERS join USERS using(USER_ID)
+  ) user_orders
+where USER_ID=42
+group by order_month
+;
+                                                                QUERY PLAN
+------------------------------------------------------------------------------------------------------------------------------------------
+ HashAggregate  (cost=1227.18..1227.33 rows=10 width=40) (actual time=0.102..0.105 rows=7 loops=1)
+   Output: (date_trunc('month'::text, orders.order_date)), sum(orders.amount)
+   Group Key: date_trunc('month'::text, orders.order_date)
+   Buffers: shared hit=23
+   -&amp;gt;  Nested Loop  (cost=7.36..1225.65 rows=306 width=17) (actual time=0.027..0.072 rows=100 loops=1)
+         Output: date_trunc('month'::text, orders.order_date), orders.amount
+         Buffers: shared hit=23
+         -&amp;gt;  Index Only Scan using users_pkey on public.users  (cost=0.42..4.44 rows=1 width=8) (actual time=0.007..0.008 rows=1 loops=1)
+               Output: users.user_id
+               Index Cond: (users.user_id = 42)
+               Heap Fetches: 0
+               Buffers: shared hit=4
+         -&amp;gt;  Bitmap Heap Scan on public.orders  (cost=6.94..1217.38 rows=306 width=25) (actual time=0.015..0.037 rows=100 loops=1)
+               Output: orders.order_id, orders.order_date, orders.amount, orders.user_id, orders.description
+               Recheck Cond: (orders.user_id = 42)
+               Heap Blocks: exact=15
+               Buffers: shared hit=19
+               -&amp;gt;  Bitmap Index Scan on orders_by_user  (cost=0.00..6.86 rows=306 width=0) (actual time=0.011..0.011 rows=100 loops=1)
+                     Index Cond: (orders.user_id = 42)
+                     Buffers: shared hit=4
+ Planning Time: 0.086 ms
+ Execution Time: 0.134 ms
+(22 rows)
+
+Time: 0.521 ms
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;You see how the cost increases slowly, with two additional pages to read here.&lt;/p&gt;&lt;p dir="ltr"&gt;Please, test with more rows. When looking at the time (less than 1 millisecond), keep in mind that it is CPU time here as all pages are in memory cache. On purpose, because the article mentions CPU and RAM (&lt;em dir="ltr"&gt;“joins require a lot of CPU and memory”&lt;/em&gt;). Anyway, 20 disk reads will still be within the millisecond on modern storage.&lt;br dir="ltr"&gt;
+&lt;/p&gt;&lt;img src="https://blog.dbi-services.com/wp-insides/uploads/sites/2/2020/07/SQL-Join-Scale-1024x625.jpg" alt="" width="420" height="256" srcset="https://blog.dbi-services.com/wp-insides/uploads/sites/2/2020/07/SQL-Join-Scale-1024x625.jpg 1024w, https://blog.dbi-services.com/wp-insides/uploads/sites/2/2020/07/SQL-Join-Scale-300x183.jpg 300w, https://blog.dbi-services.com/wp-insides/uploads/sites/2/2020/07/SQL-Join-Scale-768x468.jpg 768w, https://blog.dbi-services.com/wp-insides/uploads/sites/2/2020/07/SQL-Join-Scale-1536x937.jpg 1536w, https://blog.dbi-services.com/wp-insides/uploads/sites/2/2020/07/SQL-Join-Scale-2048x1249.jpg 2048w"&gt;&lt;h3&gt;Time complexity of B*Tree is actually very light&lt;/h3&gt;&lt;p&gt;Let’s get back to the “Big O” notation. We are definitely not “O (M + N)”. This would have been without any index, where all pages from all tables would have been full scanned. Any database maintains hashed or sorted structures to improve high selectivity queries. This has nothing to do with SQL vs. NoSQL or with RDBMS vs. Hierarchichal DB. In DynamoDB this structure on primary key is HASH partitioning (and additional sorting). In RDBMS the most common structure is a sorted index (with the possibility of additional partitioning, zone maps, clustering,…). We are not in “O(log(N))+Nlog(M)” but more like “O(log(N))+log(M)” because the size of the driving table (N) has nothing to do on the inner loop cost. The first filtering, the one with “O(log(N))”, has filtered out those N rows. Using “N” and ignoring the outer selectivity is a mistake. Anyway, this O(log) for B*Tree is really scalable as we have seen because the base of this log() function is really small (thanks to large branch blocks – 8KB).&lt;/p&gt;&lt;p&gt;Anyway, the point is not there. As you have seen, the cost of Nested Loop is in the blocks that are fetched from the inner loop, and this depends on the selectivity and the clustering factor (the table physical order correlation with the index order), and some prefetching techniques. This O(log) for going through the index is often insignificant on Range Scans.&lt;/p&gt;&lt;h3&gt;40 years of RDBMS optimizations&lt;/h3&gt;&lt;p&gt;If you have a database size that is several order of magnitude from those million rows, and where this millisecond latency is a problem, the major RDBMS offer many features and structures to go further in performance and predictability of response time. As we have seen, the cost of this query is not about Index, Nested Loop or Group By. It is about the scattered items: ingested by date but queried by user.&lt;/p&gt;&lt;p dir="ltr"&gt;Through its 40 years of optimizing OLTP applications, the &lt;strong dir="ltr"&gt;Oracle Database&lt;/strong&gt; have a lot of features, with their popularity depending on the IT trends. From the first versions, in the 80’s, because the hierarchical databases were still in people’s mind, and the fear of “joins are expensive” was already there, Oracle has implemented a structure to store the tables together, pre-joined. This is called &lt;a href="https://docs.oracle.com/en/database/oracle/oracle-database/20/sqlrf/CREATE-CLUSTER.html#GUID-4DBC701F-AFC3-486D-AA32-B5CB1D6946F7" rel="noopener noreferrer" dir="ltr"&gt;CLUSTER&lt;/a&gt;. It was, from the beginning, indexed with a sorted structure (INDEX CLUSTER) or a hashed structure (HASH CLUSTER). Parallel Query was quickly implemented to scale-up and, with Parallel Server now known as RAC, to scale-out. Partitioning was introduced to scale further, again with sorted (PARTITION by RANGE) or hashed (PARTITION BY HASH) segments. This can scale further the index access (LOCAL INDEX with partition pruning). And it also scales joins (PARTITION-WISE JOIN) to reduce CPU and RAM to join large datasets. When more agility was needed, B*Tree sorted structures were the winner and Index Organized Tables were introduced to cluster data (to avoid the most expensive operation as we have seen in the examples above). But Heap Tables and B*Tree are still the winners given their agility and because the Join operations were rarely a bottleneck. Currently, partitioning has improved (even scaling horizontally beyond the clusters with sharding), as well as data clustering (&lt;a href="https://blog.dbi-services.com/oracle-12c-clustering/" rel="noopener noreferrer" dir="ltr"&gt;Attribute Clustering&lt;/a&gt;, Zone Maps and Storage Index). And there’s always the possibility for Index Only access, just by adding more columns to the index, removing the major cost of table access. And materialized views can also act as &lt;a href="https://blog.dbi-services.com/oracle-index-on-joins/" rel="noopener noreferrer" dir="ltr"&gt;pre-built join index&lt;/a&gt; and will also reduce the CPU and RAM required for GROUP BY aggregation.&lt;/p&gt;&lt;p dir="ltr"&gt;I listed a lot of Oracle features, but Microsoft &lt;strong dir="ltr"&gt;SQL Server&lt;/strong&gt; has also many similar features. Clustered tables, covering indexes, Indexed Views, and of course partitioning. Open source databases are evolving a lot. &lt;strong dir="ltr"&gt;PostgreSQL&lt;/strong&gt; has partitioning, parallel query, clustering,.. Still Open Source, you can web-scale it to a distributed database with &lt;strong dir="ltr"&gt;YugabyteDB&lt;/strong&gt;. &lt;strong dir="ltr"&gt;MySQL&lt;/strong&gt; is evolving a lot recently. I’ll not list all databases and all features. You can port the testcase to other databases easily.&lt;/p&gt;&lt;p dir="ltr"&gt;Oh, and by the way, if you want to test it on &lt;strong dir="ltr"&gt;Oracle Database&lt;/strong&gt; you will quickly realize that the query from the article may not even do any Join operation. Because when you query with the USER_ID you probably don’t need to get back to the USERS table. And thanks to the declared foreign key, the optimizer knows that the join is not necessary: &lt;a href="https://dbfiddle.uk/?rdbms=oracle_18&amp;amp;fiddle=a5afeba2fdb27dec7533545ab0a6eb0e" rel="noopener noreferrer" dir="ltr"&gt;https://dbfiddle.uk/?rdbms=oracle_18&amp;amp;fiddle=a5afeba2fdb27dec7533545ab0a6eb0e&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;NoSQL databases are good for many use-cases. But remember that it is a key-value optimized data store. When you start to split a document into multiple entities with their own keys, remember that relational databases were invented for that. I blogged about another myth recently: &lt;a href="https://blog.dbi-services.com/the-myth-of-nosql-vs-rdbms-agility-adding-attributes/" rel="noopener noreferrer" dir="ltr"&gt;The myth of NoSQL (vs. RDBMS) agility: adding attributes&lt;/a&gt;. All feedback welcome, here or on Twitter:&lt;/p&gt;&lt;div class="embed-placeholder" data-type="twitter" data-id="1279864643029291010"&gt;&lt;/div&gt;</description><pubDate>Sun, 05 Jul 2020 19:55:34 -0500</pubDate></item><item><title>Beginner’s Guide To Abstraction</title><link>https://lobste.rs/s/covli0</link><description>&lt;h1&gt;Beginner’s Guide To Abstraction&lt;/h1&gt;&lt;p dir="ltr"&gt;In &lt;em dir="ltr"&gt;The Pragmatic Programmer&lt;/em&gt;, Andrew Hunt and David Thomas introduced the DRY (Don't Repeat Yourself) principle. The rationale being that if you see the same code copy+pasted 10 times you should probably factor that code into its own method/class.&lt;/p&gt;&lt;p dir="ltr"&gt;But then Sandi Metz came along and &lt;a href="https://www.sandimetz.com/blog/2016/1/20/the-wrong-abstraction" dir="ltr"&gt;said&lt;/a&gt;:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Duplication is far cheaper than the wrong abstraction.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;And so the eternal war began.&lt;/p&gt;&lt;h3&gt;What is abstraction?&lt;/h3&gt;&lt;p dir="ltr"&gt;Abstraction is hard to define but the process typically goes like this:&lt;br dir="ltr"&gt;
+1) you identify different chunks of code that you think are all basically doing the same thing&lt;br dir="ltr"&gt;
+2) you create a method or a class with a narrow interface which can be substituted in for all the chunks of code you found&lt;br dir="ltr"&gt;
+3) you go and swap out the chunks of code with a call to your method/class&lt;/p&gt;&lt;h3&gt;The right/wrong abstraction&lt;/h3&gt;&lt;p dir="ltr"&gt;You'll know that you've made the &lt;em dir="ltr"&gt;right&lt;/em&gt; abstraction when a long time passes and you haven't needed to expand the interface (an example of expanding the interface is adding an optional flag argument). You'll also know you've made the right abstraction when another developer doesn't find it that much harder to understand how the code behaves for a given use case than if somebody had written the code to satisfy the use case without the abstraction.&lt;/p&gt;&lt;p dir="ltr"&gt;You'll know you've made the &lt;em dir="ltr"&gt;wrong&lt;/em&gt; abstraction when after a while the interface has been expanded to support various optional flags, each for a different use case, and you need to be a genius to reason about what the code will actually do for a given use case. By the way, if you have a string arg that merely gets fed into a switch statement inside a method and for each new use case you come up with a new accepted value for it, you &lt;em dir="ltr"&gt;are&lt;/em&gt; expanding the implicit interface, even if that fact isn't captured in your type system.&lt;/p&gt;&lt;p&gt;There is a lot of grey area inbetween the perfect abstraction and the completely wrong abstraction, and so the point of this section isn't to prescribe how much you should be abstracting, but to encourage you to think about both perspectives and be able to make a case in a PR review for why you think an abstraction should/should-not exist.&lt;/p&gt;&lt;h3&gt;Do you over or under-abstract?&lt;/h3&gt;&lt;p&gt;Given it is impossible to make the right decision with regards to abstraction every time, you are probably either somebody who over-abstracts or somebody who under-abstracts.&lt;/p&gt;&lt;p&gt;If common feedback on your PR reviews is that you should DRY up your code, you could probably benefit from doing a scan for duplicated code before submitting a PR and considering whether it belongs in its own method/class.&lt;/p&gt;&lt;p&gt;If you commonly get feedback that your methods are hard to understand because they support too many use cases at once, you are probaby over-abstracting and should consider whether you should increase your tolerance for duplication.&lt;/p&gt;&lt;p&gt;Note that it's not always as simple as under-abstracting vs over-abstracting. Sometimes abstraction is appropriate, but you might take the wrong approach. If an abstraction is deemed wrong by the team, that doesn't mean no abstraction is necessarily the best alternative.&lt;/p&gt;&lt;h3&gt;Under-abstraction examples&lt;/h3&gt;&lt;p&gt;The main sign that you could be under-abstracting is that you have a heap of code doing the exact same thing called in a heap of places with no obvious reason why anybody would want the code to diverge.&lt;/p&gt;&lt;h4&gt;Example: Hard-coded formulas&lt;/h4&gt;&lt;h5&gt;Bad:&lt;/h5&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span spellcheck="true" dir="ltr"&gt;# sphere has radius of 11&lt;/span&gt;
+sphere_volume &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;4&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;Math&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;:PI&lt;/span&gt;&lt;span dir="ltr"&gt;/&lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;11&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;
+puts &lt;span dir="ltr"&gt;"the volume of the sphere is &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#{&lt;/span&gt;sphere_volume&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt; cm^3"&lt;/span&gt;
+&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;
+
+radius &lt;span dir="ltr"&gt;=&lt;/span&gt; calculate_radius
+volume &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;4&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;Math&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;:PI&lt;/span&gt;&lt;span dir="ltr"&gt;/&lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;radius&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;
+sphere&lt;span dir="ltr"&gt;.&lt;/span&gt;volume &lt;span dir="ltr"&gt;=&lt;/span&gt; volume&lt;/code&gt;&lt;/PRE&gt;&lt;h5&gt;Good:&lt;/h5&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;def&lt;/span&gt; &lt;span dir="ltr"&gt;sphere_volume&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;radius&lt;span dir="ltr"&gt;)&lt;/span&gt;
+  &lt;span dir="ltr"&gt;4&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;Math&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;:PI&lt;/span&gt;&lt;span dir="ltr"&gt;/&lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;radius&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;
+&lt;span dir="ltr"&gt;end&lt;/span&gt;
+
+&lt;span spellcheck="true" dir="ltr"&gt;# sphere has radius of 11&lt;/span&gt;
+sphere_volume &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;sphere_volume&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;11&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+puts &lt;span dir="ltr"&gt;"the volume of the sphere is &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#{&lt;/span&gt;sphere_volume&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt; cm^3"&lt;/span&gt;
+&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;
+
+radius &lt;span dir="ltr"&gt;=&lt;/span&gt; calculate_radius
+volume &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;sphere_volume&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;radius&lt;span dir="ltr"&gt;)&lt;/span&gt;
+sphere&lt;span dir="ltr"&gt;.&lt;/span&gt;volume &lt;span dir="ltr"&gt;=&lt;/span&gt; volume&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Why is it a good idea to abstract the formula for a sphere's volume into its own method? Because if mathematicians ever found out they got the formula wrong, you would want to go through all the places in your code that you used the formula and update it to be correct. That is, we know ahead of time that we want the code to be in lockstep.&lt;/p&gt;&lt;h3&gt;Over-abstraction examples&lt;/h3&gt;&lt;p&gt;The main sign that you're over-abstracting is that your method accepts a bunch of optional args:&lt;/p&gt;&lt;h4&gt;Example: Bloated method&lt;/h4&gt;&lt;h5&gt;Bad:&lt;/h5&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;def&lt;/span&gt; &lt;span dir="ltr"&gt;average&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;arr&lt;span dir="ltr"&gt;,&lt;/span&gt; type &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;Integer&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; ignore_nulls &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;false&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+  &lt;span dir="ltr"&gt;if&lt;/span&gt; arr&lt;span dir="ltr"&gt;.&lt;/span&gt;any&lt;span dir="ltr"&gt;?&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;:nil?&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+    &lt;span dir="ltr"&gt;if&lt;/span&gt; ignore_nulls
+      arr &lt;span dir="ltr"&gt;=&lt;/span&gt; arr&lt;span dir="ltr"&gt;.&lt;/span&gt;compact
+    &lt;span dir="ltr"&gt;else&lt;/span&gt;
+      &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;
+    &lt;span dir="ltr"&gt;end&lt;/span&gt;
+  &lt;span dir="ltr"&gt;end&lt;/span&gt;
+
+  &lt;span dir="ltr"&gt;if&lt;/span&gt; type &lt;span dir="ltr"&gt;==&lt;/span&gt; &lt;span dir="ltr"&gt;String&lt;/span&gt;
+    arr &lt;span dir="ltr"&gt;=&lt;/span&gt; arr&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;map&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;:to_i&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+  &lt;span dir="ltr"&gt;end&lt;/span&gt;
+
+  arr&lt;span dir="ltr"&gt;.&lt;/span&gt;sum &lt;span dir="ltr"&gt;/&lt;/span&gt; arr&lt;span dir="ltr"&gt;.&lt;/span&gt;size
+&lt;span dir="ltr"&gt;end&lt;/span&gt;
+
+puts &lt;span dir="ltr"&gt;average&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;
+
+puts &lt;span dir="ltr"&gt;average&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;'1'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;'2'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;'3'&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;String&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;
+
+puts &lt;span dir="ltr"&gt;average&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;'1'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;'2'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;'3'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;String&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;true&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;
+
+puts &lt;span dir="ltr"&gt;average&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;Integer&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;false&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;If you want to know how the &lt;code dir="ltr"&gt;average&lt;/code&gt; method behaves when you're dealing with an array of strings with no &lt;code dir="ltr"&gt;nil&lt;/code&gt; values, you have to read through the first if condition which has nothing to do with your use case before reaching the code that does. Likewise if you want to know how the &lt;code dir="ltr"&gt;average&lt;/code&gt; method behaves when the array contains either nils or integers, the second if condition is irrelevant, but you'll still need to read through that to understand how the whole thing works.&lt;/p&gt;&lt;p&gt;If each of the use cases came up dozens or hundreds of times, maybe then it would make sense to retain the abstraction, but when the number of optional arguments is roughly equal to the number of different use cases, chances are you've got the wrong abstraction.&lt;/p&gt;&lt;h5&gt;Good:&lt;/h5&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;def&lt;/span&gt; &lt;span dir="ltr"&gt;average&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;arr&lt;span dir="ltr"&gt;)&lt;/span&gt;
+  arr&lt;span dir="ltr"&gt;.&lt;/span&gt;sum &lt;span dir="ltr"&gt;/&lt;/span&gt; arr&lt;span dir="ltr"&gt;.&lt;/span&gt;size
+&lt;span dir="ltr"&gt;end&lt;/span&gt;
+
+puts &lt;span dir="ltr"&gt;average&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;
+
+arr &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;'1'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;'2'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;'3'&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;map&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;:to_i&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+puts &lt;span dir="ltr"&gt;average&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;arr&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;
+
+arr &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;'1'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;'2'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;'3'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;compact&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;map&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;:to_i&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+puts &lt;span dir="ltr"&gt;average&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;arr&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;
+
+arr &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;
+&lt;span dir="ltr"&gt;if&lt;/span&gt; arr&lt;span dir="ltr"&gt;.&lt;/span&gt;any&lt;span dir="ltr"&gt;?&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;:nil?&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+  puts &lt;span dir="ltr"&gt;nil&lt;/span&gt;
+&lt;span dir="ltr"&gt;else&lt;/span&gt;
+  puts &lt;span dir="ltr"&gt;average&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;arr&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;span dir="ltr"&gt;end&lt;/span&gt;
+&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;In this case we're not removing the abstraction altogether: we're just keeping the part that actually applies to all cases. Now understanding the logic of any one invocation of our &lt;code dir="ltr"&gt;average&lt;/code&gt; method is trivial.&lt;/p&gt;&lt;p dir="ltr"&gt;We now have &lt;code dir="ltr"&gt;.map(&amp;amp;:to_i)&lt;/code&gt; being duplicated whereas it only appeared once in the &lt;code dir="ltr"&gt;Bad&lt;/code&gt; alternative, but it's a small cost for a vast improvement.&lt;/p&gt;&lt;p dir="ltr"&gt;Note that looking at the &lt;code dir="ltr"&gt;Good&lt;/code&gt; variant, it's clear that the behaviour is quite different from one use case to the next, but that is not at all clear in the &lt;code dir="ltr"&gt;Bad&lt;/code&gt; variant because the method calls all look so simple and it was anybody's guess how much code inside &lt;code dir="ltr"&gt;average&lt;/code&gt; applied to each use case.&lt;/p&gt;&lt;p&gt;This is why abstractions go bad over time: because as you expand the interface more and more, it becomes harder and harder to judge how appropriate the abstraction is to any given use case, and developers end up assuming that all that convoluted code is vaguely relevant to the majority of use cases when in fact it's not.&lt;/p&gt;&lt;h4&gt;Example: Awkward class&lt;/h4&gt;&lt;h5&gt;Bad:&lt;/h5&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;class&lt;/span&gt; &lt;span dir="ltr"&gt;Shape&lt;/span&gt;
+  &lt;span dir="ltr"&gt;def&lt;/span&gt; &lt;span dir="ltr"&gt;initialize&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;radius&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; width&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; type&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+    &lt;span dir="ltr"&gt;@radius&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; radius
+    &lt;span dir="ltr"&gt;@width&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; width
+    &lt;span dir="ltr"&gt;@type&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; type
+  &lt;span dir="ltr"&gt;end&lt;/span&gt;
+
+  &lt;span dir="ltr"&gt;def&lt;/span&gt; area
+    &lt;span dir="ltr"&gt;case&lt;/span&gt; &lt;span dir="ltr"&gt;@type&lt;/span&gt;
+    &lt;span dir="ltr"&gt;when&lt;/span&gt; &lt;span dir="ltr"&gt;:square&lt;/span&gt;
+      &lt;span dir="ltr"&gt;@width&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;
+    &lt;span dir="ltr"&gt;when&lt;/span&gt; &lt;span dir="ltr"&gt;:circle&lt;/span&gt;
+      &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;@radius&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;Math&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;:PI&lt;/span&gt;
+    &lt;span dir="ltr"&gt;end&lt;/span&gt;
+  &lt;span dir="ltr"&gt;end&lt;/span&gt;
+
+  &lt;span dir="ltr"&gt;def&lt;/span&gt; perimeter
+    &lt;span dir="ltr"&gt;case&lt;/span&gt; &lt;span dir="ltr"&gt;@type&lt;/span&gt;
+    &lt;span dir="ltr"&gt;when&lt;/span&gt; &lt;span dir="ltr"&gt;:square&lt;/span&gt;
+      &lt;span dir="ltr"&gt;@width&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;4&lt;/span&gt;
+    &lt;span dir="ltr"&gt;when&lt;/span&gt; &lt;span dir="ltr"&gt;:circle&lt;/span&gt;
+      &lt;span dir="ltr"&gt;@radius&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;Math&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;:PI&lt;/span&gt;
+    &lt;span dir="ltr"&gt;end&lt;/span&gt;
+  &lt;span dir="ltr"&gt;end&lt;/span&gt;
+
+  &lt;span dir="ltr"&gt;def&lt;/span&gt; diameter
+    &lt;span dir="ltr"&gt;case&lt;/span&gt; &lt;span dir="ltr"&gt;@type&lt;/span&gt;
+    &lt;span dir="ltr"&gt;when&lt;/span&gt; &lt;span dir="ltr"&gt;:square&lt;/span&gt;
+      &lt;span dir="ltr"&gt;nil&lt;/span&gt;
+    &lt;span dir="ltr"&gt;when&lt;/span&gt; &lt;span dir="ltr"&gt;:circle&lt;/span&gt;
+      &lt;span dir="ltr"&gt;@radius&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;
+    &lt;span dir="ltr"&gt;end&lt;/span&gt;
+  &lt;span dir="ltr"&gt;end&lt;/span&gt;
+&lt;span dir="ltr"&gt;end&lt;/span&gt;
+
+square &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;Shape&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;new&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;type&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;:square&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; width&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+square&lt;span dir="ltr"&gt;.&lt;/span&gt;area
+&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;100&lt;/span&gt;
+
+circle &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;Shape&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;new&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;type&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;:circle&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; radius&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+circle&lt;span dir="ltr"&gt;.&lt;/span&gt;area
+&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;314.159&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Code smells:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;switching on type in several places&lt;/LI&gt;&lt;LI&gt;returning nil or raising for a specific type when the method is non-applicable&lt;/LI&gt;&lt;LI&gt;optional arguments in initializer where you're expected to use one or the other&lt;/LI&gt;&lt;/UL&gt;&lt;h5&gt;Good&lt;/h5&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;class&lt;/span&gt; &lt;span dir="ltr"&gt;Circle&lt;/span&gt;
+  &lt;span dir="ltr"&gt;def&lt;/span&gt; &lt;span dir="ltr"&gt;initialize&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;radius&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+    &lt;span dir="ltr"&gt;@radius&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; radius
+  &lt;span dir="ltr"&gt;end&lt;/span&gt;
+
+  &lt;span dir="ltr"&gt;def&lt;/span&gt; area
+    &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;@radius&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;Math&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;:PI&lt;/span&gt;
+  &lt;span dir="ltr"&gt;end&lt;/span&gt;
+
+  &lt;span dir="ltr"&gt;def&lt;/span&gt; perimeter
+    &lt;span dir="ltr"&gt;@radius&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;Math&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;:PI&lt;/span&gt;
+  &lt;span dir="ltr"&gt;end&lt;/span&gt;
+
+  &lt;span dir="ltr"&gt;def&lt;/span&gt; diameter
+    &lt;span dir="ltr"&gt;@radius&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;
+  &lt;span dir="ltr"&gt;end&lt;/span&gt;
+&lt;span dir="ltr"&gt;end&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;class&lt;/span&gt; &lt;span dir="ltr"&gt;Square&lt;/span&gt;
+  &lt;span dir="ltr"&gt;def&lt;/span&gt; &lt;span dir="ltr"&gt;initialize&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;width&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;nil&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+    &lt;span dir="ltr"&gt;@width&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; width
+  &lt;span dir="ltr"&gt;end&lt;/span&gt;
+
+  &lt;span dir="ltr"&gt;def&lt;/span&gt; area
+    &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;@width&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+  &lt;span dir="ltr"&gt;end&lt;/span&gt;
+
+  &lt;span dir="ltr"&gt;def&lt;/span&gt; perimeter
+    &lt;span dir="ltr"&gt;@width&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;4&lt;/span&gt;
+  &lt;span dir="ltr"&gt;end&lt;/span&gt;
+&lt;span dir="ltr"&gt;end&lt;/span&gt;
+
+square &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;Square&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;new&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;width&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+square&lt;span dir="ltr"&gt;.&lt;/span&gt;area
+&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;100&lt;/span&gt;
+
+circle &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;Circle&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;new&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;radius&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+circle&lt;span dir="ltr"&gt;.&lt;/span&gt;area
+&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;314.159&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Just because squares and circles each have an area and a perimeter doesn't mean they should be the same class when there is literally zero overlap in how we obtain those two things. Likewise the &lt;code dir="ltr"&gt;diameter&lt;/code&gt; method only applies to circles, not squares. In a typed language, we may want to define a Shape interface containing the area/perimeter methods but there is no good reason to combine the classes.&lt;/p&gt;&lt;h4&gt;Example: React Notice components&lt;/h4&gt;&lt;h5&gt;Option 1&lt;/h5&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; SuccessNotice &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt; message &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;Box&lt;/span&gt; &lt;span dir="ltr"&gt;color&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;green&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;`Success: &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;message&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;`&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;/&lt;/span&gt;Box&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;const&lt;/span&gt; WarningNotice &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt; message &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;Box&lt;/span&gt; &lt;span dir="ltr"&gt;color&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;yellow&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;`Warning: &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;message&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;`&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;/&lt;/span&gt;Box&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;const&lt;/span&gt; ErrorNotice &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt; message &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;Box&lt;/span&gt; &lt;span dir="ltr"&gt;color&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;red&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;`Error: &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;message&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;`&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;/&lt;/span&gt;Box&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;...&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;SuccessNotice&lt;/span&gt; &lt;span dir="ltr"&gt;message&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;You win!&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;/&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;h5&gt;Option 2&lt;/h5&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; Notice &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt; type&lt;span dir="ltr"&gt;,&lt;/span&gt; message &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+  &lt;span dir="ltr"&gt;switch&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;type&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    &lt;span dir="ltr"&gt;case&lt;/span&gt; &lt;span dir="ltr"&gt;'success'&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
+      &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;Box&lt;/span&gt; &lt;span dir="ltr"&gt;color&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;green&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;`Success: &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;message&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;`&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;/&lt;/span&gt;Box&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;case&lt;/span&gt; &lt;span dir="ltr"&gt;'warning'&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
+      &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;Box&lt;/span&gt; &lt;span dir="ltr"&gt;color&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;yellow&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;`Warning: &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;message&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;`&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;/&lt;/span&gt;Box&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;case&lt;/span&gt; &lt;span dir="ltr"&gt;'error'&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
+      &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;Box&lt;/span&gt; &lt;span dir="ltr"&gt;color&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;red&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;`Error: &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;message&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;`&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;/&lt;/span&gt;Box&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;
+  &lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+  &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;null&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;span dir="ltr"&gt;...&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;Notice&lt;/span&gt; &lt;span dir="ltr"&gt;type&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;success&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;message&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;You win!&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;/&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;h5&gt;Option 3&lt;/h5&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; noticeMap &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+  success&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt; color&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;'green'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; prefix&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;'Success: '&lt;/span&gt; &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+  warning&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt; color&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;'yellow'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; prefix&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;'Warning: '&lt;/span&gt; &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+  error&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt; color&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;'red'&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; prefix&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;'Error: '&lt;/span&gt; &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;const&lt;/span&gt; ReallyAbstractedNotice &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt; type&lt;span dir="ltr"&gt;,&lt;/span&gt; message &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+  &lt;span dir="ltr"&gt;const&lt;/span&gt; options &lt;span dir="ltr"&gt;=&lt;/span&gt; noticeMap&lt;span dir="ltr"&gt;[&lt;/span&gt;type&lt;span dir="ltr"&gt;]&lt;/span&gt;
+
+  &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;Box&lt;/span&gt; &lt;span dir="ltr"&gt;color&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;options&lt;span dir="ltr"&gt;.&lt;/span&gt;color&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;`&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;options&lt;span dir="ltr"&gt;.&lt;/span&gt;prefix&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;message&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;`&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;/&lt;/span&gt;Box&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;span dir="ltr"&gt;...&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;ReallyAbstractedNotice&lt;/span&gt; &lt;span dir="ltr"&gt;type&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;success&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;message&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;You win!&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;/&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;What advantage does option 2 have over option 1? Not much. The only possible advantage is that we might actually receive &lt;code dir="ltr"&gt;type&lt;/code&gt; and &lt;code dir="ltr"&gt;message&lt;/code&gt; props and need to map that to the right JSX, however we typically know at compile time whether we're dealing with an error or a success message. If, at compile time, we already know we need to show an error notice, why force the programmer to pass an arbitrary &lt;code dir="ltr"&gt;type&lt;/code&gt; prop to the &lt;code dir="ltr"&gt;Notice&lt;/code&gt; component? That's just adding complexity that is not intrinsic to the behaviour we want.&lt;/p&gt;&lt;p&gt;Option 2 recognises that our various use cases share an interface, but then does nothing more than jam them into a component with a switch statement. Option 2 makes the same mistake as we saw in the example with the Shape class; in thinking that classes with similar interfaces should necessarily all be in the same class.&lt;/p&gt;&lt;p&gt;Option 3 takes what option 2 did and justifies the abstraction by pulling out the differences between our use cases into a single mapping object, so that the similarities don't need to be duplicated. It identifies that the only difference between our three notices is the color of the Box and the prefix message.&lt;/p&gt;&lt;p&gt;So which is better between options 1 and 3? Two questions to ask:&lt;/p&gt;&lt;h6&gt;Which is easier to read?&lt;/h6&gt;&lt;p&gt;Option 1 hands down&lt;/p&gt;&lt;h6&gt;Which is better equipped to handle new/evolving use cases?&lt;/h6&gt;&lt;p dir="ltr"&gt;The answer to this question comes down to our confidence that new use cases will conform to the current behaviour. If we need to add a new &lt;code dir="ltr"&gt;info&lt;/code&gt; variant, it's easier in option 3 because you can just add the colour/prefix in the noticeMap object.&lt;/p&gt;&lt;p&gt;On the other hand, what if we want the success case to disappear after a certain amount of time, but for the error and warning cases to require acknowledging by the user? Easy to handle when each case is its own component: less-so when it's all wrapped up into one. What if we don't need prefixes for errors because they typically come with their own? That would mean the prefix key in the noticeMap now only applies to 2 out of 3 use cases. What if we want to pass more props to the Box component if we're dealing with a warning? We would need to add a new option in our noticeMap object, and have logic for not passing that prop in our other cases.&lt;/p&gt;&lt;p&gt;In this situation, just go with option 1. Much easier to switch to option 3 if over time it turns out these things really do evolve in lockstep, but we can't know that at the beginning.&lt;/p&gt;&lt;h3&gt;Tips:&lt;/h3&gt;&lt;h4&gt;Minimise complexity&lt;/h4&gt;&lt;p dir="ltr"&gt;For any behaviour we want to encode, there is a certain level of intrinsic complexity required. Yet we often end up writing code that is far more complex than that. We should always be asking 'does this abstraction make the code &lt;em dir="ltr"&gt;more&lt;/em&gt; complex or &lt;em dir="ltr"&gt;less&lt;/em&gt; complex?'. And even if an abstraction is less complex theoretically, is it cognitively simple enough that another person can understand it?&lt;/p&gt;&lt;h4&gt;Just because an abstraction is right now doesn't mean it won't be wrong later:&lt;/h4&gt;&lt;p&gt;If your abstraction works great for three use cases but doesn't quite fit the fourth as snugly, be very careful about extending the interface. With enough new use cases you might find the abstraction is making life harder than if it didn't exist.&lt;/p&gt;&lt;h4&gt;Don't be afraid to dismantle the wrong abstraction:&lt;/h4&gt;&lt;p dir="ltr"&gt;If you come across an abstraction that is only used in three places and already has two optional flags, do not be afraid to simply copy+paste its code back into the places that call it and then in each of those places, strip away the code that is irrelevant to the use case (see &lt;code dir="ltr"&gt;average&lt;/code&gt; method, above). You will be left with some duplicated code but as Sandi Metz says, 'Duplication is cheaper than the wrong abstraction'. Be prepared to defend the decision in a PR review.&lt;/p&gt;&lt;h4&gt;When in doubt, do not abstract:&lt;/h4&gt;&lt;p&gt;If you've found two files that each share a chunk of code, but you're not sure that you would always want the code to evolve in lockstep, don't abstract. It's much easier to abstract than to de-abstract, so there is no harm in waiting until some more use cases pop up and you get a better idea of what a good interface might look like.&lt;/p&gt;&lt;h4&gt;When not in doubt, defend your decision:&lt;/h4&gt;&lt;p&gt;If you have a single chunk of code that you think should be abstracted for the sake of future use cases, prepare for pushback in a PR review. The onus is on you to explain why this abstraction makes sense given how little evidence there is in the codebase for why it should exist.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p&gt;Different people need to hear different messages here. Maybe your code isn't DRY enough. Maybe you seize the opportunity to abstract too readily and it causes headaches down the line. Maybe you've struck a good balance. No matter where you stand, it's important to know that there are no clear cut right answers with the majority of debates around abstractions. So long as you can consider the pros/cons of abstracting more, less, and differently, and you make your case clear in a PR review, you should be fine. Happy coding!&lt;/p&gt;&lt;footer&gt;&lt;span&gt;&lt;span&gt;Posted on &lt;/span&gt;&lt;/span&gt;&lt;/footer&gt;</description><pubDate>Sun, 05 Jul 2020 10:46:44 -0500</pubDate></item><item><title>Generative Artistry Tutorials</title><link>https://generativeartistry.com/tutorials/</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/6fxhrg/generative_artistry_tutorials"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 05 Jul 2020 13:03:35 -0500</pubDate></item><item><title>Remotely upgrading OpenWrt 15.05 to 19.07 on NAND flash boards</title><link>https://lobste.rs/s/fxyj6d</link><description>&lt;div&gt;&lt;a href="https://gir.st/" dir="ltr"&gt;Home&lt;/a&gt; | &lt;a href="https://gir.st/blog" dir="ltr"&gt;Blog&lt;/a&gt; | &lt;a href="https://gir.st/blog/upgrading-openwrt.html" dir="ltr"&gt;&lt;b dir="ltr"&gt;Upgrading OpenWrt (guide)&lt;/b&gt;&lt;/a&gt;
 
 &lt;/div&gt;&lt;h1 dir="ltr"&gt;Remotely upgrading OpenWrt 15.05 to 19.07 &lt;small dir="ltr"&gt;on Mikrotik Routerboards with NAND flash (yaffs2 → ubifs)&lt;/small&gt;&lt;/h1&gt;&lt;p&gt;This guide will explain how to remotely, i.e. without having physical access to the machine, upgrade an embedded device from OpenWrt 15.05 or lower to LEDE 17.01 or OpenWrt 18.06/19.07. This process is usually not possible on systems equipped with NAND flash storage due to the root file system having been switched from yaffs2 to UBIFS without an official migration path in newer releases.
 &lt;/p&gt;&lt;p&gt;This guide was written for our migration of Mikrotik Routerboard 450G, but should be applicable to a wide range of devices and possibly even manufacturers. Apply your usual judgement for when to deviate from the instructions.
