@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0"><channel><title>lobstre.rs rss with inlined content</title><link>http://n-gate.com</link><description>webshit condom</description><lastBuildDate>Fri, 17 Jul 2020 20:17:45 -0500</lastBuildDate><item><title>Turning the IDE Inside Out with Datalog</title><link>https://lobste.rs/s/mox1k6</link><description>&lt;p&gt;2020-7-17&lt;/p&gt;&lt;p&gt;&lt;em dir="ltr"&gt;tl;dr: I made a prototype IDE in which language semantics are specified in datalog, powered by a datalog interpreter written in TypeScript, running the browser. &lt;a href="https://datalog-typechecker.netlify.app/" dir="ltr"&gt;Demo here&lt;/a&gt;.&lt;/em&gt;&lt;/p&gt;&lt;h2&gt;Motivation&lt;/h2&gt;&lt;h3 dir="ltr"&gt;What is an IDE?&lt;/h3&gt;&lt;p dir="ltr"&gt;When we write code, we’re not just writing text — we’re weaving together a web of names or “symbols” whose definitions reference each other. See, for instance, this small example, which defines variables and then uses them in a later expression:&lt;/p&gt;&lt;img src="https://petevilter.me/img/datalog/refs.gif" width="465" height="143"&gt;&lt;p dir="ltr"&gt;Integrated Development Environments (IDEs) help us to &lt;em dir="ltr"&gt;interrogate&lt;/em&gt; and &lt;em dir="ltr"&gt;manipulate&lt;/em&gt; this web of symbols (which I'll call the &lt;em dir="ltr"&gt;reference graph&lt;/em&gt;), through several key features:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Highlighting and jumping between usages and definitions&lt;/strong&gt; allows quick exploration of the reference graph.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Semantic code completion&lt;/strong&gt; helps explore what's in scope, save typing, and avoid typos.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Renaming&lt;/strong&gt; a symbol and all its usages enables refactoring with confidence.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Inline compile errors&lt;/strong&gt; let us quickly see and fix type errors in context.&lt;/LI&gt;&lt;LI&gt;Many others, like &lt;strong dir="ltr"&gt;call and type hierarchies&lt;/strong&gt;, help gain an overview of a codebase.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;These features have one thing in common: they depend on the IDE’s internal model of the codebase, which it is constantly keeping up to date as the user edits files:&lt;/p&gt;&lt;img src="https://petevilter.me/img/datalog/ide-data-flow.svg" width="465" height="371"&gt;&lt;p dir="ltr"&gt;Thus, IDEs, are, at their core, platforms for facilitating the circular dataflow above:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;When the user edits the code, the IDE updates its internal model of the codebase according to language-specific rules.&lt;/LI&gt;&lt;LI&gt;When the user requests an action (e.g. renaming a symbol, or jumping to a definition), the IDE queries its internal model to get the data needed by the action (e.g. the locations of the usages and definitions of the symbol in the source) and then makes the edit or navigates to the requested location.&lt;/LI&gt;&lt;/UL&gt;&lt;h3 dir="ltr"&gt;The Potential: Introspectable, Easily Extensible IDEs&lt;/h3&gt;&lt;p dir="ltr"&gt;In my experience as a programmer, these features have been indispensable while working on large codebases. But as I’ve used IDEs more, I’ve often felt that they have unreleased potential, because this rich internal model of the codebase is locked up within them, inaccessible except by painstakingly writing plugins using IDE-specific APIs. I’ve been wondering: what if this codebase model was as queryable as a database is? What new questions would we ask of our codebases, and what new ways would we find to visualize them? Furthermore, what if the language semantics themselves —&amp;nbsp;types, completions, errors, etc — were specified as queries, which were also introspectable?&lt;/p&gt;&lt;p dir="ltr"&gt;I believe that the design of languages and programming environments should not just be the province of a small priesthood of elite developers.&amp;nbsp;Everyone should be able to look under the hood of their IDE, and be free to push its boundaries: embed it in a different context, create a domain-specific language with rich editor support, fork an existing language to play with its semantics, etc.&lt;/p&gt;&lt;p dir="ltr"&gt;The opacity of the IDE’s inner model — and the rules by which that inner model is updated —&amp;nbsp;are barriers to this being a reality. For IDEs to be introspectable and hackable, we must first expose this model and these rules: &lt;em dir="ltr"&gt;we must turn the IDE inside out.&lt;/em&gt;&lt;/p&gt;&lt;h3&gt;Limitations of Current IDEs&lt;/h3&gt;&lt;p dir="ltr"&gt;So, what exactly does this mysterious codebase model data structure look like? How do existing IDEs keep it up to date, and how do they use it to power their UIs? What are the limitations which developers face when trying to add support for a language to one of these IDEs?&lt;/p&gt;&lt;p dir="ltr"&gt;My usual IDE, &lt;strong dir="ltr"&gt;IntelliJ IDEA&lt;/strong&gt;, defines its codebase model as an intimidating hierarchy of Java classes called the &lt;a href="https://www.jetbrains.org/intellij/sdk/docs/basics/architectural_overview/psi.html" dir="ltr"&gt;PSI&lt;/a&gt;, or “program structure interface”. Its plugin editor allows language extension developers to build parsers for their language, which parse source code into “PSI nodes”. Other Java code then runs to annotate these PSI nodes with types and other information, and then other code —&amp;nbsp;“completion providers,” for instance — runs over this structure to provide completions and other IDE features.&lt;/p&gt;&lt;p dir="ltr"&gt;While this architecture has allowed JetBrains to add support for an impressive number of languages to the IntelliJ platform over the years, it doesn’t pass the test of introspectability and hackability: the PSI tree can be viewed, but not queried, while the IDE is running, and the languages' typechecking and completion logic can’t be introspected or edited at runtime; one has to track down the Java sources of a given language’s plugin, if it’s open source.&lt;/p&gt;&lt;p dir="ltr"&gt;Microsoft’s &lt;strong dir="ltr"&gt;Visual Studio Code&lt;/strong&gt; attempts to ease the creation of language extensions with the &lt;a href="https://microsoft.github.io/language-server-protocol/" dir="ltr"&gt;Language Server Protocol&lt;/a&gt;, which allows language extension developer to implement language support as a server which VSCode calls into for completions, type errors, and other information which it then renders to its UI.&lt;/p&gt;&lt;p dir="ltr"&gt;This architecture has the benefit of allowing language extensions to be written in any language, thus allowing them to share code with the languages’ native compilers, which lowers the barrier to entry for adding support for new languages. And, the messages sent back and forth over this protocol are a good introspection point, which could help a developer understand and debug a language extension. Still, I believe this architecture doesn’t go far enough toward the goals of introspectability and hackability, since the codebase models that language extension servers use to respond to the IDE’s requests are still locked up inside the servers, accessible only via a complicated low-level API, not arbitrary queries.&lt;/p&gt;&lt;h3 dir="ltr"&gt;A New Approach: Codebase as Database&lt;/h3&gt;&lt;p dir="ltr"&gt;So, I was left wondering: is there a simple, elegant data structure and computational framework which can be used as the foundation of an IDE? It would ideally have these properties:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Incrementality:&lt;/strong&gt; The ability to efficiently respond to user changes by recomputing only the results which are affected by those changes. Ideally language extension authors should not have to think about this; the IDE should do it “for free” once the authors have expressed their language semantics in its framework.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Ad-hoc queryability&lt;/strong&gt;, (aka access-path independence): The ability for language extensions or IDE users to evaluate arbitrary queries against any internal data structure at runtime. The IDE should allow these queries to be expressed logically, and find the optimal way to execute them based on the indexes available. This is especially important because many IDE features, such as “find usages” and “go to definition” or “find implementations” and “go to interface” can be seen as one relation, queried from two different directions. Jordan Scales’ post &lt;a href="https://thatjdanisso.cool/functions-that-go-backwards" dir="ltr"&gt;“functions that go backwards”&lt;/a&gt; elaborates more on this perspective.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Traceability:&lt;/strong&gt; The ability to follow a result (for instance, a type error or a completion) back through the language’s inference rules to base facts about the program’s AST. The IDE user should be able to see all of the reasoning behind what the IDE is telling them.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;As a database nerd (I was working at &lt;a href="https://www.cockroachlabs.com/" dir="ltr"&gt;Cockroach Labs&lt;/a&gt; as these thoughts started to percolate), this started to look like a database problem to me. If a codebase could be represented as a relational database — that is, rows in a set of interlinked tables — it seemed possible to achieve all three of the requirements above: the tables would be inherently introspectable, and with the right query language and engine, perhaps all IDE features could be powered by queries on those tables, which could be kept up to date efficiently by the engine. Essentially, the problem of IDE infrastructure could be reduced to the problem of incremental view maintenance.&lt;/p&gt;&lt;p dir="ltr"&gt;This perspective was promising, but the traditional database language — SQL —&amp;nbsp;seemed to be an awfully clunky way to express complicated concepts like type inference rules. Thankfully, SQL has a cousin, Datalog, which is more suited for the task.&lt;/p&gt;&lt;h2 dir="ltr"&gt;Interlude: Brief Intro to Datalog&lt;/h2&gt;&lt;p dir="ltr"&gt;The universe of a datalog database (sometimes known as a &lt;a href="https://en.wikipedia.org/wiki/Deductive_database" dir="ltr"&gt;"deductive database"&lt;/a&gt;) consists of two things: facts and rules. (This places it in the paradigm of “logic programming”, alongside its cousin &lt;a href="https://en.wikipedia.org/wiki/Prolog" dir="ltr"&gt;Prolog&lt;/a&gt;).&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Facts&lt;/strong&gt; are statements we tell the database are true, like simple &lt;code dir="ltr"&gt;INSERT&lt;/code&gt; statements into a SQL database. Here we're inserting one row into the &lt;code dir="ltr"&gt;mother&lt;/code&gt; table, and one into the &lt;code dir="ltr"&gt;father&lt;/code&gt; table:&lt;/p&gt;&lt;PRE&gt;mother{child: "Pete", mother: "Mary"}.
+<rss version="2.0"><channel><title>lobstre.rs rss with inlined content</title><link>http://n-gate.com</link><description>webshit condom</description><lastBuildDate>Fri, 17 Jul 2020 21:09:07 -0500</lastBuildDate><item><title>Turning the IDE Inside Out with Datalog</title><link>https://lobste.rs/s/mox1k6</link><description>&lt;p&gt;2020-7-17&lt;/p&gt;&lt;p&gt;&lt;em dir="ltr"&gt;tl;dr: I made a prototype IDE in which language semantics are specified in datalog, powered by a datalog interpreter written in TypeScript, running the browser. &lt;a href="https://datalog-typechecker.netlify.app/" dir="ltr"&gt;Demo here&lt;/a&gt;.&lt;/em&gt;&lt;/p&gt;&lt;h2&gt;Motivation&lt;/h2&gt;&lt;h3 dir="ltr"&gt;What is an IDE?&lt;/h3&gt;&lt;p dir="ltr"&gt;When we write code, we’re not just writing text — we’re weaving together a web of names or “symbols” whose definitions reference each other. See, for instance, this small example, which defines variables and then uses them in a later expression:&lt;/p&gt;&lt;img src="https://petevilter.me/img/datalog/refs.gif" width="465" height="143"&gt;&lt;p dir="ltr"&gt;Integrated Development Environments (IDEs) help us to &lt;em dir="ltr"&gt;interrogate&lt;/em&gt; and &lt;em dir="ltr"&gt;manipulate&lt;/em&gt; this web of symbols (which I'll call the &lt;em dir="ltr"&gt;reference graph&lt;/em&gt;), through several key features:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Highlighting and jumping between usages and definitions&lt;/strong&gt; allows quick exploration of the reference graph.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Semantic code completion&lt;/strong&gt; helps explore what's in scope, save typing, and avoid typos.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Renaming&lt;/strong&gt; a symbol and all its usages enables refactoring with confidence.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Inline compile errors&lt;/strong&gt; let us quickly see and fix type errors in context.&lt;/LI&gt;&lt;LI&gt;Many others, like &lt;strong dir="ltr"&gt;call and type hierarchies&lt;/strong&gt;, help gain an overview of a codebase.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;These features have one thing in common: they depend on the IDE’s internal model of the codebase, which it is constantly keeping up to date as the user edits files:&lt;/p&gt;&lt;img src="https://petevilter.me/img/datalog/ide-data-flow.svg" width="465" height="371"&gt;&lt;p dir="ltr"&gt;Thus, IDEs, are, at their core, platforms for facilitating the circular dataflow above:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;When the user edits the code, the IDE updates its internal model of the codebase according to language-specific rules.&lt;/LI&gt;&lt;LI&gt;When the user requests an action (e.g. renaming a symbol, or jumping to a definition), the IDE queries its internal model to get the data needed by the action (e.g. the locations of the usages and definitions of the symbol in the source) and then makes the edit or navigates to the requested location.&lt;/LI&gt;&lt;/UL&gt;&lt;h3 dir="ltr"&gt;The Potential: Introspectable, Easily Extensible IDEs&lt;/h3&gt;&lt;p dir="ltr"&gt;In my experience as a programmer, these features have been indispensable while working on large codebases. But as I’ve used IDEs more, I’ve often felt that they have unreleased potential, because this rich internal model of the codebase is locked up within them, inaccessible except by painstakingly writing plugins using IDE-specific APIs. I’ve been wondering: what if this codebase model was as queryable as a database is? What new questions would we ask of our codebases, and what new ways would we find to visualize them? Furthermore, what if the language semantics themselves —&amp;nbsp;types, completions, errors, etc — were specified as queries, which were also introspectable?&lt;/p&gt;&lt;p dir="ltr"&gt;I believe that the design of languages and programming environments should not just be the province of a small priesthood of elite developers.&amp;nbsp;Everyone should be able to look under the hood of their IDE, and be free to push its boundaries: embed it in a different context, create a domain-specific language with rich editor support, fork an existing language to play with its semantics, etc.&lt;/p&gt;&lt;p dir="ltr"&gt;The opacity of the IDE’s inner model — and the rules by which that inner model is updated —&amp;nbsp;are barriers to this being a reality. For IDEs to be introspectable and hackable, we must first expose this model and these rules: &lt;em dir="ltr"&gt;we must turn the IDE inside out.&lt;/em&gt;&lt;/p&gt;&lt;h3&gt;Limitations of Current IDEs&lt;/h3&gt;&lt;p dir="ltr"&gt;So, what exactly does this mysterious codebase model data structure look like? How do existing IDEs keep it up to date, and how do they use it to power their UIs? What are the limitations which developers face when trying to add support for a language to one of these IDEs?&lt;/p&gt;&lt;p dir="ltr"&gt;My usual IDE, &lt;strong dir="ltr"&gt;IntelliJ IDEA&lt;/strong&gt;, defines its codebase model as an intimidating hierarchy of Java classes called the &lt;a href="https://www.jetbrains.org/intellij/sdk/docs/basics/architectural_overview/psi.html" dir="ltr"&gt;PSI&lt;/a&gt;, or “program structure interface”. Its plugin editor allows language extension developers to build parsers for their language, which parse source code into “PSI nodes”. Other Java code then runs to annotate these PSI nodes with types and other information, and then other code —&amp;nbsp;“completion providers,” for instance — runs over this structure to provide completions and other IDE features.&lt;/p&gt;&lt;p dir="ltr"&gt;While this architecture has allowed JetBrains to add support for an impressive number of languages to the IntelliJ platform over the years, it doesn’t pass the test of introspectability and hackability: the PSI tree can be viewed, but not queried, while the IDE is running, and the languages' typechecking and completion logic can’t be introspected or edited at runtime; one has to track down the Java sources of a given language’s plugin, if it’s open source.&lt;/p&gt;&lt;p dir="ltr"&gt;Microsoft’s &lt;strong dir="ltr"&gt;Visual Studio Code&lt;/strong&gt; attempts to ease the creation of language extensions with the &lt;a href="https://microsoft.github.io/language-server-protocol/" dir="ltr"&gt;Language Server Protocol&lt;/a&gt;, which allows language extension developer to implement language support as a server which VSCode calls into for completions, type errors, and other information which it then renders to its UI.&lt;/p&gt;&lt;p dir="ltr"&gt;This architecture has the benefit of allowing language extensions to be written in any language, thus allowing them to share code with the languages’ native compilers, which lowers the barrier to entry for adding support for new languages. And, the messages sent back and forth over this protocol are a good introspection point, which could help a developer understand and debug a language extension. Still, I believe this architecture doesn’t go far enough toward the goals of introspectability and hackability, since the codebase models that language extension servers use to respond to the IDE’s requests are still locked up inside the servers, accessible only via a complicated low-level API, not arbitrary queries.&lt;/p&gt;&lt;h3 dir="ltr"&gt;A New Approach: Codebase as Database&lt;/h3&gt;&lt;p dir="ltr"&gt;So, I was left wondering: is there a simple, elegant data structure and computational framework which can be used as the foundation of an IDE? It would ideally have these properties:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Incrementality:&lt;/strong&gt; The ability to efficiently respond to user changes by recomputing only the results which are affected by those changes. Ideally language extension authors should not have to think about this; the IDE should do it “for free” once the authors have expressed their language semantics in its framework.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Ad-hoc queryability&lt;/strong&gt;, (aka access-path independence): The ability for language extensions or IDE users to evaluate arbitrary queries against any internal data structure at runtime. The IDE should allow these queries to be expressed logically, and find the optimal way to execute them based on the indexes available. This is especially important because many IDE features, such as “find usages” and “go to definition” or “find implementations” and “go to interface” can be seen as one relation, queried from two different directions. Jordan Scales’ post &lt;a href="https://thatjdanisso.cool/functions-that-go-backwards" dir="ltr"&gt;“functions that go backwards”&lt;/a&gt; elaborates more on this perspective.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Traceability:&lt;/strong&gt; The ability to follow a result (for instance, a type error or a completion) back through the language’s inference rules to base facts about the program’s AST. The IDE user should be able to see all of the reasoning behind what the IDE is telling them.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;As a database nerd (I was working at &lt;a href="https://www.cockroachlabs.com/" dir="ltr"&gt;Cockroach Labs&lt;/a&gt; as these thoughts started to percolate), this started to look like a database problem to me. If a codebase could be represented as a relational database — that is, rows in a set of interlinked tables — it seemed possible to achieve all three of the requirements above: the tables would be inherently introspectable, and with the right query language and engine, perhaps all IDE features could be powered by queries on those tables, which could be kept up to date efficiently by the engine. Essentially, the problem of IDE infrastructure could be reduced to the problem of incremental view maintenance.&lt;/p&gt;&lt;p dir="ltr"&gt;This perspective was promising, but the traditional database language — SQL —&amp;nbsp;seemed to be an awfully clunky way to express complicated concepts like type inference rules. Thankfully, SQL has a cousin, Datalog, which is more suited for the task.&lt;/p&gt;&lt;h2 dir="ltr"&gt;Interlude: Brief Intro to Datalog&lt;/h2&gt;&lt;p dir="ltr"&gt;The universe of a datalog database (sometimes known as a &lt;a href="https://en.wikipedia.org/wiki/Deductive_database" dir="ltr"&gt;"deductive database"&lt;/a&gt;) consists of two things: facts and rules. (This places it in the paradigm of “logic programming”, alongside its cousin &lt;a href="https://en.wikipedia.org/wiki/Prolog" dir="ltr"&gt;Prolog&lt;/a&gt;).&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Facts&lt;/strong&gt; are statements we tell the database are true, like simple &lt;code dir="ltr"&gt;INSERT&lt;/code&gt; statements into a SQL database. Here we're inserting one row into the &lt;code dir="ltr"&gt;mother&lt;/code&gt; table, and one into the &lt;code dir="ltr"&gt;father&lt;/code&gt; table:&lt;/p&gt;&lt;PRE&gt;mother{child: "Pete", mother: "Mary"}.
 father{child: "Mary", father: "Mark"}.&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Rules&lt;/strong&gt; infer new facts from existing facts. They use variables (conventionally capital letters), and two operators: &lt;code dir="ltr"&gt;|&lt;/code&gt; (or) and &lt;code dir="ltr"&gt;&amp;amp;&lt;/code&gt; (and):&lt;/p&gt;&lt;PRE&gt;# read as "C's parent is P if C's mother is P or C's father is P"
 parent{child: C, parent: P} :-
   mother{child: C, mother: P} |
@@ -180,335 +180,7 @@ func foo() error { return nil }
 func bar() {
     foo()
 }
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Since the call to &lt;code dir="ltr"&gt;foo()&lt;/code&gt; is not touched, golangci-lint considers the unchecked error pre-existing and does not report it! The check is completely elided on changes that simply go from zero returns to a single error return. This simply makes the check not as useful as it could be, allowing regressions to merge over time.&lt;/p&gt;&lt;p&gt;The other problem with retrofitting is that the cleanup can be boring and take a long time. Clearing hundreds for errors in bulk is mind-numbing. Merely shifting around existing code might require fixing existing issues, unrelated to the change at hand.&lt;/p&gt;&lt;p&gt;Why go through that, when simply adding these linters from the start does the trick and saves you from bugs?&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;good&amp;nbsp;&lt;a href="http://rski.github.io/2020/07/17/golangci-lint.html#fnref:1" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Rust&amp;nbsp;&lt;a href="http://rski.github.io/2020/07/17/golangci-lint.html#fnref:2" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Not necessarily a good decision, you can always find yourself staring at git blame wondering why.&amp;nbsp;&lt;a href="http://rski.github.io/2020/07/17/golangci-lint.html#fnref:3" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;according to git and revgrep, using the &lt;code dir="ltr"&gt;new-&lt;/code&gt; settings in the config. Nowadays it works, a long time ago I found out the hard way it &lt;a href="https://github.com/rski/revgrep/commit/47e4fa165a7e434ef295b6837621de2d4f9db6b1" dir="ltr"&gt;didn’t&lt;/a&gt;&amp;nbsp;&lt;a href="http://rski.github.io/2020/07/17/golangci-lint.html#fnref:4" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Fri, 17 Jul 2020 19:38:37 -0500</pubDate></item><item><title>Repurposing Obsolete FPGA-based Products as Development Kits</title><link>https://www.youtube.com/watch?v=4oyF-oqu88Q</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/bprw37/repurposing_fpga_based_products_as" rel="ugc"&gt;slides&lt;/a&gt;&lt;/p&gt;
-
-            &lt;p&gt;&lt;a href="https://lobste.rs/s/hgl4v4/repurposing_obsolete_fpga_based"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Fri, 17 Jul 2020 16:06:32 -0500</pubDate></item><item><title>Compiling APL to JavaScript</title><link>https://lobste.rs/s/4c5joc</link><description>&lt;h1&gt;Compiling APL to JavaScript&lt;/h1&gt;&lt;h1 dir="ltr"&gt;Nick Nickolov (nick.nickolov@gmail.com)&lt;/h1&gt;&lt;p dir="ltr"&gt;
-    This article is about github.com/ngn/apl&lt;a href="http://archive.vector.org.uk/#ref1" dir="ltr"&gt;[1]&lt;/a&gt;, an
-    APL to JavaScript compiler written in CoffeeScript.  It gives an overview of
-    the project and its dialect of APL, then proceeds to describe three major
-    implementational obstacles and the design decisions taken to overcome them.
-&lt;/p&gt;&lt;h2&gt;
-    Introduction
-&lt;/h2&gt;&lt;p&gt;
-    The list of languages that compile to JavaScript is growing steadily for a good
-    reason: almost every modern consumer device can run a browser with a JavaScript
-    interpreter in it.  And for the server there’s NodeJS.  As a language,
-    JavaScript has its subset of good parts and if you restrict your coding to
-    them, it’s actually a very decent language.  The execution model is reminiscent
-    of Lisp with its lambdas and lexical closures, despite the superficially C-like
-    syntax.  As a matter of fact, getting rid of those curly braces, semicolons,
-    and other noise is easy thanks to CoffeeScript, which gives a comfortable layer
-    of syntactic sugar over raw JavaScript.
-&lt;/p&gt;&lt;p&gt;
-    I started an open source project for an APL compiler targeting JavaScript.
-    Though incomplete and of poor performance, it’s good enough for experimenting
-    with short programs, such as the Game of Life or the N Queens problem.
-&lt;/p&gt;&lt;p&gt;
-    I made a conscious decision to deviate from the APL tradition in several ways.
-&lt;/p&gt;&lt;h3&gt;
-    Function definition
-&lt;/h3&gt;&lt;p dir="ltr"&gt;
-Lambdas are supported (function literals enclosed in curly braces, a.k.a.
-dfns) but the del (&lt;code dir="ltr"&gt;∇&lt;/code&gt;) syntax for function definition is not.  So, instead of
-&lt;/p&gt;&lt;PRE&gt;    ∇R←A f B
-        R←...
-    ∇
-&lt;/PRE&gt;&lt;p&gt;
-one is forced to write
-&lt;/p&gt;&lt;PRE&gt;    f←{...}
-&lt;/PRE&gt;&lt;h3&gt;
-    Variable scoping
-&lt;/h3&gt;&lt;p dir="ltr"&gt;
-    Scoping is always lexical.  This means that the two occurrences of &lt;code dir="ltr"&gt;a&lt;/code&gt; below
-&lt;/p&gt;&lt;PRE&gt;    f←{a←123}
-    g←{a←456}
-    h←{...}
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-    are different variables and neither of them is accessible from within &lt;code dir="ltr"&gt;h&lt;/code&gt;,
-    regardless of the order and nesting of &lt;code dir="ltr"&gt;f&lt;/code&gt;, &lt;code dir="ltr"&gt;g&lt;/code&gt;, &lt;code dir="ltr"&gt;h&lt;/code&gt; invocations.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-    A variable is considered to belong to the outermost ancestor scope where it is
-    mentioned.  So, the first two occurrences of &lt;code dir="ltr"&gt;a&lt;/code&gt; below are the same variable and the third
-    &lt;code dir="ltr"&gt;a&lt;/code&gt; is distinct from them:
-&lt;/p&gt;&lt;PRE&gt;    f←{
-        a←123
-        g←{a←456}
-    }
-    h←{a←789}
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-    Note that assignment doesn’t necessarily create a local variable.  If the
-    variable is already present in any enclosing scope, assignment will set &lt;em dir="ltr"&gt;that&lt;/em&gt;
-    variable.
-&lt;/p&gt;&lt;p&gt;
-    A variable must not be used before it is assigned a value.  The compiler
-    can detect most violations of that:
-&lt;/p&gt;&lt;PRE&gt;    ⎕←⍳ a      ⍝ compiler error
-    a←5
-&lt;/PRE&gt;&lt;h3&gt;
-    Phrasal forms
-&lt;/h3&gt;&lt;p&gt;
-    Expressions consisting of a sequence of two or three functions are said to
-    form a hook or a fork respectively and the result is a new function defined
-    as follows:
-&lt;/p&gt;&lt;PRE&gt;     (fg)⍵    ←→   ⍵fg⍵
-    ⍺(fg)⍵    ←→   ⍺fg⍵
-     (fgh)⍵   ←→   (f⍵)g(h⍵)
-    ⍺(fgh)⍵   ←→   (⍺f⍵)g(⍺h⍵)
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-    Examples usages of phrasal forms are the arithmetic mean written as
-    &lt;code dir="ltr"&gt;+/ ÷ ⍴&lt;/code&gt; and continued fraction evaluation as &lt;code dir="ltr"&gt;(+÷)\&lt;/code&gt;.
-&lt;/p&gt;&lt;h3&gt;
-    Non-privileged primitives
-&lt;/h3&gt;&lt;p&gt;
-    Primitives are just like any other variable, only as if implicitly defined in
-    the root scope.  As a side effect, they can be overridden:
-&lt;/p&gt;&lt;PRE&gt;    3⍟4          ⍝ returns 1.2618595071429148
-    ⍟←{⍺+2×⍵}
-    3⍟4          ⍝ returns 11
-&lt;/PRE&gt;&lt;p&gt;
-One use of this fact might be to introduce comparison tolerance, which isn’t
-supported by default:
-&lt;/p&gt;&lt;PRE&gt;    ⎕CT←1e¯13
-    =←{(|⍺-⍵)≤⎕CT×(|⍺)⌈|⍵}
-&lt;/PRE&gt;&lt;p&gt;
-It’s okay to use single non-alphabetic characters as variable names, so the
-language can be augmented as one sees fit:
-&lt;/p&gt;&lt;PRE&gt;    π←○1
-    √←{⍵*.5}
-    ∑←+/
-    ½←{⍵÷2}
-    ±←+,-
-    €←{exchangeRate×⍵}
-    ≈←{(|⍺-⍵)≤⎕CT×(|⍺)⌈|⍵}
-&lt;/PRE&gt;&lt;h3&gt;
-    Index origin fixed to 0
-&lt;/h3&gt;&lt;p&gt;
-I took a side in this Holy War.
-&lt;/p&gt;&lt;PRE&gt;    ⍳3      ⍝ returns 0 1 2
-    ⎕IO←0   ⍝ ok, no effect
-    ⎕IO←1   ⍝ error
-&lt;/PRE&gt;&lt;h3&gt;
-    Line terminator ambiguity
-&lt;/h3&gt;&lt;p dir="ltr"&gt;
-A line terminator is treated as a statement separator if it occurs within &lt;code dir="ltr"&gt;{}&lt;/code&gt;
-or at the topmost level, but is considered whitespace if it’s inside &lt;code dir="ltr"&gt;()&lt;/code&gt; or
-&lt;code dir="ltr"&gt;[]&lt;/code&gt;.
-&lt;/p&gt;&lt;p&gt;
-Example:
-&lt;/p&gt;&lt;PRE&gt;    glider←{
-        a←3 3⍴(
-            0 1 0
-            0 0 1
-            1 1 1
-        )
-        ⍵ ⍵↑a
-    }
-&lt;/PRE&gt;&lt;h3&gt;
-    Absence of control structures
-&lt;/h3&gt;&lt;p dir="ltr"&gt;
-Control structures such as &lt;code dir="ltr"&gt;:If ... :Else ... :EndIf&lt;/code&gt; are not supported but can
-be emulated using lambdas, guards, and APL primitives.  For instance
-&lt;/p&gt;&lt;PRE&gt;    :If x
-        y
-    :Else
-        z
-    :EndIf
-&lt;/PRE&gt;&lt;p&gt;
-can be replaced with
-&lt;/p&gt;&lt;PRE&gt;    {x:y⋄z}0
-&lt;/PRE&gt;&lt;p&gt;
-and
-&lt;/p&gt;&lt;PRE&gt;    :While x
-        y
-    :EndWhile
-&lt;/PRE&gt;&lt;p&gt;
-with
-&lt;/p&gt;&lt;PRE&gt;    {~x:1⋄y⋄0}⍣⊢ 0
-&lt;/PRE&gt;&lt;p&gt;
-    The rest of this article describes three challenging problems which I came
-    across during the implementation of APL.  Two of them I solved and the third
-    one is yet to be taken care of.
-&lt;/p&gt;&lt;h2&gt;
-    Parsing APL expressions
-&lt;/h2&gt;&lt;p&gt;
-    Consider the APL expression
-&lt;/p&gt;&lt;PRE&gt;    a b c
-&lt;/PRE&gt;&lt;p&gt;
-    Depending on context, it could mean different things:
-&lt;/p&gt;&lt;PRE&gt;    a←0  ⋄ b←{} ⋄ c←0  ⋄ a b c    ⍝ a dyadic application of b
-    a←{} ⋄ b←{} ⋄ c←0  ⋄ a b c    ⍝ two nested monadic applications
-    a←0  ⋄ b←0  ⋄ c←{} ⋄ a b c    ⍝ compiler error
-    a←0  ⋄ b←0  ⋄ c←0  ⋄ a b c    ⍝ construction of a new vector
-    a←{} ⋄ b←{} ⋄ c←{} ⋄ a b c    ⍝ a fork
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-    So, it seems the semantics depend on what &lt;code dir="ltr"&gt;a&lt;/code&gt;, &lt;code dir="ltr"&gt;b&lt;/code&gt;, and &lt;code dir="ltr"&gt;c&lt;/code&gt; represent at
-    runtime, verbs or nouns, and building a complete AST is impossible before we have that knowledge.
-&lt;/p&gt;&lt;p&gt;
-    Fortunately, there exists a way around this at the cost of imposing a small
-    restriction on variable usage.  The restriction is as follows:
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;
-    Once we assign a noun to a variable, we are only allowed to assign nouns to it later.
-&lt;/LI&gt;&lt;LI&gt;
-    Once we assign a verb to a variable, we are only allowed to assign verbs to it later.
-&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
-    In other words, variables must preserve their lexical category.
-&lt;/p&gt;&lt;p&gt;
-Example:
-&lt;/p&gt;&lt;PRE&gt;    x ← 0
-    x ← 1     ⍝ OK
-    x ← {}    ⍝ Compiler error
-
-    f ← {}
-    f ← +/    ⍝ OK
-    f ← 2 3   ⍝ Compiler error
-&lt;/PRE&gt;&lt;p&gt;
-    This restriction separates the worlds of nouns and verbs at compile time.
-    Every expression can then be inferred one of the two lexical categories so the
-    compiler know what JavaScript code to render for it.
-&lt;/p&gt;&lt;h2&gt;
-    Representation of n-dimensional arrays
-&lt;/h2&gt;&lt;p&gt;
-    During the evolution of the project I went through a couple of different
-    implementations of the basic APL data structure.
-&lt;/p&gt;&lt;h3&gt;
-    Nested representation
-&lt;/h3&gt;&lt;p&gt;
-My first take on this was to use n nested levels of JavaScript arrays to
-represent an n-dimensional APL array.  For instance:
-&lt;/p&gt;&lt;PRE&gt;    APL: 2 3⍴⍳6
-    JS: [[0, 1, 2], [3, 4, 5]]
-&lt;/PRE&gt;&lt;p&gt;
-Thus, subscripting maps nicely between the two languages:
-&lt;/p&gt;&lt;PRE&gt;    APL: a[i;j;k]
-    JS: a[i][j][k]
-&lt;/PRE&gt;&lt;p&gt;
-but many of the primitives’ implementations had to involve recursion or
-multiple loops, which apart from being inefficient was complicating matters
-unnecessarily, so I transitioned to a flat representation.
-&lt;/p&gt;&lt;h3&gt;
-    Flat representation
-&lt;/h3&gt;&lt;p&gt;
-A flat representation is a single JavaScript array which contains all items of
-the APL array in lexicographic order of their indices (a.k.a. ravel order).
-Additional meta-information about the shape must be stored, too.
-&lt;/p&gt;&lt;PRE&gt;    APL: 2 3⍴⍳6
-    JS:
-        var a = [0, 1, 2, 3, 4, 5];
-        a.shape = [2, 3];
-&lt;/PRE&gt;&lt;p&gt;
-This way, indexing is not as plain as before:
-&lt;/p&gt;&lt;PRE&gt;    APL: a[i;j;k]
-    JS: a[
-            i * a.shape[0] * a.shape[1] +
-            j * a.shape[0] +
-            k
-        ]
-&lt;/PRE&gt;&lt;p&gt;
-but it’s still worth it, as the implementation of most primitives gets simpler
-and more efficient.
-&lt;/p&gt;&lt;p&gt;
-There turns out to be an even better data structure which I was lucky to come
-across.
-&lt;/p&gt;&lt;h3&gt;
-    Strided representation
-&lt;/h3&gt;&lt;p&gt;
-In a strided representation, an APL array is a record of:
-&lt;/p&gt;&lt;dd dir="ltr"&gt;
-        &lt;code dir="ltr"&gt;data&lt;/code&gt;: the elements, not necessarily in ravel order
-    &lt;/dd&gt;&lt;dd dir="ltr"&gt;
-        &lt;code dir="ltr"&gt;shape&lt;/code&gt;: as usual, an integer array
-    &lt;/dd&gt;&lt;dd dir="ltr"&gt;
-        &lt;code dir="ltr"&gt;stride&lt;/code&gt;: an integer for each axis, indicating how many items of &lt;code dir="ltr"&gt;data&lt;/code&gt; we
-        have to skip over in order to move to an adjacent cell along that axis.
-        Strides can be positive, negative, or zero.
-    &lt;/dd&gt;&lt;dd dir="ltr"&gt;
-        &lt;code dir="ltr"&gt;offset&lt;/code&gt;: the position in &lt;code dir="ltr"&gt;data&lt;/code&gt; where element &lt;code dir="ltr"&gt;[0;0;...;0]&lt;/code&gt; is located
-    &lt;/dd&gt;&lt;p&gt;
-Example:
-&lt;/p&gt;&lt;PRE&gt;    APL: 2 3⍴⍳6
-    JS:
-        {
-            data:   [0, 1, 2, 3, 4, 5],
-            shape:  [2, 3],
-            stride: [3, 1],
-            offset: 0
-        }
-&lt;/PRE&gt;&lt;p&gt;
-and this is another representation of the same APL array
-&lt;/p&gt;&lt;PRE&gt;    JS:
-        {
-            data:   [2, 1, 0, 5, 4, 3],
-            shape:  [2, 3],
-            stride: [3, -1],
-            offset: 2
-        }
-&lt;/PRE&gt;&lt;p&gt;
-Indexing is relatively straightforward:
-&lt;/p&gt;&lt;PRE&gt;    APL: a[i;j;k]
-    JS:
-        data[
-            offset
-            + i * stride[0]
-            + j * stride[1]
-            + k * stride[2]
-        ]
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-The advantage of this strided representation becomes apparent when working with
-large volumes of data.  Functions like transpose (&lt;code dir="ltr"&gt;⍉⍵&lt;/code&gt;), reverse (&lt;code dir="ltr"&gt;⌽⍵&lt;/code&gt;), or
-drop (&lt;code dir="ltr"&gt;⍺↓⍵&lt;/code&gt;) can reuse the &lt;code dir="ltr"&gt;data&lt;/code&gt; array and only care to give a new &lt;code dir="ltr"&gt;shape&lt;/code&gt;,
-&lt;code dir="ltr"&gt;stride&lt;/code&gt;, and &lt;code dir="ltr"&gt;offset&lt;/code&gt; to their result.  A reshaped scalar, e.g. &lt;code dir="ltr"&gt;1000000⍴0&lt;/code&gt;,
-can only occupy a constant amount of memory, exploiting the fact that strides
-can be 0.
-&lt;/p&gt;&lt;h2&gt;
-    Continuation-passing style
-&lt;/h2&gt;&lt;p&gt;
-The third problem, one which I haven’t solved in code yet, arose from the way
-NodeJS does I/O.  While in some cases NodeJS allows you to do
-&lt;/p&gt;&lt;PRE&gt;    var content = fs.readFileSync('a.txt');
-&lt;/PRE&gt;&lt;p&gt;
-it strongly encourages the so-called continuation-passing style (CPS),
-demanding a callback:
-&lt;/p&gt;&lt;PRE&gt;    fs.readFile('a.txt', function (content) {
-        // ... Invoked later, after content becomes available
-    });
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-It’s not only that.  In a browser environment, if we want to be properly
-mimicking I/O, we again need CPS.  Of course, we can use the blocking functions
-&lt;code dir="ltr"&gt;prompt()&lt;/code&gt; and &lt;code dir="ltr"&gt;alert()&lt;/code&gt;, but most users find those annoying because they
-prevent them from using other parts of the UI while entering text.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-This is what happens when reading from &lt;code dir="ltr"&gt;⎕&lt;/code&gt;, for instance:
-&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;
-        APL code tries to get the value of variable &lt;code dir="ltr"&gt;⎕&lt;/code&gt;.
-    &lt;/LI&gt;&lt;LI&gt;
-        The user is prompted to type something in an &lt;code dir="ltr"&gt;&amp;lt;input/&amp;gt;&lt;/code&gt;.
-    &lt;/LI&gt;&lt;LI&gt;
-        APL execution is suspended while the user is typing, looking up help
-    information, using the on-screen keyboard, etc.
-    &lt;/LI&gt;&lt;LI&gt;
-        The user presses enter.
-    &lt;/LI&gt;&lt;LI&gt;
-        APL execution is resumed and the value obtained from &lt;code dir="ltr"&gt;⎕&lt;/code&gt; is processed.
-    &lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;
-The trouble is in step 3.  How do we suspend execution to resume it later?  We
-might as well try to make the compiler output CPS JavaScript code, but that
-appears get complicated rather quickly.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-If only JavaScript had a &lt;code dir="ltr"&gt;call-with-current-continuation&lt;/code&gt; primitive like
-Scheme, we would be able to do just this:
-&lt;/p&gt;&lt;PRE&gt;    var content = callcc(fs.readFile.bind(fs, 'a.txt'));
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-but alas, it doesn’t.  We can amend that through implementing a virtual machine
-(VM) in JavaScript with a &lt;code dir="ltr"&gt;callcc&lt;/code&gt; instruction that suspends execution,
-captures the current state with all its stack and variable bindings and
-presents it as a callable &lt;em dir="ltr"&gt;resume&lt;/em&gt; function.  The compiler can then produce
-some intermediate bytecode for the VM instead of pure JavaScript.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-What if we also expose &lt;code dir="ltr"&gt;callcc&lt;/code&gt; as an APL primitive?  This would be so powerful
-that it could be used to implement an exception mechanism, break/continue,
-coroutines, generators, Prolog-style backtracking, etc in APL itself.
-Therefore, adding a VM looks like a lucrative prospect for ngn/apl.
-&lt;/p&gt;</description><pubDate>Fri, 17 Jul 2020 12:10:30 -0500</pubDate></item><item><title>Tutorial: Building Your Language with Graal &amp; Truffle</title><link>https://lobste.rs/s/njcwi2</link><description>&lt;h1&gt;Truffle Tutorial: Adding 1 and 1 Together&lt;/h1&gt;&lt;div&gt;&lt;span&gt;18 Jul 2020&lt;/span&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;I've now been working on &lt;a href="https://github.com/oracle/truffleruby" dir="ltr"&gt;TruffleRuby&lt;/a&gt; for about 7 months. TruffleRuby is a Ruby
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Since the call to &lt;code dir="ltr"&gt;foo()&lt;/code&gt; is not touched, golangci-lint considers the unchecked error pre-existing and does not report it! The check is completely elided on changes that simply go from zero returns to a single error return. This simply makes the check not as useful as it could be, allowing regressions to merge over time.&lt;/p&gt;&lt;p&gt;The other problem with retrofitting is that the cleanup can be boring and take a long time. Clearing hundreds for errors in bulk is mind-numbing. Merely shifting around existing code might require fixing existing issues, unrelated to the change at hand.&lt;/p&gt;&lt;p&gt;Why go through that, when simply adding these linters from the start does the trick and saves you from bugs?&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;good&amp;nbsp;&lt;a href="http://rski.github.io/2020/07/17/golangci-lint.html#fnref:1" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Rust&amp;nbsp;&lt;a href="http://rski.github.io/2020/07/17/golangci-lint.html#fnref:2" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Not necessarily a good decision, you can always find yourself staring at git blame wondering why.&amp;nbsp;&lt;a href="http://rski.github.io/2020/07/17/golangci-lint.html#fnref:3" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;according to git and revgrep, using the &lt;code dir="ltr"&gt;new-&lt;/code&gt; settings in the config. Nowadays it works, a long time ago I found out the hard way it &lt;a href="https://github.com/rski/revgrep/commit/47e4fa165a7e434ef295b6837621de2d4f9db6b1" dir="ltr"&gt;didn’t&lt;/a&gt;&amp;nbsp;&lt;a href="http://rski.github.io/2020/07/17/golangci-lint.html#fnref:4" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Fri, 17 Jul 2020 19:38:37 -0500</pubDate></item><item><title>Tutorial: Building Your Language with Graal &amp; Truffle</title><link>https://lobste.rs/s/njcwi2</link><description>&lt;h1&gt;Truffle Tutorial: Adding 1 and 1 Together&lt;/h1&gt;&lt;div&gt;&lt;span&gt;18 Jul 2020&lt;/span&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;I've now been working on &lt;a href="https://github.com/oracle/truffleruby" dir="ltr"&gt;TruffleRuby&lt;/a&gt; for about 7 months. TruffleRuby is a Ruby
 implementation built on top of &lt;a href="https://www.graalvm.org/docs/" dir="ltr"&gt;GraalVM&lt;/a&gt; and its &lt;a href="https://www.graalvm.org/docs/Truffle-Framework/user/README" dir="ltr"&gt;Truffle API&lt;/a&gt;. Truffle allows
 languages to be implemented on top of Graal as &lt;a href="https://en.wikipedia.org/wiki/Interpreter_(computing)#Abstract_syntax_tree_interpreters" dir="ltr"&gt;AST interpreters&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;I wanted to share a little bit of what I learned of Graal and Truffle, so I
 decided to write this tutorial, which demonstrates the basics of Truffle through
@@ -1001,7 +673,335 @@ the whole point of this article)!&lt;/p&gt;&lt;p&gt;In closing, I want to thank 
 patiently answer my many questions, and in particular Benoit Daloze — for
 teaching me most of what I know about Truffle, Christian Humer — for always
 helping wherever Truffle is concerned, and Boris Spasojevic for supplying very
-helpful feedback on the present article.&lt;/p&gt;</description><pubDate>Fri, 17 Jul 2020 18:08:04 -0500</pubDate></item><item><title>import - a simple and fast module system for Bash and other Unix shells</title><link>https://lobste.rs/s/ktk3im</link><description>&lt;img alt="Build Status" src="https://github.com/importpw/import/workflows/Tests/badge.svg" width="107" height="20"&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;import&lt;/code&gt; is a simple and fast module system for Bash and other Unix shells.&lt;/p&gt;&lt;p dir="ltr"&gt;Inspired by Go's import command, you specify the URL of the shell script,
+helpful feedback on the present article.&lt;/p&gt;</description><pubDate>Fri, 17 Jul 2020 18:08:04 -0500</pubDate></item><item><title>Compiling APL to JavaScript</title><link>https://lobste.rs/s/4c5joc</link><description>&lt;h1&gt;Compiling APL to JavaScript&lt;/h1&gt;&lt;h1 dir="ltr"&gt;Nick Nickolov (nick.nickolov@gmail.com)&lt;/h1&gt;&lt;p dir="ltr"&gt;
+    This article is about github.com/ngn/apl&lt;a href="http://archive.vector.org.uk/#ref1" dir="ltr"&gt;[1]&lt;/a&gt;, an
+    APL to JavaScript compiler written in CoffeeScript.  It gives an overview of
+    the project and its dialect of APL, then proceeds to describe three major
+    implementational obstacles and the design decisions taken to overcome them.
+&lt;/p&gt;&lt;h2&gt;
+    Introduction
+&lt;/h2&gt;&lt;p&gt;
+    The list of languages that compile to JavaScript is growing steadily for a good
+    reason: almost every modern consumer device can run a browser with a JavaScript
+    interpreter in it.  And for the server there’s NodeJS.  As a language,
+    JavaScript has its subset of good parts and if you restrict your coding to
+    them, it’s actually a very decent language.  The execution model is reminiscent
+    of Lisp with its lambdas and lexical closures, despite the superficially C-like
+    syntax.  As a matter of fact, getting rid of those curly braces, semicolons,
+    and other noise is easy thanks to CoffeeScript, which gives a comfortable layer
+    of syntactic sugar over raw JavaScript.
+&lt;/p&gt;&lt;p&gt;
+    I started an open source project for an APL compiler targeting JavaScript.
+    Though incomplete and of poor performance, it’s good enough for experimenting
+    with short programs, such as the Game of Life or the N Queens problem.
+&lt;/p&gt;&lt;p&gt;
+    I made a conscious decision to deviate from the APL tradition in several ways.
+&lt;/p&gt;&lt;h3&gt;
+    Function definition
+&lt;/h3&gt;&lt;p dir="ltr"&gt;
+Lambdas are supported (function literals enclosed in curly braces, a.k.a.
+dfns) but the del (&lt;code dir="ltr"&gt;∇&lt;/code&gt;) syntax for function definition is not.  So, instead of
+&lt;/p&gt;&lt;PRE&gt;    ∇R←A f B
+        R←...
+    ∇
+&lt;/PRE&gt;&lt;p&gt;
+one is forced to write
+&lt;/p&gt;&lt;PRE&gt;    f←{...}
+&lt;/PRE&gt;&lt;h3&gt;
+    Variable scoping
+&lt;/h3&gt;&lt;p dir="ltr"&gt;
+    Scoping is always lexical.  This means that the two occurrences of &lt;code dir="ltr"&gt;a&lt;/code&gt; below
+&lt;/p&gt;&lt;PRE&gt;    f←{a←123}
+    g←{a←456}
+    h←{...}
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+    are different variables and neither of them is accessible from within &lt;code dir="ltr"&gt;h&lt;/code&gt;,
+    regardless of the order and nesting of &lt;code dir="ltr"&gt;f&lt;/code&gt;, &lt;code dir="ltr"&gt;g&lt;/code&gt;, &lt;code dir="ltr"&gt;h&lt;/code&gt; invocations.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+    A variable is considered to belong to the outermost ancestor scope where it is
+    mentioned.  So, the first two occurrences of &lt;code dir="ltr"&gt;a&lt;/code&gt; below are the same variable and the third
+    &lt;code dir="ltr"&gt;a&lt;/code&gt; is distinct from them:
+&lt;/p&gt;&lt;PRE&gt;    f←{
+        a←123
+        g←{a←456}
+    }
+    h←{a←789}
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+    Note that assignment doesn’t necessarily create a local variable.  If the
+    variable is already present in any enclosing scope, assignment will set &lt;em dir="ltr"&gt;that&lt;/em&gt;
+    variable.
+&lt;/p&gt;&lt;p&gt;
+    A variable must not be used before it is assigned a value.  The compiler
+    can detect most violations of that:
+&lt;/p&gt;&lt;PRE&gt;    ⎕←⍳ a      ⍝ compiler error
+    a←5
+&lt;/PRE&gt;&lt;h3&gt;
+    Phrasal forms
+&lt;/h3&gt;&lt;p&gt;
+    Expressions consisting of a sequence of two or three functions are said to
+    form a hook or a fork respectively and the result is a new function defined
+    as follows:
+&lt;/p&gt;&lt;PRE&gt;     (fg)⍵    ←→   ⍵fg⍵
+    ⍺(fg)⍵    ←→   ⍺fg⍵
+     (fgh)⍵   ←→   (f⍵)g(h⍵)
+    ⍺(fgh)⍵   ←→   (⍺f⍵)g(⍺h⍵)
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+    Examples usages of phrasal forms are the arithmetic mean written as
+    &lt;code dir="ltr"&gt;+/ ÷ ⍴&lt;/code&gt; and continued fraction evaluation as &lt;code dir="ltr"&gt;(+÷)\&lt;/code&gt;.
+&lt;/p&gt;&lt;h3&gt;
+    Non-privileged primitives
+&lt;/h3&gt;&lt;p&gt;
+    Primitives are just like any other variable, only as if implicitly defined in
+    the root scope.  As a side effect, they can be overridden:
+&lt;/p&gt;&lt;PRE&gt;    3⍟4          ⍝ returns 1.2618595071429148
+    ⍟←{⍺+2×⍵}
+    3⍟4          ⍝ returns 11
+&lt;/PRE&gt;&lt;p&gt;
+One use of this fact might be to introduce comparison tolerance, which isn’t
+supported by default:
+&lt;/p&gt;&lt;PRE&gt;    ⎕CT←1e¯13
+    =←{(|⍺-⍵)≤⎕CT×(|⍺)⌈|⍵}
+&lt;/PRE&gt;&lt;p&gt;
+It’s okay to use single non-alphabetic characters as variable names, so the
+language can be augmented as one sees fit:
+&lt;/p&gt;&lt;PRE&gt;    π←○1
+    √←{⍵*.5}
+    ∑←+/
+    ½←{⍵÷2}
+    ±←+,-
+    €←{exchangeRate×⍵}
+    ≈←{(|⍺-⍵)≤⎕CT×(|⍺)⌈|⍵}
+&lt;/PRE&gt;&lt;h3&gt;
+    Index origin fixed to 0
+&lt;/h3&gt;&lt;p&gt;
+I took a side in this Holy War.
+&lt;/p&gt;&lt;PRE&gt;    ⍳3      ⍝ returns 0 1 2
+    ⎕IO←0   ⍝ ok, no effect
+    ⎕IO←1   ⍝ error
+&lt;/PRE&gt;&lt;h3&gt;
+    Line terminator ambiguity
+&lt;/h3&gt;&lt;p dir="ltr"&gt;
+A line terminator is treated as a statement separator if it occurs within &lt;code dir="ltr"&gt;{}&lt;/code&gt;
+or at the topmost level, but is considered whitespace if it’s inside &lt;code dir="ltr"&gt;()&lt;/code&gt; or
+&lt;code dir="ltr"&gt;[]&lt;/code&gt;.
+&lt;/p&gt;&lt;p&gt;
+Example:
+&lt;/p&gt;&lt;PRE&gt;    glider←{
+        a←3 3⍴(
+            0 1 0
+            0 0 1
+            1 1 1
+        )
+        ⍵ ⍵↑a
+    }
+&lt;/PRE&gt;&lt;h3&gt;
+    Absence of control structures
+&lt;/h3&gt;&lt;p dir="ltr"&gt;
+Control structures such as &lt;code dir="ltr"&gt;:If ... :Else ... :EndIf&lt;/code&gt; are not supported but can
+be emulated using lambdas, guards, and APL primitives.  For instance
+&lt;/p&gt;&lt;PRE&gt;    :If x
+        y
+    :Else
+        z
+    :EndIf
+&lt;/PRE&gt;&lt;p&gt;
+can be replaced with
+&lt;/p&gt;&lt;PRE&gt;    {x:y⋄z}0
+&lt;/PRE&gt;&lt;p&gt;
+and
+&lt;/p&gt;&lt;PRE&gt;    :While x
+        y
+    :EndWhile
+&lt;/PRE&gt;&lt;p&gt;
+with
+&lt;/p&gt;&lt;PRE&gt;    {~x:1⋄y⋄0}⍣⊢ 0
+&lt;/PRE&gt;&lt;p&gt;
+    The rest of this article describes three challenging problems which I came
+    across during the implementation of APL.  Two of them I solved and the third
+    one is yet to be taken care of.
+&lt;/p&gt;&lt;h2&gt;
+    Parsing APL expressions
+&lt;/h2&gt;&lt;p&gt;
+    Consider the APL expression
+&lt;/p&gt;&lt;PRE&gt;    a b c
+&lt;/PRE&gt;&lt;p&gt;
+    Depending on context, it could mean different things:
+&lt;/p&gt;&lt;PRE&gt;    a←0  ⋄ b←{} ⋄ c←0  ⋄ a b c    ⍝ a dyadic application of b
+    a←{} ⋄ b←{} ⋄ c←0  ⋄ a b c    ⍝ two nested monadic applications
+    a←0  ⋄ b←0  ⋄ c←{} ⋄ a b c    ⍝ compiler error
+    a←0  ⋄ b←0  ⋄ c←0  ⋄ a b c    ⍝ construction of a new vector
+    a←{} ⋄ b←{} ⋄ c←{} ⋄ a b c    ⍝ a fork
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+    So, it seems the semantics depend on what &lt;code dir="ltr"&gt;a&lt;/code&gt;, &lt;code dir="ltr"&gt;b&lt;/code&gt;, and &lt;code dir="ltr"&gt;c&lt;/code&gt; represent at
+    runtime, verbs or nouns, and building a complete AST is impossible before we have that knowledge.
+&lt;/p&gt;&lt;p&gt;
+    Fortunately, there exists a way around this at the cost of imposing a small
+    restriction on variable usage.  The restriction is as follows:
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;
+    Once we assign a noun to a variable, we are only allowed to assign nouns to it later.
+&lt;/LI&gt;&lt;LI&gt;
+    Once we assign a verb to a variable, we are only allowed to assign verbs to it later.
+&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
+    In other words, variables must preserve their lexical category.
+&lt;/p&gt;&lt;p&gt;
+Example:
+&lt;/p&gt;&lt;PRE&gt;    x ← 0
+    x ← 1     ⍝ OK
+    x ← {}    ⍝ Compiler error
+
+    f ← {}
+    f ← +/    ⍝ OK
+    f ← 2 3   ⍝ Compiler error
+&lt;/PRE&gt;&lt;p&gt;
+    This restriction separates the worlds of nouns and verbs at compile time.
+    Every expression can then be inferred one of the two lexical categories so the
+    compiler know what JavaScript code to render for it.
+&lt;/p&gt;&lt;h2&gt;
+    Representation of n-dimensional arrays
+&lt;/h2&gt;&lt;p&gt;
+    During the evolution of the project I went through a couple of different
+    implementations of the basic APL data structure.
+&lt;/p&gt;&lt;h3&gt;
+    Nested representation
+&lt;/h3&gt;&lt;p&gt;
+My first take on this was to use n nested levels of JavaScript arrays to
+represent an n-dimensional APL array.  For instance:
+&lt;/p&gt;&lt;PRE&gt;    APL: 2 3⍴⍳6
+    JS: [[0, 1, 2], [3, 4, 5]]
+&lt;/PRE&gt;&lt;p&gt;
+Thus, subscripting maps nicely between the two languages:
+&lt;/p&gt;&lt;PRE&gt;    APL: a[i;j;k]
+    JS: a[i][j][k]
+&lt;/PRE&gt;&lt;p&gt;
+but many of the primitives’ implementations had to involve recursion or
+multiple loops, which apart from being inefficient was complicating matters
+unnecessarily, so I transitioned to a flat representation.
+&lt;/p&gt;&lt;h3&gt;
+    Flat representation
+&lt;/h3&gt;&lt;p&gt;
+A flat representation is a single JavaScript array which contains all items of
+the APL array in lexicographic order of their indices (a.k.a. ravel order).
+Additional meta-information about the shape must be stored, too.
+&lt;/p&gt;&lt;PRE&gt;    APL: 2 3⍴⍳6
+    JS:
+        var a = [0, 1, 2, 3, 4, 5];
+        a.shape = [2, 3];
+&lt;/PRE&gt;&lt;p&gt;
+This way, indexing is not as plain as before:
+&lt;/p&gt;&lt;PRE&gt;    APL: a[i;j;k]
+    JS: a[
+            i * a.shape[0] * a.shape[1] +
+            j * a.shape[0] +
+            k
+        ]
+&lt;/PRE&gt;&lt;p&gt;
+but it’s still worth it, as the implementation of most primitives gets simpler
+and more efficient.
+&lt;/p&gt;&lt;p&gt;
+There turns out to be an even better data structure which I was lucky to come
+across.
+&lt;/p&gt;&lt;h3&gt;
+    Strided representation
+&lt;/h3&gt;&lt;p&gt;
+In a strided representation, an APL array is a record of:
+&lt;/p&gt;&lt;dd dir="ltr"&gt;
+        &lt;code dir="ltr"&gt;data&lt;/code&gt;: the elements, not necessarily in ravel order
+    &lt;/dd&gt;&lt;dd dir="ltr"&gt;
+        &lt;code dir="ltr"&gt;shape&lt;/code&gt;: as usual, an integer array
+    &lt;/dd&gt;&lt;dd dir="ltr"&gt;
+        &lt;code dir="ltr"&gt;stride&lt;/code&gt;: an integer for each axis, indicating how many items of &lt;code dir="ltr"&gt;data&lt;/code&gt; we
+        have to skip over in order to move to an adjacent cell along that axis.
+        Strides can be positive, negative, or zero.
+    &lt;/dd&gt;&lt;dd dir="ltr"&gt;
+        &lt;code dir="ltr"&gt;offset&lt;/code&gt;: the position in &lt;code dir="ltr"&gt;data&lt;/code&gt; where element &lt;code dir="ltr"&gt;[0;0;...;0]&lt;/code&gt; is located
+    &lt;/dd&gt;&lt;p&gt;
+Example:
+&lt;/p&gt;&lt;PRE&gt;    APL: 2 3⍴⍳6
+    JS:
+        {
+            data:   [0, 1, 2, 3, 4, 5],
+            shape:  [2, 3],
+            stride: [3, 1],
+            offset: 0
+        }
+&lt;/PRE&gt;&lt;p&gt;
+and this is another representation of the same APL array
+&lt;/p&gt;&lt;PRE&gt;    JS:
+        {
+            data:   [2, 1, 0, 5, 4, 3],
+            shape:  [2, 3],
+            stride: [3, -1],
+            offset: 2
+        }
+&lt;/PRE&gt;&lt;p&gt;
+Indexing is relatively straightforward:
+&lt;/p&gt;&lt;PRE&gt;    APL: a[i;j;k]
+    JS:
+        data[
+            offset
+            + i * stride[0]
+            + j * stride[1]
+            + k * stride[2]
+        ]
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+The advantage of this strided representation becomes apparent when working with
+large volumes of data.  Functions like transpose (&lt;code dir="ltr"&gt;⍉⍵&lt;/code&gt;), reverse (&lt;code dir="ltr"&gt;⌽⍵&lt;/code&gt;), or
+drop (&lt;code dir="ltr"&gt;⍺↓⍵&lt;/code&gt;) can reuse the &lt;code dir="ltr"&gt;data&lt;/code&gt; array and only care to give a new &lt;code dir="ltr"&gt;shape&lt;/code&gt;,
+&lt;code dir="ltr"&gt;stride&lt;/code&gt;, and &lt;code dir="ltr"&gt;offset&lt;/code&gt; to their result.  A reshaped scalar, e.g. &lt;code dir="ltr"&gt;1000000⍴0&lt;/code&gt;,
+can only occupy a constant amount of memory, exploiting the fact that strides
+can be 0.
+&lt;/p&gt;&lt;h2&gt;
+    Continuation-passing style
+&lt;/h2&gt;&lt;p&gt;
+The third problem, one which I haven’t solved in code yet, arose from the way
+NodeJS does I/O.  While in some cases NodeJS allows you to do
+&lt;/p&gt;&lt;PRE&gt;    var content = fs.readFileSync('a.txt');
+&lt;/PRE&gt;&lt;p&gt;
+it strongly encourages the so-called continuation-passing style (CPS),
+demanding a callback:
+&lt;/p&gt;&lt;PRE&gt;    fs.readFile('a.txt', function (content) {
+        // ... Invoked later, after content becomes available
+    });
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+It’s not only that.  In a browser environment, if we want to be properly
+mimicking I/O, we again need CPS.  Of course, we can use the blocking functions
+&lt;code dir="ltr"&gt;prompt()&lt;/code&gt; and &lt;code dir="ltr"&gt;alert()&lt;/code&gt;, but most users find those annoying because they
+prevent them from using other parts of the UI while entering text.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+This is what happens when reading from &lt;code dir="ltr"&gt;⎕&lt;/code&gt;, for instance:
+&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;
+        APL code tries to get the value of variable &lt;code dir="ltr"&gt;⎕&lt;/code&gt;.
+    &lt;/LI&gt;&lt;LI&gt;
+        The user is prompted to type something in an &lt;code dir="ltr"&gt;&amp;lt;input/&amp;gt;&lt;/code&gt;.
+    &lt;/LI&gt;&lt;LI&gt;
+        APL execution is suspended while the user is typing, looking up help
+    information, using the on-screen keyboard, etc.
+    &lt;/LI&gt;&lt;LI&gt;
+        The user presses enter.
+    &lt;/LI&gt;&lt;LI&gt;
+        APL execution is resumed and the value obtained from &lt;code dir="ltr"&gt;⎕&lt;/code&gt; is processed.
+    &lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;
+The trouble is in step 3.  How do we suspend execution to resume it later?  We
+might as well try to make the compiler output CPS JavaScript code, but that
+appears get complicated rather quickly.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+If only JavaScript had a &lt;code dir="ltr"&gt;call-with-current-continuation&lt;/code&gt; primitive like
+Scheme, we would be able to do just this:
+&lt;/p&gt;&lt;PRE&gt;    var content = callcc(fs.readFile.bind(fs, 'a.txt'));
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+but alas, it doesn’t.  We can amend that through implementing a virtual machine
+(VM) in JavaScript with a &lt;code dir="ltr"&gt;callcc&lt;/code&gt; instruction that suspends execution,
+captures the current state with all its stack and variable bindings and
+presents it as a callable &lt;em dir="ltr"&gt;resume&lt;/em&gt; function.  The compiler can then produce
+some intermediate bytecode for the VM instead of pure JavaScript.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+What if we also expose &lt;code dir="ltr"&gt;callcc&lt;/code&gt; as an APL primitive?  This would be so powerful
+that it could be used to implement an exception mechanism, break/continue,
+coroutines, generators, Prolog-style backtracking, etc in APL itself.
+Therefore, adding a VM looks like a lucrative prospect for ngn/apl.
+&lt;/p&gt;</description><pubDate>Fri, 17 Jul 2020 12:10:30 -0500</pubDate></item><item><title>Repurposing Obsolete FPGA-based Products as Development Kits</title><link>https://www.youtube.com/watch?v=4oyF-oqu88Q</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/bprw37/repurposing_fpga_based_products_as" rel="ugc"&gt;slides&lt;/a&gt;&lt;/p&gt;
+
+            &lt;p&gt;&lt;a href="https://lobste.rs/s/hgl4v4/repurposing_obsolete_fpga_based"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Fri, 17 Jul 2020 16:06:32 -0500</pubDate></item><item><title>import - a simple and fast module system for Bash and other Unix shells</title><link>https://lobste.rs/s/ktk3im</link><description>&lt;img alt="Build Status" src="https://github.com/importpw/import/workflows/Tests/badge.svg" width="107" height="20"&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;import&lt;/code&gt; is a simple and fast module system for Bash and other Unix shells.&lt;/p&gt;&lt;p dir="ltr"&gt;Inspired by Go's import command, you specify the URL of the shell script,
 and the &lt;code dir="ltr"&gt;import&lt;/code&gt; function downloads the file and caches it to &lt;code dir="ltr"&gt;~/.import-cache&lt;/code&gt;,
 &lt;em dir="ltr"&gt;forever&lt;/em&gt;.&lt;/p&gt;&lt;p&gt;The code will never change from below your feet, and will continute to work
 offline.&lt;/p&gt;&lt;h2&gt;👋 Example&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;a href="https://git.io/fAWiz" dir="ltr"&gt;https://git.io/fAWiz&lt;/a&gt; ← This URL contains a simple &lt;code dir="ltr"&gt;add&lt;/code&gt; shell function:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;add&lt;/span&gt;&lt;/span&gt;() {
@@ -1020,7 +1020,49 @@ cmake -B build -G Ninja -DCMAKE_INSTALL_PREFIX=/usr
 ninja -C build install
 &lt;/PRE&gt;&lt;p dir="ltr"&gt;Then Monado's libsurvive driver can be enabled by compiling Monado with either &lt;code dir="ltr"&gt;cmake -DBUILD_WITH_LIBSURVIVE=ON&lt;/code&gt; or &lt;code dir="ltr"&gt;meson -Ddrivers=auto,survive&lt;/code&gt;.&lt;/p&gt;&lt;h3&gt;Running Monado with Libsurvive&lt;/h3&gt;&lt;p&gt;When starting any application that uses libsurvive (in Monado's case that is monado-service), libsurvive searches for a directory calinfo and *config.json files for cached calibration. If no cached calibration is found, it runs calibration and stores calibration data in said files. Calibration should not take longer than 5-10 seconds during which the HMD and controllers should not be moved.&lt;/p&gt;&lt;p dir="ltr"&gt;You can run &lt;code dir="ltr"&gt;monado-service&lt;/code&gt; directly and let it run calibration, but you can also run the calibration standalone with libsurvive's &lt;code dir="ltr"&gt;survive-cli&lt;/code&gt; tool until you see&lt;/p&gt;&lt;PRE&gt;Info: Position found for LH 0(d99e7eac)
 Info: Position found for LH 1(fe0398ef)
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;printed to stdout. If anything goes wrong with the calibration or you move your lighthouse basestations, you can start over by simply deleting the calibration files: &lt;code dir="ltr"&gt;rm -rf calinfo *config.json&lt;/code&gt;.&lt;/p&gt;&lt;p&gt;For best results, during calibration place the HMD and the controllers on the floor since Monado does not come with a room setup configuration just yet. Make sure the distance to the lighthouse basestations is at least 0.5 - 1 meter.&lt;/p&gt;&lt;p dir="ltr"&gt;Support for the Valve Index Controller Profile is implemented in the &lt;a href="https://github.com/GodotVR/godot_openxr" rel="noopener noreferrer" dir="ltr"&gt;godot_openxr&lt;/a&gt; plugin.&lt;/p&gt;&lt;p dir="ltr"&gt;An example project for this plugin is &lt;a href="https://gitlab.freedesktop.org/monado/demos/godot_openxr_fps" rel="noopener noreferrer" dir="ltr"&gt;this fork of godot's "godot_openvr_fps" VR starter tutorial&lt;/a&gt;. This demo features some basic VR interactions with different weapons. and can be seen in action in the video at the beginning of this post.&lt;/p&gt;&lt;p&gt;Let us know if libsurvive works out for you or if you have any tricks for improving its tracking performance.&lt;/p&gt;&lt;p dir="ltr"&gt;If you are in need of more precise and more reliable open source lighthouse tracking and want to support the development of our lighthouse driver, please &lt;a href="https://www.collabora.com/contact-us.html" dir="ltr"&gt;contact us&lt;/a&gt;!&lt;/p&gt;</description><pubDate>Fri, 17 Jul 2020 11:20:32 -0500</pubDate></item><item><title>Support Diary: the LAN of 16 Million Hosts</title><link>https://lobste.rs/s/ju5yb5</link><description>&lt;h2&gt;Introduction&lt;/h2&gt;&lt;p&gt;The history of the Internet is marked by stacked innovations. Ideas that seemed
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;printed to stdout. If anything goes wrong with the calibration or you move your lighthouse basestations, you can start over by simply deleting the calibration files: &lt;code dir="ltr"&gt;rm -rf calinfo *config.json&lt;/code&gt;.&lt;/p&gt;&lt;p&gt;For best results, during calibration place the HMD and the controllers on the floor since Monado does not come with a room setup configuration just yet. Make sure the distance to the lighthouse basestations is at least 0.5 - 1 meter.&lt;/p&gt;&lt;p dir="ltr"&gt;Support for the Valve Index Controller Profile is implemented in the &lt;a href="https://github.com/GodotVR/godot_openxr" rel="noopener noreferrer" dir="ltr"&gt;godot_openxr&lt;/a&gt; plugin.&lt;/p&gt;&lt;p dir="ltr"&gt;An example project for this plugin is &lt;a href="https://gitlab.freedesktop.org/monado/demos/godot_openxr_fps" rel="noopener noreferrer" dir="ltr"&gt;this fork of godot's "godot_openvr_fps" VR starter tutorial&lt;/a&gt;. This demo features some basic VR interactions with different weapons. and can be seen in action in the video at the beginning of this post.&lt;/p&gt;&lt;p&gt;Let us know if libsurvive works out for you or if you have any tricks for improving its tracking performance.&lt;/p&gt;&lt;p dir="ltr"&gt;If you are in need of more precise and more reliable open source lighthouse tracking and want to support the development of our lighthouse driver, please &lt;a href="https://www.collabora.com/contact-us.html" dir="ltr"&gt;contact us&lt;/a&gt;!&lt;/p&gt;</description><pubDate>Fri, 17 Jul 2020 11:20:32 -0500</pubDate></item><item><title>Running Emacs with systemd</title><link>https://lobste.rs/s/cxesek</link><description>&lt;p dir="ltr"&gt;
+      &lt;time datetime="2020-07-16T09:30:00+00:00" itemprop="datePublished" dir="ltr"&gt;Jul 16, 2020
+      &lt;/time&gt;• &lt;span itemprop="author" itemscope="" itemtype="http://schema.org/Person" dir="ltr"&gt;&lt;span itemprop="name" dir="ltr"&gt;Bozhidar Batsov&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p&gt;Recently I’ve switched back to Linux, after having used macOS for the past 9 years.
+While I was generally happy with my overall macOS experience, I was also disappointed
+that Emacs simply didn’t work as well there, as it does on Linux for various reasons.&lt;/p&gt;&lt;p dir="ltr"&gt;While I was a Linux user I’d always run Emacs as a daemon (server) and I’d
+connect this daemon from multiple instances of &lt;code dir="ltr"&gt;emacsclient&lt;/code&gt;. This was both
+elegant and efficient - my clients started instantly. While this was doable to
+some extent in macOS, it never worked quite as well for me, and I abandoned
+that workflow eventually. Now, however, I’m back! Time to revive the workflow!&lt;/p&gt;&lt;p dir="ltr"&gt;Historically I ran the Emacs daemon by adding something like this to my shell init (e.g. &lt;code dir="ltr"&gt;.bashrc&lt;/code&gt;):&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;export &lt;/span&gt;&lt;span dir="ltr"&gt;ALTERNATE_EDITOR&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;''&lt;/span&gt;
+&lt;span dir="ltr"&gt;alias &lt;/span&gt;&lt;span dir="ltr"&gt;e&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;'emacsclient --tty'&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The magic is in the first line - leaving &lt;code dir="ltr"&gt;ALTERNATE_EDITOR&lt;/code&gt; blank.
+That way the first time I ran &lt;code dir="ltr"&gt;emacsclient&lt;/code&gt; it’d start an Emacs daemon and
+connect to it. Many people preferred to make the daemon a “proper” service that
+they can start, restart and monitor, but this felt like an overkill to me. I’ve
+noticed, however, that Emacs 26.1 bundles a &lt;code dir="ltr"&gt;systemd&lt;/code&gt; unit, so it’s now trivial
+to control your Emacs daemon with &lt;code dir="ltr"&gt;systemd&lt;/code&gt;. It all boils down to running this command:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ systemctl --user enable --now emacs
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Run this command with your regular user (or whatever user account you want to be running Emacs). Don’t run it as &lt;code dir="ltr"&gt;root&lt;/code&gt;, though!
+You’ll get a message that the unit file was copied to &lt;code dir="ltr"&gt;/usr/lib/systemd/user/emacs.service&lt;/code&gt; and you can examine it if you’re curious:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;[Unit]
+Description=Emacs text editor
+Documentation=info:emacs man:emacs(1) https://gnu.org/software/emacs/
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/emacs --fg-daemon
+ExecStop=/usr/bin/emacsclient --eval "(kill-emacs)"
+Environment=SSH_AUTH_SOCK=%t/keyring/ssh
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Pretty straightforward.&lt;/p&gt;&lt;p dir="ltr"&gt;At this point your Emacs daemon is up and you can connect to it using both
+terminal clients (&lt;code dir="ltr"&gt;emacsclient -t&lt;/code&gt;) and GUI clients (&lt;code dir="ltr"&gt;emacsclient -c&lt;/code&gt;). You
+might also want to create some desktop icon that runs &lt;code dir="ltr"&gt;emacsclient -c&lt;/code&gt;, instead
+of &lt;code dir="ltr"&gt;emacs&lt;/code&gt;.  You might also want to set both &lt;code dir="ltr"&gt;EDITOR&lt;/code&gt; and &lt;code dir="ltr"&gt;VISUAL&lt;/code&gt; to
+&lt;code dir="ltr"&gt;emacsclient -t&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;export &lt;/span&gt;&lt;span dir="ltr"&gt;EDITOR&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;'emacsclient -t'&lt;/span&gt;
+&lt;span dir="ltr"&gt;export &lt;/span&gt;&lt;span dir="ltr"&gt;VISUAL&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;'emacsclient -t'&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;I typically add two more aliases just to be on safe side:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;alias &lt;/span&gt;&lt;span dir="ltr"&gt;vi&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;'emacsclient -t'&lt;/span&gt;
+&lt;span dir="ltr"&gt;alias &lt;/span&gt;&lt;span dir="ltr"&gt;vim&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;'emacsclient -t'&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;One thing to keep in mind is that when you’re running Emacs in this manner it
+won’t read your user environment variables (at least not those coming from your
+&lt;code dir="ltr"&gt;.bash_profile&lt;/code&gt; and &lt;code dir="ltr"&gt;.bashrc&lt;/code&gt;). That’s why it’s a good idea to install the
+popular package
+&lt;a href="https://github.com/purcell/exec-path-from-shell" dir="ltr"&gt;exec-path-from-shell&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;That’s all I have for you today. I hope you’ve learned something useful. In parentheses we trust!&lt;/p&gt;</description><pubDate>Thu, 16 Jul 2020 07:59:32 -0500</pubDate></item><item><title>Support Diary: the LAN of 16 Million Hosts</title><link>https://lobste.rs/s/ju5yb5</link><description>&lt;h2&gt;Introduction&lt;/h2&gt;&lt;p&gt;The history of the Internet is marked by stacked innovations. Ideas that seemed
 good and necessary in their day are often superseded by better ideas that come
 along later.&lt;/p&gt;&lt;p&gt;And yet, remnants often remain.&lt;/p&gt;&lt;p&gt;We had a customer running NetBSD who was having trouble exchanging emails with
 us. They could contact other people just fine, but not us.&lt;/p&gt;&lt;p&gt;Investigation and debugging eventually determined that their service
@@ -1264,49 +1306,7 @@ information on the history of ifconfig and the Linux kernel.&lt;/p&gt;</descript
               In general, you can study the execution of any system
               that produces logs in a format that can be parsed using
               the RegExp mechanism above.
-            &lt;/p&gt;</description><pubDate>Fri, 17 Jul 2020 20:17:45 -0500</pubDate></item><item><title>Running Emacs with systemd</title><link>https://lobste.rs/s/cxesek</link><description>&lt;p dir="ltr"&gt;
-      &lt;time datetime="2020-07-16T09:30:00+00:00" itemprop="datePublished" dir="ltr"&gt;Jul 16, 2020
-      &lt;/time&gt;• &lt;span itemprop="author" itemscope="" itemtype="http://schema.org/Person" dir="ltr"&gt;&lt;span itemprop="name" dir="ltr"&gt;Bozhidar Batsov&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p&gt;Recently I’ve switched back to Linux, after having used macOS for the past 9 years.
-While I was generally happy with my overall macOS experience, I was also disappointed
-that Emacs simply didn’t work as well there, as it does on Linux for various reasons.&lt;/p&gt;&lt;p dir="ltr"&gt;While I was a Linux user I’d always run Emacs as a daemon (server) and I’d
-connect this daemon from multiple instances of &lt;code dir="ltr"&gt;emacsclient&lt;/code&gt;. This was both
-elegant and efficient - my clients started instantly. While this was doable to
-some extent in macOS, it never worked quite as well for me, and I abandoned
-that workflow eventually. Now, however, I’m back! Time to revive the workflow!&lt;/p&gt;&lt;p dir="ltr"&gt;Historically I ran the Emacs daemon by adding something like this to my shell init (e.g. &lt;code dir="ltr"&gt;.bashrc&lt;/code&gt;):&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;export &lt;/span&gt;&lt;span dir="ltr"&gt;ALTERNATE_EDITOR&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;''&lt;/span&gt;
-&lt;span dir="ltr"&gt;alias &lt;/span&gt;&lt;span dir="ltr"&gt;e&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;'emacsclient --tty'&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The magic is in the first line - leaving &lt;code dir="ltr"&gt;ALTERNATE_EDITOR&lt;/code&gt; blank.
-That way the first time I ran &lt;code dir="ltr"&gt;emacsclient&lt;/code&gt; it’d start an Emacs daemon and
-connect to it. Many people preferred to make the daemon a “proper” service that
-they can start, restart and monitor, but this felt like an overkill to me. I’ve
-noticed, however, that Emacs 26.1 bundles a &lt;code dir="ltr"&gt;systemd&lt;/code&gt; unit, so it’s now trivial
-to control your Emacs daemon with &lt;code dir="ltr"&gt;systemd&lt;/code&gt;. It all boils down to running this command:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ systemctl --user enable --now emacs
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Run this command with your regular user (or whatever user account you want to be running Emacs). Don’t run it as &lt;code dir="ltr"&gt;root&lt;/code&gt;, though!
-You’ll get a message that the unit file was copied to &lt;code dir="ltr"&gt;/usr/lib/systemd/user/emacs.service&lt;/code&gt; and you can examine it if you’re curious:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;[Unit]
-Description=Emacs text editor
-Documentation=info:emacs man:emacs(1) https://gnu.org/software/emacs/
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/emacs --fg-daemon
-ExecStop=/usr/bin/emacsclient --eval "(kill-emacs)"
-Environment=SSH_AUTH_SOCK=%t/keyring/ssh
-Restart=on-failure
-
-[Install]
-WantedBy=default.target
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Pretty straightforward.&lt;/p&gt;&lt;p dir="ltr"&gt;At this point your Emacs daemon is up and you can connect to it using both
-terminal clients (&lt;code dir="ltr"&gt;emacsclient -t&lt;/code&gt;) and GUI clients (&lt;code dir="ltr"&gt;emacsclient -c&lt;/code&gt;). You
-might also want to create some desktop icon that runs &lt;code dir="ltr"&gt;emacsclient -c&lt;/code&gt;, instead
-of &lt;code dir="ltr"&gt;emacs&lt;/code&gt;.  You might also want to set both &lt;code dir="ltr"&gt;EDITOR&lt;/code&gt; and &lt;code dir="ltr"&gt;VISUAL&lt;/code&gt; to
-&lt;code dir="ltr"&gt;emacsclient -t&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;export &lt;/span&gt;&lt;span dir="ltr"&gt;EDITOR&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;'emacsclient -t'&lt;/span&gt;
-&lt;span dir="ltr"&gt;export &lt;/span&gt;&lt;span dir="ltr"&gt;VISUAL&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;'emacsclient -t'&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;I typically add two more aliases just to be on safe side:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;alias &lt;/span&gt;&lt;span dir="ltr"&gt;vi&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;'emacsclient -t'&lt;/span&gt;
-&lt;span dir="ltr"&gt;alias &lt;/span&gt;&lt;span dir="ltr"&gt;vim&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;'emacsclient -t'&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;One thing to keep in mind is that when you’re running Emacs in this manner it
-won’t read your user environment variables (at least not those coming from your
-&lt;code dir="ltr"&gt;.bash_profile&lt;/code&gt; and &lt;code dir="ltr"&gt;.bashrc&lt;/code&gt;). That’s why it’s a good idea to install the
-popular package
-&lt;a href="https://github.com/purcell/exec-path-from-shell" dir="ltr"&gt;exec-path-from-shell&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;That’s all I have for you today. I hope you’ve learned something useful. In parentheses we trust!&lt;/p&gt;</description><pubDate>Thu, 16 Jul 2020 07:59:32 -0500</pubDate></item><item><title>fbpmn: formal tools for business process modeling</title><link>https://lobste.rs/s/uznu7m</link><description>&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;fbpmn&lt;/code&gt; supports the verification of business processes (workflows and collaborations) properties:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;option to complete&lt;/LI&gt;&lt;LI&gt;proper completion&lt;/LI&gt;&lt;LI&gt;no dead activity&lt;/LI&gt;&lt;LI&gt;safety&lt;/LI&gt;&lt;LI&gt;soundness&lt;/LI&gt;&lt;LI&gt;message-relaxed soundness&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;for seven different communication semantics:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Bag&lt;/strong&gt; (shared message multiset, no ordering)&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Fifo all&lt;/strong&gt; (shared message queue, ordering &lt;em dir="ltr"&gt;wrt.&lt;/em&gt; emission time)&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Causal&lt;/strong&gt;, (shared message causality structure, ordering &lt;em dir="ltr"&gt;wrt.&lt;/em&gt; message emission causality)&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Realizable with Synchronous Communication (RSC)&lt;/strong&gt; (shared 1-sized message buffer)&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Fifo pair&lt;/strong&gt; (message queue for each couple of processes, ordering &lt;em dir="ltr"&gt;wrt.&lt;/em&gt; emission time)&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Fifo inbox&lt;/strong&gt; (input message queue for each process, ordering &lt;em dir="ltr"&gt;wrt.&lt;/em&gt; emission time)&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Fifo outbox&lt;/strong&gt;, (output message queue for each process, ordering &lt;em dir="ltr"&gt;wrt.&lt;/em&gt; emission time)&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;New properties and communication semantics can be easily taken into account&lt;/strong&gt; (see Sect. 5, &lt;em dir="ltr"&gt;Extending the verification&lt;/em&gt;).&lt;/p&gt;&lt;h3&gt;References&lt;/h3&gt;&lt;p dir="ltr"&gt;Sara Houhou, Souheib Baarir, Pascal Poizat, and Philippe Quéinnec. &lt;strong dir="ltr"&gt;A First-Order Logic Semantics for Communication-Parametric BPMN Collaborations&lt;/strong&gt;. In: &lt;em dir="ltr"&gt;17th International Conference on Business Process Management (BPM)&lt;/em&gt;, Springer, 2019.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p&gt;verify your model for all combinations of property and communication semantics&lt;/p&gt;&lt;PRE&gt;❯ fbpmn-check &lt;span dir="ltr"&gt;$FBPMN_HOME&lt;/span&gt;/models/bpmn-origin/src/e033MBE.bpmn 2
+            &lt;/p&gt;</description><pubDate>Fri, 17 Jul 2020 20:17:45 -0500</pubDate></item><item><title>fbpmn: formal tools for business process modeling</title><link>https://lobste.rs/s/uznu7m</link><description>&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;fbpmn&lt;/code&gt; supports the verification of business processes (workflows and collaborations) properties:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;option to complete&lt;/LI&gt;&lt;LI&gt;proper completion&lt;/LI&gt;&lt;LI&gt;no dead activity&lt;/LI&gt;&lt;LI&gt;safety&lt;/LI&gt;&lt;LI&gt;soundness&lt;/LI&gt;&lt;LI&gt;message-relaxed soundness&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;for seven different communication semantics:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Bag&lt;/strong&gt; (shared message multiset, no ordering)&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Fifo all&lt;/strong&gt; (shared message queue, ordering &lt;em dir="ltr"&gt;wrt.&lt;/em&gt; emission time)&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Causal&lt;/strong&gt;, (shared message causality structure, ordering &lt;em dir="ltr"&gt;wrt.&lt;/em&gt; message emission causality)&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Realizable with Synchronous Communication (RSC)&lt;/strong&gt; (shared 1-sized message buffer)&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Fifo pair&lt;/strong&gt; (message queue for each couple of processes, ordering &lt;em dir="ltr"&gt;wrt.&lt;/em&gt; emission time)&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Fifo inbox&lt;/strong&gt; (input message queue for each process, ordering &lt;em dir="ltr"&gt;wrt.&lt;/em&gt; emission time)&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Fifo outbox&lt;/strong&gt;, (output message queue for each process, ordering &lt;em dir="ltr"&gt;wrt.&lt;/em&gt; emission time)&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;New properties and communication semantics can be easily taken into account&lt;/strong&gt; (see Sect. 5, &lt;em dir="ltr"&gt;Extending the verification&lt;/em&gt;).&lt;/p&gt;&lt;h3&gt;References&lt;/h3&gt;&lt;p dir="ltr"&gt;Sara Houhou, Souheib Baarir, Pascal Poizat, and Philippe Quéinnec. &lt;strong dir="ltr"&gt;A First-Order Logic Semantics for Communication-Parametric BPMN Collaborations&lt;/strong&gt;. In: &lt;em dir="ltr"&gt;17th International Conference on Business Process Management (BPM)&lt;/em&gt;, Springer, 2019.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p&gt;verify your model for all combinations of property and communication semantics&lt;/p&gt;&lt;PRE&gt;❯ fbpmn-check &lt;span dir="ltr"&gt;$FBPMN_HOME&lt;/span&gt;/models/bpmn-origin/src/e033MBE.bpmn 2
 Working &lt;span dir="ltr"&gt;in&lt;/span&gt; /tmp/e033MBE.T07y4 with 2 worker(s)
 transformation &lt;span dir="ltr"&gt;done&lt;/span&gt;
 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&amp;lt;&lt;/span&gt;"&lt;span dir="ltr"&gt;Processes=&lt;/span&gt;", 2, "Nodes=", 22, "Gateway=", 4, "SF=", 20, "MF=", 6&amp;gt;&amp;gt;&lt;/span&gt;
@@ -1691,28 +1691,59 @@ Girl" came out and I said to myself, Joe Bob, you gotta get out of  the  country
 &amp;lt;dc:creator&amp;gt;Joe Bob Briggs&amp;lt;/dc:creator&amp;gt;&lt;/p&gt;&lt;h5&gt;Recommendations&lt;/h5&gt;&lt;p dir="ltr"&gt;The value of the &lt;span dir="ltr"&gt;dc:creator&lt;/span&gt; element is less restrictive than the &lt;a href="https://www.rssboard.org/rss-profile#element-channel-item-author" dir="ltr"&gt;author&lt;/a&gt; element, which must contain an e-mail address. Publishers often rely on &lt;span dir="ltr"&gt;dc:creator&lt;/span&gt; to credit authorship without revealing e-mail addresses in a form that can be exploited by spammers.&lt;/p&gt;&lt;p dir="ltr"&gt;All of the tested aggregators that display item authors support both the &lt;span dir="ltr"&gt;author&lt;/span&gt; and &lt;span dir="ltr"&gt;dc:creator&lt;/span&gt; elements. (BottomFeeder, Mozilla Firefox 2.0 and My Yahoo do not identify authors.)&lt;/p&gt;&lt;p dir="ltr"&gt;When an &lt;a href="https://www.rssboard.org/rss-profile#element-channel-item" dir="ltr"&gt;item&lt;/a&gt; contains both elements, aggregators handle it in different ways. Some take the first element that appears within the item, others take the last and one aggregator combines their values.&lt;/p&gt;&lt;p dir="ltr"&gt;Publishers &lt;span dir="ltr"&gt;should&lt;/span&gt; use &lt;span dir="ltr"&gt;author&lt;/span&gt; when they want to reveal an author's e-mail address and &lt;span dir="ltr"&gt;dc:creator&lt;/span&gt; when they don't. The same item &lt;span dir="ltr"&gt;should not&lt;/span&gt; include both elements.&lt;/p&gt;&lt;p dir="ltr"&gt;This same recommendation &lt;span dir="ltr"&gt;should&lt;/span&gt; be followed for the use of &lt;span dir="ltr"&gt;dc:creator&lt;/span&gt; with the channel elements &lt;a href="https://www.rssboard.org/rss-profile#element-channel-managingeditor" dir="ltr"&gt;managingEditor&lt;/a&gt; and &lt;a href="https://www.rssboard.org/rss-profile#element-channel-webmaster" dir="ltr"&gt;webMaster&lt;/a&gt;.&lt;/p&gt;&lt;h4 dir="ltr"&gt;5.4. &lt;a href="https://www.rssboard.org/rss-profile#namespace-elements-slash" dir="ltr"&gt;Slash&lt;/a&gt;&lt;/h4&gt;&lt;p dir="ltr"&gt;The &lt;a href="http://web.resource.org/rss/1.0/modules/slash/" dir="ltr"&gt;Slash&lt;/a&gt; namespace supports features associated with items in the &lt;a href="http://www.slashcode.com/" dir="ltr"&gt;Slash&lt;/a&gt; content-management system, the software that powers &lt;a href="http://www.slashdot.org/" dir="ltr"&gt;Slashdot&lt;/a&gt; and other sites. Any RSS-producing software that employs the same features can use the namespace.&lt;/p&gt;&lt;p dir="ltr"&gt;This namespace requires the "http://purl.org/rss/1.0/modules/slash/" declaration in the &lt;a href="https://www.rssboard.org/rss-profile#element-rss" dir="ltr"&gt;rss&lt;/a&gt; element.&lt;/p&gt;&lt;p&gt;&amp;lt;rss xmlns:slash="http://purl.org/rss/1.0/modules/slash/"&amp;gt;&lt;/p&gt;&lt;h5&gt;Requirements&lt;/h5&gt;&lt;p dir="ltr"&gt;The &lt;span dir="ltr"&gt;slash:comments&lt;/span&gt; element contains a non-negative integer that counts the number of comments that an &lt;a href="https://www.rssboard.org/rss-profile#element-channel-item" dir="ltr"&gt;item&lt;/a&gt; has received (&lt;span dir="ltr"&gt;optional&lt;/span&gt;).&lt;/p&gt;&lt;p&gt;
 &amp;lt;slash:comments&amp;gt;13&amp;lt;/slash:comments&amp;gt;&lt;/p&gt;&lt;p dir="ltr"&gt;This complements the &lt;a href="https://www.rssboard.org/rss-profile#element-channel-item-comments" dir="ltr"&gt;comments&lt;/a&gt; element, which identifies the &lt;a href="https://www.rssboard.org/rss-profile#data-types-url" dir="ltr"&gt;URL&lt;/a&gt; of the web page where an item's comments are displayed.&lt;/p&gt;&lt;h5&gt;Recommendations&lt;/h5&gt;&lt;p dir="ltr"&gt;On an active web site, comment counts change frequently as new comments are published, so by necessity this element contains a snapshot of the totals at a particular moment in time. Because the Slash namespace lacks an element to indicate when the comment counts were compiled, publishers who use this element also &lt;span dir="ltr"&gt;should&lt;/span&gt; include a &lt;a href="https://www.rssboard.org/rss-profile#element-channel-lastbuilddate" dir="ltr"&gt;lastBuildDate&lt;/a&gt; element.&lt;/p&gt;&lt;h4 dir="ltr"&gt;6. &lt;a href="https://www.rssboard.org/rss-profile#license" dir="ltr"&gt;License&lt;/a&gt;&lt;/h4&gt;&lt;p dir="ltr"&gt;Copyright 2007 RSS Advisory Board. Redistribution and reuse of this document is permitted under the terms of the Creative Commons &lt;a href="http://creativecommons.org/licenses/by-sa/2.0/" dir="ltr"&gt;Attribution-ShareAlike 2.0&lt;/a&gt; license. The copyright applies to the text of this document, not to the data format that it describes.&lt;/p&gt;&lt;h4 dir="ltr"&gt;7. &lt;a href="https://www.rssboard.org/rss-profile#credits" dir="ltr"&gt;Credits&lt;/a&gt;&lt;/h4&gt;&lt;p dir="ltr"&gt;The author of this document is the &lt;a href="https://www.rssboard.org/" dir="ltr"&gt;RSS Advisory Board&lt;/a&gt;. Comments and corrections regarding this document are encouraged on the &lt;a href="http://groups.yahoo.com/group/rss-public" dir="ltr"&gt;RSS-Public&lt;/a&gt; mailing list.&lt;/p&gt;&lt;p&gt;The RSS format was created by Dan Libby and Ramanathan V. Guha. The Atom syndication format was created by the AtomPub Working Group. The Content namespace was created by Gabe Beged-Dov, Aaron Swartz and Eric van der Vlist. The Dublin Core namespace was created by Beged-Dov, Dan Brickley, Rael Dornfest, Ian Davis, Leigh Dodds, Jonathan Eisenzopf, David Galbraith, R.V. Guha, Ken MacLeod, Eric Miller, Swartz and van der Vlist. The Slash namespace was created by 
 Chris Nandor and Dornfest.
-&lt;/p&gt;&lt;p&gt;Rogers Cadenhead, James Holderness, Randy Charles Morin and Geoffrey Sneddon contributed to this document.&lt;/p&gt;&lt;div&gt;Main Menu&lt;/div&gt;</description><pubDate>Fri, 17 Jul 2020 10:48:05 -0500</pubDate></item><item><title>Shoelace, a forward-thinking library of web components</title><link>https://lobste.rs/s/vepqmn</link><description>&lt;UL&gt;&lt;LI&gt;Works with all frameworks 🧩&lt;/LI&gt;&lt;LI&gt;Works with CDNs 🚛&lt;/LI&gt;&lt;LI&gt;Fully customizable with CSS 🎨&lt;/LI&gt;&lt;LI&gt;Open source 😸&lt;/LI&gt;&lt;/UL&gt;&lt;img src="https://shoelace.style/assets/images/undraw-content-team.svg" alt="Cartoon of people assembling components while standing on a giant laptop." width="400" height="251"&gt;&lt;h2&gt;&lt;a href="https://shoelace.style/?id=quick-start" data-id="quick-start"&gt;&lt;span&gt;Quick Start&lt;/span&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Add the following code to your page.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;link&lt;/span&gt; &lt;span dir="ltr"&gt;rel&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;stylesheet&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;href&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;https://unpkg.com/@shoelace-style/shoelace@2.0.0-beta.3/dist/shoelace/shoelace.css&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;
-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;script&lt;/span&gt; &lt;span dir="ltr"&gt;type&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;module&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;src&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;https://unpkg.com/@shoelace-style/shoelace@2.0.0-beta.3/dist/shoelace/shoelace.esm.js&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;/&lt;/span&gt;script&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Now you have access to all of Shoelace's components! Try adding a button:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;sl-button&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;Click me&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;/&lt;/span&gt;sl-button&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;See the &lt;a href="https://shoelace.style/getting-started/installation" dir="ltr"&gt;installation instructions&lt;/a&gt; for more details and other ways to install Shoelace.&lt;/p&gt;&lt;h2&gt;&lt;a href="https://shoelace.style/?id=new-to-web-components" data-id="new-to-web-components"&gt;&lt;span&gt;New to Web Components?&lt;/span&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;TL;DR&lt;/strong&gt; – we finally have a way to create &lt;a href="https://html.spec.whatwg.org/multipage/custom-elements.html" rel="noopener" dir="ltr"&gt;our own HTML elements&lt;/a&gt; and use them in any framework we want!&lt;/p&gt;&lt;p&gt;Thanks to the popularity of frameworks such as Angular, Vue, and React, component-driven development has become a part of our every day lives. Components help us encapsulate styles and behaviors into reusable building blocks. They make a lot of sense in terms of design, development, and testing.&lt;/p&gt;&lt;p dir="ltr"&gt;Unfortunately, &lt;em dir="ltr"&gt;framework-specific&lt;/em&gt; components fail us in a number of ways:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;You can only use them in the framework they're designed for 🔒&lt;/LI&gt;&lt;LI&gt;Their lifespan is limited to that of the framework's ⏳&lt;/LI&gt;&lt;LI&gt;New framework versions can lead to breaking changes, requiring substantial effort to update components 😭&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Web components solve these problems. They're &lt;a href="https://caniuse.com/#feat=custom-elementsv1" rel="noopener" dir="ltr"&gt;supported by all modern browsers&lt;/a&gt;, they're framework-agnostic, and they're &lt;a href="https://developer.mozilla.org/en-US/docs/Web/Web_Components" rel="noopener" dir="ltr"&gt;part of the standard&lt;/a&gt;, so we know they'll be supported for many years to come.&lt;/p&gt;&lt;p&gt;This is the technology that Shoelace is built on.&lt;/p&gt;&lt;h2&gt;&lt;a href="https://shoelace.style/?id=what-problem-does-this-solve" data-id="what-problem-does-this-solve"&gt;&lt;span&gt;What Problem Does This Solve?&lt;/span&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Shoelace provides a collection of professionally designed, every day UI components built on a framework-agnostic technology. Why spend hundreds of hours or more building a design system from scratch? Why make a component library that only works with one framework?&lt;/p&gt;&lt;p&gt;With Shoelace, you can:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Start building things faster (no need to roll your own buttons)&lt;/LI&gt;&lt;LI&gt;Build multiple apps with different frameworks that all share the same UI&lt;/LI&gt;&lt;LI&gt;Skip having to learn a new component library every time you switch frameworks&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;If your organization is looking to build a design system, &lt;a href="https://medium.com/eightshapes-llc/and-you-thought-buttons-were-easy-26eb5b5c1871" rel="noopener" dir="ltr"&gt;Shoelace will save you thousands of dollars&lt;/a&gt;.* All the foundational components you need are right here, ready to be customized for your brand. And since it's built on web standards, browsers will continue to support it for many years to come.&lt;/p&gt;&lt;p&gt;Whether you use Shoelace as a starting point for your organization's design system or for a fun personal project, there's no limit to what you can do with it.&lt;/p&gt;&lt;p&gt;&lt;small dir="ltr"&gt;*Please consider giving back some of what you save by &lt;a href="https://github.com/sponsors/claviska" rel="noopener" dir="ltr"&gt;supporting this project with a sponsorship&lt;/a&gt;.&lt;/small&gt;&lt;/p&gt;&lt;h2&gt;&lt;a href="https://shoelace.style/?id=browser-support" data-id="browser-support"&gt;&lt;span&gt;Browser Support&lt;/span&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Shoelace is tested in the latest two versions of the following browsers.&lt;/p&gt;&lt;img src="https://shoelace.style/assets/images/chrome.png" alt="Chrome" width="64" height="64"&gt;&lt;img src="https://shoelace.style/assets/images/edge.png" alt="Edge" width="64" height="64"&gt;&lt;img src="https://shoelace.style/assets/images/firefox.png" alt="Firefox" width="64" height="64"&gt;&lt;img src="https://shoelace.style/assets/images/opera.png" alt="Opera" width="64" height="64"&gt;&lt;img src="https://shoelace.style/assets/images/safari.png" alt="Safari" width="64" height="64"&gt;&lt;p&gt;Critical bug fixes in earlier versions will be addressed based on their severity and impact.&lt;/p&gt;&lt;p&gt;If you need to support IE11 or pre-Chromium Edge, this library isn't for you. Although web components can (to some degree) be polyfilled for legacy browsers, supporting them is outside the scope of this project. If you're using Shoelace in such a browser, you're gonna have a bad time. ⛷&lt;/p&gt;&lt;h2&gt;&lt;a href="https://shoelace.style/?id=license" data-id="license"&gt;&lt;span&gt;License&lt;/span&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;Shoelace is designed in New Hampshire by &lt;a href="https://twitter.com/claviska" rel="noopener" dir="ltr"&gt;Cory LaViska&lt;/a&gt;. It's available under the terms of the MIT license.&lt;/p&gt;&lt;p&gt;Designing, developing, and supporting this library requires a lot of time, effort, and skill. I'd like to keep it open source so everyone can use it, but that doesn't provide me with any income. &lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Therefore, if you're using my software to make a profit,&lt;/strong&gt; I respectfully ask that you help &lt;a href="https://github.com/sponsors/claviska" rel="noopener" dir="ltr"&gt;fund its development&lt;/a&gt; by becoming a sponsor. There are multiple tiers to choose from with benefits at every level, including prioritized support, bug fixes, feature requests, and advertising.&lt;/p&gt;&lt;p&gt;👇 Your support is very much appreciated! 👇&lt;/p&gt;&lt;h2&gt;&lt;a href="https://shoelace.style/?id=attribution" data-id="attribution"&gt;&lt;span&gt;Attribution&lt;/span&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Special thanks to the following projects and individuals that helped make Shoelace possible.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Components are compiled by &lt;a href="https://stenciljs.com/" rel="noopener" dir="ltr"&gt;Stencil&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;Documentation is powered by &lt;a href="https://docsify.js.org/" rel="noopener" dir="ltr"&gt;Docsify&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;Theme colors and form controls are inspired by &lt;a href="https://shoelace.style/element.eleme.io" dir="ltr"&gt;Element&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;Icons are courtesy of &lt;a href="https://icons.getbootstrap.com/" rel="noopener" dir="ltr"&gt;Bootstrap Icons&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;Illustrations are courtesy of &lt;a href="https://undraw.co/" rel="noopener" dir="ltr"&gt;unDraw&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;Positioning of menus, tooltips, et al is handled by &lt;a href="https://popper.js.org/" rel="noopener" dir="ltr"&gt;Popper.js&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;CDN services are provided by &lt;a href="https://unpkg.com/" rel="noopener" dir="ltr"&gt;unpkg&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;The Shoelace logo was designed with a single shoelace by &lt;a href="https://twitter.com/adamkolson" rel="noopener" dir="ltr"&gt;Adam K Olson&lt;/a&gt;&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Fri, 17 Jul 2020 08:48:15 -0500</pubDate></item><item><title>Why the J-core open processor is cool</title><link>https://www.youtube.com/watch?v=dVD1Yws__v0</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/nfklqz/why_j_core_open_processor_is_cool"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Fri, 17 Jul 2020 16:02:42 -0500</pubDate></item><item><title>Improving performance of PHP for Arm64 and impact on Amazon EC2 M6g instances</title><link>https://lobste.rs/s/auu1iz</link><description>&lt;p&gt;&lt;em&gt;This post is contributed by Sebastian Pop, Senior Software Engineer, Amazon Web Services.&lt;/em&gt;&lt;/p&gt;&lt;p&gt;AWS recently launched the Amazon EC2 M6g instances powered by Graviton2. Compared to similar-sized M5 instances, Graviton2 instances provide up to 40% better cost-performance on several open-source application stacks.&lt;/p&gt;&lt;p&gt;This blog discusses how AWS worked together with the PHP community to drive major improvements to the performance of the PHP software stack on the Graviton2-based instances. By using M6g instances, the latest release of PHP-7.4 currently experiences up to 37% faster execution time compared to the previous release PHP-7.3. This significantly lowers the cost of running PHP software such as WordPress on Amazon EC2 M6g instances.&lt;/p&gt;&lt;h3&gt;A better Zend optimizer for Arm64&lt;/h3&gt;&lt;p dir="ltr"&gt;Zend optimizer is a component of the PHP runtime system that improves performance by up to 30% on a range of Zend micro-benchmarks. Before PHP 7.4 the Zend optimizer was not enabled for Arm. AWS added Arm64-specific implementations to several functions of the PHP interpreter.&lt;br dir="ltr"&gt;AWS evaluated the performance impact of the software changes to the PHP interpreter by running the standard micro-benchmarks distributed with the Zend optimizer: bench.php and micro_bench.php. To look at the performance of PHP interpreter as used in a fully loaded server, the benchmarks are set to run as many copies in parallel as vCPUs in the system, that is, each vCPU runs one copy of the benchmark such that the utilization of the system is above 95%. The experiment was run on a 16 vCPUs Graviton2 M6g.4xl and a 16 vCPUs Intel M5.4xl instances. Between PHP versions 7.3 and 7.4 the execution time of M6g instances improved by up to 37%. The following images demonstrate the benchmark results: the first image shows improved execution time of Zend/bench.php with newer versions of PHP, and the second image illustrates a faster execution time with newer versions of PHP on Zend/micro_bench.php.&lt;/p&gt;&lt;img src="https://idk.dev/wp-content/uploads/2020/07/Improving-performance-of-PHP-for-Arm64-and-impact-on-Amazon.png" alt="PHP performance with Graviton2" width="1027" height="300"&gt;&lt;h3&gt;Performance evaluation of WordPress on Ubuntu 19.04&lt;/h3&gt;&lt;p&gt;While the synthetic benchmarks proved M6g’s superior performance, I also looked at WordPress, a PHP-based real-world application. The following image shows the setup of the experiment:&lt;/p&gt;&lt;img src="https://idk.dev/wp-content/uploads/2020/07/1594781652_527_Improving-performance-of-PHP-for-Arm64-and-impact-on-Amazon.png" alt="PHP WordPress" width="497" height="145"&gt;&lt;p&gt;The machine represented in the middle of the image is the system under test (SUT) that is an M6g.4xl and an M5.4xl. To measure the performance of PHP independently of other components in the system, the MySQL database is set to run on a separate C5.4xl instance, in blue on the figure. The program WRK generates the HTTP requests for the main page of WordPress. WRK runs on a separate C5.4xl instance represented in orange on the figure. To minimize network noise, the three machines are allocated in the same cluster placement group. The SUT runs the NGINX web-server and the PHP interpreter. The NGINX web-server is configured with the fast CGI interface PHP-FPM. All the machines run Ubuntu 19.04.&lt;/p&gt;&lt;p&gt;With the software changes in PHP-7.4 and PHP-8, WordPress can serve up to 17% more pages per second on M6g.4xl vs. M5.4xl. Combined with the 20% lower cost of M6g instances, running PHP-7.4 and WordPress provides up to 34% better price/performance on M6g instances vs. M5 instances. The following image illustrates the performance of PHP versions 7.3, 7.4, and 8 when running on M6g.4xl and M5.4xl instances:&lt;/p&gt;&lt;img src="https://idk.dev/wp-content/uploads/2020/07/1594781652_522_Improving-performance-of-PHP-for-Arm64-and-impact-on-Amazon.png" alt="Wordpress NGINX performance" width="483" height="253"&gt;&lt;p dir="ltr"&gt;Looking at the scalability of WordPress-NGINX benchmark on the M6g instances, and a better performing PHP-7.4 release, adding more vCPUs scales almost linearly in the number of served pages until eight vCPUs. However, on the beta version of PHP-8 from August 20, 2019 that contains even more optimizations, the scalability trend continues up to 32 vCPUs (after which CPU utilization drops below 90%.)&lt;br dir="ltr"&gt;On the low-cost end of the spectrum, AWS offers an M6g.medium instance with 1vCPU that can sustain up to 77 pages per second which may be interesting for small (cost-conscious) users of WordPress.&lt;/p&gt;&lt;img src="https://idk.dev/wp-content/uploads/2020/07/1594781652_655_Improving-performance-of-PHP-for-Arm64-and-impact-on-Amazon.png" alt="Scalability of WordPress NGINX" width="497" height="453"&gt;&lt;h3&gt;How to install PHP-7.4&lt;/h3&gt;&lt;p dir="ltr"&gt;Installation instructions: https://www.php.net/install&lt;br dir="ltr"&gt;Installation instructions for Ubuntu: https://computingforgeeks.com/how-to-install-php-on-ubuntu/&lt;/p&gt;&lt;h3&gt;AWS contributions to PHP-7.4&lt;/h3&gt;&lt;h3&gt;Patches impacting performance of WordPress benchmark&lt;/h3&gt;&lt;p dir="ltr"&gt;The 20% performance difference from PHP-7.4 and PHP-8 master is due to https://github.com/php/php-src/commit/682b54f68748715f85e9ac4a267477d9ac61918a that removes support for PHP-4 constructors deprecated in PHP-7.0 https://wiki.php.net/rfc/remove_php4_constructors.&lt;br dir="ltr"&gt;As this has been committed early after the PHP-7.4 branch has been cut, the patch may be easily applied to the PHP-7.4 branch to get the performance benefits that we see in PHP-8 master.&lt;br dir="ltr"&gt;There are two other patches that impact the performance of the WordPress-NGINX benchmark, and both have been applied to master and PHP-7.4 branch:&lt;/p&gt;&lt;h3&gt;Future developments&lt;/h3&gt;&lt;p&gt;PHP-8 plans to release in 2021 with more improvements for Arm64: an improved toupper/tolower function brings performance up by 16.5x. https://github.com/php/php-src/pull/4439&lt;/p&gt;&lt;p&gt;AWS has contributed changes to PCRE2 release 10.34. PCRE2 version 10.34 is used in PHP-8 to match regular expressions. PCRE2 accounted for about 8% of execution time in WordPress benchmark. The change contributed by AWS to PCRE2 vectorizes first character match and matching pairs of characters with NEON instructions: performance improves by up to 8x on M6g. https://lists.exim.org/lurker/message/20191106.052444.1ea1a176.en.html&lt;/p&gt;&lt;p&gt;PHP-8 plans to feature a new JIT compiler that optimizes the PHP byte-code in the Opcache. The JIT is currently developed on x86 and is based on Lua’s JIT. As Lua’s JIT supports ARM64, we work with PHP developers to enable and to tune the Opcache JIT in PHP-8 to get the best performance on AWS Graviton processors.&lt;/p&gt;&lt;p&gt;The interaction with PHP community was through early discussion with the maintainers of the PHP Zend optimizer on our plans to improve performance on ARM, patch reviews that improved the quality of our submissions, and follow-up patches from the community to address problems uncovered during review of our patches. AWS continues to contribute ARM performance improvements to PHP-8. We followed the same pattern of involvement with the PCRE community, and continue to work with other open-source communities to bring our expertise and knowledge in improving the performance and tuning of ARM-based AWS Graviton systems.&lt;/p&gt;&lt;h3&gt;Conclusion&lt;/h3&gt;&lt;p&gt;PHP release 7.4 is key to obtain maximum performance from the Graviton2-based M6g instances. PHP 7.4 makes the M6g instances even more appealing by delivering both higher performance and lower cost compared to M5 instances.&lt;/p&gt;&lt;p&gt;To get started, check out the New – EC2 M6g Instances, powered by AWS Graviton2, and please leave comments!&lt;/p&gt;&lt;img width="421" height="195" src="https://idk.dev/wp-content/uploads/2020/07/1594824990_CDK-Pipelines-Continuous-delivery-for-AWS-CDK-applications-375x195.png" alt="CDK Pipelines: Continuous delivery for AWS CDK applications"&gt;</description><pubDate>Fri, 17 Jul 2020 04:31:52 -0500</pubDate></item><item><title>Tech firms like Facebook must restrict data sent from EU to US, European court rules</title><link>https://lobste.rs/s/fmula1</link><description>&lt;p&gt;Long-running legal saga finds inadequate protections against snooping on personal data by US intelligence agencies&lt;/p&gt;&lt;p aria-hidden="true" dir="ltr"&gt;
-&lt;time itemprop="datePublished" datetime="2020-07-16T07:30:41-0400" data-timestamp="1594899041000" dir="ltr"&gt;
-Thu 16 Jul 2020 &lt;span dir="ltr"&gt;07.30&amp;nbsp;EDT&lt;/span&gt;
-&lt;/time&gt;
-&lt;/p&gt;&lt;p aria-hidden="true"&gt;&lt;time datetime="2020-07-16T08:05:00-0400" data-timestamp="1594901100000" itemprop="dateModified" dir="ltr"&gt;
-Last modified on Thu 16 Jul 2020 &lt;span dir="ltr"&gt;08.05&amp;nbsp;EDT&lt;/span&gt;
-&lt;/time&gt;&lt;/p&gt;&lt;div&gt;21&lt;/div&gt;&lt;figure&gt;&lt;picture&gt;
-&lt;!--[if IE 9]&gt;&lt;video style="display: none;"&gt;&lt;![endif]--&gt;
-&lt;source media="(min-width: 980px) and (-webkit-min-device-pixel-ratio: 1.25), (min-width: 980px) and (min-resolution: 120dpi)" sizes="620px" srcset="https://i.guim.co.uk/img/media/3c2346ded5282801f30de25fa9983d2e1c8d6ba0/0_180_3154_1893/master/3154.jpg?width=620&amp;amp;quality=45&amp;amp;auto=format&amp;amp;fit=max&amp;amp;dpr=2&amp;amp;s=d7881b7715e2bd92a874e5dc5407d101 1240w"&gt;
-&lt;source media="(min-width: 980px)" sizes="620px" srcset="https://i.guim.co.uk/img/media/3c2346ded5282801f30de25fa9983d2e1c8d6ba0/0_180_3154_1893/master/3154.jpg?width=620&amp;amp;quality=85&amp;amp;auto=format&amp;amp;fit=max&amp;amp;s=2047fe254aedd738a0764107f18dd753 620w"&gt;
-&lt;source media="(min-width: 740px) and (-webkit-min-device-pixel-ratio: 1.25), (min-width: 740px) and (min-resolution: 120dpi)" sizes="700px" srcset="https://i.guim.co.uk/img/media/3c2346ded5282801f30de25fa9983d2e1c8d6ba0/0_180_3154_1893/master/3154.jpg?width=700&amp;amp;quality=45&amp;amp;auto=format&amp;amp;fit=max&amp;amp;dpr=2&amp;amp;s=793e63d84e6c25bbbdba329a6680a250 1400w"&gt;
-&lt;source media="(min-width: 740px)" sizes="700px" srcset="https://i.guim.co.uk/img/media/3c2346ded5282801f30de25fa9983d2e1c8d6ba0/0_180_3154_1893/master/3154.jpg?width=700&amp;amp;quality=85&amp;amp;auto=format&amp;amp;fit=max&amp;amp;s=8a923052ee5a63795625860594b5fd43 700w"&gt;
-&lt;source media="(min-width: 660px) and (-webkit-min-device-pixel-ratio: 1.25), (min-width: 660px) and (min-resolution: 120dpi)" sizes="620px" srcset="https://i.guim.co.uk/img/media/3c2346ded5282801f30de25fa9983d2e1c8d6ba0/0_180_3154_1893/master/3154.jpg?width=620&amp;amp;quality=45&amp;amp;auto=format&amp;amp;fit=max&amp;amp;dpr=2&amp;amp;s=d7881b7715e2bd92a874e5dc5407d101 1240w"&gt;
-&lt;source media="(min-width: 660px)" sizes="620px" srcset="https://i.guim.co.uk/img/media/3c2346ded5282801f30de25fa9983d2e1c8d6ba0/0_180_3154_1893/master/3154.jpg?width=620&amp;amp;quality=85&amp;amp;auto=format&amp;amp;fit=max&amp;amp;s=2047fe254aedd738a0764107f18dd753 620w"&gt;
-&lt;source media="(min-width: 480px) and (-webkit-min-device-pixel-ratio: 1.25), (min-width: 480px) and (min-resolution: 120dpi)" sizes="645px" srcset="https://i.guim.co.uk/img/media/3c2346ded5282801f30de25fa9983d2e1c8d6ba0/0_180_3154_1893/master/3154.jpg?width=645&amp;amp;quality=45&amp;amp;auto=format&amp;amp;fit=max&amp;amp;dpr=2&amp;amp;s=166680603eabf1c8938099cccd7a4641 1290w"&gt;
-&lt;source media="(min-width: 480px)" sizes="645px" srcset="https://i.guim.co.uk/img/media/3c2346ded5282801f30de25fa9983d2e1c8d6ba0/0_180_3154_1893/master/3154.jpg?width=645&amp;amp;quality=85&amp;amp;auto=format&amp;amp;fit=max&amp;amp;s=18a4c17d22298956a53aa3a01f2427a1 645w"&gt;
-&lt;source media="(min-width: 0px) and (-webkit-min-device-pixel-ratio: 1.25), (min-width: 0px) and (min-resolution: 120dpi)" sizes="465px" srcset="https://i.guim.co.uk/img/media/3c2346ded5282801f30de25fa9983d2e1c8d6ba0/0_180_3154_1893/master/3154.jpg?width=465&amp;amp;quality=45&amp;amp;auto=format&amp;amp;fit=max&amp;amp;dpr=2&amp;amp;s=a39909a3ac07b4efc98e635962ae41c1 930w"&gt;
-&lt;source media="(min-width: 0px)" sizes="465px" srcset="https://i.guim.co.uk/img/media/3c2346ded5282801f30de25fa9983d2e1c8d6ba0/0_180_3154_1893/master/3154.jpg?width=465&amp;amp;quality=85&amp;amp;auto=format&amp;amp;fit=max&amp;amp;s=c9d64ae7dc8000736fdebd554b60ddd9 465w"&gt;
-&lt;!--[if IE 9]&gt;&lt;/video&gt;&lt;![endif]--&gt;
-&lt;img alt="Facebook icon on phone screen" src="https://i.guim.co.uk/img/media/3c2346ded5282801f30de25fa9983d2e1c8d6ba0/0_180_3154_1893/master/3154.jpg?width=300&amp;amp;quality=85&amp;amp;auto=format&amp;amp;fit=max&amp;amp;s=67c9f21792c1297eda09edaaa4e604e3" width="500" height="300"&gt;
-&lt;/picture&gt;&lt;figcaption dir="auto"&gt;European Union’s top court rules that an agreement that allows big tech companies to transfer data to the US is invalid.
-Photograph: Jenny Kane/AP&lt;/figcaption&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;Tech companies like &lt;a href="https://www.theguardian.com/technology/facebook" data-link-name="auto-linked-tag" data-component="auto-linked-tag" dir="ltr"&gt;Facebook&lt;/a&gt; could be prevented from sending data back to the US, after the latest ruling in a long-running European legal saga found that there are not enough protections against snooping by US intelligence agencies.&lt;/p&gt;&lt;p dir="ltr"&gt;The ruling of the court of justice of the &lt;a href="https://www.theguardian.com/world/eu" data-link-name="auto-linked-tag" data-component="auto-linked-tag" dir="ltr"&gt;European Union&lt;/a&gt; (CJEU) does not immediately end such transfers, but requires data protection authorities (DPAs) in individual member states to vet the sending of any new data to make sure people’s personal information remains protected according to the EU’s data protection laws (GDPR).&lt;/p&gt;&lt;p&gt;The complaint, which goes back to October 2014, was lodged by Austrian privacy activist Max Schrems. He argued, following the Snowden revelations, that the privacy of European citizens could not be guaranteed if their data was sent to the US, given the evidence of widespread eavesdropping by the country’s National Security Agency (NSA), and the fact that the US legal system only protected the rights of US citizens.&lt;/p&gt;&lt;p&gt;Schrems’ initial complaint led to the overturning of the EU/US “safe harbour”, which had governed data transfer between the two countries, and the creation of a new treaty, the EU/US “privacy shield”. This latest ruling has overturned that policy too.&lt;/p&gt;&lt;p&gt;“At first sight it seems the court has followed us in all aspects,” Schrems said in a statement. “This is a total blow to the Irish DPC [data protection commission] and Facebook. It is clear that the US will have to seriously change their surveillance laws if US companies want to continue to play a role on the EU market.”&lt;/p&gt;&lt;p dir="ltr"&gt;“The court is not only telling the Irish DPC to do its job after seven years of inaction, but also that DPAs have a duty to take action and cannot just look the other way,” he added. “This is a fundamental shift going far beyond EU-US data transfers. Authorities like the Irish DPC have so far undermined the success of the &lt;a href="https://www.theguardian.com/technology/gdpr" data-link-name="auto-linked-tag" data-component="auto-linked-tag" dir="ltr"&gt;GDPR&lt;/a&gt;. The court has clearly told the DPAs to get going and enforce the law.”&lt;/p&gt;&lt;p dir="ltr"&gt;The ruling is not a total halt on data transfers between the EU and US, said Lisa Peets, a partner at Covington, which represented the UK’s software industry in the case. The court upheld the use of “standard contractual clauses” (SCCs) to transfer personal data between &lt;a href="https://www.theguardian.com/world/europe-news" data-link-name="auto-linked-tag" data-component="auto-linked-tag" dir="ltr"&gt;Europe&lt;/a&gt; and US, allowing companies to seek specific consent from users for data to be exported.&lt;/p&gt;&lt;p&gt;“Data flows between Europe and the United States are an integral part of the European economy and of the day-to-day lives of millions of European consumers, and the SCCs are the backbone for many of those data transfers,” Peets said. “As for the privacy shield, the European commission will be highly focused on finding a resolution and will be actively working work with the US government to identify a path forward.”&lt;/p&gt;&lt;p&gt;With the end of the Brexit withdrawal agreement on the horizon, the ruling also poses new problems for the UK in defining its future relationship with the EU. Without a new replacement for the privacy shield, the UK could be forced to pick between frictionless data transfers with the US or EU on 31 December, warned Toni Vitale, partner and head of data protection at JMW Solicitors.&lt;/p&gt;&lt;p&gt;“Post Brexit, the UK could be deemed to have inadequate protection given the lack of judicial oversight over the security forces,” Vitale added, “and this could this lead to a ban on exports of data from the EU to the UK in the future.”&lt;/p&gt;&lt;h2&gt;
-                    America is at a crossroads ...
-                &lt;/h2&gt;&lt;p&gt;... and the coming months will define the country for a generation. These are perilous times. Over the last three years, much of what the Guardian holds dear has been threatened – democracy, civility, truth. &lt;/p&gt;&lt;p&gt;Science is presently in a battle with conjecture and instinct to determine policy in the middle of a pandemic. At the same time, the US is reckoning with centuries of racial injustice – as the White House stokes division along racial lines. At a time like this, an independent news organisation that fights for truth and holds power to account is not just optional. It is essential. &lt;/p&gt;&lt;p&gt;The Guardian has been significantly impacted by the pandemic. Like many other news organisations, we are facing an unprecedented collapse in advertising revenues. We rely to an ever greater extent on our readers, both for the moral force to continue doing journalism at a time like this and for the financial strength to facilitate that reporting.&lt;/p&gt;&lt;p&gt;We believe every one of us deserves equal access to fact-based news and analysis. We’ve decided to keep Guardian journalism free for all readers, regardless of where they live or what they can afford to pay. This is made possible thanks to the support we receive from readers across America in all 50 states.&lt;/p&gt;&lt;p dir="ltr"&gt;As our business model comes under even greater pressure, we’d love your help so that we can carry on our essential work. &lt;strong dir="ltr"&gt;&lt;span dir="ltr"&gt;If you can, support the Guardian from as little as $1 - it only takes a minute. Thank you.&lt;/span&gt;&lt;/strong&gt;&lt;/p&gt;</description><pubDate>Thu, 16 Jul 2020 07:04:49 -0500</pubDate></item></channel></rss>
+&lt;/p&gt;&lt;p&gt;Rogers Cadenhead, James Holderness, Randy Charles Morin and Geoffrey Sneddon contributed to this document.&lt;/p&gt;&lt;div&gt;Main Menu&lt;/div&gt;</description><pubDate>Fri, 17 Jul 2020 10:48:05 -0500</pubDate></item><item><title>I'm back into the grind of FreeBSD's wireless stack and 802.11ac</title><link>https://lobste.rs/s/7oyebx</link><description>&lt;div itemprop="description articleBody" dir="ltr"&gt;
+hi!&lt;br dir="ltr"&gt;
+&lt;br dir="ltr"&gt;
+Yes, it's been a while since I posted here and yes, it's been a while since I was actively working on FreeBSD's wireless stack. Life's been .. well, life. I started the ath10k port in 2015. I wasn't expecting it to take 5 years, but here we are. My life has changed quite a lot since 2015 and a lot of the things I was doing in 2015 just stopped being fun for a while.&lt;br dir="ltr"&gt;
+&lt;br dir="ltr"&gt;
+But the stars have aligned and it's fun again, so here I am.&lt;br dir="ltr"&gt;
+&lt;br dir="ltr"&gt;
+Here's where things are right now.&lt;br dir="ltr"&gt;
+&lt;br dir="ltr"&gt;
+First up - if_run. This is the Ralink (now mediatek) 11abgn USB driver for stuff that they made before Mediatek acquired them. A contributor named Ashish Gupta showed up on the #freebsd-wifi IRC channel on efnet to start working on 11n support to if_run and he got it to the point where the basics worked - and I took it and ran with it enough to land 20MHz 11n support. It turns out I had a couple of suitable NICs to test with and, well, it just happened. I'm super happy Ashish came along to get 11n working on another NIC.&lt;br dir="ltr"&gt;
+&lt;br dir="ltr"&gt;
+The if_run TODO list (which anyone is welcome to contribute to):&lt;br dir="ltr"&gt;
+&lt;br dir="ltr"&gt;
+&lt;/div&gt;&lt;UL&gt;&lt;LI&gt;Ashish is looking at 40MHz wide channel support right now;&lt;/LI&gt;&lt;LI&gt;Short and long-GI support would be good to have;&lt;/LI&gt;&lt;LI&gt;we need to get 11n TX aggregation working via the firmware interface - it looks like the Linux driver has all the bits we need and it doesn't need retransmission support in net80211. The firmware will do it all if we set up the descriptors correctly.&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;
+net80211 work&lt;/h3&gt;&lt;div&gt;
+Next up - net80211. So, net80211 has basic 11ac bits, even if people think it's not there. It doesn't know about MU-MIMO streams yet but it'll be a basic 11ac AP and STA if the driver and regulatory domain supports it.&lt;/div&gt;&lt;div&gt;
+However, as I implement more of the ath10k port, I find more and more missing bits that really need to be in net80211.&lt;/div&gt;&lt;h4&gt;
+A-MPDU / A-MSDU de-encapsulation&lt;/h4&gt;&lt;div&gt;
+The hardware does A-MPDU and A-MSDU de-encapsulation in hardware/firmware, pushing up individual decrypted and de-encapsulated frames to the driver. It supports native wifi and 802.3 (ethernet) encapsulation, and right now we only support native wifi. (Note - net80211 supports 802.3 as well; I'll try to get that going once the driver lands.)&lt;/div&gt;&lt;div&gt;
+I added support to handle decryption offload with the ath10k supplied A-MPDU/A-MSDU frames (where there's no PN/MIC at all, it's all done in firmware/hardware!) so we could get SOME traffic. However, receive throughput just plainly sucked when I last poked at this. I also added A-MSDU offload support where we wouldn't drop the A-MSDU frames with the same receive 802.11 sequence number. However...&lt;/div&gt;&lt;div&gt;
+It turns out that my mac was doing A-MSDU in A-MPDU in 11ac, and the net80211 receive A-MPDU reordering was faithfully dropping all A-MSDU frames with the same receive 802.11 sequence number. So TCP would just see massive packet loss and drop the throughput in a huge way. Implementing this feature requires buffering all A-MSDU frames in an A-MPDU sub-frame in the reordering queue rather than tossing them, and then reordering them as if they were a single frame.&lt;/div&gt;&lt;div&gt;
+So I modified the receive reordering logic to reorder queues of mbufs instead of mbufs, and patched things to allow queuing multiple mbufs as long as they were appropriately stamped as being A-MSDUs in a single A-MPDU subframe .. and now the receive traffic rate is where it should be (&amp;gt; 300mbit UDP/TCP.) Phew.&lt;/div&gt;&lt;h4&gt;
+U-APSD support&lt;/h4&gt;&lt;div&gt;
+I didn't want to implement full U-APSD support in the Atheros 11abgn driver because it requires a lot of driver work to get it right, but the actual U-APSD negotiation support in net80211 is significantly easier. If the NIC supports U-APSD offload (like ath10k does) then I just have to populate the WME QoS fields appropriately and call into the driver to notify them about U-APSD changes.&lt;/div&gt;&lt;div&gt;
+Right now net80211 doesn't support the ADD-TS / DEL-TS methods for clients requesting explicit QoS requirements.&lt;/div&gt;&lt;h4&gt;
+Migrating more options to per-VAP state&lt;/h4&gt;&lt;div&gt;
+There are a bunch of net80211 state which was still global rather than per-VAP. It makes sense in the old world - NICs that do things in the driver or net80211 side are driven in software, not in firmware, so things like "the current channel", "short/long preamble", etc are global state. However the later NICs that offload various things into firmware can now begin to do interesting things like background channel switching for scan, background channel switching between STA and P2P-AP / P2P-STA. So a lot of state should be kept per-VAP rather than globally so the "right" flags and IEs are set for a given VAP.&lt;/div&gt;&lt;div&gt;
+I've started migrating this state into per-VAP fields rather than global, but it showed a second shortcoming - because it was global, we weren't explicitly tracking these things per-channel. Ok, this needs a bit more explanation.&lt;/div&gt;&lt;div&gt;
+Say you're on a 2GHz channel and you need to determine whether you care about 11n, 11g or 11b clients. If you're only seeing and servicing 11n clients then you should be using the short slot time, short preamble and not require RTS/CTS protection to interoperate with pre-11n clients.&lt;/div&gt;&lt;div&gt;
+But then an 11g client shows up.&lt;/div&gt;&lt;div dir="ltr"&gt;
+The 11g client doesn't need to interoperate with 11b, only 11n - so it doesn't need RTS/CTS. It can use short preamble and short slot time still. But the 11n client need to interoperate, so &lt;b dir="ltr"&gt;it&lt;/b&gt;&amp;nbsp;needs to switch protection mode into legacy - and it will do RTS/CTS protection.&lt;/div&gt;&lt;div&gt;
+But then, an 11b client shows up.&lt;/div&gt;&lt;div dir="ltr"&gt;
+&lt;br dir="ltr"&gt;At this point the 11g protection kicks in; everyone does RTS/CTS protection and long preamble/slot time kicks in.&lt;/div&gt;&lt;div dir="ltr"&gt;
+Now - is this a property of a VAP, or of a channel? Technically speaking, it's the property of a channel. If any VAP on that channel sees an 11b or 11g client, &lt;b dir="ltr"&gt;ALL&lt;/b&gt;&amp;nbsp;VAPs need to transition to update protection mode.&lt;/div&gt;&lt;div&gt;
+I migrated all of this to be per-VAP, but I kept the global state for literally all the drivers that currently consume it. The ath10k driver now uses the per-VAP state for the above, greatly simplifying things (and finishing TODO items in the driver!)&lt;/div&gt;&lt;h3&gt;
+ath10k changes&lt;/h3&gt;&lt;div&gt;
+And yes, I've been hacking on ath10k too.&lt;/div&gt;&lt;h4&gt;
+Locking issues&lt;/h4&gt;&lt;div&gt;
+I've had a bunch of feedback and pull requests from Bjorn and Geramy pointing out lock ordering / deadlock issues in ath10k. I'm slowly working through them; the straight conversion from Linux to FreeBSD showed the differences in our locking and how/when driver threads run. I will rant about this another day.&lt;/div&gt;&lt;h4&gt;
+Encryption key programming&lt;/h4&gt;&lt;div&gt;
+The encryption key programming is programmed using firmware calls, but net80211 currently expects them to be done synchronously. We can't sleep in the net80211 crypto key updates without changing net80211's locks to all be SX locks (and I honestly think that's a bad solution that papers over non-asynchronous code that honestly should just be made asynchronous.) Anyway, so it and the node updates are done using deferred calls - but this required me to take complete copies of the encryption key contents. It turns out net80211 can pretty quickly recycle the key contents - including the key that is hiding inside the ieee80211_node. This fixed up the key reprogramming and deletion - it was sometimes sending garbage to the firmware. Whoops.&lt;/div&gt;&lt;h3&gt;
+What's next?&lt;/h3&gt;&lt;div&gt;
+So what's next? Well, I want to land the ath10k driver! There are still a whole bunch of things to do in both net80211 and the driver before I can do this.&lt;/div&gt;&lt;h4&gt;
+Add 802.11ac channel entries to regdomain.xml&lt;/h4&gt;&lt;div&gt;
+Yes, I added it - but only for FCC. I didn't add them for all the other regulatory domain codes. It's a lot of work because of how this file is implemented and I'd love help here.&lt;/div&gt;&lt;h4&gt;
+Add MU-MIMO group notification&lt;/h4&gt;&lt;div&gt;
+I'd like to make sure that we can at least support associating to a MU-MIMO AP. I think ath10k does it in firmware but we need to support the IE notifications.&lt;/div&gt;&lt;h4&gt;
+Block traffic from being transmitted during a node creation or key update&lt;/h4&gt;&lt;div&gt;
+Right now net80211 will transmit frames right after adding a node or sending a key update - it assumes the driver is completing it before returning. For software driven NICs like the pre-11ac Atheros chips this holds true, but for everything USB and newer firmware based devices this definitely doesn't hold.&lt;/div&gt;&lt;div dir="ltr"&gt;
+&lt;br dir="ltr"&gt;For ath10k in particular if you try transmitting a frame without a node in firmware the whole transmit path just hangs. Whoops. So I've fixed that so we can't queue a frame if the firmware doesn't know about the node but ...&lt;/div&gt;&lt;div&gt;
+... net80211 will send the association responses in hostap mode once the node is created. This means the first association response doesn't make it to the associating client. Since net80211 doesn't yet do this traffic buffering, I'll do it in ath10k- I'll buffer frames during a key update and during node addition/deletion to make sure that nothing is sent OR dropped.&lt;/div&gt;&lt;h4&gt;
+Clean up the Linux-y bits&lt;/h4&gt;&lt;div&gt;
+There's a bunch of dead code which we don't need or don't use; as well as some compatibility bits that define Linux mac80211/nl80211 bits that should live in net80211. I'm going to turn these into net80211 methods and remove the Linux-y bits from ath10k. Bjorn's work to make linuxkpi wifi shims can then just translate the calls to the net80211 API bits I'll add, rather than having to roll full wifi methods inside linuxkpi.&lt;/div&gt;&lt;h3&gt;
+To wrap up ..&lt;/h3&gt;&lt;div&gt;
+.. job changes, relationship changes, having kids, getting a green card, buying a house and paying off old debts from your old hosting company can throw a spanner in the life machine. On the plus side, hacking on FreeBSD and wifi support are fun again and I'm actually able to sleep through the night once more, so ... here goes!&lt;/div&gt;&lt;div dir="ltr"&gt;If you're interested in helping out, I've been updating the net80211/driver TODO list here:&amp;nbsp;&lt;a href="https://wiki.freebsd.org/WiFi/TodoStuff" dir="ltr"&gt;https://wiki.freebsd.org/WiFi/TodoStuff&lt;/a&gt;&amp;nbsp;. I'd love some help, even on the small things!&lt;/div&gt;</description><pubDate>Fri, 17 Jul 2020 21:09:07 -0500</pubDate></item><item><title>Shoelace, a forward-thinking library of web components</title><link>https://lobste.rs/s/vepqmn</link><description>&lt;UL&gt;&lt;LI&gt;Works with all frameworks 🧩&lt;/LI&gt;&lt;LI&gt;Works with CDNs 🚛&lt;/LI&gt;&lt;LI&gt;Fully customizable with CSS 🎨&lt;/LI&gt;&lt;LI&gt;Open source 😸&lt;/LI&gt;&lt;/UL&gt;&lt;img src="https://shoelace.style/assets/images/undraw-content-team.svg" alt="Cartoon of people assembling components while standing on a giant laptop." width="400" height="251"&gt;&lt;h2&gt;&lt;a href="https://shoelace.style/?id=quick-start" data-id="quick-start"&gt;&lt;span&gt;Quick Start&lt;/span&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Add the following code to your page.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;link&lt;/span&gt; &lt;span dir="ltr"&gt;rel&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;stylesheet&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;href&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;https://unpkg.com/@shoelace-style/shoelace@2.0.0-beta.3/dist/shoelace/shoelace.css&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;script&lt;/span&gt; &lt;span dir="ltr"&gt;type&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;module&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;src&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;https://unpkg.com/@shoelace-style/shoelace@2.0.0-beta.3/dist/shoelace/shoelace.esm.js&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;/&lt;/span&gt;script&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Now you have access to all of Shoelace's components! Try adding a button:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;sl-button&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;Click me&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;/&lt;/span&gt;sl-button&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;See the &lt;a href="https://shoelace.style/getting-started/installation" dir="ltr"&gt;installation instructions&lt;/a&gt; for more details and other ways to install Shoelace.&lt;/p&gt;&lt;h2&gt;&lt;a href="https://shoelace.style/?id=new-to-web-components" data-id="new-to-web-components"&gt;&lt;span&gt;New to Web Components?&lt;/span&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;TL;DR&lt;/strong&gt; – we finally have a way to create &lt;a href="https://html.spec.whatwg.org/multipage/custom-elements.html" rel="noopener" dir="ltr"&gt;our own HTML elements&lt;/a&gt; and use them in any framework we want!&lt;/p&gt;&lt;p&gt;Thanks to the popularity of frameworks such as Angular, Vue, and React, component-driven development has become a part of our every day lives. Components help us encapsulate styles and behaviors into reusable building blocks. They make a lot of sense in terms of design, development, and testing.&lt;/p&gt;&lt;p dir="ltr"&gt;Unfortunately, &lt;em dir="ltr"&gt;framework-specific&lt;/em&gt; components fail us in a number of ways:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;You can only use them in the framework they're designed for 🔒&lt;/LI&gt;&lt;LI&gt;Their lifespan is limited to that of the framework's ⏳&lt;/LI&gt;&lt;LI&gt;New framework versions can lead to breaking changes, requiring substantial effort to update components 😭&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Web components solve these problems. They're &lt;a href="https://caniuse.com/#feat=custom-elementsv1" rel="noopener" dir="ltr"&gt;supported by all modern browsers&lt;/a&gt;, they're framework-agnostic, and they're &lt;a href="https://developer.mozilla.org/en-US/docs/Web/Web_Components" rel="noopener" dir="ltr"&gt;part of the standard&lt;/a&gt;, so we know they'll be supported for many years to come.&lt;/p&gt;&lt;p&gt;This is the technology that Shoelace is built on.&lt;/p&gt;&lt;h2&gt;&lt;a href="https://shoelace.style/?id=what-problem-does-this-solve" data-id="what-problem-does-this-solve"&gt;&lt;span&gt;What Problem Does This Solve?&lt;/span&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Shoelace provides a collection of professionally designed, every day UI components built on a framework-agnostic technology. Why spend hundreds of hours or more building a design system from scratch? Why make a component library that only works with one framework?&lt;/p&gt;&lt;p&gt;With Shoelace, you can:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Start building things faster (no need to roll your own buttons)&lt;/LI&gt;&lt;LI&gt;Build multiple apps with different frameworks that all share the same UI&lt;/LI&gt;&lt;LI&gt;Skip having to learn a new component library every time you switch frameworks&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;If your organization is looking to build a design system, &lt;a href="https://medium.com/eightshapes-llc/and-you-thought-buttons-were-easy-26eb5b5c1871" rel="noopener" dir="ltr"&gt;Shoelace will save you thousands of dollars&lt;/a&gt;.* All the foundational components you need are right here, ready to be customized for your brand. And since it's built on web standards, browsers will continue to support it for many years to come.&lt;/p&gt;&lt;p&gt;Whether you use Shoelace as a starting point for your organization's design system or for a fun personal project, there's no limit to what you can do with it.&lt;/p&gt;&lt;p&gt;&lt;small dir="ltr"&gt;*Please consider giving back some of what you save by &lt;a href="https://github.com/sponsors/claviska" rel="noopener" dir="ltr"&gt;supporting this project with a sponsorship&lt;/a&gt;.&lt;/small&gt;&lt;/p&gt;&lt;h2&gt;&lt;a href="https://shoelace.style/?id=browser-support" data-id="browser-support"&gt;&lt;span&gt;Browser Support&lt;/span&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Shoelace is tested in the latest two versions of the following browsers.&lt;/p&gt;&lt;img src="https://shoelace.style/assets/images/chrome.png" alt="Chrome" width="64" height="64"&gt;&lt;img src="https://shoelace.style/assets/images/edge.png" alt="Edge" width="64" height="64"&gt;&lt;img src="https://shoelace.style/assets/images/firefox.png" alt="Firefox" width="64" height="64"&gt;&lt;img src="https://shoelace.style/assets/images/opera.png" alt="Opera" width="64" height="64"&gt;&lt;img src="https://shoelace.style/assets/images/safari.png" alt="Safari" width="64" height="64"&gt;&lt;p&gt;Critical bug fixes in earlier versions will be addressed based on their severity and impact.&lt;/p&gt;&lt;p&gt;If you need to support IE11 or pre-Chromium Edge, this library isn't for you. Although web components can (to some degree) be polyfilled for legacy browsers, supporting them is outside the scope of this project. If you're using Shoelace in such a browser, you're gonna have a bad time. ⛷&lt;/p&gt;&lt;h2&gt;&lt;a href="https://shoelace.style/?id=license" data-id="license"&gt;&lt;span&gt;License&lt;/span&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;Shoelace is designed in New Hampshire by &lt;a href="https://twitter.com/claviska" rel="noopener" dir="ltr"&gt;Cory LaViska&lt;/a&gt;. It's available under the terms of the MIT license.&lt;/p&gt;&lt;p&gt;Designing, developing, and supporting this library requires a lot of time, effort, and skill. I'd like to keep it open source so everyone can use it, but that doesn't provide me with any income. &lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Therefore, if you're using my software to make a profit,&lt;/strong&gt; I respectfully ask that you help &lt;a href="https://github.com/sponsors/claviska" rel="noopener" dir="ltr"&gt;fund its development&lt;/a&gt; by becoming a sponsor. There are multiple tiers to choose from with benefits at every level, including prioritized support, bug fixes, feature requests, and advertising.&lt;/p&gt;&lt;p&gt;👇 Your support is very much appreciated! 👇&lt;/p&gt;&lt;h2&gt;&lt;a href="https://shoelace.style/?id=attribution" data-id="attribution"&gt;&lt;span&gt;Attribution&lt;/span&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Special thanks to the following projects and individuals that helped make Shoelace possible.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Components are compiled by &lt;a href="https://stenciljs.com/" rel="noopener" dir="ltr"&gt;Stencil&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;Documentation is powered by &lt;a href="https://docsify.js.org/" rel="noopener" dir="ltr"&gt;Docsify&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;Theme colors and form controls are inspired by &lt;a href="https://shoelace.style/element.eleme.io" dir="ltr"&gt;Element&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;Icons are courtesy of &lt;a href="https://icons.getbootstrap.com/" rel="noopener" dir="ltr"&gt;Bootstrap Icons&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;Illustrations are courtesy of &lt;a href="https://undraw.co/" rel="noopener" dir="ltr"&gt;unDraw&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;Positioning of menus, tooltips, et al is handled by &lt;a href="https://popper.js.org/" rel="noopener" dir="ltr"&gt;Popper.js&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;CDN services are provided by &lt;a href="https://unpkg.com/" rel="noopener" dir="ltr"&gt;unpkg&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;The Shoelace logo was designed with a single shoelace by &lt;a href="https://twitter.com/adamkolson" rel="noopener" dir="ltr"&gt;Adam K Olson&lt;/a&gt;&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Fri, 17 Jul 2020 08:48:15 -0500</pubDate></item><item><title>Why the J-core open processor is cool</title><link>https://www.youtube.com/watch?v=dVD1Yws__v0</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/nfklqz/why_j_core_open_processor_is_cool"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Fri, 17 Jul 2020 16:02:42 -0500</pubDate></item><item><title>Improving performance of PHP for Arm64 and impact on Amazon EC2 M6g instances</title><link>https://lobste.rs/s/auu1iz</link><description>&lt;p&gt;&lt;em&gt;This post is contributed by Sebastian Pop, Senior Software Engineer, Amazon Web Services.&lt;/em&gt;&lt;/p&gt;&lt;p&gt;AWS recently launched the Amazon EC2 M6g instances powered by Graviton2. Compared to similar-sized M5 instances, Graviton2 instances provide up to 40% better cost-performance on several open-source application stacks.&lt;/p&gt;&lt;p&gt;This blog discusses how AWS worked together with the PHP community to drive major improvements to the performance of the PHP software stack on the Graviton2-based instances. By using M6g instances, the latest release of PHP-7.4 currently experiences up to 37% faster execution time compared to the previous release PHP-7.3. This significantly lowers the cost of running PHP software such as WordPress on Amazon EC2 M6g instances.&lt;/p&gt;&lt;h3&gt;A better Zend optimizer for Arm64&lt;/h3&gt;&lt;p dir="ltr"&gt;Zend optimizer is a component of the PHP runtime system that improves performance by up to 30% on a range of Zend micro-benchmarks. Before PHP 7.4 the Zend optimizer was not enabled for Arm. AWS added Arm64-specific implementations to several functions of the PHP interpreter.&lt;br dir="ltr"&gt;AWS evaluated the performance impact of the software changes to the PHP interpreter by running the standard micro-benchmarks distributed with the Zend optimizer: bench.php and micro_bench.php. To look at the performance of PHP interpreter as used in a fully loaded server, the benchmarks are set to run as many copies in parallel as vCPUs in the system, that is, each vCPU runs one copy of the benchmark such that the utilization of the system is above 95%. The experiment was run on a 16 vCPUs Graviton2 M6g.4xl and a 16 vCPUs Intel M5.4xl instances. Between PHP versions 7.3 and 7.4 the execution time of M6g instances improved by up to 37%. The following images demonstrate the benchmark results: the first image shows improved execution time of Zend/bench.php with newer versions of PHP, and the second image illustrates a faster execution time with newer versions of PHP on Zend/micro_bench.php.&lt;/p&gt;&lt;img src="https://idk.dev/wp-content/uploads/2020/07/Improving-performance-of-PHP-for-Arm64-and-impact-on-Amazon.png" alt="PHP performance with Graviton2" width="1027" height="300"&gt;&lt;h3&gt;Performance evaluation of WordPress on Ubuntu 19.04&lt;/h3&gt;&lt;p&gt;While the synthetic benchmarks proved M6g’s superior performance, I also looked at WordPress, a PHP-based real-world application. The following image shows the setup of the experiment:&lt;/p&gt;&lt;img src="https://idk.dev/wp-content/uploads/2020/07/1594781652_527_Improving-performance-of-PHP-for-Arm64-and-impact-on-Amazon.png" alt="PHP WordPress" width="497" height="145"&gt;&lt;p&gt;The machine represented in the middle of the image is the system under test (SUT) that is an M6g.4xl and an M5.4xl. To measure the performance of PHP independently of other components in the system, the MySQL database is set to run on a separate C5.4xl instance, in blue on the figure. The program WRK generates the HTTP requests for the main page of WordPress. WRK runs on a separate C5.4xl instance represented in orange on the figure. To minimize network noise, the three machines are allocated in the same cluster placement group. The SUT runs the NGINX web-server and the PHP interpreter. The NGINX web-server is configured with the fast CGI interface PHP-FPM. All the machines run Ubuntu 19.04.&lt;/p&gt;&lt;p&gt;With the software changes in PHP-7.4 and PHP-8, WordPress can serve up to 17% more pages per second on M6g.4xl vs. M5.4xl. Combined with the 20% lower cost of M6g instances, running PHP-7.4 and WordPress provides up to 34% better price/performance on M6g instances vs. M5 instances. The following image illustrates the performance of PHP versions 7.3, 7.4, and 8 when running on M6g.4xl and M5.4xl instances:&lt;/p&gt;&lt;img src="https://idk.dev/wp-content/uploads/2020/07/1594781652_522_Improving-performance-of-PHP-for-Arm64-and-impact-on-Amazon.png" alt="Wordpress NGINX performance" width="483" height="253"&gt;&lt;p dir="ltr"&gt;Looking at the scalability of WordPress-NGINX benchmark on the M6g instances, and a better performing PHP-7.4 release, adding more vCPUs scales almost linearly in the number of served pages until eight vCPUs. However, on the beta version of PHP-8 from August 20, 2019 that contains even more optimizations, the scalability trend continues up to 32 vCPUs (after which CPU utilization drops below 90%.)&lt;br dir="ltr"&gt;On the low-cost end of the spectrum, AWS offers an M6g.medium instance with 1vCPU that can sustain up to 77 pages per second which may be interesting for small (cost-conscious) users of WordPress.&lt;/p&gt;&lt;img src="https://idk.dev/wp-content/uploads/2020/07/1594781652_655_Improving-performance-of-PHP-for-Arm64-and-impact-on-Amazon.png" alt="Scalability of WordPress NGINX" width="497" height="453"&gt;&lt;h3&gt;How to install PHP-7.4&lt;/h3&gt;&lt;p dir="ltr"&gt;Installation instructions: https://www.php.net/install&lt;br dir="ltr"&gt;Installation instructions for Ubuntu: https://computingforgeeks.com/how-to-install-php-on-ubuntu/&lt;/p&gt;&lt;h3&gt;AWS contributions to PHP-7.4&lt;/h3&gt;&lt;h3&gt;Patches impacting performance of WordPress benchmark&lt;/h3&gt;&lt;p dir="ltr"&gt;The 20% performance difference from PHP-7.4 and PHP-8 master is due to https://github.com/php/php-src/commit/682b54f68748715f85e9ac4a267477d9ac61918a that removes support for PHP-4 constructors deprecated in PHP-7.0 https://wiki.php.net/rfc/remove_php4_constructors.&lt;br dir="ltr"&gt;As this has been committed early after the PHP-7.4 branch has been cut, the patch may be easily applied to the PHP-7.4 branch to get the performance benefits that we see in PHP-8 master.&lt;br dir="ltr"&gt;There are two other patches that impact the performance of the WordPress-NGINX benchmark, and both have been applied to master and PHP-7.4 branch:&lt;/p&gt;&lt;h3&gt;Future developments&lt;/h3&gt;&lt;p&gt;PHP-8 plans to release in 2021 with more improvements for Arm64: an improved toupper/tolower function brings performance up by 16.5x. https://github.com/php/php-src/pull/4439&lt;/p&gt;&lt;p&gt;AWS has contributed changes to PCRE2 release 10.34. PCRE2 version 10.34 is used in PHP-8 to match regular expressions. PCRE2 accounted for about 8% of execution time in WordPress benchmark. The change contributed by AWS to PCRE2 vectorizes first character match and matching pairs of characters with NEON instructions: performance improves by up to 8x on M6g. https://lists.exim.org/lurker/message/20191106.052444.1ea1a176.en.html&lt;/p&gt;&lt;p&gt;PHP-8 plans to feature a new JIT compiler that optimizes the PHP byte-code in the Opcache. The JIT is currently developed on x86 and is based on Lua’s JIT. As Lua’s JIT supports ARM64, we work with PHP developers to enable and to tune the Opcache JIT in PHP-8 to get the best performance on AWS Graviton processors.&lt;/p&gt;&lt;p&gt;The interaction with PHP community was through early discussion with the maintainers of the PHP Zend optimizer on our plans to improve performance on ARM, patch reviews that improved the quality of our submissions, and follow-up patches from the community to address problems uncovered during review of our patches. AWS continues to contribute ARM performance improvements to PHP-8. We followed the same pattern of involvement with the PCRE community, and continue to work with other open-source communities to bring our expertise and knowledge in improving the performance and tuning of ARM-based AWS Graviton systems.&lt;/p&gt;&lt;h3&gt;Conclusion&lt;/h3&gt;&lt;p&gt;PHP release 7.4 is key to obtain maximum performance from the Graviton2-based M6g instances. PHP 7.4 makes the M6g instances even more appealing by delivering both higher performance and lower cost compared to M5 instances.&lt;/p&gt;&lt;p&gt;To get started, check out the New – EC2 M6g Instances, powered by AWS Graviton2, and please leave comments!&lt;/p&gt;&lt;img width="421" height="195" src="https://idk.dev/wp-content/uploads/2020/07/1594824990_CDK-Pipelines-Continuous-delivery-for-AWS-CDK-applications-375x195.png" alt="CDK Pipelines: Continuous delivery for AWS CDK applications"&gt;</description><pubDate>Fri, 17 Jul 2020 04:31:52 -0500</pubDate></item></channel></rss>
