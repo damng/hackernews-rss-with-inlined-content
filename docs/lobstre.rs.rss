@@ -35,517 +35,7 @@ as the result:&lt;/p&gt;&lt;img src="https://emacsredux.com/assets/images/instan
 display the shell config in the same window, but that’s a small thing.  The variables
 like &lt;code dir="ltr"&gt;crux-shell-bash-init-files&lt;/code&gt; are simply lists of all potential files that
 we should look for, that’s why I’ve opted to omit them from the code listing.&lt;/p&gt;&lt;p dir="ltr"&gt;I stand by my original suggestion to bind this useful command to &lt;code dir="ltr"&gt;C-c S&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;global-set-key&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;kbd&lt;/span&gt; &lt;span dir="ltr"&gt;"C-c S"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;#'&lt;/span&gt;&lt;span dir="ltr"&gt;crux-find-shell-init-file&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;That’s all I have for you today! Meta-x forever!&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Did you notice the subtle difference in the names of the original and the updated article?&amp;nbsp;&lt;a href="https://emacsredux.com/blog/2020/07/16/instant-access-to-your-shell-init-files/#fnref:1" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Sat, 18 Jul 2020 11:50:08 -0500</pubDate></item><item><title>Debugging a dynamic linking bug in a Nix project</title><link>https://lobste.rs/s/ip8pih</link><description>&lt;h1&gt;Debugging a dynamic linking bug in a Nix project&lt;/h1&gt;&lt;h2&gt;Trying out the Nix development experience&lt;/h2&gt;&lt;p dir="ltr"&gt;The other day, while building a &lt;a href="https://faculty.washington.edu/shumlak/WARPX/html/index.html" dir="ltr"&gt;scientific project&lt;/a&gt; to which I’m a contributor, I
-ran into a nasty version conflict between two system libraries. In a fit of
-pique, I decided to learn enough about &lt;a href="https://nixos.org/" dir="ltr"&gt;Nix&lt;/a&gt; to be able to set up a reproducible,
-tightly controlled local build. It’s done now, and overall I’m very happy with
-the tooling and setup. I’m using &lt;a href="https://direnv.net/" dir="ltr"&gt;direnv&lt;/a&gt; to tightly integrate my normal shell
-with Nix’s &lt;code dir="ltr"&gt;nix-shell&lt;/code&gt; feature, and for the most part everything feels seamless.
-It is extremely refreshing to see &lt;code dir="ltr"&gt;cmake&lt;/code&gt; report that it has found a plethora of
-binaries and libraries, content-hashed and installed in neat little rows under
-&lt;code dir="ltr"&gt;/nix/store&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;I’m using Nix to manage my development environment, but &lt;em dir="ltr"&gt;not&lt;/em&gt; to build the
-project itself. Nix ensures that the project dependencies are installed and
-discoverable by the compiler and linker. Building the project is done with
-CMake, set up for &lt;code dir="ltr"&gt;cmake&lt;/code&gt; to find the nix-installed libraries. Nix achieves this
-by &lt;a href="https://nixos.wiki/wiki/C#The%5Fcompiler%5Fwrapper" dir="ltr"&gt;wrapping the C compiler&lt;/a&gt; with its own shell script and injecting the paths to
-libraries and binaries via environment variables. There’s very little to do to
-make &lt;code dir="ltr"&gt;cmake&lt;/code&gt; just work, beyond declaring that the packages you want are
-&lt;code dir="ltr"&gt;buildInputs&lt;/code&gt;. The first version of my &lt;code dir="ltr"&gt;shell.nix&lt;/code&gt; file looked like this:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="nix" dir="ltr"&gt;&lt;span dir="ltr"&gt;# file shell.nix&lt;/span&gt;
-{ &lt;span dir="ltr"&gt;pkgs&lt;/span&gt; ? &lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;nixpkgs&amp;gt;&lt;/span&gt; {} }:
-
-&lt;span dir="ltr"&gt;pkgs&lt;/span&gt;.&lt;span dir="ltr"&gt;mkShell&lt;/span&gt; {
-  &lt;span dir="ltr"&gt;buildInputs&lt;/span&gt; = &lt;span dir="ltr"&gt;with&lt;/span&gt; &lt;span dir="ltr"&gt;pkgs&lt;/span&gt;; [
-    &lt;span dir="ltr"&gt;cmake&lt;/span&gt;
-    (&lt;span dir="ltr"&gt;callPackage&lt;/span&gt; &lt;span dir="ltr"&gt;nix/petsc.nix&lt;/span&gt; {})
-    &lt;span dir="ltr"&gt;metis&lt;/span&gt;
-    &lt;span dir="ltr"&gt;hdf5&lt;/span&gt;
-    &lt;span dir="ltr"&gt;openmpi&lt;/span&gt;
-    (&lt;span dir="ltr"&gt;python38&lt;/span&gt;.&lt;span dir="ltr"&gt;withPackages&lt;/span&gt; (&lt;span dir="ltr"&gt;packages&lt;/span&gt;: [ &lt;span dir="ltr"&gt;packages&lt;/span&gt;.&lt;span dir="ltr"&gt;numpy&lt;/span&gt; ]))
-  ];
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Using this setup, I had very little trouble getting the project to build. I had
-to &lt;a href="https://nixos.org/nixos/nix-pills/nixpkgs-overriding-packages.html" dir="ltr"&gt;override&lt;/a&gt; the &lt;a href="https://github.com/NixOS/nixpkgs/blob/master/pkgs/development/libraries/science/math/petsc/default.nix" dir="ltr"&gt;default PETSc derivation&lt;/a&gt; to compile with METIS and OpenMPI
-support, which was not too hard:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="nix" dir="ltr"&gt;&lt;span dir="ltr"&gt;# file nix/petsc.nix&lt;/span&gt;
-{ &lt;span dir="ltr"&gt;petsc&lt;/span&gt; , &lt;span dir="ltr"&gt;blas&lt;/span&gt; , &lt;span dir="ltr"&gt;gfortran&lt;/span&gt; , &lt;span dir="ltr"&gt;lapack&lt;/span&gt; , &lt;span dir="ltr"&gt;python&lt;/span&gt; , &lt;span dir="ltr"&gt;metis&lt;/span&gt; , &lt;span dir="ltr"&gt;openmpi&lt;/span&gt; }:
-
-&lt;span dir="ltr"&gt;petsc&lt;/span&gt;.&lt;span dir="ltr"&gt;overrideAttrs&lt;/span&gt; (&lt;span dir="ltr"&gt;oldAttrs&lt;/span&gt;: &lt;span dir="ltr"&gt;rec&lt;/span&gt; {
-    &lt;span dir="ltr"&gt;nativeBuildInputs&lt;/span&gt; = [ &lt;span dir="ltr"&gt;blas&lt;/span&gt; &lt;span dir="ltr"&gt;gfortran&lt;/span&gt; &lt;span dir="ltr"&gt;gfortran&lt;/span&gt;.&lt;span dir="ltr"&gt;cc&lt;/span&gt;.&lt;span dir="ltr"&gt;lib&lt;/span&gt; &lt;span dir="ltr"&gt;lapack&lt;/span&gt; &lt;span dir="ltr"&gt;python&lt;/span&gt; &lt;span dir="ltr"&gt;openmpi&lt;/span&gt; &lt;span dir="ltr"&gt;metis&lt;/span&gt; ];
-    &lt;span dir="ltr"&gt;preConfigure&lt;/span&gt; = &lt;span dir="ltr"&gt;''
-&lt;/span&gt;&lt;span dir="ltr"&gt;        export FC="&lt;/span&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;&lt;span dir="ltr"&gt;gfortran&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;/bin/gfortran" F77="&lt;/span&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;&lt;span dir="ltr"&gt;gfortran&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;/bin/gfortran"
-&lt;/span&gt;&lt;span dir="ltr"&gt;        patchShebangs .
-&lt;/span&gt;&lt;span dir="ltr"&gt;        configureFlagsArray=(
-&lt;/span&gt;&lt;span dir="ltr"&gt;        $configureFlagsArray
-&lt;/span&gt;&lt;span dir="ltr"&gt;        "--with-mpi-dir=&lt;/span&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;&lt;span dir="ltr"&gt;openmpi&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;"
-&lt;/span&gt;&lt;span dir="ltr"&gt;        "--with-metis=&lt;/span&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;&lt;span dir="ltr"&gt;metis&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;"
-&lt;/span&gt;&lt;span dir="ltr"&gt;        "--with-blas-lib=[&lt;/span&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;&lt;span dir="ltr"&gt;blas&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;/lib/libblas.so,&lt;/span&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;&lt;span dir="ltr"&gt;gfortran&lt;/span&gt;.&lt;span dir="ltr"&gt;cc&lt;/span&gt;.&lt;span dir="ltr"&gt;lib&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;/lib/libgfortran.a]"
-&lt;/span&gt;&lt;span dir="ltr"&gt;        "--with-lapack-lib=[&lt;/span&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;&lt;span dir="ltr"&gt;lapack&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;/lib/liblapack.so,&lt;/span&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;&lt;span dir="ltr"&gt;gfortran&lt;/span&gt;.&lt;span dir="ltr"&gt;cc&lt;/span&gt;.&lt;span dir="ltr"&gt;lib&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;/lib/libgfortran.a]"
-&lt;/span&gt;&lt;span dir="ltr"&gt;        )
-&lt;/span&gt;&lt;span dir="ltr"&gt;    ''&lt;/span&gt;;
-})
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This Nix file returns a function which is invoked in &lt;code dir="ltr"&gt;shell.nix&lt;/code&gt; using
-&lt;code dir="ltr"&gt;callPackage&lt;/code&gt; function. &lt;code dir="ltr"&gt;petsc.overrideAttrs&lt;/code&gt; is a neat way to override the
-attributes of a derivation created with &lt;code dir="ltr"&gt;stdenv.mkDerivation&lt;/code&gt;. Building PETSc
-with MPI and METIS support is as simple as passing in a different set of
-arguments to the &lt;code dir="ltr"&gt;configure&lt;/code&gt; script.&lt;/p&gt;&lt;p dir="ltr"&gt;Figuring out how to do all of this was fun. I mostly referred to the &lt;a href="https://nixos.org/nixos/nix-pills/index.html" dir="ltr"&gt;Nix
-“Pills”&lt;/a&gt;, which are a great progression through the Nix tool and language.&lt;/p&gt;&lt;p dir="ltr"&gt;With these Nix files, I was able to execute &lt;code dir="ltr"&gt;cmake .. &amp;amp;&amp;amp; make&lt;/code&gt; successfully.
-Getting the project to &lt;em dir="ltr"&gt;run&lt;/em&gt; was another story. The final binary failed
-immediately with a dynamic loading error:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash"&gt;➜ bin/warpxm
-dyld: Library not loaded: /private/tmp/nix-build-petsc-3.13.2.drv-0/petsc-3.13.2/arch-darwin-c-debug/lib/libpetsc.3.13.dylib
-  Referenced from: /Users/jack/src/warpxm/build/bin/warpxm
-  Reason: image not found
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The binary was trying to load a dynamic lib from one of the temporary directories
-that Nix created in the process of building PETSc. Of course this failed: by the
-time I invoked &lt;code dir="ltr"&gt;bin/warpxm&lt;/code&gt;, that directory had been cleaned up. Instead of a
-file under &lt;code dir="ltr"&gt;/private/tmp&lt;/code&gt;, the binary should have linked to the result of the
-&lt;code dir="ltr"&gt;petsc&lt;/code&gt; derivation in the Nix store, under &lt;code dir="ltr"&gt;/nix/store&lt;/code&gt;. At some point, it
-seemed, an environment variable was incorrectly set to this intermediate
-directory. To figure out where, I would have to learn a lot more about linking
-on OS X than I ever expected.&lt;/p&gt;&lt;h2&gt;Whither the linker?&lt;/h2&gt;&lt;p dir="ltr"&gt;First I checked the compiler and linker flags that are inserted by Nix’s
-compiler wrapper. These come in via &lt;code dir="ltr"&gt;NIX_CFLAGS_COMPILE&lt;/code&gt; and &lt;code dir="ltr"&gt;NIX_LDFLAGS&lt;/code&gt;. When
-you’re working with &lt;code dir="ltr"&gt;nix-shell&lt;/code&gt; and &lt;code dir="ltr"&gt;direnv&lt;/code&gt;, all of the environment variables
-from your derivations are injected into your shell. It’s a simple matter of echoing
-them out:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;➜ &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;echo&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$NIX_CFLAGS_COMPILE&lt;/span&gt;&lt;/span&gt;
-... -isystem /nix/store/w23r8kplmfx2xc111cpvmdjwmkwy6ip3-petsc-3.13.2/include ...
-➜ &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;echo&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$NIX_LDFLAGS&lt;/span&gt;&lt;/span&gt;
-... -L/nix/store/w23r8kplmfx2xc111cpvmdjwmkwy6ip3-petsc-3.13.2/lib ...
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;These look fine! Invoking &lt;code dir="ltr"&gt;cmake&lt;/code&gt; and &lt;code dir="ltr"&gt;make&lt;/code&gt; in this shell ought to pull in the
-correct library.&lt;/p&gt;&lt;p dir="ltr"&gt;Then I remembered that this project uses &lt;code dir="ltr"&gt;pkg-config&lt;/code&gt; to find and pull together
-the linked libraries. Frankly, I don’t understand &lt;code dir="ltr"&gt;pkg-config&lt;/code&gt; very well, but I
-do know that in this project it is invoked from inside of &lt;code dir="ltr"&gt;cmake&lt;/code&gt;. It searches for
-libraries according to its own rules, and it runs &lt;em dir="ltr"&gt;after&lt;/em&gt; Nix has done its
-job setting everything up. Therefore, it circumvents the compiler and linker
-flags that we just checked.&lt;/p&gt;&lt;p dir="ltr"&gt;I happened to have &lt;code dir="ltr"&gt;pkg-config&lt;/code&gt; installed from before setting up this Nix
-environment. Therefore, &lt;code dir="ltr"&gt;cmake&lt;/code&gt; was able to invoke the system &lt;code dir="ltr"&gt;pkg-config&lt;/code&gt; from
-my user &lt;code dir="ltr"&gt;PATH&lt;/code&gt;. Perhaps the system version of &lt;code dir="ltr"&gt;pkg-config&lt;/code&gt; was somehow finding
-the wrong library? Indeed, &lt;code dir="ltr"&gt;echo $PKG_CONFIG_PATH&lt;/code&gt; confirmed that it was
-searching a directory under my &lt;code dir="ltr"&gt;$HOME&lt;/code&gt;. I thought it possible that some wires
-got crossed while I was adding dependencies to my Nix derivation one at a time:
-configuring &lt;code dir="ltr"&gt;pkg-config&lt;/code&gt; appropriately might help.&lt;/p&gt;&lt;p dir="ltr"&gt;I referred once again to the Nix wiki page on C projects, which also has &lt;a href="https://nixos.wiki/wiki/C#pkg-config" dir="ltr"&gt;a
-section&lt;/a&gt; on using &lt;code dir="ltr"&gt;pkg-config&lt;/code&gt;. It seems that including the &lt;code dir="ltr"&gt;pkg-config&lt;/code&gt;
-derivation as a &lt;code dir="ltr"&gt;nativeBuildInput&lt;/code&gt; will let packages like &lt;code dir="ltr"&gt;petsc&lt;/code&gt; append their
-output paths to the &lt;code dir="ltr"&gt;PKG_CONFIG_PATH&lt;/code&gt; environment variable. I did so:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="nix" dir="ltr"&gt;&lt;span dir="ltr"&gt;pkgs&lt;/span&gt;.&lt;span dir="ltr"&gt;mkShell&lt;/span&gt; {
-  &lt;span dir="ltr"&gt;buildInputs&lt;/span&gt; = &lt;span dir="ltr"&gt;with&lt;/span&gt; &lt;span dir="ltr"&gt;pkgs&lt;/span&gt;; [
-    ...
-  ];
-  &lt;span dir="ltr"&gt;nativeBuildInputs&lt;/span&gt; = &lt;span dir="ltr"&gt;with&lt;/span&gt; &lt;span dir="ltr"&gt;pkgs&lt;/span&gt;; [
-    &lt;span dir="ltr"&gt;pkg-config&lt;/span&gt;
-  ];
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;but it didn’t fix the problem. I would have to go deeper and track down where
-the bad library was being pulled in.&lt;/p&gt;&lt;p dir="ltr"&gt;Digging into the &lt;code dir="ltr"&gt;cmake&lt;/code&gt; documentation and the project’s &lt;code dir="ltr"&gt;.cmake&lt;/code&gt; files led me
-to insert a trio of print statements:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="diff" dir="ltr"&gt;find_package(PkgConfig REQUIRED)
-pkg_check_modules(PETSC PETSc REQUIRED)
-
-link_directories(${PETSC_LIBRARY_DIRS})
-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;+ message("petsc libraries: ${PETSC_LIBRARIES}")&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;+ message("petsc library dirs: ${PETSC_LIBRARY_DIRS}")&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;+ message("petsc link libraries: ${PETSC_LINK_LIBRARIES}")&lt;/span&gt;
-&lt;/span&gt;list(APPEND WARPXM_LINK_TARGETS ${PETSC_LIBRARIES})
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;These printed out three lines in my &lt;code dir="ltr"&gt;cmake&lt;/code&gt; output:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="text"&gt;petsc libraries: petsc
-petsc library dirs: /nix/store/w23r8kplmfx2xc111cpvmdjwmkwy6ip3-petsc-3.13.2/lib
-petsc link libraries: /nix/store/w23r8kplmfx2xc111cpvmdjwmkwy6ip3-petsc-3.13.2/lib/libpetsc.dylib
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The second two look good. But the first, just the library name &lt;code dir="ltr"&gt;petsc&lt;/code&gt;, was a little too
-implicit for comfort. It was precisely this variable that was being appended
-to the link targets list. At &lt;em dir="ltr"&gt;compile&lt;/em&gt; time, it would be up to the linker to find
-the library &lt;code dir="ltr"&gt;petsc&lt;/code&gt;, and I wasn’t sure where it would look. Safer to use the
-absolute path to the &lt;code dir="ltr"&gt;.dylib&lt;/code&gt;, like so:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="diff" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;- list(APPEND WARPXM_LINK_TARGETS ${PETSC_LIBRARIES})&lt;/span&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;+ list(APPEND WARPXM_LINK_TARGETS ${PETSC_LINK_LIBRARIES})&lt;/span&gt;
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Changing the link target to the absolute path eased my mind only for the duration of
-the next &lt;code dir="ltr"&gt;cmake .. &amp;amp;&amp;amp; make&lt;/code&gt; cycle. Surely there was no way the linker could
-screw up now. No arcane library search involved, just an absolute path, which
-couldn’t possibly be misinterpreted…&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash"&gt;➜ bin/warpxm
-dyld: Library not loaded: /private/tmp/nix-build-petsc-3.13.2.drv-0/petsc-3.13.2/arch-darwin-c-debug/lib/libpetsc.3.13.dylib
-  Referenced from: /Users/jack/src/warpxm/build/bin/warpxm
-  Reason: image not found
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Damn it!&lt;/p&gt;&lt;h2&gt;install_name and other depravities&lt;/h2&gt;&lt;p dir="ltr"&gt;At this point I was absolutely flummoxed. With every fix I attempted, I
-grepped vainly for the offending &lt;code dir="ltr"&gt;/private/tmp&lt;/code&gt; path in my build directory, and come up
-empty-handed. I tracked down the final, irrevocable link options passed to the
-compiler, tucked away in a &lt;code dir="ltr"&gt;link.txt&lt;/code&gt; file in the build tree. They showed
-incontrovertibly that my binary was being linked to the correct library:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="text"&gt;➜ cat build/src/CMakeFiles/warpxm.dir/link.txt
-/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/c++     -O3 -DNDEBUG -isysroot ... -L/nix/store/31d3hng4sclxi3sz8g3zi3yqmychj2kg-petsc-3.13.2/lib ...
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;I had proved nearly to my satisfaction that CMake was doing the right thing with
-this library, and I was completely out of ideas.
-Finally, a very lucky google search led me to the &lt;a href="https://nixos.org/nixpkgs/manual/#sec-darwin" dir="ltr"&gt;section&lt;/a&gt; of the Nix manual
-describing issues specific to the Darwin (MacOS) platform. It states:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;On Darwin, libraries are linked using absolute paths, libraries are resolved
-by their install_name at link time. Sometimes packages won’t set this
-correctly causing the library lookups to fail at runtime. This can be fixed by
-adding extra linker flags or by running install_name_tool -id during the
-fixupPhase.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;This is a very matter-of-fact way of stating something that, when I understood
-it, flabbergasted me. To the best of my understanding, here’s what happens on
-MacOS:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;My source code has an include directive, &lt;code dir="ltr"&gt;include&amp;lt;petsc.h&amp;gt;&lt;/code&gt; or something like
-that, which creates a binary interface to be satisfied by the linker.&lt;/LI&gt;&lt;LI&gt;At link time, we pass the list of absolute paths to libraries, and the linker
-finds the one that matches the interface.&lt;/LI&gt;&lt;LI&gt;The linker then saves the &lt;em dir="ltr"&gt;install_name&lt;/em&gt; of the library it found in the
-binary’s load section.&lt;/LI&gt;&lt;LI&gt;At run time, the binary (actually, the MacOS &lt;code dir="ltr"&gt;dyld&lt;/code&gt; system) loads the library.
-The install_name is all it has, so it looks there.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;I’ve certainly gotten some aspect of this wrong, so I would definitely
-appreciate hearing from someone who understands it better than me!&lt;/p&gt;&lt;p dir="ltr"&gt;In any case, this find pointed me to the concept of the install_name, so I had
-something to go on. More searching led to a &lt;a href="http://log.zyxar.com/blog/2012/03/10/install-name-on-os-x/" dir="ltr"&gt;helpful blog post&lt;/a&gt; describing exactly
-the issue that I was facing. It also described how to check the install_name of
-the library:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="text"&gt;➜ otool -D /nix/store/31d3hng4sclxi3sz8g3zi3yqmychj2kg-petsc-3.13.2/lib/libpetsc.dylib
-/nix/store/31d3hng4sclxi3sz8g3zi3yqmychj2kg-petsc-3.13.2/lib/libpetsc.dylib:
-/private/tmp/nix-build-petsc-3.13.2.drv-0/petsc-3.13.2/arch-darwin-c-debug/lib/libpetsc.3.13.dylib
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Gotcha&lt;/strong&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;The Nix manual states that “some packages won’t set this correctly”, and points
-to the fix, which is to use &lt;code dir="ltr"&gt;install_name_tool&lt;/code&gt; to change the install_name of
-the built library. Is &lt;a href="https://github.com/NixOS/nixpkgs/blob/master/pkgs/development/libraries/science/math/petsc/default.nix" dir="ltr"&gt;the PETSc derivation&lt;/a&gt; on nixpkgs doing this correctly? I
-saw that it was doing &lt;em dir="ltr"&gt;something&lt;/em&gt; with &lt;code dir="ltr"&gt;install_name_tool&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="nix" dir="ltr"&gt;  &lt;span dir="ltr"&gt;prePatch&lt;/span&gt; = &lt;span dir="ltr"&gt;''
-&lt;/span&gt;&lt;span dir="ltr"&gt;    substituteInPlace configure \
-&lt;/span&gt;&lt;span dir="ltr"&gt;      --replace /bin/sh /usr/bin/python
-&lt;/span&gt;&lt;span dir="ltr"&gt;  ''&lt;/span&gt; + &lt;span dir="ltr"&gt;stdenv&lt;/span&gt;.&lt;span dir="ltr"&gt;lib&lt;/span&gt;.&lt;span dir="ltr"&gt;optionalString&lt;/span&gt; &lt;span dir="ltr"&gt;stdenv&lt;/span&gt;.&lt;span dir="ltr"&gt;isDarwin&lt;/span&gt; &lt;span dir="ltr"&gt;''
-&lt;/span&gt;&lt;span dir="ltr"&gt;    substituteInPlace config/install.py \
-&lt;/span&gt;&lt;span dir="ltr"&gt;      --replace /usr/bin/install_name_tool install_name_tool
-&lt;/span&gt;&lt;span dir="ltr"&gt;  ''&lt;/span&gt;;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This directive replaces the appearances of the string
-&lt;code dir="ltr"&gt;/usr/bin/install_name_tool&lt;/code&gt; with just &lt;code dir="ltr"&gt;install_name_tool&lt;/code&gt;. The reason that Nix
-packages do this is to ensure that builds rely on the Nix-built tools, which are
-provided in the build shell’s &lt;code dir="ltr"&gt;PATH&lt;/code&gt;, and not on binaries in system directories
-like &lt;code dir="ltr"&gt;/usr/bin&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;The PR that introduced this substitution indicates that it fixed a build on
-Darwin, so there must be some invocation of &lt;code dir="ltr"&gt;/usr/bin/install_name_tool&lt;/code&gt; in
-PETSc. Searching for that in the PETSc repo leads to &lt;a href="https://gitlab.com/petsc/petsc/-/blob/master/config/install.py#L368" dir="ltr"&gt;this line&lt;/a&gt;, which is doing
-exactly what the Mark’s Logs &lt;a href="http://log.zyxar.com/blog/2012/03/10/install-name-on-os-x/" dir="ltr"&gt;post&lt;/a&gt; on install_name instructed: it changes the
-install_name to the absolute path of the library in its installation directory,
-using &lt;code dir="ltr"&gt;install_name_tool -id&lt;/code&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="python" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;os&lt;/span&gt;.&lt;span dir="ltr"&gt;path&lt;/span&gt;.&lt;span dir="ltr"&gt;splitext&lt;/span&gt;(&lt;span dir="ltr"&gt;dst&lt;/span&gt;)[&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;/span&gt;] == &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;'.dylib'&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;and&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;os&lt;/span&gt;.&lt;span dir="ltr"&gt;path&lt;/span&gt;.&lt;span dir="ltr"&gt;isfile&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;'/usr/bin/install_name_tool'&lt;/span&gt;&lt;/span&gt;):
-    [&lt;span dir="ltr"&gt;output&lt;/span&gt;,&lt;span dir="ltr"&gt;err&lt;/span&gt;,&lt;span dir="ltr"&gt;flg&lt;/span&gt;] = &lt;span dir="ltr"&gt;self&lt;/span&gt;.&lt;span dir="ltr"&gt;executeShellCommand&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"otool -D "&lt;/span&gt;&lt;/span&gt;+&lt;span dir="ltr"&gt;src&lt;/span&gt;)
-    &lt;span dir="ltr"&gt;oldname&lt;/span&gt; = &lt;span dir="ltr"&gt;output&lt;/span&gt;[&lt;span dir="ltr"&gt;output&lt;/span&gt;.&lt;span dir="ltr"&gt;find&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;\n&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;)+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;/span&gt;:]
-    &lt;span dir="ltr"&gt;installName&lt;/span&gt; = &lt;span dir="ltr"&gt;oldname&lt;/span&gt;.&lt;span dir="ltr"&gt;replace&lt;/span&gt;(&lt;span dir="ltr"&gt;os&lt;/span&gt;.&lt;span dir="ltr"&gt;path&lt;/span&gt;.&lt;span dir="ltr"&gt;realpath&lt;/span&gt;(&lt;span dir="ltr"&gt;self&lt;/span&gt;.&lt;span dir="ltr"&gt;archDir&lt;/span&gt;), &lt;span dir="ltr"&gt;self&lt;/span&gt;.&lt;span dir="ltr"&gt;installDir&lt;/span&gt;)
-    &lt;span dir="ltr"&gt;self&lt;/span&gt;.&lt;span dir="ltr"&gt;executeShellCommand&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;'/usr/bin/install_name_tool -id '&lt;/span&gt;&lt;/span&gt; + &lt;span dir="ltr"&gt;installName&lt;/span&gt; + &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;' '&lt;/span&gt;&lt;/span&gt; + &lt;span dir="ltr"&gt;dst&lt;/span&gt;)
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;According to this, the install_name of the library should have been repaired by
-PETSc when the library was built! Except… notice something? The second
-condition in the &lt;code dir="ltr"&gt;if&lt;/code&gt; statement. After the PETSc derivation runs its &lt;code dir="ltr"&gt;prePatch&lt;/code&gt;
-step, that condition will become &lt;code dir="ltr"&gt;and os.path.isfile('install_name_tool')&lt;/code&gt;. That
-will certainly fail: &lt;code dir="ltr"&gt;install_name_tool&lt;/code&gt; is not going to be a file in the
-directory where &lt;code dir="ltr"&gt;configure&lt;/code&gt; is running! The patched &lt;code dir="ltr"&gt;configure&lt;/code&gt; script will
-silently skip this step, leaving the install_name of the library as the
-temporary directory where it was built!&lt;/p&gt;&lt;p dir="ltr"&gt;Luckily, the solution to this problem is not too hard. Instead of the name of a
-program on the &lt;code dir="ltr"&gt;PATH&lt;/code&gt;, we should pass the absolute path to the program we want
-to run. This can be done by overriding the &lt;code dir="ltr"&gt;prePatch&lt;/code&gt; step like so:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="nix" dir="ltr"&gt;    &lt;span dir="ltr"&gt;prePatch&lt;/span&gt; = &lt;span dir="ltr"&gt;''
-&lt;/span&gt;&lt;span dir="ltr"&gt;        substituteInPlace configure \
-&lt;/span&gt;&lt;span dir="ltr"&gt;        --replace /bin/sh /usr/bin/python
-&lt;/span&gt;&lt;span dir="ltr"&gt;    ''&lt;/span&gt; + &lt;span dir="ltr"&gt;stdenv&lt;/span&gt;.&lt;span dir="ltr"&gt;lib&lt;/span&gt;.&lt;span dir="ltr"&gt;optionalString&lt;/span&gt; &lt;span dir="ltr"&gt;stdenv&lt;/span&gt;.&lt;span dir="ltr"&gt;isDarwin&lt;/span&gt; &lt;span dir="ltr"&gt;''
-&lt;/span&gt;&lt;span dir="ltr"&gt;        substituteInPlace config/install.py \
-&lt;/span&gt;&lt;span dir="ltr"&gt;        --replace /usr/bin/install_name_tool &lt;/span&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;&lt;span dir="ltr"&gt;darwin&lt;/span&gt;.&lt;span dir="ltr"&gt;cctools&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;/bin/install_name_tool
-&lt;/span&gt;&lt;span dir="ltr"&gt;    ''&lt;/span&gt;;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The Nix variable &lt;code dir="ltr"&gt;${darwin.cctools}&lt;/code&gt; will expand to the full path of the
-built &lt;code dir="ltr"&gt;darwin.cctools&lt;/code&gt; derivation, which is a directory under &lt;code dir="ltr"&gt;/nix/store&lt;/code&gt;. So
-the patched &lt;code dir="ltr"&gt;if&lt;/code&gt; statement inside of PETSc’s &lt;code dir="ltr"&gt;configure.py&lt;/code&gt; becomes&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="python" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;os&lt;/span&gt;.&lt;span dir="ltr"&gt;path&lt;/span&gt;.&lt;span dir="ltr"&gt;splitext&lt;/span&gt;(&lt;span dir="ltr"&gt;dst&lt;/span&gt;)[&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;/span&gt;] == &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;'.dylib'&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;and&lt;/span&gt;&lt;/span&gt;
-   &lt;span dir="ltr"&gt;os&lt;/span&gt;.&lt;span dir="ltr"&gt;path&lt;/span&gt;.&lt;span dir="ltr"&gt;isfile&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;'/nix/store/1dgdim74d05ypll85vslm8i7kgzq78vw-cctools-port/bin/install_name_tool'&lt;/span&gt;&lt;/span&gt;):
-   &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;# use install_name_tool&lt;/span&gt;&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;and the install_name of the resulting library will be correct. We can check that
-with &lt;code dir="ltr"&gt;otool -D&lt;/code&gt; again:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash"&gt;➜ otool -D /nix/store/w23r8kplmfx2xc111cpvmdjwmkwy6ip3-petsc-3.13.2/lib/libpetsc.dylib
-/nix/store/w23r8kplmfx2xc111cpvmdjwmkwy6ip3-petsc-3.13.2/lib/libpetsc.dylib:
-/nix/store/w23r8kplmfx2xc111cpvmdjwmkwy6ip3-petsc-3.13.2/lib/libpetsc.3.13.dylib
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Looking much better! And since the error was in a dynamically loaded library, we
-don’t even have to recompile to check that it’s working:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;➜  build git:(master) ✗ &lt;span dir="ltr"&gt;DYLD_PRINT_LIBRARIES&lt;/span&gt;=&lt;span dir="ltr"&gt;1&lt;/span&gt; bin/warpxm
-dyld: loaded: /Users/jack/src/warpxm/build/bin/warpxm
-dyld: loaded: /nix/store/ni26aaiira47ak60vks1qv4apbkwbg1d-hdf5-1.10.6/lib/libhdf5.103.dylib
-dyld: loaded: /nix/store/acsjaw04hrf4rv8gizai7gx1ibq92ksa-zlib-1.2.11/lib/libz.dylib
-dyld: loaded: /nix/store/z4f1bq363m0ydmbyncfi2srij8vlsx32-Libsystem-osx-10.12.6/lib/libSystem.B.dylib
-dyld: loaded: /nix/store/w23r8kplmfx2xc111cpvmdjwmkwy6ip3-petsc-3.13.2/lib/libpetsc.3.13.dylib
-...
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;That’s more like it.&lt;/p&gt;&lt;h2&gt;Epilogue&lt;/h2&gt;&lt;p dir="ltr"&gt;I spent most of my time debugging this problem without a working
-understanding of the different build phases. It should have been clear
-to me that neither the CMake nor the &lt;code dir="ltr"&gt;pkg-config&lt;/code&gt; setups could be the cause,
-because at the time that I was invoking &lt;code dir="ltr"&gt;cmake&lt;/code&gt;, the offending &lt;code dir="ltr"&gt;/private/tmp&lt;/code&gt;
-directory had long vanished. If I had focused exclusively on the PETSc
-derivation provided by Nix, I might have homed in on the &lt;code dir="ltr"&gt;install_name_tool&lt;/code&gt;
-patch a little sooner. As it went, I was lucky to find the note in the Nix
-manual about Darwin-specific linker problems.&lt;/p&gt;&lt;p dir="ltr"&gt;As for Nix, I will absolutely be using more of it. What’s remarkable is how
-&lt;em dir="ltr"&gt;little&lt;/em&gt; impact it can have. I am able to use it to manage my environment for
-this project without impacting the way the other developers manage their
-environments. Of course, if they asked, I would advocate that they try out Nix,
-but it’s nice for everyone to be able to do it on their own time.&lt;/p&gt;&lt;p dir="ltr"&gt;I’m also looking forward to having my &lt;a href="https://github.com/NixOS/nixpkgs/pull/93428" dir="ltr"&gt;first contribution&lt;/a&gt; to Nix!&lt;/p&gt;&lt;img src="https://www.johnbcoughlin.com/images/buddy.png" width="32" height="24"&gt;</description><pubDate>Sat, 18 Jul 2020 10:58:46 -0500</pubDate></item><item><title>Why I don't mock (2014)</title><link>https://lobste.rs/s/gqqxxt</link><description>&lt;div itemprop="description articleBody"&gt;
-Well, it's impolite, isn't it?  But seriously, 
-when I first heard about mock object testing, I was excited, because it 
-certainly sounded like The Right Thing™:  message-based, checking
-relationships instead of state, and the new hip thing.&lt;/div&gt;&lt;p&gt;
-
-However, when I looked at actual examples, they looked sophisticated
-and obscure, the opposite of what I feel unit tests should be:  
-obvious and simple, simplistic to the point of stupidity.  I couldn't figure
-out at a glance what the expected behavior was, what was being
-tested and what was environment.&lt;/p&gt;&lt;p&gt;
-
-So I never used mocks in practice, meaning my opinions could not
-go beyond being superficial.  Fortunately, I was given the 
-task of porting a fairly large Objective-C project to OS X
-(yes, you read that right:  "to OS X" ), and it was heavily
-mock-tested.&lt;/p&gt;&lt;p&gt;
-
-As far as I could tell, most of the vague premonitions I had
-about mock testing were borne out in that project:  obscure
-mock tests, mock tests that didn't actually test anything except their
-own expectations and mock tests that were deeply coupled to 
-implementation details.&lt;/p&gt;&lt;p dir="ltr"&gt;
-
-Again, though, that could just be my misunderstandings, certainly
-people for whom I have a great deal of respect advocate for
-mock tests, but I was heartened when I heard in the recent
-DHH/Fowler/Beck TDD &lt;span dir="ltr"&gt;&lt;a href="https://www.youtube.com/watch?v=z9quxZsLcfo" dir="ltr"&gt;death-matches&lt;/a&gt;&lt;/span&gt;&amp;nbsp;&lt;a href="https://www.youtube.com/watch?v=JoTB2mcjU7w" dir="ltr"&gt;friendly&lt;/a&gt;&amp;nbsp;&lt;a href="https://www.youtube.com/watch?v=YNw4baDz6WA" dir="ltr"&gt;conversations&lt;/a&gt; that neither Kent nor Martin are
-&lt;a href="https://twitter.com/WardCunningham/status/464808275381604353" dir="ltr"&gt;great fans&lt;/a&gt; of mocking, and certainly not of deeply nested mocks.&lt;/p&gt;&lt;p dir="ltr"&gt;
-
-However, it was DHH's comments that finally made me realize that
-what &lt;em dir="ltr"&gt;really&lt;/em&gt; bothered was something more subtle, and
-much more pervasive.  The talk is about "mocking the database",
-or mocking some other component.  While not proof positive, this
-kind of mocking seems indicative of not letting the tests drive
-the design towards simplicity, because the design is already 
-set in stone.&lt;/p&gt;&lt;p&gt;
-
-As a result, you're going to have constant pain, because the 
-tests will continuously try to drive you towards simplifying
-your design, which you resist by putting in mocks.&lt;/p&gt;&lt;p&gt;
-
-Instead of putting in mocks of presumed components, let the
-tests tell you what counterparts they want.  Then build those
-counterparts, again in simplest way possible.  You will likely
-discover that a lot of your assumptions about the required
-environment for your application turn out not to be true.&lt;/p&gt;&lt;p&gt;
-
-For example, when building SportStats v2 at the BBC we thought
-we needed a database for persistence.  But we didn't build it
-in until we needed it, and we didn't mock it out either.  We
-waited until the code told us that we now needed a database.&lt;/p&gt;&lt;p&gt;
-
-It never did.&lt;/p&gt;&lt;p&gt;
-
-So we discovered that our problem was simpler than we had 
-originally thought, and therefore our architecture could
-be as well.  Mocking eliminates that feedback.&lt;/p&gt;&lt;p&gt;
-
-So don't mock.  Because it's impolite to not listen to what
-your code is trying to tell you.&lt;/p&gt;</description><pubDate>Sat, 18 Jul 2020 11:15:33 -0500</pubDate></item><item><title>Why you shouldn’t remove your package from PyPI</title><link>https://lobste.rs/s/hzak6t</link><description>&lt;p&gt;Nowadays most software developed using the Python language relies on external packages (dependencies) to get the job done. Correctly managing this “supply-chain” ends up being very important and having a big impact on the end product.&lt;/p&gt;&lt;p dir="ltr"&gt;As a developer you should be cautious about the dependencies you include on your project, &lt;a href="https://blog.ovalerio.net/archives/1296" dir="ltr"&gt;as I explained in a previous post&lt;/a&gt;, but you are always dependent on the job done by the maintainers of those packages.&lt;/p&gt;&lt;p&gt;As a public package owner/maintainer, you also have to be aware that the code you write, your decisions and your actions will have an impact on the projects that depend directly or indirectly on your package.&lt;/p&gt;&lt;p&gt;With this small introduction we arrive to the topic of this post, which is “What to do as a maintainer when you no longer want to support a given package?” or ” How to properly rename my package?”.&lt;/p&gt;&lt;p&gt;In both of these situations you might think “I will start by removing the package from PyPI”, I hope the next lines will convince you that this is the worst you can do, for two reasons:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;You will break the code or the build systems of all projects that depend on the current or past versions of your package.&lt;/LI&gt;&lt;LI&gt;You will free the namespace for others to use and if your package is popular enough this might become a juicy target for any malicious actor.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;TLDR:&lt;/strong&gt; your will screw your “users”.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://www.theregister.com/2016/03/23/npm_left_pad_chaos/" dir="ltr"&gt;The left-pad incident&lt;/a&gt;, while it didn’t happen in the python ecosystem, is a well known example of the first point and shows what happens when a popular package gets removed from the public index.&lt;/p&gt;&lt;p dir="ltr"&gt;Malicious actors usually register packages using names that are similar to other popular packages with the hope that a user will end up installing them by mistake, something that already has been found multiple &lt;a href="https://snyk.io/blog/malicious-packages-found-to-be-typo-squatting-in-pypi/" dir="ltr"&gt;times&lt;/a&gt; &lt;a href="https://www.zdnet.com/article/twelve-malicious-python-libraries-found-and-removed-from-pypi/" dir="ltr"&gt;on&lt;/a&gt; &lt;a href="https://www.bleepingcomputer.com/news/security/ten-malicious-libraries-found-on-pypi-python-package-index/" dir="ltr"&gt;PyPI&lt;/a&gt;. Now imagine if that package name suddenly becomes available and is already trusted by other projects.&lt;/p&gt;&lt;h2&gt;What should you do it then? &lt;/h2&gt;&lt;p&gt;Just don’t delete the package.&lt;/p&gt;&lt;p&gt;I admit that in some rare occasions it might be required, but most of the time the best thing to do is to leave it there (specially for open-source ones).&lt;/p&gt;&lt;p dir="ltr"&gt;Adding a &lt;a href="https://docs.python.org/3/library/warnings.html" dir="ltr"&gt;warning&lt;/a&gt; to the code and informing the users in the &lt;code dir="ltr"&gt;README&lt;/code&gt; file that the package is no longer maintained or safe to use is also a nice thing to do.&lt;/p&gt;&lt;p dir="ltr"&gt;A good example of this process being done properly was the renaming of &lt;code dir="ltr"&gt;model-mommy&lt;/code&gt; to &lt;code dir="ltr"&gt;model-bakery&lt;/code&gt;, as a user it was painless. Here’s an overview of the steps they took:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;A new source code repository was created with the same contents. (This step is optional)&lt;/LI&gt;&lt;LI&gt;After doing the required changes a new package was uploaded to PyPI.&lt;/LI&gt;&lt;LI&gt;Deprecation warnings were added to the old code, mentioning the new package.&lt;/LI&gt;&lt;LI&gt;The documentation was updated mentioning the new package and making it clear the old package will no longer be maintained.&lt;/LI&gt;&lt;LI&gt;A new release of the old package was created, so the user could see the deprecation warnings.&lt;/LI&gt;&lt;LI&gt;All further development was done on the new package.&lt;/LI&gt;&lt;LI&gt;The old code repository was archived.&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;So here is what is shown every time the test suite of an affected project is executed:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;/lib/python3.7/site-packages/model_mommy/__init__.py:7: DeprecationWarning: Important: model_mommy is no longer maintained. Please use model_bakery instead: https://pypi.org/project/model-bakery/&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;In the end, even though I didn’t update right away, everything kept working and I was constantly reminded that I needed to make the change.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;span&gt;&lt;span&gt;Tags&lt;/span&gt;&lt;/span&gt;&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Sat, 18 Jul 2020 12:12:23 -0500</pubDate></item><item><title>Cloudflare outage on July 17, 2020</title><link>https://lobste.rs/s/xbl6uc</link><description>&lt;p localize="" datetime="2020-07-18T02:22:00+01:00"&gt;July 17, 2020 9:22 PM&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;img src="https://blog.cloudflare.com/content/images/2017/03/url-2.jpg" alt="John Graham-Cumming" width="32" height="32"&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Today a configuration error in our backbone network caused an outage for Internet properties and Cloudflare services that lasted 27 minutes. We saw traffic drop by about 50% across our network. Because of the architecture of our backbone this outage didn’t affect the entire Cloudflare network and was localized to certain geographies. &lt;/p&gt;&lt;p&gt;The outage occurred because, while working on an unrelated issue with a segment of the backbone from Newark to Chicago, our network engineering team updated the configuration on a router in Atlanta to alleviate congestion. This configuration contained an error that caused all traffic across our backbone to be sent to Atlanta. This quickly overwhelmed the Atlanta router and caused Cloudflare network locations connected to the backbone to fail.&lt;/p&gt;&lt;p&gt;The affected locations were San Jose, Dallas, Seattle, Los Angeles, Chicago, Washington, DC, Richmond, Newark, Atlanta, London, Amsterdam, Frankfurt, Paris, Stockholm, Moscow, St. Petersburg, São Paulo, Curitiba, and Porto Alegre. Other locations continued to operate normally.&lt;/p&gt;&lt;p&gt;For the avoidance of doubt: this was not caused by an attack or breach of any kind.&lt;/p&gt;&lt;p&gt;We are sorry for this outage and have already made a global change to the backbone configuration that will prevent it from being able to occur again.&lt;/p&gt;&lt;h3&gt;The Cloudflare Backbone&lt;/h3&gt;&lt;figure&gt;&lt;img src="https://blog-cloudflare-com-assets.storage.googleapis.com/2020/07/1a.png" width="453" height="325"&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;Cloudflare operates a &lt;em dir="ltr"&gt;backbone&lt;/em&gt; between many of our data centers around the world. The backbone is a series of private lines between our data centers that we use for faster and more reliable paths between them. These links allow us to carry traffic between different data centers, without going over the public Internet. &lt;/p&gt;&lt;p&gt;We use this, for example, to reach a website origin server sitting in New York, carrying requests over our private backbone to both San Jose, California, as far as Frankfurt or São Paulo. This additional option to avoid the public Internet allows a higher quality of service, as the private network can be used to avoid Internet congestion points. With the backbone, we have far greater control over where and how to route Internet requests and traffic than the public Internet provides.&lt;/p&gt;&lt;h3&gt;Timeline&lt;/h3&gt;&lt;p&gt;All timestamps are UTC.&lt;/p&gt;&lt;p&gt;First, an issue occurred on the backbone link between Newark and Chicago which led to backbone congestion in between Atlanta and Washington, DC. &lt;/p&gt;&lt;p&gt;In responding to that issue, a configuration change was made in Atlanta. That change started the outage at 21:12. Once the outage was understood, the Atlanta router was disabled and traffic began flowing normally again at 21:39. &lt;/p&gt;&lt;p&gt;Shortly after, we saw congestion at one of our core data centers that processes logs and metrics, causing some logs to be dropped. During this period the edge network continued to operate normally.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;20:25: Loss of backbone link between EWR and ORD&lt;/LI&gt;&lt;LI&gt;20:25: Backbone between ATL and IAD is congesting&lt;/LI&gt;&lt;LI&gt;21:12 to 21:39: ATL attracted traffic from across the backbone&lt;/LI&gt;&lt;LI&gt;21:39 to 21:47: ATL dropped from the backbone, service restored&lt;/LI&gt;&lt;LI&gt;21:47 to 22:10: Core congestion caused some logs to drop, edge continues operating&lt;/LI&gt;&lt;LI&gt;22:10: Full recovery, including logs and metrics&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Here’s a view of the impact from Cloudflare’s internal traffic manager tool. The red and orange region at the top shows CPU utilization in Atlanta reaching overload, and the white regions show affected data centers seeing CPU drop to near zero as they were no longer handling traffic. This is the period of the outage.&lt;/p&gt;&lt;p&gt;Other, unaffected data centers show no change in their CPU utilization during the incident. That’s indicated by the fact that the green color does not change during the incident for those data centers.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://blog-cloudflare-com-assets.storage.googleapis.com/2020/07/tm.png" width="453" height="449"&gt;&lt;/figure&gt;&lt;h3&gt;What happened and what we’re doing about it&lt;/h3&gt;&lt;p&gt;As there was backbone congestion in Atlanta, the team had decided to remove some of Atlanta’s backbone traffic. But instead of removing the Atlanta routes from the backbone, a one line change started leaking all BGP routes into the backbone.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;{master}[edit]
-atl01# show | compare 
-[edit policy-options policy-statement 6-BBONE-OUT term 6-SITE-LOCAL from]
-!       inactive: prefix-list 6-SITE-LOCAL { ... }
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The complete term looks like this:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;from {
-    prefix-list 6-SITE-LOCAL;
-}
-then {
-    local-preference 200;
-    community add SITE-LOCAL-ROUTE;
-    community add ATL01;
-    community add NORTH-AMERICA;
-    accept;
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This term sets the local-preference, adds some communities, and accepts the routes that match the prefix-list. Local-preference is a transitive property on iBGP sessions (it will be transferred to the next BGP peer). &lt;/p&gt;&lt;p&gt;The correct change would have been to deactivate the term instead of the prefix-list.&lt;/p&gt;&lt;p&gt;By removing the prefix-list condition, the router was instructed to send all its BGP routes to all other backbone routers, with an increased local-preference of 200. Unfortunately at the time, local routes that the edge routers received from our compute nodes had a local-preference of 100. As the higher local-preference wins, all of the traffic meant for local compute nodes went to Atlanta compute nodes instead. &lt;/p&gt;&lt;p&gt;With the routes sent out, Atlanta started attracting traffic from across the backbone.&lt;/p&gt;&lt;p&gt;We are making the following changes:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Introduce a maximum-prefix limit on our backbone BGP sessions - this would have shut down the backbone in Atlanta, but our network is built to function properly without a backbone. This change will be deployed on Monday, July 20.&lt;/LI&gt;&lt;LI&gt;Change the BGP local-preference for local server routes. This change will prevent a single location from attracting other locations’ traffic in a similar manner. This change has been deployed following the incident.&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;Conclusion&lt;/h3&gt;&lt;p&gt;We’ve never experienced an outage on our backbone and our team responded quickly to restore service in the affected locations, but this was a very painful period for everyone involved. We are sorry for the disruption to our customers and to all the users who were unable to access Internet properties while the outage was happening.&lt;/p&gt;&lt;p&gt;We’ve already made changes to the backbone configuration to make sure that this cannot happen again, and further changes will resume on Monday.&lt;/p&gt;</description><pubDate>Sat, 18 Jul 2020 01:34:55 -0500</pubDate></item><item><title>A Proposal for Proquints: Identifiers that are Readable, Spellable, and Pronounceable</title><link>https://lobste.rs/s/m0wfux</link><description>&lt;div dir="ltr"&gt;
-&lt;span dir="ltr"&gt;Daniel Shawcross Wilkerson&lt;/span&gt;&lt;br dir="ltr"&gt;
-&lt;span dir="ltr"&gt;version 1.0,&lt;/span&gt;
-26 January 2009
-&lt;/div&gt;&lt;p dir="ltr"&gt;Identifiers (IDs) are pervasive throughout our modern life.  We
-suggest that these IDs would be easier to manage and remember if they
-were easily readable, spellable, and pronounceable.  As a solution to
-this problem we propose using PRO-nouncable QUINT-uplets of
-alternating unambiguous consonants and vowels: &lt;em dir="ltr"&gt;proquints&lt;/em&gt;.&lt;/p&gt;&lt;h2&gt;Introduction&lt;/h2&gt;&lt;p dir="ltr"&gt;Our life is full of identifying numbers.  However the number-ness of
-these numbers is irrelevant.  A credit-card number is not a &lt;em dir="ltr"&gt;number&lt;/em&gt;
-exactly — when was the last time you did arithmetic on one?  Mostly
-these numbers are &lt;em dir="ltr"&gt;identifiers&lt;/em&gt;: their only function is to be unique.
-The problem is, they are getting longer as the world of things that
-must be uniquely identified gets larger: the number of things goes up,
-previously disjoint contexts merge, and history gets longer.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;
-Dotted quads IP addresses, e.g. 127.0.0.1, will soon (someday?),
-   with IPv6, be twice as long.
-&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
-Eight hex-digit Memory addresses, e.g. 0xF074B0CD, will soon, with
-   64-bit machines, be twice as long.
-&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
-Nine-digit Social security numbers are already being re-used with
-   obvious attendant problems.
-&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Most codes are designed to maximize information density.  Humans often
-must manipulate identifiers personally and there are therefore other
-dimensions to the problem that should also be considered.  Here our
-goal here is not to have a narrow, "vertical", solution that is
-optimized for only one dimension, such as information density, but a
-broad "horizontal" solution that is a good solution for &lt;em dir="ltr"&gt;all&lt;/em&gt; of the
-relevant concerns, especially those of &lt;em dir="ltr"&gt;humans&lt;/em&gt;.&lt;/p&gt;&lt;p&gt;In general what would help the humans would be if IDs were not only
-unique, but were also that are readable, spellable, and pronounceable
-and just generally convenient for a human to use — as well as being a
-reasonably efficient information encoding.  We therefore propose
-PRO-nouncable QUINT-uplets of alternating unambiguous consonants and
-vowels, or "proquints", as the solution.&lt;/p&gt;&lt;p&gt;In this essay we first derive an initial naive solution from the
-relevant concerns.  Next we review other aspects of human interaction
-with the solution and thereby derive the details.  We then compute the
-information density of the solution.  Finally we summarize the
-resulting protocol.&lt;/p&gt;&lt;h2&gt;Distinguishable Available Sounds and Symbols&lt;/h2&gt;&lt;p dir="ltr"&gt;There is only so much Shannon entropy &lt;strong dir="ltr"&gt;[Shannon-1948, Shannon-1949,
-Shannon-1993, Shannon-1951]&lt;/strong&gt; you can get by pushing air through
-flapping organs originally purposed for eating and breathing.  We
-assume it best to re-use the method to which natural language has
-already converged.&lt;/p&gt;&lt;p dir="ltr"&gt;Our initial idea is to encode numbers as strings of alternating
-phonetically-unambiguous consonants and vowels.
-&lt;a href="http://www.antimoon.com/how/pronunc-soundsipa.htm" dir="ltr"&gt;There seem to be&lt;/a&gt;
-&lt;strong dir="ltr"&gt;[pronounce]&lt;/strong&gt; 24 consonants and 20 vowels in English.
-&lt;a href="http://en.wikipedia.org/wiki/English_pronunciation" dir="ltr"&gt;It gets more
-complex&lt;/a&gt; &lt;strong dir="ltr"&gt;[pronounce2]&lt;/strong&gt; if you look more carefully.&lt;/p&gt;&lt;p&gt;Some consonants are too hard to encode or to hear the difference
-between.  There are 16 unambiguous 1-letter consonants (omitting what
-we consider to be the wrongly-categorized letter "r"):&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;    b d f g h j k l m n p s t v w z,&lt;/tt&gt;&lt;/PRE&gt;&lt;p&gt;and 3 more two-letter:&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;    sh ch th.&lt;/tt&gt;&lt;/PRE&gt;&lt;p&gt;Having 16 sounds gives 4 bits right there and all in a
-single-character spelling, so we think sticking to the above
-one-letter consonants is good.&lt;/p&gt;&lt;p&gt;There are 6 unambiguous 1-letter vowels (again disagreeing with the
-categorization of the letter "r"):&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;    a e i o u r.&lt;/tt&gt;&lt;/PRE&gt;&lt;p&gt;If we just had two more vowels we would have 8 sounds or 3 bits.  Then
-we could use consonant-vowel order (reversing the pair) or stress
-(indicated by, say, a capital letter) to get one more bit.  This would
-yield a total of 8 bits for a consonant-vowel pair.&lt;/p&gt;&lt;h2&gt;Serving Multiple Human Constraints&lt;/h2&gt;&lt;p&gt;Recall that the proquint goals are multiple and include readability
-and spellability and just general convenience and general fitness to
-the problem: this is a system to used by humans who do not like
-complexity.&lt;/p&gt;&lt;p&gt;Therefore we think it is important to make the textual encoding of the
-sounds simple, by&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;
-writing all proquints using the same character width,
-&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
-not introducing case differences to encode information, and
-&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
-not using non-alpha chars to encode other vowels (@ for the "a" in
-    "at").
-&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Further, a simple (C=consonant, V=vowel) CVCVC
-pronounceable-five-group or "proquint" feels right as a word.  In
-fact, we can get rid of two of the vowels, say "e" and "r", and still
-encode 2 bits in one vowel.  This method makes the information
-contained in one proquint a convenient number:&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;    (log2 (* 16.0 4.0 16.0 4.0 16.0))
-    16.0&lt;/tt&gt;&lt;/PRE&gt;&lt;p&gt;So four proquints suffices to encode 64 bits and two suffice for 32
-bits.  We wonder why IP addresses aren't encoded this way — they sure
-would be easier to remember.&lt;/p&gt;&lt;p&gt;Since one may also want to fall back on saying each letter separately
-and therefore each should likely be a single syllable in English, we
-eliminate "w", which as previously-mentioned was a source of ambiguity
-already.  In its place we promote "r" to a consonant.&lt;/p&gt;&lt;p&gt;Getting rid of ambiguities between vowels is a good idea for making
-this system more international, though there are persistent
-difficulties: Japanese have difficulty distinguishing "l" and "r",
-Hungarians have difficulty pronouncing "w", and "l" can easily sound
-like a "w" (a mutation occurring in the history of my middle name).
-My proof-readers have sent me many more examples from other languages
-— attempting to eliminate all such ambiguities is impossible, but we
-have prevented some of the worst ones above.&lt;/p&gt;&lt;p&gt;Some proquint sequences ending in "h" take some extra effort to
-pronounce and hear, but since there is always exactly one consonant
-where you expect one, there is less ambiguity than in natural spoken
-English: if you don't hear a consonant when you expected one, it was
-an "h", the empty consonant.  The only other option is to replace "h"
-with "x" and we really can't say that doing so is an improvement: "x"
-is usually pronounced as "ks" which is really a consonant cluster and
-confuses the rhythm.&lt;/p&gt;&lt;p&gt;There is another subtle reason not to use "x": the standard notation
-for a hex string starts with a prefix that includes an "x" so it is
-therefore possible to unambiguously distinguish between a proquint and
-a hex string in standard notation.&lt;/p&gt;&lt;p&gt;A sequence of proquints should be separated by something standard,
-such as dashes.  While the dash is intended to induce a pause, for
-easy flow of pronunciation we suggest an unused vowel sound be used.
-Since we don't use the vowel "e", we suggest the dash be pronounced as
-"eh".&lt;/p&gt;&lt;p&gt;See the "Conclusion and Specification" section below for the full
-specification of the resulting proquint coding scheme.&lt;/p&gt;&lt;h2&gt;Information Density&lt;/h2&gt;&lt;p&gt;While information density is not the only goal, it is a concern for
-any coding system.  Note that we get 16 bits out of 5 letters, which
-gives us an proquint information density of:&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;    (/ 16.0 5.0)
-    3.2&lt;/tt&gt;&lt;/PRE&gt;&lt;p&gt;This is close to the density of 4 for hexadecimal and almost the same
-as the density 3.32 for decimal digits.&lt;/p&gt;&lt;p&gt;However, note that unbroken strings of hex or decimal digits are quite
-unreadable, and they are usually broken into groups of at most four,
-whereas proquints are readable in groups of five.  Taking this into
-account gives hex a density of 3.2, decimal 2.65, and proquint 2.86.&lt;/p&gt;&lt;h3&gt;Density as Compared To Credit Card Numbers&lt;/h3&gt;&lt;p&gt;In particular, why aren't credit card numbers proquints instead of
-numbers?&lt;/p&gt;&lt;p&gt;The density of four blocks of four decimal digits, including separators is&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;    (/ (log2 (* 10000.0 10000.0 10000.0 10000.0 ))
-       (+ (* 4 4) (* 3 1)))
-    2.7974131325367266&lt;/tt&gt;&lt;/PRE&gt;&lt;p&gt;The density of three blocks proquints, including separators is&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;    (* 16.0 6.0 16.0 6.0 16.0)
-    147456.0
-    (/ (log2 (* 147456.0 147456.0 147456.0))
-       (+ (* 3 5) (* 2 1)))
-    3.0299867649604084&lt;/tt&gt;&lt;/PRE&gt;&lt;h3&gt;Density as Compared To English&lt;/h3&gt;&lt;p dir="ltr"&gt;Bruce Schneier says in "Applied Cryptography" &lt;strong dir="ltr"&gt;[Schneier-1996,
-pp. 233-234]&lt;/strong&gt; that Shannon computed an entropy of 2.3 bits per letter
-for 8-letter chunks; other computations getting lower numbers,
-Schneier settling on 1.3 for general purposes.  So we are above the
-information rate expected for English, but not dramatically so.  We
-suspect the fact that proquints are more information-dense than
-English is the reason proquints must be pronounced a bit more
-carefully than English — there's no such thing as a free lunch.&lt;/p&gt;&lt;h2&gt;Proquints As A Mnemonic Password Scheme&lt;/h2&gt;&lt;p dir="ltr"&gt;It is a well-known problem that people often create weak passwords, at
-least partly due to their desire to create mnemonic passwords.
-Mnemonic schemes have been suggested but the information density /
-password strength versus that of standard password schemes can be a
-challenge to state precisely, as the useful entropy of a password
-amounts only the entropy relative to the implied expectations encoded
-in an attackers dictionary.  Various empirical studies have been made
-&lt;strong dir="ltr"&gt;[YBA-2000, KRC-2006]&lt;/strong&gt;.  At least one method of generating random
-pronounceable passwords have been shown to be insecure &lt;strong dir="ltr"&gt;[GD-1994]&lt;/strong&gt;.
-Narayanan and Shmatikov &lt;strong dir="ltr"&gt;[NS-2005]&lt;/strong&gt; claim that "as long as passwords
-remain human-memorable, they are vulnerable to "smart-dictionary"
-attacks even when the space of potential passwords is large."&lt;/p&gt;&lt;p&gt;Of course a simple scheme using proquints can generate passwords of
-known strength that are still quite readable, spellable, and
-pronounceable:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p&gt;
-generate random 32 (or 48 or 64 bits),
-&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
-convert them to two (or three or four) proquints, and
-&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
-tell the user that's their password.
-&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;The extent to which a user would find a password so generated to be
-mnemonic is still an open question.  Narayanan points out to me
-&lt;strong dir="ltr"&gt;[N-2009-p]&lt;/strong&gt; that if users are allowed to regenerate passwords until
-they find one that is particularly mnemonic then the strength of the
-above password scheme may not be quite as imagined.&lt;/p&gt;&lt;p&gt;We imagine one possible security threat is that proquints are rather
-fun to pronounce, and we find ourselves doing so especially when we
-are attempting to memorize or recall one.  Therefore perhaps users of
-proquint-encoded passwords should be admonished to refrain from this
-temptation.&lt;/p&gt;&lt;h2&gt;An Easy Path to Adoption&lt;/h2&gt;&lt;p&gt;Any protocol that currently uses an opaque identifier somewhere can
-immediately begin to use proquints by simply printing any such
-identifiers in proquint form as well and accepting proquints as
-alternatives to such identifiers.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;
-Debuggers could input and output memory addresses as proquints as
-   an alternative to hex.
-&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
-Network tools such as browsers, ping, netstat, traceroute,
-   etc. could input and output proquints as an alternative to dotted
-   quads.
-&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
-Password generators could generate the proquint form, as above.
-&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
-Hash functions such as sha1 could use proquints as as alternative
-   notation for the hashvalue.  Tools that use hash values of objects
-   as their identifiers, such as version control systems like
-   monotone, mercurial, and git, could do the same.
-&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
-Tools that use public-key encryption could encode the
-   public/private key-pairs as proquints.  It might actually be
-   possible to memorize your public key if you chanted it enough
-   times.
-&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Conclusion and Specification&lt;/h2&gt;&lt;p&gt;In sum, we propose encoding a 16-bit string as a proquint of
-alternating consonants and vowels as follows.&lt;/p&gt;&lt;p&gt;Four-bits as a consonant:&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;    0 1 2 3 4 5 6 7 8 9 A B C D E F
-    b d f g h j k l m n p r s t v z&lt;/tt&gt;&lt;/PRE&gt;&lt;p&gt;Two-bits as a vowel:&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;    0 1 2 3
-    a i o u&lt;/tt&gt;&lt;/PRE&gt;&lt;p&gt;Whole 16-bit word, where "con" = consonant, "vo" = vowel:&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;     0 1 2 3 4 5 6 7 8 9 A B C D E F
-    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    |con    |vo |con    |vo |con    |
-    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+&lt;/tt&gt;&lt;/PRE&gt;&lt;p&gt;Separate proquints using dashes, which can go un-pronounced or be
-pronounced "eh".  The suggested optional magic number prefix to a
-sequence of proquints is "0q-".&lt;/p&gt;&lt;p&gt;Here are some IP dotted-quads and their corresponding proquints.&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;    127.0.0.1       lusab-babad
-    63.84.220.193   gutih-tugad
-    63.118.7.35     gutuk-bisog
-    140.98.193.141  mudof-sakat
-    64.255.6.200    haguz-biram
-    128.30.52.45    mabiv-gibot
-    147.67.119.2    natag-lisaf
-    212.58.253.68   tibup-zujah
-    216.35.68.215   tobog-higil
-    216.68.232.21   todah-vobij
-    198.81.129.136  sinid-makam
-    12.110.110.204  budov-kuras&lt;/tt&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;An Open Source implementation of a converter between strings encoded
-as dotted quads, hex, decimal, and proquints is available
-&lt;strong dir="ltr"&gt;[proquint-github]&lt;/strong&gt;.&lt;/p&gt;&lt;h2&gt;Acknowledgements&lt;/h2&gt;&lt;p&gt;We gratefully acknowledge Simon Goldsmith, Karl Chen, Erick Armbrust,
-and Arvind Narayanan for their proofreading and/or discussion of this
-article.  Any remaining errors are mine alone.&lt;/p&gt;&lt;h2&gt;References&lt;/h2&gt;&lt;h3&gt;Open Source implementation&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[proquint-github]&lt;/strong&gt; &lt;a href="http://github.com/dsw/proquint" dir="ltr"&gt;http://github.com/dsw/proquint&lt;/a&gt;&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;
-An implementation in C of a converter between proquint, hex, and
-   decimal strings.
-&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
-An implementation in Perl5 of a converter between dotted quads and
-   hex.
-&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;Print&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[GD-1994]&lt;/strong&gt; Ravi Ganesan and Chris Davies.  "A New Attack on Random
-Pronounceable Password Generators".  &lt;em dir="ltr"&gt;Proceedings of the 17th
-NIST-NCSC National Computer Security Conference&lt;/em&gt;.  1994.  pp. 184-197.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[KRC-2006]&lt;/strong&gt; Cynthia Kuo, Sasha Romanosky, and Lorrie Faith Cranor.
-"Human Selection of Mnemonic Phrase-based Passwords", &lt;em dir="ltr"&gt;Symposium on
-Usable Privacy and Security (SOUPS) 2006&lt;/em&gt;, July 12 - 14, 2006.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[NS-2005]&lt;/strong&gt; Arvind Narayanan and Vitaly Shmatikov.  "Fast Dictionary
-Attacks on Passwords Using Time-Space Tradeoff".  &lt;em dir="ltr"&gt;Proceedings of 12th
-ACM Conference on Computer and Communications Security (CCS)&lt;/em&gt;.
-November 2005.  pp. 364-372.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[Schneier-1996]&lt;/strong&gt; Bruce Schneier.  &lt;em dir="ltr"&gt;Applied Cryptography&lt;/em&gt;.  John Wiley
-&amp;amp; Sons.  1996.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[Shannon-1948]&lt;/strong&gt; C.E. Shannon, "A Mathematical Theory of
-Communication", &lt;em dir="ltr"&gt;Bell System Technical Journal&lt;/em&gt;, v. 27, n. 4, 1948,
-pp. 379-423, 623-656.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[Shannon-1949]&lt;/strong&gt; C.E. Shannon, "Communication Theory of Secrecy
-Systems", &lt;em dir="ltr"&gt;Bell System Technical Journal&lt;/em&gt;, v. 28, n. 4, 1949,
-pp. 656-715.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[Shannon-1951]&lt;/strong&gt; C.E. Shannon, "Predication and Entropy in Printed
-English", &lt;em dir="ltr"&gt;Bell System Technical Journal&lt;/em&gt;, v.30, n.1, 1951, pp. 50-64.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[Shannon-1993]&lt;/strong&gt; C.E. Shannon, &lt;em dir="ltr"&gt;Collected Papers: Claude Elwood
-Shannon&lt;/em&gt;, N.J.A. Sloane and A.D. Wyner, eds., New York: IEEE Press,
-1993.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[YBA-2000]&lt;/strong&gt; Jeff Yan, Alan Blackwell, Ross Anderson, and Alasdair
-Grant.  "The Memorability and Security of Passwords — Some Empirical
-Results".  Technical Report No. 500, Computer Laboratory, University
-of Cambridge, 2000.&lt;/p&gt;&lt;h3&gt;Web&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[pronounce]&lt;/strong&gt; Pronounceable sounds in English:
-&lt;a href="http://www.antimoon.com/how/pronunc-soundsipa.htm" dir="ltr"&gt;http://www.antimoon.com/how/pronunc-soundsipa.htm&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[pronounce2]&lt;/strong&gt; Wikipedia article on pronounceable sounds in English:
-&lt;a href="http://en.wikipedia.org/wiki/English_pronunciation" dir="ltr"&gt;http://en.wikipedia.org/wiki/English_pronunciation&lt;/a&gt;&lt;/p&gt;&lt;h3&gt;Personal Communication&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[N-2009-p]&lt;/strong&gt; Personal communication, Arvind Narayanan.&lt;/p&gt;&lt;h2&gt;Copyright&lt;/h2&gt;&lt;p&gt;Copyright 2009 Daniel S. Wilkerson&lt;/p&gt;&lt;div dir="ltr"&gt;
-Version 1.0&lt;br dir="ltr"&gt;
-Last updated 2009-01-26 15:48:38 PDT
-&lt;/div&gt;</description><pubDate>Fri, 17 Jul 2020 22:42:24 -0500</pubDate></item><item><title>Why is processing a sorted array faster than processing an unsorted array?</title><link>https://lobste.rs/s/zngxrf</link><description>&lt;UL&gt;&lt;LI&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;The code is summing up some independent terms, so the order should not matter.&lt;/p&gt;&lt;p&gt;&lt;strong dir="ltr"&gt;You are a victim of &lt;a href="https://en.wikipedia.org/wiki/Branch_predictor" rel="noreferrer" dir="ltr"&gt;branch prediction&lt;/a&gt; fail.&lt;/strong&gt;&lt;/p&gt;&lt;h2&gt;What is Branch Prediction?&lt;/h2&gt;&lt;p&gt;Consider a railroad junction:&lt;/p&gt;&lt;img src="https://i.stack.imgur.com/muxnt.jpg" alt="Image showing a railroad junction" width="366" height="274"&gt;&lt;p dir="ltr"&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;That’s all I have for you today! Meta-x forever!&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Did you notice the subtle difference in the names of the original and the updated article?&amp;nbsp;&lt;a href="https://emacsredux.com/blog/2020/07/16/instant-access-to-your-shell-init-files/#fnref:1" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Sat, 18 Jul 2020 11:50:08 -0500</pubDate></item><item><title>Why is processing a sorted array faster than processing an unsorted array?</title><link>https://lobste.rs/s/zngxrf</link><description>&lt;UL&gt;&lt;LI&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;The code is summing up some independent terms, so the order should not matter.&lt;/p&gt;&lt;p&gt;&lt;strong dir="ltr"&gt;You are a victim of &lt;a href="https://en.wikipedia.org/wiki/Branch_predictor" rel="noreferrer" dir="ltr"&gt;branch prediction&lt;/a&gt; fail.&lt;/strong&gt;&lt;/p&gt;&lt;h2&gt;What is Branch Prediction?&lt;/h2&gt;&lt;p&gt;Consider a railroad junction:&lt;/p&gt;&lt;img src="https://i.stack.imgur.com/muxnt.jpg" alt="Image showing a railroad junction" width="366" height="274"&gt;&lt;p dir="ltr"&gt;
 &lt;sub dir="ltr"&gt;&lt;a href="https://commons.wikimedia.org/wiki/File:Entroncamento_do_Transpraia.JPG" rel="noreferrer" dir="ltr"&gt;Image&lt;/a&gt; by Mecanismo, via Wikimedia Commons. Used under the &lt;a href="https://creativecommons.org/licenses/by-sa/3.0/deed.en" rel="noreferrer" dir="ltr"&gt;CC-By-SA 3.0&lt;/a&gt; license.&lt;/sub&gt;&lt;/p&gt;&lt;p&gt;Now for the sake of argument, suppose this is back in the 1800s - before long-distance or radio communication.&lt;/p&gt;&lt;p&gt;You are the operator of a junction and you hear a train coming. You have no idea which way it is supposed to go. You stop the train to ask the driver which direction they want. And then you set the switch appropriately.&lt;/p&gt;&lt;p&gt;&lt;em&gt;Trains are heavy and have a lot of inertia. So they take forever to start up and slow down.&lt;/em&gt;&lt;/p&gt;&lt;p&gt;Is there a better way? You guess which direction the train will go to!&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;If you guessed right, it continues on.&lt;/LI&gt;&lt;LI&gt;If you guessed wrong, the captain will stop, back up, and yell at you to flip the switch. Then it can restart down the other path.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;If you guess right every time&lt;/strong&gt;, the train will never have to stop. &lt;br dir="ltr"&gt;
 &lt;strong dir="ltr"&gt;If you guess wrong too often&lt;/strong&gt;, the train will spend a lot of time stopping, backing up, and restarting.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Consider an if-statement:&lt;/strong&gt; At the processor level, it is a branch instruction:&lt;/p&gt;&lt;img src="https://i.stack.imgur.com/pyfwC.png" alt="Screenshot of compiled code containing an if statement" width="366" height="59"&gt;&lt;p&gt;You are a processor and you see a branch. You have no idea which way it will go. What do you do? You halt execution and wait until the previous instructions are complete. Then you continue down the correct path.&lt;/p&gt;&lt;p&gt;&lt;em&gt;Modern processors are complicated and have long pipelines. So they take forever to "warm-up" and "slow down".&lt;/em&gt;&lt;/p&gt;&lt;p&gt;Is there a better way? You guess which direction the branch will go to!&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;If you guessed right, you continue executing.&lt;/LI&gt;&lt;LI&gt;If you guessed wrong, you need to flush the pipeline and roll back to the branch. Then you can restart down the other path.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;If you guess right every time&lt;/strong&gt;, the execution will never have to stop. &lt;br dir="ltr"&gt;
 &lt;strong dir="ltr"&gt;If you guess wrong too often&lt;/strong&gt;, you spend a lot of time stalling, rolling back, and restarting.&lt;/p&gt;&lt;p&gt;This is branch prediction. I admit it's not the best analogy since the train could just signal the direction with a flag. But in computers, the processor doesn't know which direction a branch will go until the last moment.&lt;/p&gt;&lt;p&gt;So how would you strategically guess to minimize the number of times that the train must back up and go down the other path? You look at the past history! If the train goes left 99% of the time, then you guess left. If it alternates, then you alternate your guesses. If it goes one way every three times, you guess the same...&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;&lt;strong dir="ltr"&gt;In other words, you try to identify a pattern and follow it.&lt;/strong&gt;&lt;/em&gt; This is more or less how branch predictors work.&lt;/p&gt;&lt;p&gt;Most applications have well-behaved branches. So modern branch predictors will typically achieve &amp;gt;90% hit rates. But when faced with unpredictable branches with no recognizable patterns, branch predictors are virtually useless.&lt;/p&gt;&lt;h2&gt;As hinted from above, the culprit is this if-statement:&lt;/h2&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;data&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;c&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;=&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;128&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;
@@ -1062,7 +552,517 @@ sum &lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt; a&lt
 &lt;/span&gt;&lt;span dir="ltr"&gt;this&lt;/span&gt;&lt;span dir="ltr"&gt; library would &lt;/span&gt;&lt;span dir="ltr"&gt;do&lt;/span&gt;&lt;span dir="ltr"&gt; something like&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;
 
 i &lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;x &lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;&lt;span dir="ltr"&gt; node&lt;/span&gt;&lt;span dir="ltr"&gt;-&amp;gt;&lt;/span&gt;&lt;span dir="ltr"&gt;value&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;&lt;span dir="ltr"&gt;
-node &lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt; node&lt;/span&gt;&lt;span dir="ltr"&gt;-&amp;gt;&lt;/span&gt;&lt;span dir="ltr"&gt;link&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;];&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;It's a nice solution and maybe it will work.&lt;/p&gt;</description><pubDate>Sat, 18 Jul 2020 19:32:43 -0500</pubDate></item><item><title>The Next Steps for Single Ownership and RAII</title><link>https://lobste.rs/s/rq9yqz</link><description>&lt;div&gt;How constraint references enable easy safety, speed, and much more powerful RAII!&lt;/div&gt;&lt;div dir="ltr"&gt;&lt;span dir="ltr"&gt;July 15th, 2020&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;nbsp;—&amp;nbsp; Evan Ovadia&lt;/span&gt;&lt;/div&gt;&lt;div&gt;While diving the depths of single ownership, we discovered a hidden gem from the most unlikely of places. With it, we were able to reassemble C++ into something that really unleashes the full potential of RAII.&lt;/div&gt;&lt;div&gt;Recall these ancient mantras, known to any C++ developer:&lt;/div&gt;&lt;UL&gt;&lt;LI&gt;"Who destroyed that object I was pointing at?"&lt;/LI&gt;&lt;LI&gt;"Blasted segfaults!"&lt;/LI&gt;&lt;LI&gt;"We need to influence the destructor, but destructors take no parameters!"&lt;/LI&gt;&lt;LI&gt;"Who's still holding a &lt;span dir="ltr"&gt;shared_ptr&lt;/span&gt; to my object? It should be dead!"&lt;/LI&gt;&lt;LI&gt;"I can't throw from a destructor, or have multiple exceptions in flight?"&lt;/LI&gt;&lt;LI&gt;"Destructors can't return a status, either?!"&lt;/LI&gt;&lt;/UL&gt;&lt;div dir="ltr"&gt;In this journey, we discovered language solutions for &lt;i dir="ltr"&gt;all&lt;/i&gt; of these.&lt;/div&gt;&lt;div&gt;This article is about C++'s RAII and single ownership, and how we can take it even further. &lt;/div&gt;&lt;div&gt;C++'s syntax often makes single ownership look more difficult than it is, so we also use Vale to illustrate how easy and powerful single ownership can be. &lt;/div&gt;&lt;h3&gt;Single Ownership&lt;/h3&gt;&lt;div dir="ltr"&gt;Our journey started in 2011, when C++11's &lt;span dir="ltr"&gt;unique_ptr&lt;/span&gt; brought single ownership and move semantics to C++ programmers worldwide, and changed our lives forever. &lt;/div&gt;&lt;div dir="ltr"&gt;In one fell swoop, it basically single-handedly solved memory leaks. Single-ownership is one of those notions that, once it clicked, felt &lt;i dir="ltr"&gt;right&lt;/i&gt;. It was probably because this is how we already think: in C, we would mentally track ownership, to know whose responsibility it was to free an object. Even in GC'd languages, we would implicitly track who's responsible for calling &lt;span dir="ltr"&gt;.dispose()&lt;/span&gt;.&lt;/div&gt;&lt;div&gt;We slowly discovered that we could use RAII for things other than freeing memory! We could:&lt;/div&gt;&lt;UL&gt;&lt;LI&gt;Remove self from an observers list. &lt;/LI&gt;&lt;LI&gt;Close a file stream, or clean up a temp file.&lt;/LI&gt;&lt;LI&gt;Close a mutex's lock.&lt;/LI&gt;&lt;LI&gt;Stop an ongoing calculation in another thread.&lt;/LI&gt;&lt;LI&gt;Roll-back or commit a transaction.&lt;/LI&gt;&lt;LI&gt;Cancel a retrying network request.&lt;/LI&gt;&lt;LI&gt;Remove some UI elements from the view.&lt;/LI&gt;&lt;LI&gt;Resolve or reject a future.&lt;/LI&gt;&lt;LI&gt;Notify others that we're being freed.&lt;/LI&gt;&lt;LI&gt;Enforce that we actually handled an error, rather than dropping it on the floor.&lt;/LI&gt;&lt;/UL&gt;&lt;div dir="ltr"&gt;We realized: RAII wasn't just way to track who should free an object, and these weren't just neat tricks. RAII is much more, it's a way to &lt;b dir="ltr"&gt;track responsibility&lt;/b&gt;. &lt;/div&gt;&lt;div&gt;It's a promise that's enforced by the compiler. Instead of just "The compiler will make sure we free this," RAII is "The compiler will make sure that we XYZ" where XYZ is whatever we want. &lt;/div&gt;&lt;h3&gt;Safe Handling of Aliases&lt;/h3&gt;&lt;div dir="ltr"&gt;Single ownership in modern C++ uses owning &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;unique_ptr&amp;lt;T&amp;gt;&lt;/span&gt;s&lt;/span&gt;, and non-owning &lt;span dir="ltr"&gt;T*&lt;/span&gt; raw pointers.&lt;/div&gt;&lt;div dir="ltr"&gt;Where &lt;span dir="ltr"&gt;unique_ptr&lt;/span&gt; is the sheriff, the raw pointer is the infamous mercenary who rides into town and makes everyone mighty nervous. When things go well, he's useful... but if things get dicey, he &lt;b dir="ltr"&gt;might just decide to dereference that pointer&lt;/b&gt; and cause all sorts of chaos.&lt;/div&gt;&lt;div dir="ltr"&gt;We discovered that the sheriff and the mercenaries &lt;i dir="ltr"&gt;can&lt;/i&gt; work together, with some solid rules. We discovered patterns that worked pretty well.&lt;/div&gt;&lt;div&gt;For example, we'd often have a BigClass, that owns a bunch of smaller classes ("subcomponents"), where each subcomponent has raw pointers to subcomponents made before it.&lt;/div&gt;&lt;div&gt;C++'s member initializer list even enforces that we don't refer to a not-yet-initialized member.&lt;/div&gt;&lt;div&gt;The big class constructs these in the right order, and destructs them in the correct reverse order.&lt;/div&gt;&lt;div&gt;With this, there won't be any unfortunate seg-faulting in our small town.&lt;/div&gt;&lt;div&gt;The world discovered many patterns like this for handling raw pointers. &lt;/div&gt;&lt;PRE&gt;&lt;div&gt;C++&lt;/div&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;class&lt;/span&gt; &lt;span dir="ltr"&gt;BigClass&lt;/span&gt; {&lt;/span&gt;
+node &lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt; node&lt;/span&gt;&lt;span dir="ltr"&gt;-&amp;gt;&lt;/span&gt;&lt;span dir="ltr"&gt;link&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;];&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;It's a nice solution and maybe it will work.&lt;/p&gt;</description><pubDate>Sat, 18 Jul 2020 19:32:43 -0500</pubDate></item><item><title>Debugging a dynamic linking bug in a Nix project</title><link>https://lobste.rs/s/ip8pih</link><description>&lt;h1&gt;Debugging a dynamic linking bug in a Nix project&lt;/h1&gt;&lt;h2&gt;Trying out the Nix development experience&lt;/h2&gt;&lt;p dir="ltr"&gt;The other day, while building a &lt;a href="https://faculty.washington.edu/shumlak/WARPX/html/index.html" dir="ltr"&gt;scientific project&lt;/a&gt; to which I’m a contributor, I
+ran into a nasty version conflict between two system libraries. In a fit of
+pique, I decided to learn enough about &lt;a href="https://nixos.org/" dir="ltr"&gt;Nix&lt;/a&gt; to be able to set up a reproducible,
+tightly controlled local build. It’s done now, and overall I’m very happy with
+the tooling and setup. I’m using &lt;a href="https://direnv.net/" dir="ltr"&gt;direnv&lt;/a&gt; to tightly integrate my normal shell
+with Nix’s &lt;code dir="ltr"&gt;nix-shell&lt;/code&gt; feature, and for the most part everything feels seamless.
+It is extremely refreshing to see &lt;code dir="ltr"&gt;cmake&lt;/code&gt; report that it has found a plethora of
+binaries and libraries, content-hashed and installed in neat little rows under
+&lt;code dir="ltr"&gt;/nix/store&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;I’m using Nix to manage my development environment, but &lt;em dir="ltr"&gt;not&lt;/em&gt; to build the
+project itself. Nix ensures that the project dependencies are installed and
+discoverable by the compiler and linker. Building the project is done with
+CMake, set up for &lt;code dir="ltr"&gt;cmake&lt;/code&gt; to find the nix-installed libraries. Nix achieves this
+by &lt;a href="https://nixos.wiki/wiki/C#The%5Fcompiler%5Fwrapper" dir="ltr"&gt;wrapping the C compiler&lt;/a&gt; with its own shell script and injecting the paths to
+libraries and binaries via environment variables. There’s very little to do to
+make &lt;code dir="ltr"&gt;cmake&lt;/code&gt; just work, beyond declaring that the packages you want are
+&lt;code dir="ltr"&gt;buildInputs&lt;/code&gt;. The first version of my &lt;code dir="ltr"&gt;shell.nix&lt;/code&gt; file looked like this:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="nix" dir="ltr"&gt;&lt;span dir="ltr"&gt;# file shell.nix&lt;/span&gt;
+{ &lt;span dir="ltr"&gt;pkgs&lt;/span&gt; ? &lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;nixpkgs&amp;gt;&lt;/span&gt; {} }:
+
+&lt;span dir="ltr"&gt;pkgs&lt;/span&gt;.&lt;span dir="ltr"&gt;mkShell&lt;/span&gt; {
+  &lt;span dir="ltr"&gt;buildInputs&lt;/span&gt; = &lt;span dir="ltr"&gt;with&lt;/span&gt; &lt;span dir="ltr"&gt;pkgs&lt;/span&gt;; [
+    &lt;span dir="ltr"&gt;cmake&lt;/span&gt;
+    (&lt;span dir="ltr"&gt;callPackage&lt;/span&gt; &lt;span dir="ltr"&gt;nix/petsc.nix&lt;/span&gt; {})
+    &lt;span dir="ltr"&gt;metis&lt;/span&gt;
+    &lt;span dir="ltr"&gt;hdf5&lt;/span&gt;
+    &lt;span dir="ltr"&gt;openmpi&lt;/span&gt;
+    (&lt;span dir="ltr"&gt;python38&lt;/span&gt;.&lt;span dir="ltr"&gt;withPackages&lt;/span&gt; (&lt;span dir="ltr"&gt;packages&lt;/span&gt;: [ &lt;span dir="ltr"&gt;packages&lt;/span&gt;.&lt;span dir="ltr"&gt;numpy&lt;/span&gt; ]))
+  ];
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Using this setup, I had very little trouble getting the project to build. I had
+to &lt;a href="https://nixos.org/nixos/nix-pills/nixpkgs-overriding-packages.html" dir="ltr"&gt;override&lt;/a&gt; the &lt;a href="https://github.com/NixOS/nixpkgs/blob/master/pkgs/development/libraries/science/math/petsc/default.nix" dir="ltr"&gt;default PETSc derivation&lt;/a&gt; to compile with METIS and OpenMPI
+support, which was not too hard:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="nix" dir="ltr"&gt;&lt;span dir="ltr"&gt;# file nix/petsc.nix&lt;/span&gt;
+{ &lt;span dir="ltr"&gt;petsc&lt;/span&gt; , &lt;span dir="ltr"&gt;blas&lt;/span&gt; , &lt;span dir="ltr"&gt;gfortran&lt;/span&gt; , &lt;span dir="ltr"&gt;lapack&lt;/span&gt; , &lt;span dir="ltr"&gt;python&lt;/span&gt; , &lt;span dir="ltr"&gt;metis&lt;/span&gt; , &lt;span dir="ltr"&gt;openmpi&lt;/span&gt; }:
+
+&lt;span dir="ltr"&gt;petsc&lt;/span&gt;.&lt;span dir="ltr"&gt;overrideAttrs&lt;/span&gt; (&lt;span dir="ltr"&gt;oldAttrs&lt;/span&gt;: &lt;span dir="ltr"&gt;rec&lt;/span&gt; {
+    &lt;span dir="ltr"&gt;nativeBuildInputs&lt;/span&gt; = [ &lt;span dir="ltr"&gt;blas&lt;/span&gt; &lt;span dir="ltr"&gt;gfortran&lt;/span&gt; &lt;span dir="ltr"&gt;gfortran&lt;/span&gt;.&lt;span dir="ltr"&gt;cc&lt;/span&gt;.&lt;span dir="ltr"&gt;lib&lt;/span&gt; &lt;span dir="ltr"&gt;lapack&lt;/span&gt; &lt;span dir="ltr"&gt;python&lt;/span&gt; &lt;span dir="ltr"&gt;openmpi&lt;/span&gt; &lt;span dir="ltr"&gt;metis&lt;/span&gt; ];
+    &lt;span dir="ltr"&gt;preConfigure&lt;/span&gt; = &lt;span dir="ltr"&gt;''
+&lt;/span&gt;&lt;span dir="ltr"&gt;        export FC="&lt;/span&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;&lt;span dir="ltr"&gt;gfortran&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;/bin/gfortran" F77="&lt;/span&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;&lt;span dir="ltr"&gt;gfortran&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;/bin/gfortran"
+&lt;/span&gt;&lt;span dir="ltr"&gt;        patchShebangs .
+&lt;/span&gt;&lt;span dir="ltr"&gt;        configureFlagsArray=(
+&lt;/span&gt;&lt;span dir="ltr"&gt;        $configureFlagsArray
+&lt;/span&gt;&lt;span dir="ltr"&gt;        "--with-mpi-dir=&lt;/span&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;&lt;span dir="ltr"&gt;openmpi&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;"
+&lt;/span&gt;&lt;span dir="ltr"&gt;        "--with-metis=&lt;/span&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;&lt;span dir="ltr"&gt;metis&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;"
+&lt;/span&gt;&lt;span dir="ltr"&gt;        "--with-blas-lib=[&lt;/span&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;&lt;span dir="ltr"&gt;blas&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;/lib/libblas.so,&lt;/span&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;&lt;span dir="ltr"&gt;gfortran&lt;/span&gt;.&lt;span dir="ltr"&gt;cc&lt;/span&gt;.&lt;span dir="ltr"&gt;lib&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;/lib/libgfortran.a]"
+&lt;/span&gt;&lt;span dir="ltr"&gt;        "--with-lapack-lib=[&lt;/span&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;&lt;span dir="ltr"&gt;lapack&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;/lib/liblapack.so,&lt;/span&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;&lt;span dir="ltr"&gt;gfortran&lt;/span&gt;.&lt;span dir="ltr"&gt;cc&lt;/span&gt;.&lt;span dir="ltr"&gt;lib&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;/lib/libgfortran.a]"
+&lt;/span&gt;&lt;span dir="ltr"&gt;        )
+&lt;/span&gt;&lt;span dir="ltr"&gt;    ''&lt;/span&gt;;
+})
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This Nix file returns a function which is invoked in &lt;code dir="ltr"&gt;shell.nix&lt;/code&gt; using
+&lt;code dir="ltr"&gt;callPackage&lt;/code&gt; function. &lt;code dir="ltr"&gt;petsc.overrideAttrs&lt;/code&gt; is a neat way to override the
+attributes of a derivation created with &lt;code dir="ltr"&gt;stdenv.mkDerivation&lt;/code&gt;. Building PETSc
+with MPI and METIS support is as simple as passing in a different set of
+arguments to the &lt;code dir="ltr"&gt;configure&lt;/code&gt; script.&lt;/p&gt;&lt;p dir="ltr"&gt;Figuring out how to do all of this was fun. I mostly referred to the &lt;a href="https://nixos.org/nixos/nix-pills/index.html" dir="ltr"&gt;Nix
+“Pills”&lt;/a&gt;, which are a great progression through the Nix tool and language.&lt;/p&gt;&lt;p dir="ltr"&gt;With these Nix files, I was able to execute &lt;code dir="ltr"&gt;cmake .. &amp;amp;&amp;amp; make&lt;/code&gt; successfully.
+Getting the project to &lt;em dir="ltr"&gt;run&lt;/em&gt; was another story. The final binary failed
+immediately with a dynamic loading error:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash"&gt;➜ bin/warpxm
+dyld: Library not loaded: /private/tmp/nix-build-petsc-3.13.2.drv-0/petsc-3.13.2/arch-darwin-c-debug/lib/libpetsc.3.13.dylib
+  Referenced from: /Users/jack/src/warpxm/build/bin/warpxm
+  Reason: image not found
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The binary was trying to load a dynamic lib from one of the temporary directories
+that Nix created in the process of building PETSc. Of course this failed: by the
+time I invoked &lt;code dir="ltr"&gt;bin/warpxm&lt;/code&gt;, that directory had been cleaned up. Instead of a
+file under &lt;code dir="ltr"&gt;/private/tmp&lt;/code&gt;, the binary should have linked to the result of the
+&lt;code dir="ltr"&gt;petsc&lt;/code&gt; derivation in the Nix store, under &lt;code dir="ltr"&gt;/nix/store&lt;/code&gt;. At some point, it
+seemed, an environment variable was incorrectly set to this intermediate
+directory. To figure out where, I would have to learn a lot more about linking
+on OS X than I ever expected.&lt;/p&gt;&lt;h2&gt;Whither the linker?&lt;/h2&gt;&lt;p dir="ltr"&gt;First I checked the compiler and linker flags that are inserted by Nix’s
+compiler wrapper. These come in via &lt;code dir="ltr"&gt;NIX_CFLAGS_COMPILE&lt;/code&gt; and &lt;code dir="ltr"&gt;NIX_LDFLAGS&lt;/code&gt;. When
+you’re working with &lt;code dir="ltr"&gt;nix-shell&lt;/code&gt; and &lt;code dir="ltr"&gt;direnv&lt;/code&gt;, all of the environment variables
+from your derivations are injected into your shell. It’s a simple matter of echoing
+them out:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;➜ &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;echo&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$NIX_CFLAGS_COMPILE&lt;/span&gt;&lt;/span&gt;
+... -isystem /nix/store/w23r8kplmfx2xc111cpvmdjwmkwy6ip3-petsc-3.13.2/include ...
+➜ &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;echo&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$NIX_LDFLAGS&lt;/span&gt;&lt;/span&gt;
+... -L/nix/store/w23r8kplmfx2xc111cpvmdjwmkwy6ip3-petsc-3.13.2/lib ...
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;These look fine! Invoking &lt;code dir="ltr"&gt;cmake&lt;/code&gt; and &lt;code dir="ltr"&gt;make&lt;/code&gt; in this shell ought to pull in the
+correct library.&lt;/p&gt;&lt;p dir="ltr"&gt;Then I remembered that this project uses &lt;code dir="ltr"&gt;pkg-config&lt;/code&gt; to find and pull together
+the linked libraries. Frankly, I don’t understand &lt;code dir="ltr"&gt;pkg-config&lt;/code&gt; very well, but I
+do know that in this project it is invoked from inside of &lt;code dir="ltr"&gt;cmake&lt;/code&gt;. It searches for
+libraries according to its own rules, and it runs &lt;em dir="ltr"&gt;after&lt;/em&gt; Nix has done its
+job setting everything up. Therefore, it circumvents the compiler and linker
+flags that we just checked.&lt;/p&gt;&lt;p dir="ltr"&gt;I happened to have &lt;code dir="ltr"&gt;pkg-config&lt;/code&gt; installed from before setting up this Nix
+environment. Therefore, &lt;code dir="ltr"&gt;cmake&lt;/code&gt; was able to invoke the system &lt;code dir="ltr"&gt;pkg-config&lt;/code&gt; from
+my user &lt;code dir="ltr"&gt;PATH&lt;/code&gt;. Perhaps the system version of &lt;code dir="ltr"&gt;pkg-config&lt;/code&gt; was somehow finding
+the wrong library? Indeed, &lt;code dir="ltr"&gt;echo $PKG_CONFIG_PATH&lt;/code&gt; confirmed that it was
+searching a directory under my &lt;code dir="ltr"&gt;$HOME&lt;/code&gt;. I thought it possible that some wires
+got crossed while I was adding dependencies to my Nix derivation one at a time:
+configuring &lt;code dir="ltr"&gt;pkg-config&lt;/code&gt; appropriately might help.&lt;/p&gt;&lt;p dir="ltr"&gt;I referred once again to the Nix wiki page on C projects, which also has &lt;a href="https://nixos.wiki/wiki/C#pkg-config" dir="ltr"&gt;a
+section&lt;/a&gt; on using &lt;code dir="ltr"&gt;pkg-config&lt;/code&gt;. It seems that including the &lt;code dir="ltr"&gt;pkg-config&lt;/code&gt;
+derivation as a &lt;code dir="ltr"&gt;nativeBuildInput&lt;/code&gt; will let packages like &lt;code dir="ltr"&gt;petsc&lt;/code&gt; append their
+output paths to the &lt;code dir="ltr"&gt;PKG_CONFIG_PATH&lt;/code&gt; environment variable. I did so:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="nix" dir="ltr"&gt;&lt;span dir="ltr"&gt;pkgs&lt;/span&gt;.&lt;span dir="ltr"&gt;mkShell&lt;/span&gt; {
+  &lt;span dir="ltr"&gt;buildInputs&lt;/span&gt; = &lt;span dir="ltr"&gt;with&lt;/span&gt; &lt;span dir="ltr"&gt;pkgs&lt;/span&gt;; [
+    ...
+  ];
+  &lt;span dir="ltr"&gt;nativeBuildInputs&lt;/span&gt; = &lt;span dir="ltr"&gt;with&lt;/span&gt; &lt;span dir="ltr"&gt;pkgs&lt;/span&gt;; [
+    &lt;span dir="ltr"&gt;pkg-config&lt;/span&gt;
+  ];
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;but it didn’t fix the problem. I would have to go deeper and track down where
+the bad library was being pulled in.&lt;/p&gt;&lt;p dir="ltr"&gt;Digging into the &lt;code dir="ltr"&gt;cmake&lt;/code&gt; documentation and the project’s &lt;code dir="ltr"&gt;.cmake&lt;/code&gt; files led me
+to insert a trio of print statements:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="diff" dir="ltr"&gt;find_package(PkgConfig REQUIRED)
+pkg_check_modules(PETSC PETSc REQUIRED)
+
+link_directories(${PETSC_LIBRARY_DIRS})
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;+ message("petsc libraries: ${PETSC_LIBRARIES}")&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;+ message("petsc library dirs: ${PETSC_LIBRARY_DIRS}")&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;+ message("petsc link libraries: ${PETSC_LINK_LIBRARIES}")&lt;/span&gt;
+&lt;/span&gt;list(APPEND WARPXM_LINK_TARGETS ${PETSC_LIBRARIES})
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;These printed out three lines in my &lt;code dir="ltr"&gt;cmake&lt;/code&gt; output:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="text"&gt;petsc libraries: petsc
+petsc library dirs: /nix/store/w23r8kplmfx2xc111cpvmdjwmkwy6ip3-petsc-3.13.2/lib
+petsc link libraries: /nix/store/w23r8kplmfx2xc111cpvmdjwmkwy6ip3-petsc-3.13.2/lib/libpetsc.dylib
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The second two look good. But the first, just the library name &lt;code dir="ltr"&gt;petsc&lt;/code&gt;, was a little too
+implicit for comfort. It was precisely this variable that was being appended
+to the link targets list. At &lt;em dir="ltr"&gt;compile&lt;/em&gt; time, it would be up to the linker to find
+the library &lt;code dir="ltr"&gt;petsc&lt;/code&gt;, and I wasn’t sure where it would look. Safer to use the
+absolute path to the &lt;code dir="ltr"&gt;.dylib&lt;/code&gt;, like so:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="diff" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;- list(APPEND WARPXM_LINK_TARGETS ${PETSC_LIBRARIES})&lt;/span&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;+ list(APPEND WARPXM_LINK_TARGETS ${PETSC_LINK_LIBRARIES})&lt;/span&gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Changing the link target to the absolute path eased my mind only for the duration of
+the next &lt;code dir="ltr"&gt;cmake .. &amp;amp;&amp;amp; make&lt;/code&gt; cycle. Surely there was no way the linker could
+screw up now. No arcane library search involved, just an absolute path, which
+couldn’t possibly be misinterpreted…&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash"&gt;➜ bin/warpxm
+dyld: Library not loaded: /private/tmp/nix-build-petsc-3.13.2.drv-0/petsc-3.13.2/arch-darwin-c-debug/lib/libpetsc.3.13.dylib
+  Referenced from: /Users/jack/src/warpxm/build/bin/warpxm
+  Reason: image not found
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Damn it!&lt;/p&gt;&lt;h2&gt;install_name and other depravities&lt;/h2&gt;&lt;p dir="ltr"&gt;At this point I was absolutely flummoxed. With every fix I attempted, I
+grepped vainly for the offending &lt;code dir="ltr"&gt;/private/tmp&lt;/code&gt; path in my build directory, and come up
+empty-handed. I tracked down the final, irrevocable link options passed to the
+compiler, tucked away in a &lt;code dir="ltr"&gt;link.txt&lt;/code&gt; file in the build tree. They showed
+incontrovertibly that my binary was being linked to the correct library:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="text"&gt;➜ cat build/src/CMakeFiles/warpxm.dir/link.txt
+/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/c++     -O3 -DNDEBUG -isysroot ... -L/nix/store/31d3hng4sclxi3sz8g3zi3yqmychj2kg-petsc-3.13.2/lib ...
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;I had proved nearly to my satisfaction that CMake was doing the right thing with
+this library, and I was completely out of ideas.
+Finally, a very lucky google search led me to the &lt;a href="https://nixos.org/nixpkgs/manual/#sec-darwin" dir="ltr"&gt;section&lt;/a&gt; of the Nix manual
+describing issues specific to the Darwin (MacOS) platform. It states:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;On Darwin, libraries are linked using absolute paths, libraries are resolved
+by their install_name at link time. Sometimes packages won’t set this
+correctly causing the library lookups to fail at runtime. This can be fixed by
+adding extra linker flags or by running install_name_tool -id during the
+fixupPhase.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;This is a very matter-of-fact way of stating something that, when I understood
+it, flabbergasted me. To the best of my understanding, here’s what happens on
+MacOS:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;My source code has an include directive, &lt;code dir="ltr"&gt;include&amp;lt;petsc.h&amp;gt;&lt;/code&gt; or something like
+that, which creates a binary interface to be satisfied by the linker.&lt;/LI&gt;&lt;LI&gt;At link time, we pass the list of absolute paths to libraries, and the linker
+finds the one that matches the interface.&lt;/LI&gt;&lt;LI&gt;The linker then saves the &lt;em dir="ltr"&gt;install_name&lt;/em&gt; of the library it found in the
+binary’s load section.&lt;/LI&gt;&lt;LI&gt;At run time, the binary (actually, the MacOS &lt;code dir="ltr"&gt;dyld&lt;/code&gt; system) loads the library.
+The install_name is all it has, so it looks there.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;I’ve certainly gotten some aspect of this wrong, so I would definitely
+appreciate hearing from someone who understands it better than me!&lt;/p&gt;&lt;p dir="ltr"&gt;In any case, this find pointed me to the concept of the install_name, so I had
+something to go on. More searching led to a &lt;a href="http://log.zyxar.com/blog/2012/03/10/install-name-on-os-x/" dir="ltr"&gt;helpful blog post&lt;/a&gt; describing exactly
+the issue that I was facing. It also described how to check the install_name of
+the library:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="text"&gt;➜ otool -D /nix/store/31d3hng4sclxi3sz8g3zi3yqmychj2kg-petsc-3.13.2/lib/libpetsc.dylib
+/nix/store/31d3hng4sclxi3sz8g3zi3yqmychj2kg-petsc-3.13.2/lib/libpetsc.dylib:
+/private/tmp/nix-build-petsc-3.13.2.drv-0/petsc-3.13.2/arch-darwin-c-debug/lib/libpetsc.3.13.dylib
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Gotcha&lt;/strong&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;The Nix manual states that “some packages won’t set this correctly”, and points
+to the fix, which is to use &lt;code dir="ltr"&gt;install_name_tool&lt;/code&gt; to change the install_name of
+the built library. Is &lt;a href="https://github.com/NixOS/nixpkgs/blob/master/pkgs/development/libraries/science/math/petsc/default.nix" dir="ltr"&gt;the PETSc derivation&lt;/a&gt; on nixpkgs doing this correctly? I
+saw that it was doing &lt;em dir="ltr"&gt;something&lt;/em&gt; with &lt;code dir="ltr"&gt;install_name_tool&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="nix" dir="ltr"&gt;  &lt;span dir="ltr"&gt;prePatch&lt;/span&gt; = &lt;span dir="ltr"&gt;''
+&lt;/span&gt;&lt;span dir="ltr"&gt;    substituteInPlace configure \
+&lt;/span&gt;&lt;span dir="ltr"&gt;      --replace /bin/sh /usr/bin/python
+&lt;/span&gt;&lt;span dir="ltr"&gt;  ''&lt;/span&gt; + &lt;span dir="ltr"&gt;stdenv&lt;/span&gt;.&lt;span dir="ltr"&gt;lib&lt;/span&gt;.&lt;span dir="ltr"&gt;optionalString&lt;/span&gt; &lt;span dir="ltr"&gt;stdenv&lt;/span&gt;.&lt;span dir="ltr"&gt;isDarwin&lt;/span&gt; &lt;span dir="ltr"&gt;''
+&lt;/span&gt;&lt;span dir="ltr"&gt;    substituteInPlace config/install.py \
+&lt;/span&gt;&lt;span dir="ltr"&gt;      --replace /usr/bin/install_name_tool install_name_tool
+&lt;/span&gt;&lt;span dir="ltr"&gt;  ''&lt;/span&gt;;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This directive replaces the appearances of the string
+&lt;code dir="ltr"&gt;/usr/bin/install_name_tool&lt;/code&gt; with just &lt;code dir="ltr"&gt;install_name_tool&lt;/code&gt;. The reason that Nix
+packages do this is to ensure that builds rely on the Nix-built tools, which are
+provided in the build shell’s &lt;code dir="ltr"&gt;PATH&lt;/code&gt;, and not on binaries in system directories
+like &lt;code dir="ltr"&gt;/usr/bin&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;The PR that introduced this substitution indicates that it fixed a build on
+Darwin, so there must be some invocation of &lt;code dir="ltr"&gt;/usr/bin/install_name_tool&lt;/code&gt; in
+PETSc. Searching for that in the PETSc repo leads to &lt;a href="https://gitlab.com/petsc/petsc/-/blob/master/config/install.py#L368" dir="ltr"&gt;this line&lt;/a&gt;, which is doing
+exactly what the Mark’s Logs &lt;a href="http://log.zyxar.com/blog/2012/03/10/install-name-on-os-x/" dir="ltr"&gt;post&lt;/a&gt; on install_name instructed: it changes the
+install_name to the absolute path of the library in its installation directory,
+using &lt;code dir="ltr"&gt;install_name_tool -id&lt;/code&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="python" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;os&lt;/span&gt;.&lt;span dir="ltr"&gt;path&lt;/span&gt;.&lt;span dir="ltr"&gt;splitext&lt;/span&gt;(&lt;span dir="ltr"&gt;dst&lt;/span&gt;)[&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;/span&gt;] == &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;'.dylib'&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;and&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;os&lt;/span&gt;.&lt;span dir="ltr"&gt;path&lt;/span&gt;.&lt;span dir="ltr"&gt;isfile&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;'/usr/bin/install_name_tool'&lt;/span&gt;&lt;/span&gt;):
+    [&lt;span dir="ltr"&gt;output&lt;/span&gt;,&lt;span dir="ltr"&gt;err&lt;/span&gt;,&lt;span dir="ltr"&gt;flg&lt;/span&gt;] = &lt;span dir="ltr"&gt;self&lt;/span&gt;.&lt;span dir="ltr"&gt;executeShellCommand&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"otool -D "&lt;/span&gt;&lt;/span&gt;+&lt;span dir="ltr"&gt;src&lt;/span&gt;)
+    &lt;span dir="ltr"&gt;oldname&lt;/span&gt; = &lt;span dir="ltr"&gt;output&lt;/span&gt;[&lt;span dir="ltr"&gt;output&lt;/span&gt;.&lt;span dir="ltr"&gt;find&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;\n&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;)+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;/span&gt;:]
+    &lt;span dir="ltr"&gt;installName&lt;/span&gt; = &lt;span dir="ltr"&gt;oldname&lt;/span&gt;.&lt;span dir="ltr"&gt;replace&lt;/span&gt;(&lt;span dir="ltr"&gt;os&lt;/span&gt;.&lt;span dir="ltr"&gt;path&lt;/span&gt;.&lt;span dir="ltr"&gt;realpath&lt;/span&gt;(&lt;span dir="ltr"&gt;self&lt;/span&gt;.&lt;span dir="ltr"&gt;archDir&lt;/span&gt;), &lt;span dir="ltr"&gt;self&lt;/span&gt;.&lt;span dir="ltr"&gt;installDir&lt;/span&gt;)
+    &lt;span dir="ltr"&gt;self&lt;/span&gt;.&lt;span dir="ltr"&gt;executeShellCommand&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;'/usr/bin/install_name_tool -id '&lt;/span&gt;&lt;/span&gt; + &lt;span dir="ltr"&gt;installName&lt;/span&gt; + &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;' '&lt;/span&gt;&lt;/span&gt; + &lt;span dir="ltr"&gt;dst&lt;/span&gt;)
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;According to this, the install_name of the library should have been repaired by
+PETSc when the library was built! Except… notice something? The second
+condition in the &lt;code dir="ltr"&gt;if&lt;/code&gt; statement. After the PETSc derivation runs its &lt;code dir="ltr"&gt;prePatch&lt;/code&gt;
+step, that condition will become &lt;code dir="ltr"&gt;and os.path.isfile('install_name_tool')&lt;/code&gt;. That
+will certainly fail: &lt;code dir="ltr"&gt;install_name_tool&lt;/code&gt; is not going to be a file in the
+directory where &lt;code dir="ltr"&gt;configure&lt;/code&gt; is running! The patched &lt;code dir="ltr"&gt;configure&lt;/code&gt; script will
+silently skip this step, leaving the install_name of the library as the
+temporary directory where it was built!&lt;/p&gt;&lt;p dir="ltr"&gt;Luckily, the solution to this problem is not too hard. Instead of the name of a
+program on the &lt;code dir="ltr"&gt;PATH&lt;/code&gt;, we should pass the absolute path to the program we want
+to run. This can be done by overriding the &lt;code dir="ltr"&gt;prePatch&lt;/code&gt; step like so:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="nix" dir="ltr"&gt;    &lt;span dir="ltr"&gt;prePatch&lt;/span&gt; = &lt;span dir="ltr"&gt;''
+&lt;/span&gt;&lt;span dir="ltr"&gt;        substituteInPlace configure \
+&lt;/span&gt;&lt;span dir="ltr"&gt;        --replace /bin/sh /usr/bin/python
+&lt;/span&gt;&lt;span dir="ltr"&gt;    ''&lt;/span&gt; + &lt;span dir="ltr"&gt;stdenv&lt;/span&gt;.&lt;span dir="ltr"&gt;lib&lt;/span&gt;.&lt;span dir="ltr"&gt;optionalString&lt;/span&gt; &lt;span dir="ltr"&gt;stdenv&lt;/span&gt;.&lt;span dir="ltr"&gt;isDarwin&lt;/span&gt; &lt;span dir="ltr"&gt;''
+&lt;/span&gt;&lt;span dir="ltr"&gt;        substituteInPlace config/install.py \
+&lt;/span&gt;&lt;span dir="ltr"&gt;        --replace /usr/bin/install_name_tool &lt;/span&gt;&lt;span dir="ltr"&gt;${&lt;/span&gt;&lt;span dir="ltr"&gt;darwin&lt;/span&gt;.&lt;span dir="ltr"&gt;cctools&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;/bin/install_name_tool
+&lt;/span&gt;&lt;span dir="ltr"&gt;    ''&lt;/span&gt;;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The Nix variable &lt;code dir="ltr"&gt;${darwin.cctools}&lt;/code&gt; will expand to the full path of the
+built &lt;code dir="ltr"&gt;darwin.cctools&lt;/code&gt; derivation, which is a directory under &lt;code dir="ltr"&gt;/nix/store&lt;/code&gt;. So
+the patched &lt;code dir="ltr"&gt;if&lt;/code&gt; statement inside of PETSc’s &lt;code dir="ltr"&gt;configure.py&lt;/code&gt; becomes&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="python" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;os&lt;/span&gt;.&lt;span dir="ltr"&gt;path&lt;/span&gt;.&lt;span dir="ltr"&gt;splitext&lt;/span&gt;(&lt;span dir="ltr"&gt;dst&lt;/span&gt;)[&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;/span&gt;] == &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;'.dylib'&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;and&lt;/span&gt;&lt;/span&gt;
+   &lt;span dir="ltr"&gt;os&lt;/span&gt;.&lt;span dir="ltr"&gt;path&lt;/span&gt;.&lt;span dir="ltr"&gt;isfile&lt;/span&gt;(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;'/nix/store/1dgdim74d05ypll85vslm8i7kgzq78vw-cctools-port/bin/install_name_tool'&lt;/span&gt;&lt;/span&gt;):
+   &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;# use install_name_tool&lt;/span&gt;&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;and the install_name of the resulting library will be correct. We can check that
+with &lt;code dir="ltr"&gt;otool -D&lt;/code&gt; again:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash"&gt;➜ otool -D /nix/store/w23r8kplmfx2xc111cpvmdjwmkwy6ip3-petsc-3.13.2/lib/libpetsc.dylib
+/nix/store/w23r8kplmfx2xc111cpvmdjwmkwy6ip3-petsc-3.13.2/lib/libpetsc.dylib:
+/nix/store/w23r8kplmfx2xc111cpvmdjwmkwy6ip3-petsc-3.13.2/lib/libpetsc.3.13.dylib
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Looking much better! And since the error was in a dynamically loaded library, we
+don’t even have to recompile to check that it’s working:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;➜  build git:(master) ✗ &lt;span dir="ltr"&gt;DYLD_PRINT_LIBRARIES&lt;/span&gt;=&lt;span dir="ltr"&gt;1&lt;/span&gt; bin/warpxm
+dyld: loaded: /Users/jack/src/warpxm/build/bin/warpxm
+dyld: loaded: /nix/store/ni26aaiira47ak60vks1qv4apbkwbg1d-hdf5-1.10.6/lib/libhdf5.103.dylib
+dyld: loaded: /nix/store/acsjaw04hrf4rv8gizai7gx1ibq92ksa-zlib-1.2.11/lib/libz.dylib
+dyld: loaded: /nix/store/z4f1bq363m0ydmbyncfi2srij8vlsx32-Libsystem-osx-10.12.6/lib/libSystem.B.dylib
+dyld: loaded: /nix/store/w23r8kplmfx2xc111cpvmdjwmkwy6ip3-petsc-3.13.2/lib/libpetsc.3.13.dylib
+...
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;That’s more like it.&lt;/p&gt;&lt;h2&gt;Epilogue&lt;/h2&gt;&lt;p dir="ltr"&gt;I spent most of my time debugging this problem without a working
+understanding of the different build phases. It should have been clear
+to me that neither the CMake nor the &lt;code dir="ltr"&gt;pkg-config&lt;/code&gt; setups could be the cause,
+because at the time that I was invoking &lt;code dir="ltr"&gt;cmake&lt;/code&gt;, the offending &lt;code dir="ltr"&gt;/private/tmp&lt;/code&gt;
+directory had long vanished. If I had focused exclusively on the PETSc
+derivation provided by Nix, I might have homed in on the &lt;code dir="ltr"&gt;install_name_tool&lt;/code&gt;
+patch a little sooner. As it went, I was lucky to find the note in the Nix
+manual about Darwin-specific linker problems.&lt;/p&gt;&lt;p dir="ltr"&gt;As for Nix, I will absolutely be using more of it. What’s remarkable is how
+&lt;em dir="ltr"&gt;little&lt;/em&gt; impact it can have. I am able to use it to manage my environment for
+this project without impacting the way the other developers manage their
+environments. Of course, if they asked, I would advocate that they try out Nix,
+but it’s nice for everyone to be able to do it on their own time.&lt;/p&gt;&lt;p dir="ltr"&gt;I’m also looking forward to having my &lt;a href="https://github.com/NixOS/nixpkgs/pull/93428" dir="ltr"&gt;first contribution&lt;/a&gt; to Nix!&lt;/p&gt;&lt;img src="https://www.johnbcoughlin.com/images/buddy.png" width="32" height="24"&gt;</description><pubDate>Sat, 18 Jul 2020 10:58:46 -0500</pubDate></item><item><title>Why I don't mock (2014)</title><link>https://lobste.rs/s/gqqxxt</link><description>&lt;div itemprop="description articleBody"&gt;
+Well, it's impolite, isn't it?  But seriously, 
+when I first heard about mock object testing, I was excited, because it 
+certainly sounded like The Right Thing™:  message-based, checking
+relationships instead of state, and the new hip thing.&lt;/div&gt;&lt;p&gt;
+
+However, when I looked at actual examples, they looked sophisticated
+and obscure, the opposite of what I feel unit tests should be:  
+obvious and simple, simplistic to the point of stupidity.  I couldn't figure
+out at a glance what the expected behavior was, what was being
+tested and what was environment.&lt;/p&gt;&lt;p&gt;
+
+So I never used mocks in practice, meaning my opinions could not
+go beyond being superficial.  Fortunately, I was given the 
+task of porting a fairly large Objective-C project to OS X
+(yes, you read that right:  "to OS X" ), and it was heavily
+mock-tested.&lt;/p&gt;&lt;p&gt;
+
+As far as I could tell, most of the vague premonitions I had
+about mock testing were borne out in that project:  obscure
+mock tests, mock tests that didn't actually test anything except their
+own expectations and mock tests that were deeply coupled to 
+implementation details.&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Again, though, that could just be my misunderstandings, certainly
+people for whom I have a great deal of respect advocate for
+mock tests, but I was heartened when I heard in the recent
+DHH/Fowler/Beck TDD &lt;span dir="ltr"&gt;&lt;a href="https://www.youtube.com/watch?v=z9quxZsLcfo" dir="ltr"&gt;death-matches&lt;/a&gt;&lt;/span&gt;&amp;nbsp;&lt;a href="https://www.youtube.com/watch?v=JoTB2mcjU7w" dir="ltr"&gt;friendly&lt;/a&gt;&amp;nbsp;&lt;a href="https://www.youtube.com/watch?v=YNw4baDz6WA" dir="ltr"&gt;conversations&lt;/a&gt; that neither Kent nor Martin are
+&lt;a href="https://twitter.com/WardCunningham/status/464808275381604353" dir="ltr"&gt;great fans&lt;/a&gt; of mocking, and certainly not of deeply nested mocks.&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+However, it was DHH's comments that finally made me realize that
+what &lt;em dir="ltr"&gt;really&lt;/em&gt; bothered was something more subtle, and
+much more pervasive.  The talk is about "mocking the database",
+or mocking some other component.  While not proof positive, this
+kind of mocking seems indicative of not letting the tests drive
+the design towards simplicity, because the design is already 
+set in stone.&lt;/p&gt;&lt;p&gt;
+
+As a result, you're going to have constant pain, because the 
+tests will continuously try to drive you towards simplifying
+your design, which you resist by putting in mocks.&lt;/p&gt;&lt;p&gt;
+
+Instead of putting in mocks of presumed components, let the
+tests tell you what counterparts they want.  Then build those
+counterparts, again in simplest way possible.  You will likely
+discover that a lot of your assumptions about the required
+environment for your application turn out not to be true.&lt;/p&gt;&lt;p&gt;
+
+For example, when building SportStats v2 at the BBC we thought
+we needed a database for persistence.  But we didn't build it
+in until we needed it, and we didn't mock it out either.  We
+waited until the code told us that we now needed a database.&lt;/p&gt;&lt;p&gt;
+
+It never did.&lt;/p&gt;&lt;p&gt;
+
+So we discovered that our problem was simpler than we had 
+originally thought, and therefore our architecture could
+be as well.  Mocking eliminates that feedback.&lt;/p&gt;&lt;p&gt;
+
+So don't mock.  Because it's impolite to not listen to what
+your code is trying to tell you.&lt;/p&gt;</description><pubDate>Sat, 18 Jul 2020 11:15:33 -0500</pubDate></item><item><title>Why you shouldn’t remove your package from PyPI</title><link>https://lobste.rs/s/hzak6t</link><description>&lt;p&gt;Nowadays most software developed using the Python language relies on external packages (dependencies) to get the job done. Correctly managing this “supply-chain” ends up being very important and having a big impact on the end product.&lt;/p&gt;&lt;p dir="ltr"&gt;As a developer you should be cautious about the dependencies you include on your project, &lt;a href="https://blog.ovalerio.net/archives/1296" dir="ltr"&gt;as I explained in a previous post&lt;/a&gt;, but you are always dependent on the job done by the maintainers of those packages.&lt;/p&gt;&lt;p&gt;As a public package owner/maintainer, you also have to be aware that the code you write, your decisions and your actions will have an impact on the projects that depend directly or indirectly on your package.&lt;/p&gt;&lt;p&gt;With this small introduction we arrive to the topic of this post, which is “What to do as a maintainer when you no longer want to support a given package?” or ” How to properly rename my package?”.&lt;/p&gt;&lt;p&gt;In both of these situations you might think “I will start by removing the package from PyPI”, I hope the next lines will convince you that this is the worst you can do, for two reasons:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;You will break the code or the build systems of all projects that depend on the current or past versions of your package.&lt;/LI&gt;&lt;LI&gt;You will free the namespace for others to use and if your package is popular enough this might become a juicy target for any malicious actor.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;TLDR:&lt;/strong&gt; your will screw your “users”.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://www.theregister.com/2016/03/23/npm_left_pad_chaos/" dir="ltr"&gt;The left-pad incident&lt;/a&gt;, while it didn’t happen in the python ecosystem, is a well known example of the first point and shows what happens when a popular package gets removed from the public index.&lt;/p&gt;&lt;p dir="ltr"&gt;Malicious actors usually register packages using names that are similar to other popular packages with the hope that a user will end up installing them by mistake, something that already has been found multiple &lt;a href="https://snyk.io/blog/malicious-packages-found-to-be-typo-squatting-in-pypi/" dir="ltr"&gt;times&lt;/a&gt; &lt;a href="https://www.zdnet.com/article/twelve-malicious-python-libraries-found-and-removed-from-pypi/" dir="ltr"&gt;on&lt;/a&gt; &lt;a href="https://www.bleepingcomputer.com/news/security/ten-malicious-libraries-found-on-pypi-python-package-index/" dir="ltr"&gt;PyPI&lt;/a&gt;. Now imagine if that package name suddenly becomes available and is already trusted by other projects.&lt;/p&gt;&lt;h2&gt;What should you do it then? &lt;/h2&gt;&lt;p&gt;Just don’t delete the package.&lt;/p&gt;&lt;p&gt;I admit that in some rare occasions it might be required, but most of the time the best thing to do is to leave it there (specially for open-source ones).&lt;/p&gt;&lt;p dir="ltr"&gt;Adding a &lt;a href="https://docs.python.org/3/library/warnings.html" dir="ltr"&gt;warning&lt;/a&gt; to the code and informing the users in the &lt;code dir="ltr"&gt;README&lt;/code&gt; file that the package is no longer maintained or safe to use is also a nice thing to do.&lt;/p&gt;&lt;p dir="ltr"&gt;A good example of this process being done properly was the renaming of &lt;code dir="ltr"&gt;model-mommy&lt;/code&gt; to &lt;code dir="ltr"&gt;model-bakery&lt;/code&gt;, as a user it was painless. Here’s an overview of the steps they took:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;A new source code repository was created with the same contents. (This step is optional)&lt;/LI&gt;&lt;LI&gt;After doing the required changes a new package was uploaded to PyPI.&lt;/LI&gt;&lt;LI&gt;Deprecation warnings were added to the old code, mentioning the new package.&lt;/LI&gt;&lt;LI&gt;The documentation was updated mentioning the new package and making it clear the old package will no longer be maintained.&lt;/LI&gt;&lt;LI&gt;A new release of the old package was created, so the user could see the deprecation warnings.&lt;/LI&gt;&lt;LI&gt;All further development was done on the new package.&lt;/LI&gt;&lt;LI&gt;The old code repository was archived.&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;So here is what is shown every time the test suite of an affected project is executed:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;/lib/python3.7/site-packages/model_mommy/__init__.py:7: DeprecationWarning: Important: model_mommy is no longer maintained. Please use model_bakery instead: https://pypi.org/project/model-bakery/&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;In the end, even though I didn’t update right away, everything kept working and I was constantly reminded that I needed to make the change.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;span&gt;&lt;span&gt;Tags&lt;/span&gt;&lt;/span&gt;&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Sat, 18 Jul 2020 12:12:23 -0500</pubDate></item><item><title>Cloudflare outage on July 17, 2020</title><link>https://lobste.rs/s/xbl6uc</link><description>&lt;p localize="" datetime="2020-07-18T02:22:00+01:00"&gt;July 17, 2020 9:22 PM&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;img src="https://blog.cloudflare.com/content/images/2017/03/url-2.jpg" alt="John Graham-Cumming" width="32" height="32"&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Today a configuration error in our backbone network caused an outage for Internet properties and Cloudflare services that lasted 27 minutes. We saw traffic drop by about 50% across our network. Because of the architecture of our backbone this outage didn’t affect the entire Cloudflare network and was localized to certain geographies. &lt;/p&gt;&lt;p&gt;The outage occurred because, while working on an unrelated issue with a segment of the backbone from Newark to Chicago, our network engineering team updated the configuration on a router in Atlanta to alleviate congestion. This configuration contained an error that caused all traffic across our backbone to be sent to Atlanta. This quickly overwhelmed the Atlanta router and caused Cloudflare network locations connected to the backbone to fail.&lt;/p&gt;&lt;p&gt;The affected locations were San Jose, Dallas, Seattle, Los Angeles, Chicago, Washington, DC, Richmond, Newark, Atlanta, London, Amsterdam, Frankfurt, Paris, Stockholm, Moscow, St. Petersburg, São Paulo, Curitiba, and Porto Alegre. Other locations continued to operate normally.&lt;/p&gt;&lt;p&gt;For the avoidance of doubt: this was not caused by an attack or breach of any kind.&lt;/p&gt;&lt;p&gt;We are sorry for this outage and have already made a global change to the backbone configuration that will prevent it from being able to occur again.&lt;/p&gt;&lt;h3&gt;The Cloudflare Backbone&lt;/h3&gt;&lt;figure&gt;&lt;img src="https://blog-cloudflare-com-assets.storage.googleapis.com/2020/07/1a.png" width="453" height="325"&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;Cloudflare operates a &lt;em dir="ltr"&gt;backbone&lt;/em&gt; between many of our data centers around the world. The backbone is a series of private lines between our data centers that we use for faster and more reliable paths between them. These links allow us to carry traffic between different data centers, without going over the public Internet. &lt;/p&gt;&lt;p&gt;We use this, for example, to reach a website origin server sitting in New York, carrying requests over our private backbone to both San Jose, California, as far as Frankfurt or São Paulo. This additional option to avoid the public Internet allows a higher quality of service, as the private network can be used to avoid Internet congestion points. With the backbone, we have far greater control over where and how to route Internet requests and traffic than the public Internet provides.&lt;/p&gt;&lt;h3&gt;Timeline&lt;/h3&gt;&lt;p&gt;All timestamps are UTC.&lt;/p&gt;&lt;p&gt;First, an issue occurred on the backbone link between Newark and Chicago which led to backbone congestion in between Atlanta and Washington, DC. &lt;/p&gt;&lt;p&gt;In responding to that issue, a configuration change was made in Atlanta. That change started the outage at 21:12. Once the outage was understood, the Atlanta router was disabled and traffic began flowing normally again at 21:39. &lt;/p&gt;&lt;p&gt;Shortly after, we saw congestion at one of our core data centers that processes logs and metrics, causing some logs to be dropped. During this period the edge network continued to operate normally.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;20:25: Loss of backbone link between EWR and ORD&lt;/LI&gt;&lt;LI&gt;20:25: Backbone between ATL and IAD is congesting&lt;/LI&gt;&lt;LI&gt;21:12 to 21:39: ATL attracted traffic from across the backbone&lt;/LI&gt;&lt;LI&gt;21:39 to 21:47: ATL dropped from the backbone, service restored&lt;/LI&gt;&lt;LI&gt;21:47 to 22:10: Core congestion caused some logs to drop, edge continues operating&lt;/LI&gt;&lt;LI&gt;22:10: Full recovery, including logs and metrics&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Here’s a view of the impact from Cloudflare’s internal traffic manager tool. The red and orange region at the top shows CPU utilization in Atlanta reaching overload, and the white regions show affected data centers seeing CPU drop to near zero as they were no longer handling traffic. This is the period of the outage.&lt;/p&gt;&lt;p&gt;Other, unaffected data centers show no change in their CPU utilization during the incident. That’s indicated by the fact that the green color does not change during the incident for those data centers.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://blog-cloudflare-com-assets.storage.googleapis.com/2020/07/tm.png" width="453" height="449"&gt;&lt;/figure&gt;&lt;h3&gt;What happened and what we’re doing about it&lt;/h3&gt;&lt;p&gt;As there was backbone congestion in Atlanta, the team had decided to remove some of Atlanta’s backbone traffic. But instead of removing the Atlanta routes from the backbone, a one line change started leaking all BGP routes into the backbone.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;{master}[edit]
+atl01# show | compare 
+[edit policy-options policy-statement 6-BBONE-OUT term 6-SITE-LOCAL from]
+!       inactive: prefix-list 6-SITE-LOCAL { ... }
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The complete term looks like this:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;from {
+    prefix-list 6-SITE-LOCAL;
+}
+then {
+    local-preference 200;
+    community add SITE-LOCAL-ROUTE;
+    community add ATL01;
+    community add NORTH-AMERICA;
+    accept;
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This term sets the local-preference, adds some communities, and accepts the routes that match the prefix-list. Local-preference is a transitive property on iBGP sessions (it will be transferred to the next BGP peer). &lt;/p&gt;&lt;p&gt;The correct change would have been to deactivate the term instead of the prefix-list.&lt;/p&gt;&lt;p&gt;By removing the prefix-list condition, the router was instructed to send all its BGP routes to all other backbone routers, with an increased local-preference of 200. Unfortunately at the time, local routes that the edge routers received from our compute nodes had a local-preference of 100. As the higher local-preference wins, all of the traffic meant for local compute nodes went to Atlanta compute nodes instead. &lt;/p&gt;&lt;p&gt;With the routes sent out, Atlanta started attracting traffic from across the backbone.&lt;/p&gt;&lt;p&gt;We are making the following changes:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Introduce a maximum-prefix limit on our backbone BGP sessions - this would have shut down the backbone in Atlanta, but our network is built to function properly without a backbone. This change will be deployed on Monday, July 20.&lt;/LI&gt;&lt;LI&gt;Change the BGP local-preference for local server routes. This change will prevent a single location from attracting other locations’ traffic in a similar manner. This change has been deployed following the incident.&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;Conclusion&lt;/h3&gt;&lt;p&gt;We’ve never experienced an outage on our backbone and our team responded quickly to restore service in the affected locations, but this was a very painful period for everyone involved. We are sorry for the disruption to our customers and to all the users who were unable to access Internet properties while the outage was happening.&lt;/p&gt;&lt;p&gt;We’ve already made changes to the backbone configuration to make sure that this cannot happen again, and further changes will resume on Monday.&lt;/p&gt;</description><pubDate>Sat, 18 Jul 2020 01:34:55 -0500</pubDate></item><item><title>A Proposal for Proquints: Identifiers that are Readable, Spellable, and Pronounceable</title><link>https://lobste.rs/s/m0wfux</link><description>&lt;div dir="ltr"&gt;
+&lt;span dir="ltr"&gt;Daniel Shawcross Wilkerson&lt;/span&gt;&lt;br dir="ltr"&gt;
+&lt;span dir="ltr"&gt;version 1.0,&lt;/span&gt;
+26 January 2009
+&lt;/div&gt;&lt;p dir="ltr"&gt;Identifiers (IDs) are pervasive throughout our modern life.  We
+suggest that these IDs would be easier to manage and remember if they
+were easily readable, spellable, and pronounceable.  As a solution to
+this problem we propose using PRO-nouncable QUINT-uplets of
+alternating unambiguous consonants and vowels: &lt;em dir="ltr"&gt;proquints&lt;/em&gt;.&lt;/p&gt;&lt;h2&gt;Introduction&lt;/h2&gt;&lt;p dir="ltr"&gt;Our life is full of identifying numbers.  However the number-ness of
+these numbers is irrelevant.  A credit-card number is not a &lt;em dir="ltr"&gt;number&lt;/em&gt;
+exactly — when was the last time you did arithmetic on one?  Mostly
+these numbers are &lt;em dir="ltr"&gt;identifiers&lt;/em&gt;: their only function is to be unique.
+The problem is, they are getting longer as the world of things that
+must be uniquely identified gets larger: the number of things goes up,
+previously disjoint contexts merge, and history gets longer.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;
+Dotted quads IP addresses, e.g. 127.0.0.1, will soon (someday?),
+   with IPv6, be twice as long.
+&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
+Eight hex-digit Memory addresses, e.g. 0xF074B0CD, will soon, with
+   64-bit machines, be twice as long.
+&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
+Nine-digit Social security numbers are already being re-used with
+   obvious attendant problems.
+&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Most codes are designed to maximize information density.  Humans often
+must manipulate identifiers personally and there are therefore other
+dimensions to the problem that should also be considered.  Here our
+goal here is not to have a narrow, "vertical", solution that is
+optimized for only one dimension, such as information density, but a
+broad "horizontal" solution that is a good solution for &lt;em dir="ltr"&gt;all&lt;/em&gt; of the
+relevant concerns, especially those of &lt;em dir="ltr"&gt;humans&lt;/em&gt;.&lt;/p&gt;&lt;p&gt;In general what would help the humans would be if IDs were not only
+unique, but were also that are readable, spellable, and pronounceable
+and just generally convenient for a human to use — as well as being a
+reasonably efficient information encoding.  We therefore propose
+PRO-nouncable QUINT-uplets of alternating unambiguous consonants and
+vowels, or "proquints", as the solution.&lt;/p&gt;&lt;p&gt;In this essay we first derive an initial naive solution from the
+relevant concerns.  Next we review other aspects of human interaction
+with the solution and thereby derive the details.  We then compute the
+information density of the solution.  Finally we summarize the
+resulting protocol.&lt;/p&gt;&lt;h2&gt;Distinguishable Available Sounds and Symbols&lt;/h2&gt;&lt;p dir="ltr"&gt;There is only so much Shannon entropy &lt;strong dir="ltr"&gt;[Shannon-1948, Shannon-1949,
+Shannon-1993, Shannon-1951]&lt;/strong&gt; you can get by pushing air through
+flapping organs originally purposed for eating and breathing.  We
+assume it best to re-use the method to which natural language has
+already converged.&lt;/p&gt;&lt;p dir="ltr"&gt;Our initial idea is to encode numbers as strings of alternating
+phonetically-unambiguous consonants and vowels.
+&lt;a href="http://www.antimoon.com/how/pronunc-soundsipa.htm" dir="ltr"&gt;There seem to be&lt;/a&gt;
+&lt;strong dir="ltr"&gt;[pronounce]&lt;/strong&gt; 24 consonants and 20 vowels in English.
+&lt;a href="http://en.wikipedia.org/wiki/English_pronunciation" dir="ltr"&gt;It gets more
+complex&lt;/a&gt; &lt;strong dir="ltr"&gt;[pronounce2]&lt;/strong&gt; if you look more carefully.&lt;/p&gt;&lt;p&gt;Some consonants are too hard to encode or to hear the difference
+between.  There are 16 unambiguous 1-letter consonants (omitting what
+we consider to be the wrongly-categorized letter "r"):&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;    b d f g h j k l m n p s t v w z,&lt;/tt&gt;&lt;/PRE&gt;&lt;p&gt;and 3 more two-letter:&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;    sh ch th.&lt;/tt&gt;&lt;/PRE&gt;&lt;p&gt;Having 16 sounds gives 4 bits right there and all in a
+single-character spelling, so we think sticking to the above
+one-letter consonants is good.&lt;/p&gt;&lt;p&gt;There are 6 unambiguous 1-letter vowels (again disagreeing with the
+categorization of the letter "r"):&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;    a e i o u r.&lt;/tt&gt;&lt;/PRE&gt;&lt;p&gt;If we just had two more vowels we would have 8 sounds or 3 bits.  Then
+we could use consonant-vowel order (reversing the pair) or stress
+(indicated by, say, a capital letter) to get one more bit.  This would
+yield a total of 8 bits for a consonant-vowel pair.&lt;/p&gt;&lt;h2&gt;Serving Multiple Human Constraints&lt;/h2&gt;&lt;p&gt;Recall that the proquint goals are multiple and include readability
+and spellability and just general convenience and general fitness to
+the problem: this is a system to used by humans who do not like
+complexity.&lt;/p&gt;&lt;p&gt;Therefore we think it is important to make the textual encoding of the
+sounds simple, by&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;
+writing all proquints using the same character width,
+&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
+not introducing case differences to encode information, and
+&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
+not using non-alpha chars to encode other vowels (@ for the "a" in
+    "at").
+&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Further, a simple (C=consonant, V=vowel) CVCVC
+pronounceable-five-group or "proquint" feels right as a word.  In
+fact, we can get rid of two of the vowels, say "e" and "r", and still
+encode 2 bits in one vowel.  This method makes the information
+contained in one proquint a convenient number:&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;    (log2 (* 16.0 4.0 16.0 4.0 16.0))
+    16.0&lt;/tt&gt;&lt;/PRE&gt;&lt;p&gt;So four proquints suffices to encode 64 bits and two suffice for 32
+bits.  We wonder why IP addresses aren't encoded this way — they sure
+would be easier to remember.&lt;/p&gt;&lt;p&gt;Since one may also want to fall back on saying each letter separately
+and therefore each should likely be a single syllable in English, we
+eliminate "w", which as previously-mentioned was a source of ambiguity
+already.  In its place we promote "r" to a consonant.&lt;/p&gt;&lt;p&gt;Getting rid of ambiguities between vowels is a good idea for making
+this system more international, though there are persistent
+difficulties: Japanese have difficulty distinguishing "l" and "r",
+Hungarians have difficulty pronouncing "w", and "l" can easily sound
+like a "w" (a mutation occurring in the history of my middle name).
+My proof-readers have sent me many more examples from other languages
+— attempting to eliminate all such ambiguities is impossible, but we
+have prevented some of the worst ones above.&lt;/p&gt;&lt;p&gt;Some proquint sequences ending in "h" take some extra effort to
+pronounce and hear, but since there is always exactly one consonant
+where you expect one, there is less ambiguity than in natural spoken
+English: if you don't hear a consonant when you expected one, it was
+an "h", the empty consonant.  The only other option is to replace "h"
+with "x" and we really can't say that doing so is an improvement: "x"
+is usually pronounced as "ks" which is really a consonant cluster and
+confuses the rhythm.&lt;/p&gt;&lt;p&gt;There is another subtle reason not to use "x": the standard notation
+for a hex string starts with a prefix that includes an "x" so it is
+therefore possible to unambiguously distinguish between a proquint and
+a hex string in standard notation.&lt;/p&gt;&lt;p&gt;A sequence of proquints should be separated by something standard,
+such as dashes.  While the dash is intended to induce a pause, for
+easy flow of pronunciation we suggest an unused vowel sound be used.
+Since we don't use the vowel "e", we suggest the dash be pronounced as
+"eh".&lt;/p&gt;&lt;p&gt;See the "Conclusion and Specification" section below for the full
+specification of the resulting proquint coding scheme.&lt;/p&gt;&lt;h2&gt;Information Density&lt;/h2&gt;&lt;p&gt;While information density is not the only goal, it is a concern for
+any coding system.  Note that we get 16 bits out of 5 letters, which
+gives us an proquint information density of:&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;    (/ 16.0 5.0)
+    3.2&lt;/tt&gt;&lt;/PRE&gt;&lt;p&gt;This is close to the density of 4 for hexadecimal and almost the same
+as the density 3.32 for decimal digits.&lt;/p&gt;&lt;p&gt;However, note that unbroken strings of hex or decimal digits are quite
+unreadable, and they are usually broken into groups of at most four,
+whereas proquints are readable in groups of five.  Taking this into
+account gives hex a density of 3.2, decimal 2.65, and proquint 2.86.&lt;/p&gt;&lt;h3&gt;Density as Compared To Credit Card Numbers&lt;/h3&gt;&lt;p&gt;In particular, why aren't credit card numbers proquints instead of
+numbers?&lt;/p&gt;&lt;p&gt;The density of four blocks of four decimal digits, including separators is&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;    (/ (log2 (* 10000.0 10000.0 10000.0 10000.0 ))
+       (+ (* 4 4) (* 3 1)))
+    2.7974131325367266&lt;/tt&gt;&lt;/PRE&gt;&lt;p&gt;The density of three blocks proquints, including separators is&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;    (* 16.0 6.0 16.0 6.0 16.0)
+    147456.0
+    (/ (log2 (* 147456.0 147456.0 147456.0))
+       (+ (* 3 5) (* 2 1)))
+    3.0299867649604084&lt;/tt&gt;&lt;/PRE&gt;&lt;h3&gt;Density as Compared To English&lt;/h3&gt;&lt;p dir="ltr"&gt;Bruce Schneier says in "Applied Cryptography" &lt;strong dir="ltr"&gt;[Schneier-1996,
+pp. 233-234]&lt;/strong&gt; that Shannon computed an entropy of 2.3 bits per letter
+for 8-letter chunks; other computations getting lower numbers,
+Schneier settling on 1.3 for general purposes.  So we are above the
+information rate expected for English, but not dramatically so.  We
+suspect the fact that proquints are more information-dense than
+English is the reason proquints must be pronounced a bit more
+carefully than English — there's no such thing as a free lunch.&lt;/p&gt;&lt;h2&gt;Proquints As A Mnemonic Password Scheme&lt;/h2&gt;&lt;p dir="ltr"&gt;It is a well-known problem that people often create weak passwords, at
+least partly due to their desire to create mnemonic passwords.
+Mnemonic schemes have been suggested but the information density /
+password strength versus that of standard password schemes can be a
+challenge to state precisely, as the useful entropy of a password
+amounts only the entropy relative to the implied expectations encoded
+in an attackers dictionary.  Various empirical studies have been made
+&lt;strong dir="ltr"&gt;[YBA-2000, KRC-2006]&lt;/strong&gt;.  At least one method of generating random
+pronounceable passwords have been shown to be insecure &lt;strong dir="ltr"&gt;[GD-1994]&lt;/strong&gt;.
+Narayanan and Shmatikov &lt;strong dir="ltr"&gt;[NS-2005]&lt;/strong&gt; claim that "as long as passwords
+remain human-memorable, they are vulnerable to "smart-dictionary"
+attacks even when the space of potential passwords is large."&lt;/p&gt;&lt;p&gt;Of course a simple scheme using proquints can generate passwords of
+known strength that are still quite readable, spellable, and
+pronounceable:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p&gt;
+generate random 32 (or 48 or 64 bits),
+&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
+convert them to two (or three or four) proquints, and
+&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
+tell the user that's their password.
+&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;The extent to which a user would find a password so generated to be
+mnemonic is still an open question.  Narayanan points out to me
+&lt;strong dir="ltr"&gt;[N-2009-p]&lt;/strong&gt; that if users are allowed to regenerate passwords until
+they find one that is particularly mnemonic then the strength of the
+above password scheme may not be quite as imagined.&lt;/p&gt;&lt;p&gt;We imagine one possible security threat is that proquints are rather
+fun to pronounce, and we find ourselves doing so especially when we
+are attempting to memorize or recall one.  Therefore perhaps users of
+proquint-encoded passwords should be admonished to refrain from this
+temptation.&lt;/p&gt;&lt;h2&gt;An Easy Path to Adoption&lt;/h2&gt;&lt;p&gt;Any protocol that currently uses an opaque identifier somewhere can
+immediately begin to use proquints by simply printing any such
+identifiers in proquint form as well and accepting proquints as
+alternatives to such identifiers.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;
+Debuggers could input and output memory addresses as proquints as
+   an alternative to hex.
+&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
+Network tools such as browsers, ping, netstat, traceroute,
+   etc. could input and output proquints as an alternative to dotted
+   quads.
+&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
+Password generators could generate the proquint form, as above.
+&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
+Hash functions such as sha1 could use proquints as as alternative
+   notation for the hashvalue.  Tools that use hash values of objects
+   as their identifiers, such as version control systems like
+   monotone, mercurial, and git, could do the same.
+&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
+Tools that use public-key encryption could encode the
+   public/private key-pairs as proquints.  It might actually be
+   possible to memorize your public key if you chanted it enough
+   times.
+&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Conclusion and Specification&lt;/h2&gt;&lt;p&gt;In sum, we propose encoding a 16-bit string as a proquint of
+alternating consonants and vowels as follows.&lt;/p&gt;&lt;p&gt;Four-bits as a consonant:&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;    0 1 2 3 4 5 6 7 8 9 A B C D E F
+    b d f g h j k l m n p r s t v z&lt;/tt&gt;&lt;/PRE&gt;&lt;p&gt;Two-bits as a vowel:&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;    0 1 2 3
+    a i o u&lt;/tt&gt;&lt;/PRE&gt;&lt;p&gt;Whole 16-bit word, where "con" = consonant, "vo" = vowel:&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;     0 1 2 3 4 5 6 7 8 9 A B C D E F
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |con    |vo |con    |vo |con    |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+&lt;/tt&gt;&lt;/PRE&gt;&lt;p&gt;Separate proquints using dashes, which can go un-pronounced or be
+pronounced "eh".  The suggested optional magic number prefix to a
+sequence of proquints is "0q-".&lt;/p&gt;&lt;p&gt;Here are some IP dotted-quads and their corresponding proquints.&lt;/p&gt;&lt;PRE&gt;&lt;tt&gt;    127.0.0.1       lusab-babad
+    63.84.220.193   gutih-tugad
+    63.118.7.35     gutuk-bisog
+    140.98.193.141  mudof-sakat
+    64.255.6.200    haguz-biram
+    128.30.52.45    mabiv-gibot
+    147.67.119.2    natag-lisaf
+    212.58.253.68   tibup-zujah
+    216.35.68.215   tobog-higil
+    216.68.232.21   todah-vobij
+    198.81.129.136  sinid-makam
+    12.110.110.204  budov-kuras&lt;/tt&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;An Open Source implementation of a converter between strings encoded
+as dotted quads, hex, decimal, and proquints is available
+&lt;strong dir="ltr"&gt;[proquint-github]&lt;/strong&gt;.&lt;/p&gt;&lt;h2&gt;Acknowledgements&lt;/h2&gt;&lt;p&gt;We gratefully acknowledge Simon Goldsmith, Karl Chen, Erick Armbrust,
+and Arvind Narayanan for their proofreading and/or discussion of this
+article.  Any remaining errors are mine alone.&lt;/p&gt;&lt;h2&gt;References&lt;/h2&gt;&lt;h3&gt;Open Source implementation&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[proquint-github]&lt;/strong&gt; &lt;a href="http://github.com/dsw/proquint" dir="ltr"&gt;http://github.com/dsw/proquint&lt;/a&gt;&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;
+An implementation in C of a converter between proquint, hex, and
+   decimal strings.
+&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
+An implementation in Perl5 of a converter between dotted quads and
+   hex.
+&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;Print&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[GD-1994]&lt;/strong&gt; Ravi Ganesan and Chris Davies.  "A New Attack on Random
+Pronounceable Password Generators".  &lt;em dir="ltr"&gt;Proceedings of the 17th
+NIST-NCSC National Computer Security Conference&lt;/em&gt;.  1994.  pp. 184-197.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[KRC-2006]&lt;/strong&gt; Cynthia Kuo, Sasha Romanosky, and Lorrie Faith Cranor.
+"Human Selection of Mnemonic Phrase-based Passwords", &lt;em dir="ltr"&gt;Symposium on
+Usable Privacy and Security (SOUPS) 2006&lt;/em&gt;, July 12 - 14, 2006.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[NS-2005]&lt;/strong&gt; Arvind Narayanan and Vitaly Shmatikov.  "Fast Dictionary
+Attacks on Passwords Using Time-Space Tradeoff".  &lt;em dir="ltr"&gt;Proceedings of 12th
+ACM Conference on Computer and Communications Security (CCS)&lt;/em&gt;.
+November 2005.  pp. 364-372.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[Schneier-1996]&lt;/strong&gt; Bruce Schneier.  &lt;em dir="ltr"&gt;Applied Cryptography&lt;/em&gt;.  John Wiley
+&amp;amp; Sons.  1996.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[Shannon-1948]&lt;/strong&gt; C.E. Shannon, "A Mathematical Theory of
+Communication", &lt;em dir="ltr"&gt;Bell System Technical Journal&lt;/em&gt;, v. 27, n. 4, 1948,
+pp. 379-423, 623-656.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[Shannon-1949]&lt;/strong&gt; C.E. Shannon, "Communication Theory of Secrecy
+Systems", &lt;em dir="ltr"&gt;Bell System Technical Journal&lt;/em&gt;, v. 28, n. 4, 1949,
+pp. 656-715.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[Shannon-1951]&lt;/strong&gt; C.E. Shannon, "Predication and Entropy in Printed
+English", &lt;em dir="ltr"&gt;Bell System Technical Journal&lt;/em&gt;, v.30, n.1, 1951, pp. 50-64.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[Shannon-1993]&lt;/strong&gt; C.E. Shannon, &lt;em dir="ltr"&gt;Collected Papers: Claude Elwood
+Shannon&lt;/em&gt;, N.J.A. Sloane and A.D. Wyner, eds., New York: IEEE Press,
+1993.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[YBA-2000]&lt;/strong&gt; Jeff Yan, Alan Blackwell, Ross Anderson, and Alasdair
+Grant.  "The Memorability and Security of Passwords — Some Empirical
+Results".  Technical Report No. 500, Computer Laboratory, University
+of Cambridge, 2000.&lt;/p&gt;&lt;h3&gt;Web&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[pronounce]&lt;/strong&gt; Pronounceable sounds in English:
+&lt;a href="http://www.antimoon.com/how/pronunc-soundsipa.htm" dir="ltr"&gt;http://www.antimoon.com/how/pronunc-soundsipa.htm&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[pronounce2]&lt;/strong&gt; Wikipedia article on pronounceable sounds in English:
+&lt;a href="http://en.wikipedia.org/wiki/English_pronunciation" dir="ltr"&gt;http://en.wikipedia.org/wiki/English_pronunciation&lt;/a&gt;&lt;/p&gt;&lt;h3&gt;Personal Communication&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;[N-2009-p]&lt;/strong&gt; Personal communication, Arvind Narayanan.&lt;/p&gt;&lt;h2&gt;Copyright&lt;/h2&gt;&lt;p&gt;Copyright 2009 Daniel S. Wilkerson&lt;/p&gt;&lt;div dir="ltr"&gt;
+Version 1.0&lt;br dir="ltr"&gt;
+Last updated 2009-01-26 15:48:38 PDT
+&lt;/div&gt;</description><pubDate>Fri, 17 Jul 2020 22:42:24 -0500</pubDate></item><item><title>The Next Steps for Single Ownership and RAII</title><link>https://lobste.rs/s/rq9yqz</link><description>&lt;div&gt;How constraint references enable easy safety, speed, and much more powerful RAII!&lt;/div&gt;&lt;div dir="ltr"&gt;&lt;span dir="ltr"&gt;July 15th, 2020&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;nbsp;—&amp;nbsp; Evan Ovadia&lt;/span&gt;&lt;/div&gt;&lt;div&gt;While diving the depths of single ownership, we discovered a hidden gem from the most unlikely of places. With it, we were able to reassemble C++ into something that really unleashes the full potential of RAII.&lt;/div&gt;&lt;div&gt;Recall these ancient mantras, known to any C++ developer:&lt;/div&gt;&lt;UL&gt;&lt;LI&gt;"Who destroyed that object I was pointing at?"&lt;/LI&gt;&lt;LI&gt;"Blasted segfaults!"&lt;/LI&gt;&lt;LI&gt;"We need to influence the destructor, but destructors take no parameters!"&lt;/LI&gt;&lt;LI&gt;"Who's still holding a &lt;span dir="ltr"&gt;shared_ptr&lt;/span&gt; to my object? It should be dead!"&lt;/LI&gt;&lt;LI&gt;"I can't throw from a destructor, or have multiple exceptions in flight?"&lt;/LI&gt;&lt;LI&gt;"Destructors can't return a status, either?!"&lt;/LI&gt;&lt;/UL&gt;&lt;div dir="ltr"&gt;In this journey, we discovered language solutions for &lt;i dir="ltr"&gt;all&lt;/i&gt; of these.&lt;/div&gt;&lt;div&gt;This article is about C++'s RAII and single ownership, and how we can take it even further. &lt;/div&gt;&lt;div&gt;C++'s syntax often makes single ownership look more difficult than it is, so we also use Vale to illustrate how easy and powerful single ownership can be. &lt;/div&gt;&lt;h3&gt;Single Ownership&lt;/h3&gt;&lt;div dir="ltr"&gt;Our journey started in 2011, when C++11's &lt;span dir="ltr"&gt;unique_ptr&lt;/span&gt; brought single ownership and move semantics to C++ programmers worldwide, and changed our lives forever. &lt;/div&gt;&lt;div dir="ltr"&gt;In one fell swoop, it basically single-handedly solved memory leaks. Single-ownership is one of those notions that, once it clicked, felt &lt;i dir="ltr"&gt;right&lt;/i&gt;. It was probably because this is how we already think: in C, we would mentally track ownership, to know whose responsibility it was to free an object. Even in GC'd languages, we would implicitly track who's responsible for calling &lt;span dir="ltr"&gt;.dispose()&lt;/span&gt;.&lt;/div&gt;&lt;div&gt;We slowly discovered that we could use RAII for things other than freeing memory! We could:&lt;/div&gt;&lt;UL&gt;&lt;LI&gt;Remove self from an observers list. &lt;/LI&gt;&lt;LI&gt;Close a file stream, or clean up a temp file.&lt;/LI&gt;&lt;LI&gt;Close a mutex's lock.&lt;/LI&gt;&lt;LI&gt;Stop an ongoing calculation in another thread.&lt;/LI&gt;&lt;LI&gt;Roll-back or commit a transaction.&lt;/LI&gt;&lt;LI&gt;Cancel a retrying network request.&lt;/LI&gt;&lt;LI&gt;Remove some UI elements from the view.&lt;/LI&gt;&lt;LI&gt;Resolve or reject a future.&lt;/LI&gt;&lt;LI&gt;Notify others that we're being freed.&lt;/LI&gt;&lt;LI&gt;Enforce that we actually handled an error, rather than dropping it on the floor.&lt;/LI&gt;&lt;/UL&gt;&lt;div dir="ltr"&gt;We realized: RAII wasn't just way to track who should free an object, and these weren't just neat tricks. RAII is much more, it's a way to &lt;b dir="ltr"&gt;track responsibility&lt;/b&gt;. &lt;/div&gt;&lt;div&gt;It's a promise that's enforced by the compiler. Instead of just "The compiler will make sure we free this," RAII is "The compiler will make sure that we XYZ" where XYZ is whatever we want. &lt;/div&gt;&lt;h3&gt;Safe Handling of Aliases&lt;/h3&gt;&lt;div dir="ltr"&gt;Single ownership in modern C++ uses owning &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;unique_ptr&amp;lt;T&amp;gt;&lt;/span&gt;s&lt;/span&gt;, and non-owning &lt;span dir="ltr"&gt;T*&lt;/span&gt; raw pointers.&lt;/div&gt;&lt;div dir="ltr"&gt;Where &lt;span dir="ltr"&gt;unique_ptr&lt;/span&gt; is the sheriff, the raw pointer is the infamous mercenary who rides into town and makes everyone mighty nervous. When things go well, he's useful... but if things get dicey, he &lt;b dir="ltr"&gt;might just decide to dereference that pointer&lt;/b&gt; and cause all sorts of chaos.&lt;/div&gt;&lt;div dir="ltr"&gt;We discovered that the sheriff and the mercenaries &lt;i dir="ltr"&gt;can&lt;/i&gt; work together, with some solid rules. We discovered patterns that worked pretty well.&lt;/div&gt;&lt;div&gt;For example, we'd often have a BigClass, that owns a bunch of smaller classes ("subcomponents"), where each subcomponent has raw pointers to subcomponents made before it.&lt;/div&gt;&lt;div&gt;C++'s member initializer list even enforces that we don't refer to a not-yet-initialized member.&lt;/div&gt;&lt;div&gt;The big class constructs these in the right order, and destructs them in the correct reverse order.&lt;/div&gt;&lt;div&gt;With this, there won't be any unfortunate seg-faulting in our small town.&lt;/div&gt;&lt;div&gt;The world discovered many patterns like this for handling raw pointers. &lt;/div&gt;&lt;PRE&gt;&lt;div&gt;C++&lt;/div&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;class&lt;/span&gt; &lt;span dir="ltr"&gt;BigClass&lt;/span&gt; {&lt;/span&gt;
 &lt;span dir="ltr"&gt;public&lt;/span&gt;:
   &lt;span dir="ltr"&gt;unique_ptr&lt;/span&gt;&amp;lt;A&amp;gt; a;
   &lt;span dir="ltr"&gt;unique_ptr&lt;/span&gt;&amp;lt;B&amp;gt; b;
