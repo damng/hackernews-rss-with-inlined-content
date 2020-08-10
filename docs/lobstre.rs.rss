@@ -1373,7 +1373,260 @@ many of the decisions which govern our current tools were.  If CSS was designed
 the way it is just to satisfy the constraints of 1996, then maybe that gives
 us permission 20 years later to do things a little differently.&lt;/p&gt;&lt;p&gt;In our next blog post we expose the tremendous innovation that allowed a copper wire to
 evolve from morse code to 10 Gbps Cat6 ethernet. Subscribe below
-to be notified when it’s released.&lt;/p&gt;&lt;h3&gt;Like this post? Share it with your followers.&lt;/h3&gt;&lt;h3&gt;Sign up to get our next post delivered to your inbox.&lt;/h3&gt;&lt;div&gt;&lt;button type="submit"&gt;&lt;span&gt;Sign up&lt;/span&gt;&lt;/button&gt;&lt;/div&gt;</description><pubDate>Mon, 10 Aug 2020 11:47:23 -0500</pubDate></item><item><title>Haskell Love 2020</title><link>http://www.youtube.com/playlist?list=PLBqWQH1MiwBSK9wuaATNS701c43VYVTuc</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/usqmnt/haskell_love_2020"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 09:38:41 -0500</pubDate></item><item><title>sh(1) simple combined log analytics for static sites (wip)</title><link>https://lobste.rs/s/omc5xf</link><description>&lt;p&gt;combined log&lt;/p&gt;&lt;h2&gt;cblv(1)&lt;/h2&gt;&lt;h3&gt;NAME&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblv&lt;/strong&gt; - combined log views&lt;/p&gt;&lt;h3&gt;SYNOPSIS&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblv&lt;/strong&gt;
+to be notified when it’s released.&lt;/p&gt;&lt;h3&gt;Like this post? Share it with your followers.&lt;/h3&gt;&lt;h3&gt;Sign up to get our next post delivered to your inbox.&lt;/h3&gt;&lt;div&gt;&lt;button type="submit"&gt;&lt;span&gt;Sign up&lt;/span&gt;&lt;/button&gt;&lt;/div&gt;</description><pubDate>Mon, 10 Aug 2020 11:47:23 -0500</pubDate></item><item><title>"Cloud-like" Infrastructure at Home - Part 1: LoadBalancers on the Metal</title><link>https://lobste.rs/s/rty4wa</link><description>&lt;p&gt;
+This is the introductory post to a series outlining how I achieve "Cloud-like" application deployments
+on my personal servers.  If you're interested in Platform Engineering/SRE/DevOps, read on!
+&lt;/p&gt;&lt;h2&gt;
+☁️ What does "Cloud-like" mean?
+&lt;/h2&gt;&lt;p&gt;
+I'm using this phrase to express a set of capabilities that engineers have come to expect from cloud
+  providers in their offerings for hosting infrastructure. Namely: load balancers, dynamic DNS, certificate
+  leasing, and perhaps a few others.
+&lt;/p&gt;&lt;h2&gt;
+🤷 Who's this post for?
+&lt;/h2&gt;&lt;p&gt;
+I'm guessing by now you have at least some interest in the subject, so I'll state some assumptions:
+&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p&gt;
+You're somewhat familiar with Kubernetes &amp;amp; its configuration with YAML
+&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
+You're somewhat familiar with basic networking concepts, like DHCP, DNS, TCP/IP, ARP
+&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
+You're not looking for a guide to set-up self-hosted Kubernetes
+(I'll write about how I do this in a future post) - we're going to be working with an already running
+cluster
+&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;
+All set then? Let's dive in!
+&lt;/p&gt;&lt;h2&gt;
+💡 What're we solving today?
+&lt;/h2&gt;&lt;h3&gt;
+LAN routable traffic to services hosted in Kubernetes
+&lt;/h3&gt;&lt;p&gt;
+Say we have a web service we want to deploy - let's call it "coffee" ☕
+&lt;/p&gt;&lt;p&gt;
+   We deploy it into k8s (Kubernetes) and can access it by using
+&lt;/p&gt;&lt;PRE&gt;$ kubectl port-forward coffee-5b8f7c69bd-9x6sk 8080:80
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+   Now we can visit &lt;code dir="ltr"&gt;localhost:8080/&lt;/code&gt; to reach our service - great!
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+   But we don't want to have to rely on &lt;code dir="ltr"&gt;kubectl&lt;/code&gt; to handle the proxying for us.
+   What about other devices on the network that we want to be able to access the &lt;code dir="ltr"&gt;coffee&lt;/code&gt; service?
+&lt;/p&gt;&lt;p&gt;
+   Well, once we've gotten through this post, we'll end up getting a LAN accessible web
+   service we can reach via a segment of our LAN address space - like any other physical device on
+   the network - just by deploying k8s manifests.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+   No need to pick out an IP address and set up static routes, no need for any &lt;code dir="ltr"&gt;iptables&lt;/code&gt; magic 🔮
+&lt;/p&gt;&lt;h3&gt;
+Accessing Kubernetes services via IP
+&lt;/h3&gt;&lt;p dir="ltr"&gt;
+When deploying a pod of containers providing a network application, we can expose its port
+   so it's accessible using a &lt;a href="https://kubernetes.io/docs/concepts/services-networking/service" dir="ltr"&gt;&lt;code dir="ltr"&gt;Service&lt;/code&gt;&lt;/a&gt;. Here's what a &lt;code dir="ltr"&gt;Service&lt;/code&gt; accompanying a &lt;code dir="ltr"&gt;Deployment&lt;/code&gt; for
+   &lt;code dir="ltr"&gt;coffee&lt;/code&gt; might look like:
+&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="yaml" dir="ltr"&gt;---
+&lt;span dir="ltr"&gt;kind&lt;/span&gt;: Deployment
+&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: apps/v1
+&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
+&lt;span dir="ltr"&gt;spec&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;replicas&lt;/span&gt;: &lt;span dir="ltr"&gt;1&lt;/span&gt;
+  &lt;span dir="ltr"&gt;selector&lt;/span&gt;:
+    &lt;span dir="ltr"&gt;matchLabels&lt;/span&gt;:
+      &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
+  &lt;span dir="ltr"&gt;template&lt;/span&gt;:
+    &lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
+      &lt;span dir="ltr"&gt;labels&lt;/span&gt;:
+        &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
+    &lt;span dir="ltr"&gt;spec&lt;/span&gt;:
+      &lt;span dir="ltr"&gt;containers&lt;/span&gt;:
+      - &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
+        &lt;span dir="ltr"&gt;image&lt;/span&gt;: example/coffee
+        &lt;span dir="ltr"&gt;ports&lt;/span&gt;:
+        - &lt;span dir="ltr"&gt;name&lt;/span&gt;: api
+          &lt;span dir="ltr"&gt;containerPort&lt;/span&gt;: &lt;span dir="ltr"&gt;80&lt;/span&gt;
+
+---
+&lt;span dir="ltr"&gt;kind&lt;/span&gt;: Service
+&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: v1
+&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
+&lt;span dir="ltr"&gt;spec&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;selector&lt;/span&gt;:
+    &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
+  &lt;span dir="ltr"&gt;ports&lt;/span&gt;:
+  - &lt;span dir="ltr"&gt;name&lt;/span&gt;: api
+    &lt;span dir="ltr"&gt;port&lt;/span&gt;: &lt;span dir="ltr"&gt;8080&lt;/span&gt;
+    &lt;span dir="ltr"&gt;targetPort&lt;/span&gt;: coffee&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+   After evaluating this manifest, our k8s cluster would have a &lt;code dir="ltr"&gt;coffee&lt;/code&gt; service that's available
+   within the cluster network. Other pods within the same namespace could simply call out to &lt;code dir="ltr"&gt;http://coffee:8080&lt;/code&gt;,
+   or pods deployed in other namespaces could reach it via &lt;code dir="ltr"&gt;http://coffee.example:8080&lt;/code&gt; (&lt;code dir="ltr"&gt;example&lt;/code&gt; being the
+   namespace we deployed the &lt;code dir="ltr"&gt;coffee&lt;/code&gt; resources to).
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+   By default, we'll get a &lt;code dir="ltr"&gt;ClusterIP&lt;/code&gt; type &lt;code dir="ltr"&gt;Service&lt;/code&gt;. I won't go into much detail here about k8s &lt;code dir="ltr"&gt;Service&lt;/code&gt;
+   objects, but it's useful to outline the available &lt;code dir="ltr"&gt;ServiceTypes&lt;/code&gt;, in particular &lt;a href="https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types" dir="ltr"&gt;"publishing" services&lt;/a&gt;.
+&lt;/p&gt;&lt;h3&gt;
+Publishing ServiceTypes
+&lt;/h3&gt;&lt;p dir="ltr"&gt;
+Let's take a look at each type, leaning on excerpts from &lt;a href="https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types" dir="ltr"&gt;the official documentation&lt;/a&gt;.
+&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
+&lt;code dir="ltr"&gt;ClusterIP&lt;/code&gt;: Exposes the Service on a cluster-internal IP. Choosing this value makes the Service only
+   reachable from within the cluster. This is the default ServiceType.
+&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
+We can quite plainly see this is a no-go for what we want, we want our service to be reachable outside
+    the cluster.
+&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
+&lt;code dir="ltr"&gt;NodePort&lt;/code&gt;: Exposes the Service on each Node’s IP at a static port (the NodePort).
+   A ClusterIP Service, to which the NodePort Service routes, is automatically created.
+   You’ll be able to contact the NodePort Service, from outside the cluster, by requesting
+   &amp;lt;NodeIP&amp;gt;:&amp;lt;NodePort&amp;gt;.
+&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
+This looks like it meets our needs in terms of external (to the cluster, not our LAN) access.
+   But on second thought, this means we have to worry about maintaining unique port numbers for each
+   service. If a service's pods are scheduled onto a node with another service already occupying that port,
+   it won't be able to operate. It also begs the question "how do we know which node, and thus which NodeIP
+   we'll be using to reach the service?"
+&lt;/p&gt;&lt;p&gt;
+   No dice.
+&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
+&lt;code dir="ltr"&gt;ExternalName&lt;/code&gt;: Maps the Service to the contents of the externalName field (e.g. foo.bar.example.com),
+   by returning a CNAME record with its value. No proxying of any kind is set up.
+&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
+Hmm, this doesn't seem like a good fit either. There's no mention of traffic being routable for cluster
+   external networking. It's simply about mapping external DNS records to services within the cluster, for
+   other cluster residents.
+&lt;/p&gt;&lt;p&gt;
+   Next!
+&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
+&lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt;: Exposes the Service externally using a cloud provider’s load balancer. NodePort and
+   ClusterIP Services, to which the external load balancer routes, are automatically created.
+&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
+This sounds perfect! Except… we're not deploying to some cloud environment. We don't have a cloud
+   provider's solution to provision load balancers.
+&lt;/p&gt;&lt;p&gt;
+   …Or do we? 👈😎👈
+&lt;/p&gt;&lt;h2&gt;
+⚖️ LoadBalancers on the metal
+&lt;/h2&gt;&lt;p dir="ltr"&gt;
+Turns out a service of type &lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt; is actually achievable, without the cloud provider! 🌩️
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+  &lt;a href="https://metallb.universe.tf/" dir="ltr"&gt;MetalLB&lt;/a&gt; is a project that aims to bring the &lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt; ServiceType to k8s clusters provisioned
+  on bare metal - and does so very well.
+&lt;/p&gt;&lt;h3&gt;
+Deployment &amp;amp; configuration
+&lt;/h3&gt;&lt;p&gt;
+MetalLB has two modes of operation: BGP &amp;amp; Layer2. Both are self explanatory, if you're familiar with
+   the respective network protocols - I won't be expanding on either, as it's out of scope for this write-up.
+&lt;/p&gt;&lt;p&gt;
+   For our implementation, we're going to keep things simple and go with Layer2.
+&lt;/p&gt;&lt;p&gt;
+   MetalLB is deployed entirely with native k8s manifests. How you choose to deploy your YAML is up to you.
+   There are a few options:
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;
+Raw YAML manifests
+&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
+I personally use &lt;a href="https://argoproj.github.io/projects/argo-cd" dir="ltr"&gt;ArgoCD&lt;/a&gt; to deploy the Helm chart, but details on that are for another post.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+   The installation documentation is straight forward and can be found &lt;a href="https://metallb.universe.tf/installation/" dir="ltr"&gt;here&lt;/a&gt;.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+   Let's focus on the configuration. MetalLB evaluates its configuration through a &lt;a href="https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/" dir="ltr"&gt;&lt;code dir="ltr"&gt;ConfigMap&lt;/code&gt;&lt;/a&gt;.
+   For the Layer2 configuration, it's as simple as picking out an IP range you want your services
+   to be allocated an address from.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+   My LAN is &lt;code dir="ltr"&gt;10.0.0.0/16&lt;/code&gt;, I opted to slice out &lt;code dir="ltr"&gt;10.0.42.0/24&lt;/code&gt;. So my configuration looks like:
+&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="yaml" dir="ltr"&gt;&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: v1
+&lt;span dir="ltr"&gt;kind&lt;/span&gt;: ConfigMap
+&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;namespace&lt;/span&gt;: metallb-system
+  &lt;span dir="ltr"&gt;name&lt;/span&gt;: config
+&lt;span dir="ltr"&gt;data&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;config&lt;/span&gt;: &lt;span dir="ltr"&gt;|
+&lt;/span&gt;&lt;span dir="ltr"&gt;    address-pools:&lt;/span&gt;
+      - &lt;span dir="ltr"&gt;name&lt;/span&gt;: default
+        &lt;span dir="ltr"&gt;protocol&lt;/span&gt;: layer2
+        &lt;span dir="ltr"&gt;addresses&lt;/span&gt;:
+          - &lt;span dir="ltr"&gt;10.0.42.0&lt;/span&gt;/&lt;span dir="ltr"&gt;24&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+   If we configure MetalLB with this, we can then deploy &lt;code dir="ltr"&gt;Service&lt;/code&gt; objects with &lt;code dir="ltr"&gt;spec.type: LoadBalancer&lt;/code&gt;
+   in their manifest and expect to get an IP leased from the &lt;code dir="ltr"&gt;10.0.42.0/24&lt;/code&gt; pool.
+&lt;/p&gt;&lt;h3&gt;
+Take it for a spin
+&lt;/h3&gt;&lt;p dir="ltr"&gt;
+Let's update our &lt;code dir="ltr"&gt;coffee&lt;/code&gt; service manifest to set &lt;code dir="ltr"&gt;spec.type&lt;/code&gt; to &lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt;
+&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="yaml" dir="ltr"&gt;---
+&lt;span dir="ltr"&gt;kind&lt;/span&gt;: Service
+&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: v1
+&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
+&lt;span dir="ltr"&gt;spec&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;selector&lt;/span&gt;:
+    &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
+  &lt;span dir="ltr"&gt;ports&lt;/span&gt;:
+    - &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
+      &lt;span dir="ltr"&gt;port&lt;/span&gt;: &lt;span dir="ltr"&gt;8080&lt;/span&gt;
+      &lt;span dir="ltr"&gt;targetPort&lt;/span&gt;: coffee
+  &lt;span dir="ltr"&gt;type&lt;/span&gt;: LoadBalancer &lt;span dir="ltr"&gt;# &amp;lt;- here&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+   Applying this will yield something like
+&lt;/p&gt;&lt;PRE&gt;$ kubectl describe svc coffee
+Name:                     coffee
+Namespace:                default
+Labels:                   &amp;lt;none&amp;gt;
+Annotations:              Selector:  app=coffee
+Type:                     LoadBalancer
+IP:                       172.16.57.10
+LoadBalancer Ingress:     10.0.42.0
+Port:                     api  8080/TCP
+TargetPort:               coffee/TCP
+NodePort:                 api  30786/TCP
+Endpoints:                192.168.2.7:8080
+Session Affinity:         None
+External Traffic Policy:  Cluster
+Events:
+  Type    Reason       Age    From                Message
+  ----    ------       ----   ----                -------
+  Normal  IPAllocated  9s  metallb-controller  Assigned IP "10.0.42.0"
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+   For those of us who aren't networking wizards, something may look a bit strange here: &lt;code dir="ltr"&gt;10.0.0.42.0&lt;/code&gt;.
+   Rest assured, that's actually a routable address. Most day-to-day DHCP configurations will
+   start the allocation range at &lt;code dir="ltr"&gt;X.X.X.1&lt;/code&gt;, but there's no need here.
+&lt;/p&gt;&lt;p&gt;
+   So, if our service is alive, we should be able to establish a TCP session with it.
+   Let's try with good old netcat
+&lt;/p&gt;&lt;PRE&gt;$ nc -vz 10.0.42.0 8080
+Connection to 10.0.42.0 port 8080 [tcp/http] succeeded!
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+   Woo! If we look a little closer with a simple &lt;code dir="ltr"&gt;ping&lt;/code&gt;, we'll see something interesting:
+&lt;/p&gt;&lt;PRE&gt;$ ping 10.0.42.0
+PING 10.0.42.0 (10.0.42.0): 56 data bytes
+Request timeout for icmp_seq 0
+92 bytes from 10.0.10.2: Redirect Host(New addr: 10.0.42.0)
+Vr HL TOS  Len   ID Flg  off TTL Pro  cks      Src      Dst
+ 4  5  00 0054 903f   0 0000  3f  01 ac67 10.0.1.3  10.0.42.0
+&lt;/PRE&gt;&lt;p&gt;
+   It's not that it didn't respond to the ICMP request, it's that we got
+&lt;/p&gt;&lt;PRE&gt;92 bytes from 10.0.10.2: Redirect Host(New addr: 10.0.42.0)
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+   That address, &lt;code dir="ltr"&gt;10.0.10.2&lt;/code&gt;, is the IP for &lt;code dir="ltr"&gt;compute2&lt;/code&gt;, an active compute node in my cluster.
+   Let's take a look at where &lt;code dir="ltr"&gt;coffee&lt;/code&gt;'s pod was scheduled
+&lt;/p&gt;&lt;PRE&gt;NAME                      READY   STATUS    RESTARTS   AGE   IP            NODE
+coffee-65b9b69679-96kl8   1/1     Running   0          30m   192.168.2.7   compute2.cmacr.ae
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+   There it is, on &lt;code dir="ltr"&gt;compute2&lt;/code&gt;. Since this is a layer 2 let's see what those two addresses
+   look like in the ARP table
+&lt;/p&gt;&lt;PRE&gt;$ arp -a
+? (10.0.10.2) at b8:ae:ed:7d:19:6 on en0 ifscope [ethernet]
+? (10.0.42.0) at b8:ae:ed:7d:19:6 on en0 ifscope [ethernet]
+&lt;/PRE&gt;&lt;p&gt;
+   And there you have it: the same MAC address. Hopefully by stepping through the flow of traffic
+   so far, it becomes a little clearer how layer 2 mode in MetalLB works.
+&lt;/p&gt;&lt;p&gt;
+   Our cluster is now set up to receive external traffic, from the rest of our LAN. Perfect!
+   Though, those IPs that MetalLB is leasing are dynamic. We don't want to have to keep track of which
+   service has which IP by asking k8s…
+&lt;/p&gt;&lt;h2&gt;
+🗞 Watch out for 'Part 2: Hosting your own dynamic DNS solution'
+&lt;/h2&gt;&lt;p&gt;
+Next time I'll detail how I simplify reaching these services with human friendly DNS records ✨
+&lt;/p&gt;&lt;p&gt;
+  Thanks for reading! 👋
+&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 14:47:01 -0500</pubDate></item><item><title>Haskell Love 2020</title><link>http://www.youtube.com/playlist?list=PLBqWQH1MiwBSK9wuaATNS701c43VYVTuc</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/usqmnt/haskell_love_2020"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 09:38:41 -0500</pubDate></item><item><title>How We Got the Favicon</title><link>https://lobste.rs/s/jt2udm</link><description>&lt;p&gt;&lt;em dir="ltr"&gt;Image courtesy of&amp;nbsp;&lt;a href="https://rehansaeed.com/internet-favicon-madness/" dir="ltr"&gt;Muhammad Rehan Saeed&lt;/a&gt;&lt;/em&gt;&lt;/p&gt;&lt;p&gt;In 1999 the two largest browsers, Netscape Navigator and Microsoft Internet Explorer, were in all out war for control of the market. Looming just ahead was the release of Internet Explorer 5,&amp;nbsp;in March of 1999, a release that would give users a free browser deeply integrated into the Windows operating system, and deliver a final blow to Netscape Navigator’s market share. In the years to come, it would feature heavily in an antitrust suit brought against Microsoft.&lt;/p&gt;&lt;p&gt;All of which is to say that it was not at all unusual to see browser makers experiment with new features and ideas in the hopes of gaining some sort of advantage over their competition. Communication between the two companies was almost unheard of, and there was very little sharing of processes or code.&lt;/p&gt;&lt;p&gt;It was this kind of experimentation that led developer Bharat Shyam over at Microsoft to make a fairly simple addition while working on the Internet Explorer “favorites” feature. Already in IE 4, users could add websites to their favorites list, pretty much ripped straight from Netscape’s “bookmarks” feature. But what both browsers lacked was an easy way to navigate a long&amp;nbsp;list of websites.&lt;/p&gt;&lt;p dir="ltr"&gt;So in order to make websites stand out, Shyam added a small icon next to each website in the favorites list; a 16 x 16px image that could help users differentiate one website from another. He called this minor flourish a &lt;em dir="ltr"&gt;favicon&lt;/em&gt;, combining together “favorite” and “icon.” Today, the word favicon exists almost outside of its etymology in our vernacular, but its origin is almost deceptively&amp;nbsp;simple.&lt;/p&gt;&lt;p dir="ltr"&gt;In order to enable icons for a site, Shyam made it so that developers would simply need to create a file called&amp;nbsp;&lt;em dir="ltr"&gt;favicon.ico&amp;nbsp;&lt;/em&gt;and drop it in the root directory of their web server. Internet Explorer would know to look there for a possible icon before adding a site to a user’s favorite list.&lt;/p&gt;&lt;p dir="ltr"&gt;Shyam chose the &lt;code dir="ltr"&gt;.ico&lt;/code&gt; format because it was the standard Windows format for icons, and was used extensively by the Windows operating system. And since browsers were, at the time, developed in what were essentially vacuums, that made some kind of sense. So did&amp;nbsp;the subsequent choice of having developers drop the icon in a servers root folder, since this was typically an easy task on Windows web servers.&lt;/p&gt;&lt;p&gt;As the story goes, late one night, Shyam was working on his new favicon feature. He called over junior project manager&amp;nbsp;Ray Sun to take a look.&lt;/p&gt;&lt;p&gt;Shyam commented, “This is good, right? Check it in?”, requesting permission to check the code into the Internet Explorer codebase so it could be released in the next version. Sun didn’t think too much of it, the feature was cool and would clearly give IE an edge. So he told Shyam to go ahead and add it. And just like that, the favicon made its way into Internet Explorer 5, which would go on to become one of the largest browser releases the web has ever seen.&lt;/p&gt;&lt;p&gt;The next day, Sun was reprimanded by his manager for letting the feature get by so quickly. As it turns out, Shyam had specifically waited until later in the day, knowing that a less experienced Program Manager would give him a pass. But by then, the code had been merged in. Incidentally, you’d be surprised just how many relatively major browser features have snuck their way into releases like this.&lt;/p&gt;&lt;p dir="ltr"&gt;Either way, the feature was a pretty big hit. Developers caught on to the idea of adding favicon’s fairly quickly, and big players like Yahoo even jumped on board. Some more inquiring minds even discovered a pretty cool side effect. At first, favicons were only seen when a user added a site to their favorites list. So if you could dig through your website’s server logs and see how many times the &lt;code dir="ltr"&gt;favicon.ico&lt;/code&gt;&amp;nbsp;file was requested, you could also get a fairly accurate count of how many people had added your site as a bookmark.&lt;/p&gt;&lt;img src="https://thehistoryoftheweb.com/wp-content/uploads/1999/02/IC70810.gif?854022&amp;amp;854022" alt="What original favicons looked like" width="453" height="230"&gt;&lt;p dir="ltr"&gt;That wouldn’t last too long, though.&amp;nbsp;After a bit of time (which is often the case) web standards began to catch up. And they took a more considered and accessible approach. For one thing, there might be cases when adding a favicon file to a server’s web directory was difficult, or even impossible. So the emerging proposal in the W3C was to use the link element with a new attribute that allowed developers to define exactly where a favicon image could be found. This also gave developers the ability to use a format other than &lt;code dir="ltr"&gt;.ico&lt;/code&gt;. It looked like this:&lt;/p&gt;&lt;p&gt;&lt;span&gt;&amp;lt;link rel=”icon” href=”/path/to/icon.png”&amp;gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Wider adoption by browsers soon led to more innovation, which in turn, came with its own bumps in the road. For instance, it wasn’t long before Microsoft&amp;nbsp;began to use favicon’s not just for bookmarks, but in several different contexts, like next to a URL in the address bar (other browsers soon followed). But Microsoft’s original intention was to have one image for favorites (a &lt;code dir="ltr"&gt;shortcut&lt;/code&gt;) and one for elsewhere (an &lt;code dir="ltr"&gt;icon&lt;/code&gt;). The feature got pushed through before it could move through the W3C, but it never fully came to fruition. It did, however, leave behind a strange quirk. In older versions of IE it was necessary to define both the shortcut &lt;em dir="ltr"&gt;and&amp;nbsp;&lt;/em&gt;icon for favicons to work, even though the shortcut was not actually used anywhere. It looked like this:&lt;/p&gt;&lt;p&gt;&lt;code&gt;&amp;lt;link rel="shortcut icon" href="/path/to/icon.png?854022&amp;amp;854022"&amp;gt;&lt;/code&gt;&lt;/p&gt;&lt;p&gt;That implementation, by the way, is still supported in all browsers for historical reasons.&lt;/p&gt;&lt;p&gt;So that’s how the favicon snuck its way into Internet Explorer 5 and went on to become one of the more defining browser features. One of those quick decisions that today feels like a no-brainer. But even the smallest link in the chain comes with a story.&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 10:33:24 -0500</pubDate></item><item><title>sh(1) simple combined log analytics for static sites (wip)</title><link>https://lobste.rs/s/omc5xf</link><description>&lt;p&gt;combined log&lt;/p&gt;&lt;h2&gt;cblv(1)&lt;/h2&gt;&lt;h3&gt;NAME&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblv&lt;/strong&gt; - combined log views&lt;/p&gt;&lt;h3&gt;SYNOPSIS&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblv&lt;/strong&gt;
 [&lt;em dir="ltr"&gt;file&amp;nbsp;...&lt;/em&gt;]&lt;/p&gt;&lt;h3&gt;DESCRIPTION&lt;/h3&gt;&lt;p dir="ltr"&gt;The
 &lt;strong dir="ltr"&gt;cblv&lt;/strong&gt;
 utility reads
@@ -1652,7 +1905,7 @@ an anti-goal, but more than we have now is a good idea.)&lt;/LI&gt;&lt;LI&gt;[DO
 and has maintainer buy-in.
 (Let us know if you maintain another Python tool or library and are
 interested in working with us on this!)&lt;/LI&gt;&lt;LI&gt;More optimization! Code size reductions in particular are likely to
-be valuable and will speed up mypyc compilation.&lt;/LI&gt;&lt;/OL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;We'll see! Adventure is out there!&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Mon, 10 Aug 2020 07:44:03 -0500</pubDate></item><item><title>How We Got the Favicon</title><link>https://lobste.rs/s/jt2udm</link><description>&lt;p&gt;&lt;em dir="ltr"&gt;Image courtesy of&amp;nbsp;&lt;a href="https://rehansaeed.com/internet-favicon-madness/" dir="ltr"&gt;Muhammad Rehan Saeed&lt;/a&gt;&lt;/em&gt;&lt;/p&gt;&lt;p&gt;In 1999 the two largest browsers, Netscape Navigator and Microsoft Internet Explorer, were in all out war for control of the market. Looming just ahead was the release of Internet Explorer 5,&amp;nbsp;in March of 1999, a release that would give users a free browser deeply integrated into the Windows operating system, and deliver a final blow to Netscape Navigator’s market share. In the years to come, it would feature heavily in an antitrust suit brought against Microsoft.&lt;/p&gt;&lt;p&gt;All of which is to say that it was not at all unusual to see browser makers experiment with new features and ideas in the hopes of gaining some sort of advantage over their competition. Communication between the two companies was almost unheard of, and there was very little sharing of processes or code.&lt;/p&gt;&lt;p&gt;It was this kind of experimentation that led developer Bharat Shyam over at Microsoft to make a fairly simple addition while working on the Internet Explorer “favorites” feature. Already in IE 4, users could add websites to their favorites list, pretty much ripped straight from Netscape’s “bookmarks” feature. But what both browsers lacked was an easy way to navigate a long&amp;nbsp;list of websites.&lt;/p&gt;&lt;p dir="ltr"&gt;So in order to make websites stand out, Shyam added a small icon next to each website in the favorites list; a 16 x 16px image that could help users differentiate one website from another. He called this minor flourish a &lt;em dir="ltr"&gt;favicon&lt;/em&gt;, combining together “favorite” and “icon.” Today, the word favicon exists almost outside of its etymology in our vernacular, but its origin is almost deceptively&amp;nbsp;simple.&lt;/p&gt;&lt;p dir="ltr"&gt;In order to enable icons for a site, Shyam made it so that developers would simply need to create a file called&amp;nbsp;&lt;em dir="ltr"&gt;favicon.ico&amp;nbsp;&lt;/em&gt;and drop it in the root directory of their web server. Internet Explorer would know to look there for a possible icon before adding a site to a user’s favorite list.&lt;/p&gt;&lt;p dir="ltr"&gt;Shyam chose the &lt;code dir="ltr"&gt;.ico&lt;/code&gt; format because it was the standard Windows format for icons, and was used extensively by the Windows operating system. And since browsers were, at the time, developed in what were essentially vacuums, that made some kind of sense. So did&amp;nbsp;the subsequent choice of having developers drop the icon in a servers root folder, since this was typically an easy task on Windows web servers.&lt;/p&gt;&lt;p&gt;As the story goes, late one night, Shyam was working on his new favicon feature. He called over junior project manager&amp;nbsp;Ray Sun to take a look.&lt;/p&gt;&lt;p&gt;Shyam commented, “This is good, right? Check it in?”, requesting permission to check the code into the Internet Explorer codebase so it could be released in the next version. Sun didn’t think too much of it, the feature was cool and would clearly give IE an edge. So he told Shyam to go ahead and add it. And just like that, the favicon made its way into Internet Explorer 5, which would go on to become one of the largest browser releases the web has ever seen.&lt;/p&gt;&lt;p&gt;The next day, Sun was reprimanded by his manager for letting the feature get by so quickly. As it turns out, Shyam had specifically waited until later in the day, knowing that a less experienced Program Manager would give him a pass. But by then, the code had been merged in. Incidentally, you’d be surprised just how many relatively major browser features have snuck their way into releases like this.&lt;/p&gt;&lt;p dir="ltr"&gt;Either way, the feature was a pretty big hit. Developers caught on to the idea of adding favicon’s fairly quickly, and big players like Yahoo even jumped on board. Some more inquiring minds even discovered a pretty cool side effect. At first, favicons were only seen when a user added a site to their favorites list. So if you could dig through your website’s server logs and see how many times the &lt;code dir="ltr"&gt;favicon.ico&lt;/code&gt;&amp;nbsp;file was requested, you could also get a fairly accurate count of how many people had added your site as a bookmark.&lt;/p&gt;&lt;img src="https://thehistoryoftheweb.com/wp-content/uploads/1999/02/IC70810.gif?854022&amp;amp;854022" alt="What original favicons looked like" width="453" height="230"&gt;&lt;p dir="ltr"&gt;That wouldn’t last too long, though.&amp;nbsp;After a bit of time (which is often the case) web standards began to catch up. And they took a more considered and accessible approach. For one thing, there might be cases when adding a favicon file to a server’s web directory was difficult, or even impossible. So the emerging proposal in the W3C was to use the link element with a new attribute that allowed developers to define exactly where a favicon image could be found. This also gave developers the ability to use a format other than &lt;code dir="ltr"&gt;.ico&lt;/code&gt;. It looked like this:&lt;/p&gt;&lt;p&gt;&lt;span&gt;&amp;lt;link rel=”icon” href=”/path/to/icon.png”&amp;gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Wider adoption by browsers soon led to more innovation, which in turn, came with its own bumps in the road. For instance, it wasn’t long before Microsoft&amp;nbsp;began to use favicon’s not just for bookmarks, but in several different contexts, like next to a URL in the address bar (other browsers soon followed). But Microsoft’s original intention was to have one image for favorites (a &lt;code dir="ltr"&gt;shortcut&lt;/code&gt;) and one for elsewhere (an &lt;code dir="ltr"&gt;icon&lt;/code&gt;). The feature got pushed through before it could move through the W3C, but it never fully came to fruition. It did, however, leave behind a strange quirk. In older versions of IE it was necessary to define both the shortcut &lt;em dir="ltr"&gt;and&amp;nbsp;&lt;/em&gt;icon for favicons to work, even though the shortcut was not actually used anywhere. It looked like this:&lt;/p&gt;&lt;p&gt;&lt;code&gt;&amp;lt;link rel="shortcut icon" href="/path/to/icon.png?854022&amp;amp;854022"&amp;gt;&lt;/code&gt;&lt;/p&gt;&lt;p&gt;That implementation, by the way, is still supported in all browsers for historical reasons.&lt;/p&gt;&lt;p&gt;So that’s how the favicon snuck its way into Internet Explorer 5 and went on to become one of the more defining browser features. One of those quick decisions that today feels like a no-brainer. But even the smallest link in the chain comes with a story.&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 10:33:24 -0500</pubDate></item><item><title>Ideas for Programmers Looking Beyond Web Development</title><link>https://lobste.rs/s/b4rfzt</link><description>&lt;div dir="ltr"&gt;
+be valuable and will speed up mypyc compilation.&lt;/LI&gt;&lt;/OL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;We'll see! Adventure is out there!&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Mon, 10 Aug 2020 07:44:03 -0500</pubDate></item><item><title>Ideas for Programmers Looking Beyond Web Development</title><link>https://lobste.rs/s/b4rfzt</link><description>&lt;div dir="ltr"&gt;
         &lt;time datetime="2020-07-10" dir="ltr"&gt;
           2020-07-10
         &lt;/time&gt;
@@ -1858,260 +2111,7 @@ As such, everything is included, from C libraries to Python interpreter to your 
     &lt;/tr&gt;
   &lt;/tbody&gt;
 &lt;/table&gt;&lt;p&gt;Which one should you use?
-That depends on your particular situation.&lt;/p&gt;&lt;h4 dir="ltr"&gt;Learn how to build fast, production-ready Docker images—read the rest of the &lt;a href="https://pythonspeed.com/docker/" dir="ltr"&gt;Docker packaging guide for Python&lt;/a&gt;.&lt;/h4&gt;&lt;h3&gt;Learn practical Docker and Python software engineering skills, every week&lt;/h3&gt;&lt;p&gt;You need to stay competitive in the job market—but there's too much to learn, and you don’t know where to start.&lt;/p&gt;&lt;p&gt;Join over 2100 Python developers and data scientists learning practical tools and techniques, from Docker packaging to Python best practices, with a free new article in your inbox every week.&lt;/p&gt;&lt;div data-element="fields" data-stacked="false"&gt;&lt;button data-element="submit"&gt;&lt;span&gt;Learn practical software engineering skills&lt;/span&gt;&lt;/button&gt;&lt;/div&gt;</description><pubDate>Mon, 10 Aug 2020 11:54:49 -0500</pubDate></item><item><title>That UPS you bought for your home server may not be as useful as you think</title><link>https://lobste.rs/s/vzjgdm</link><description>&lt;p&gt;Some years ago I decided to install a server at home for use as a NAS (network-attached storage) in my home network, and for an Internet-facing server. I live in a place where blackouts are very infrequent (perhaps a couple per year), but occasionally the mains drops out for only a second or two. I suspect these very short dropouts occur when substation switchgear operates, but have no way of being sure. Anyway, with a server running 24/7 I obviously wanted protection against any loss of the mains supply.&lt;/p&gt;&lt;p dir="ltr"&gt;I ended up buying a 700VA &lt;a href="https://www.apc.com/shop/uk/en/products/APC-Power-Saving-Back-UPS-700VA-230V-BS1363/P-BE700G-UK" title="APC Back-UPS ES-BE700G-UK" dir="ltr"&gt;APC Back-UPS ES-BE700G-UK&lt;/a&gt;, which has four mains sockets that are battery-backed and also have surge protection, plus another four mains sockets that have surge protection but are not battery-backed. Additionally, it has two RJ45 sockets to provide pass-through filtering for an Ethernet connection. It also has a USB port for connection to the server so that it can transmit unsolicited status information to the server (including requesting the server to shutdown) and can also be interrogated by the server using the &lt;code dir="ltr"&gt;apcaccess&lt;/code&gt; command. The &lt;a href="http://www.apcupsd.org/" title="APC UPS daemon" dir="ltr"&gt;APC UPS daemon&lt;/a&gt; works with this model of UPS, and was relatively easy to set up. APC, formerly American Power Conversion Corporation, is a subsidiary of European company Schneider Electric. My UPS was manufactured in The Philippines.&lt;/p&gt;&lt;p&gt;I have three devices plugged into the battery-backed sockets on the APC UPS: the server, an external 6TB USB HDD connected to the server for automated daily backups by the server, and a 5-port Ethernet switch. The battery in the UPS would provide between 15 and 20 minutes of power when the mains fails, although I have configured the UPS to trigger the server to shutdown when 30 per cent of the battery power remains, as battery life is reduced considerably if its power is allowed to drain completely. In case you’re wondering why my router is not also plugged into the UPS, due to the position of the broadband provider’s socket the router is in a different room and I have therefore had to connect it to a different UPS, an iLEPO multi-functional DC UPS (the ECO PLUS 412P, which is tiny but can keep the router powered for several hours). Obviously the router needs to be connected to a UPS, otherwise the server would not be able to send me e-mails when there is a mains power cut. Being able to receive UPS status e-mails from the server is important to me when I am away from home on work trips.&lt;/p&gt;&lt;p&gt;So I thought I had covered all bases, and, indeed, the UPS proved useful on several occasions. I would quite often be on a work trip and receive an e-mail from the server informing me that mains power to the UPS had been lost, then another e-mail soon after informing me that mains power to the UPS had returned. Only once did the power cut last longer than the battery capacity, and the server was shutdown automatically.&lt;/p&gt;&lt;p&gt;Now, the life of the 12-volt lead-acid battery in the APC UPS is supposed to last approximately three to five years. The life will depend on how many times the battery is discharged and ambient temperature.&lt;/p&gt;&lt;p dir="ltr"&gt;While I was away from home on a long work trip, I could no longer connect to my server and I had not received an e-mail from the server informing me of any problem. Luckily it was near the end of my trip so I was not too inconvenienced. When I arrived home I found that the UPS was sounding an alarm and was not supplying power to the server even though there was mains supply to the UPS. It transpired that the UPS battery had suddenly died without warning and could no longer hold a charge, and this had happened &lt;em dir="ltr"&gt;while there was mains supply to the UPS&lt;/em&gt;, i.e. there had not been a power cut while I was away. Fortunately there was no loss of data on the server; I was able to run &lt;code dir="ltr"&gt;fsck&lt;/code&gt; during boot-up.&lt;/p&gt;&lt;p dir="ltr"&gt;This failure was annoying on two counts. Firstly, the battery was only about thirteen months old (the manufacturing date stamped on the UPS box was only two or three months before the date I purchased the UPS). Secondly, I certainly did not expect the UPS to stop supplying power to the server while there was mains supply to the UPS. The APC white paper on UPS topologies, ‘&lt;a href="https://download.schneider-electric.com/files?p_Doc_Ref=SPD_SADE-5TNM3Y_EN" title="The Different Types of UPS Systems" dir="ltr"&gt;The Different Types of UPS Systems&lt;/a&gt;‘, does not make this behaviour clear.&lt;/p&gt;&lt;p dir="ltr"&gt;It turns out that the type of UPS topology (‘Standby’ — see the model’s &lt;a href="https://www.apc.com/shop/uk/en/products/APC-Power-Saving-Back-UPS-700VA-230V-BS1363/P-BE700G-UK" title="BE700G-UK Technical Specifications" dir="ltr"&gt;Technical Specifications&lt;/a&gt;) in this model of UPS does not continue to provide power to connected equipment when the UPS battery either fails or is disconnected for whatever reason when there is mains power supply to the UPS. A quick search of the Web showed me that I was not alone in discovering this ‘feature’: an APC Back-UPS 350 owner posted ‘&lt;a href="https://www.cnet.com/forums/discussions/ups-battery-backup-useless-when-the-battery-dies-319380/" title="UPS Battery Backup -- useless when the battery dies?" dir="ltr"&gt;UPS Battery Backup — useless when the battery dies?&lt;/a&gt;‘.&lt;/p&gt;&lt;p&gt;From what I have read, the so-called ‘Line Interactive’ UPS topology does not suffer this shortcoming, so, the next time I have to buy a UPS for a piece of equipment that requires power 24/7, I will buy a line-interactive UPS rather than a standby UPS. But, before purchasing, I will be sure to ask the manufacturer what the precise model would do if its battery fails or is disconnected while there is mains supply to the UPS. The APC line-interactive UPSs are more expensive than the APC Back-UPS models; now I know why. It’s a pity I was not aware of the shortcoming of the Back-UPS models, as I would have spent more and bought a UPS that continues to work when the battery dies while there is mains supply. I would also hope the UPS would issue an alarm if the battery has failed or is disconnected while there is mains supply. Be sure to ask the manufacturer all these questions if you cannot tolerate a sudden loss of power to your equipment if the battery dies while there is mains supply.&lt;/p&gt;&lt;p&gt;Anyway, after checking that the dead battery was indeed useless I replaced it with a new Yuasa battery that has lasted nearly three years now. I will be replacing it shortly as a precaution, even though it has not had to be used much at all since I installed it. I have not replaced the APC Back-UPS model but I will be replacing the battery at least every three years just to be cautious, and of course taking the old batteries to my local waste disposal centre to be recycled properly. By the way, it is possible to purchase a 12-volt battery manufactured by one of the reputable battery manufacturers such as Yuasa with the same specification as the APC battery, for a significantly lower price than APC charges for replacement batteries (which I suspect are badged by APC in any case).&lt;/p&gt;&lt;h3&gt;Share this:&lt;/h3&gt;</description><pubDate>Sun, 09 Aug 2020 14:37:13 -0500</pubDate></item><item><title>"Cloud-like" Infrastructure at Home - Part 1: LoadBalancers on the Metal</title><link>https://lobste.rs/s/rty4wa</link><description>&lt;p&gt;
-This is the introductory post to a series outlining how I achieve "Cloud-like" application deployments
-on my personal servers.  If you're interested in Platform Engineering/SRE/DevOps, read on!
-&lt;/p&gt;&lt;h2&gt;
-☁️ What does "Cloud-like" mean?
-&lt;/h2&gt;&lt;p&gt;
-I'm using this phrase to express a set of capabilities that engineers have come to expect from cloud
-  providers in their offerings for hosting infrastructure. Namely: load balancers, dynamic DNS, certificate
-  leasing, and perhaps a few others.
-&lt;/p&gt;&lt;h2&gt;
-🤷 Who's this post for?
-&lt;/h2&gt;&lt;p&gt;
-I'm guessing by now you have at least some interest in the subject, so I'll state some assumptions:
-&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p&gt;
-You're somewhat familiar with Kubernetes &amp;amp; its configuration with YAML
-&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
-You're somewhat familiar with basic networking concepts, like DHCP, DNS, TCP/IP, ARP
-&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
-You're not looking for a guide to set-up self-hosted Kubernetes
-(I'll write about how I do this in a future post) - we're going to be working with an already running
-cluster
-&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;
-All set then? Let's dive in!
-&lt;/p&gt;&lt;h2&gt;
-💡 What're we solving today?
-&lt;/h2&gt;&lt;h3&gt;
-LAN routable traffic to services hosted in Kubernetes
-&lt;/h3&gt;&lt;p&gt;
-Say we have a web service we want to deploy - let's call it "coffee" ☕
-&lt;/p&gt;&lt;p&gt;
-   We deploy it into k8s (Kubernetes) and can access it by using
-&lt;/p&gt;&lt;PRE&gt;$ kubectl port-forward coffee-5b8f7c69bd-9x6sk 8080:80
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-   Now we can visit &lt;code dir="ltr"&gt;localhost:8080/&lt;/code&gt; to reach our service - great!
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-   But we don't want to have to rely on &lt;code dir="ltr"&gt;kubectl&lt;/code&gt; to handle the proxying for us.
-   What about other devices on the network that we want to be able to access the &lt;code dir="ltr"&gt;coffee&lt;/code&gt; service?
-&lt;/p&gt;&lt;p&gt;
-   Well, once we've gotten through this post, we'll end up getting a LAN accessible web
-   service we can reach via a segment of our LAN address space - like any other physical device on
-   the network - just by deploying k8s manifests.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-   No need to pick out an IP address and set up static routes, no need for any &lt;code dir="ltr"&gt;iptables&lt;/code&gt; magic 🔮
-&lt;/p&gt;&lt;h3&gt;
-Accessing Kubernetes services via IP
-&lt;/h3&gt;&lt;p dir="ltr"&gt;
-When deploying a pod of containers providing a network application, we can expose its port
-   so it's accessible using a &lt;a href="https://kubernetes.io/docs/concepts/services-networking/service" dir="ltr"&gt;&lt;code dir="ltr"&gt;Service&lt;/code&gt;&lt;/a&gt;. Here's what a &lt;code dir="ltr"&gt;Service&lt;/code&gt; accompanying a &lt;code dir="ltr"&gt;Deployment&lt;/code&gt; for
-   &lt;code dir="ltr"&gt;coffee&lt;/code&gt; might look like:
-&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="yaml" dir="ltr"&gt;---
-&lt;span dir="ltr"&gt;kind&lt;/span&gt;: Deployment
-&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: apps/v1
-&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
-&lt;span dir="ltr"&gt;spec&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;replicas&lt;/span&gt;: &lt;span dir="ltr"&gt;1&lt;/span&gt;
-  &lt;span dir="ltr"&gt;selector&lt;/span&gt;:
-    &lt;span dir="ltr"&gt;matchLabels&lt;/span&gt;:
-      &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
-  &lt;span dir="ltr"&gt;template&lt;/span&gt;:
-    &lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
-      &lt;span dir="ltr"&gt;labels&lt;/span&gt;:
-        &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
-    &lt;span dir="ltr"&gt;spec&lt;/span&gt;:
-      &lt;span dir="ltr"&gt;containers&lt;/span&gt;:
-      - &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
-        &lt;span dir="ltr"&gt;image&lt;/span&gt;: example/coffee
-        &lt;span dir="ltr"&gt;ports&lt;/span&gt;:
-        - &lt;span dir="ltr"&gt;name&lt;/span&gt;: api
-          &lt;span dir="ltr"&gt;containerPort&lt;/span&gt;: &lt;span dir="ltr"&gt;80&lt;/span&gt;
-
----
-&lt;span dir="ltr"&gt;kind&lt;/span&gt;: Service
-&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: v1
-&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
-&lt;span dir="ltr"&gt;spec&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;selector&lt;/span&gt;:
-    &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
-  &lt;span dir="ltr"&gt;ports&lt;/span&gt;:
-  - &lt;span dir="ltr"&gt;name&lt;/span&gt;: api
-    &lt;span dir="ltr"&gt;port&lt;/span&gt;: &lt;span dir="ltr"&gt;8080&lt;/span&gt;
-    &lt;span dir="ltr"&gt;targetPort&lt;/span&gt;: coffee&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-   After evaluating this manifest, our k8s cluster would have a &lt;code dir="ltr"&gt;coffee&lt;/code&gt; service that's available
-   within the cluster network. Other pods within the same namespace could simply call out to &lt;code dir="ltr"&gt;http://coffee:8080&lt;/code&gt;,
-   or pods deployed in other namespaces could reach it via &lt;code dir="ltr"&gt;http://coffee.example:8080&lt;/code&gt; (&lt;code dir="ltr"&gt;example&lt;/code&gt; being the
-   namespace we deployed the &lt;code dir="ltr"&gt;coffee&lt;/code&gt; resources to).
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-   By default, we'll get a &lt;code dir="ltr"&gt;ClusterIP&lt;/code&gt; type &lt;code dir="ltr"&gt;Service&lt;/code&gt;. I won't go into much detail here about k8s &lt;code dir="ltr"&gt;Service&lt;/code&gt;
-   objects, but it's useful to outline the available &lt;code dir="ltr"&gt;ServiceTypes&lt;/code&gt;, in particular &lt;a href="https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types" dir="ltr"&gt;"publishing" services&lt;/a&gt;.
-&lt;/p&gt;&lt;h3&gt;
-Publishing ServiceTypes
-&lt;/h3&gt;&lt;p dir="ltr"&gt;
-Let's take a look at each type, leaning on excerpts from &lt;a href="https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types" dir="ltr"&gt;the official documentation&lt;/a&gt;.
-&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
-&lt;code dir="ltr"&gt;ClusterIP&lt;/code&gt;: Exposes the Service on a cluster-internal IP. Choosing this value makes the Service only
-   reachable from within the cluster. This is the default ServiceType.
-&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
-We can quite plainly see this is a no-go for what we want, we want our service to be reachable outside
-    the cluster.
-&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
-&lt;code dir="ltr"&gt;NodePort&lt;/code&gt;: Exposes the Service on each Node’s IP at a static port (the NodePort).
-   A ClusterIP Service, to which the NodePort Service routes, is automatically created.
-   You’ll be able to contact the NodePort Service, from outside the cluster, by requesting
-   &amp;lt;NodeIP&amp;gt;:&amp;lt;NodePort&amp;gt;.
-&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
-This looks like it meets our needs in terms of external (to the cluster, not our LAN) access.
-   But on second thought, this means we have to worry about maintaining unique port numbers for each
-   service. If a service's pods are scheduled onto a node with another service already occupying that port,
-   it won't be able to operate. It also begs the question "how do we know which node, and thus which NodeIP
-   we'll be using to reach the service?"
-&lt;/p&gt;&lt;p&gt;
-   No dice.
-&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
-&lt;code dir="ltr"&gt;ExternalName&lt;/code&gt;: Maps the Service to the contents of the externalName field (e.g. foo.bar.example.com),
-   by returning a CNAME record with its value. No proxying of any kind is set up.
-&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
-Hmm, this doesn't seem like a good fit either. There's no mention of traffic being routable for cluster
-   external networking. It's simply about mapping external DNS records to services within the cluster, for
-   other cluster residents.
-&lt;/p&gt;&lt;p&gt;
-   Next!
-&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
-&lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt;: Exposes the Service externally using a cloud provider’s load balancer. NodePort and
-   ClusterIP Services, to which the external load balancer routes, are automatically created.
-&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
-This sounds perfect! Except… we're not deploying to some cloud environment. We don't have a cloud
-   provider's solution to provision load balancers.
-&lt;/p&gt;&lt;p&gt;
-   …Or do we? 👈😎👈
-&lt;/p&gt;&lt;h2&gt;
-⚖️ LoadBalancers on the metal
-&lt;/h2&gt;&lt;p dir="ltr"&gt;
-Turns out a service of type &lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt; is actually achievable, without the cloud provider! 🌩️
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-  &lt;a href="https://metallb.universe.tf/" dir="ltr"&gt;MetalLB&lt;/a&gt; is a project that aims to bring the &lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt; ServiceType to k8s clusters provisioned
-  on bare metal - and does so very well.
-&lt;/p&gt;&lt;h3&gt;
-Deployment &amp;amp; configuration
-&lt;/h3&gt;&lt;p&gt;
-MetalLB has two modes of operation: BGP &amp;amp; Layer2. Both are self explanatory, if you're familiar with
-   the respective network protocols - I won't be expanding on either, as it's out of scope for this write-up.
-&lt;/p&gt;&lt;p&gt;
-   For our implementation, we're going to keep things simple and go with Layer2.
-&lt;/p&gt;&lt;p&gt;
-   MetalLB is deployed entirely with native k8s manifests. How you choose to deploy your YAML is up to you.
-   There are a few options:
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;
-Raw YAML manifests
-&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
-I personally use &lt;a href="https://argoproj.github.io/projects/argo-cd" dir="ltr"&gt;ArgoCD&lt;/a&gt; to deploy the Helm chart, but details on that are for another post.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-   The installation documentation is straight forward and can be found &lt;a href="https://metallb.universe.tf/installation/" dir="ltr"&gt;here&lt;/a&gt;.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-   Let's focus on the configuration. MetalLB evaluates its configuration through a &lt;a href="https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/" dir="ltr"&gt;&lt;code dir="ltr"&gt;ConfigMap&lt;/code&gt;&lt;/a&gt;.
-   For the Layer2 configuration, it's as simple as picking out an IP range you want your services
-   to be allocated an address from.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-   My LAN is &lt;code dir="ltr"&gt;10.0.0.0/16&lt;/code&gt;, I opted to slice out &lt;code dir="ltr"&gt;10.0.42.0/24&lt;/code&gt;. So my configuration looks like:
-&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="yaml" dir="ltr"&gt;&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: v1
-&lt;span dir="ltr"&gt;kind&lt;/span&gt;: ConfigMap
-&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;namespace&lt;/span&gt;: metallb-system
-  &lt;span dir="ltr"&gt;name&lt;/span&gt;: config
-&lt;span dir="ltr"&gt;data&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;config&lt;/span&gt;: &lt;span dir="ltr"&gt;|
-&lt;/span&gt;&lt;span dir="ltr"&gt;    address-pools:&lt;/span&gt;
-      - &lt;span dir="ltr"&gt;name&lt;/span&gt;: default
-        &lt;span dir="ltr"&gt;protocol&lt;/span&gt;: layer2
-        &lt;span dir="ltr"&gt;addresses&lt;/span&gt;:
-          - &lt;span dir="ltr"&gt;10.0.42.0&lt;/span&gt;/&lt;span dir="ltr"&gt;24&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-   If we configure MetalLB with this, we can then deploy &lt;code dir="ltr"&gt;Service&lt;/code&gt; objects with &lt;code dir="ltr"&gt;spec.type: LoadBalancer&lt;/code&gt;
-   in their manifest and expect to get an IP leased from the &lt;code dir="ltr"&gt;10.0.42.0/24&lt;/code&gt; pool.
-&lt;/p&gt;&lt;h3&gt;
-Take it for a spin
-&lt;/h3&gt;&lt;p dir="ltr"&gt;
-Let's update our &lt;code dir="ltr"&gt;coffee&lt;/code&gt; service manifest to set &lt;code dir="ltr"&gt;spec.type&lt;/code&gt; to &lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt;
-&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="yaml" dir="ltr"&gt;---
-&lt;span dir="ltr"&gt;kind&lt;/span&gt;: Service
-&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: v1
-&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
-&lt;span dir="ltr"&gt;spec&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;selector&lt;/span&gt;:
-    &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
-  &lt;span dir="ltr"&gt;ports&lt;/span&gt;:
-    - &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
-      &lt;span dir="ltr"&gt;port&lt;/span&gt;: &lt;span dir="ltr"&gt;8080&lt;/span&gt;
-      &lt;span dir="ltr"&gt;targetPort&lt;/span&gt;: coffee
-  &lt;span dir="ltr"&gt;type&lt;/span&gt;: LoadBalancer &lt;span dir="ltr"&gt;# &amp;lt;- here&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
-   Applying this will yield something like
-&lt;/p&gt;&lt;PRE&gt;$ kubectl describe svc coffee
-Name:                     coffee
-Namespace:                default
-Labels:                   &amp;lt;none&amp;gt;
-Annotations:              Selector:  app=coffee
-Type:                     LoadBalancer
-IP:                       172.16.57.10
-LoadBalancer Ingress:     10.0.42.0
-Port:                     api  8080/TCP
-TargetPort:               coffee/TCP
-NodePort:                 api  30786/TCP
-Endpoints:                192.168.2.7:8080
-Session Affinity:         None
-External Traffic Policy:  Cluster
-Events:
-  Type    Reason       Age    From                Message
-  ----    ------       ----   ----                -------
-  Normal  IPAllocated  9s  metallb-controller  Assigned IP "10.0.42.0"
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-   For those of us who aren't networking wizards, something may look a bit strange here: &lt;code dir="ltr"&gt;10.0.0.42.0&lt;/code&gt;.
-   Rest assured, that's actually a routable address. Most day-to-day DHCP configurations will
-   start the allocation range at &lt;code dir="ltr"&gt;X.X.X.1&lt;/code&gt;, but there's no need here.
-&lt;/p&gt;&lt;p&gt;
-   So, if our service is alive, we should be able to establish a TCP session with it.
-   Let's try with good old netcat
-&lt;/p&gt;&lt;PRE&gt;$ nc -vz 10.0.42.0 8080
-Connection to 10.0.42.0 port 8080 [tcp/http] succeeded!
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-   Woo! If we look a little closer with a simple &lt;code dir="ltr"&gt;ping&lt;/code&gt;, we'll see something interesting:
-&lt;/p&gt;&lt;PRE&gt;$ ping 10.0.42.0
-PING 10.0.42.0 (10.0.42.0): 56 data bytes
-Request timeout for icmp_seq 0
-92 bytes from 10.0.10.2: Redirect Host(New addr: 10.0.42.0)
-Vr HL TOS  Len   ID Flg  off TTL Pro  cks      Src      Dst
- 4  5  00 0054 903f   0 0000  3f  01 ac67 10.0.1.3  10.0.42.0
-&lt;/PRE&gt;&lt;p&gt;
-   It's not that it didn't respond to the ICMP request, it's that we got
-&lt;/p&gt;&lt;PRE&gt;92 bytes from 10.0.10.2: Redirect Host(New addr: 10.0.42.0)
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-   That address, &lt;code dir="ltr"&gt;10.0.10.2&lt;/code&gt;, is the IP for &lt;code dir="ltr"&gt;compute2&lt;/code&gt;, an active compute node in my cluster.
-   Let's take a look at where &lt;code dir="ltr"&gt;coffee&lt;/code&gt;'s pod was scheduled
-&lt;/p&gt;&lt;PRE&gt;NAME                      READY   STATUS    RESTARTS   AGE   IP            NODE
-coffee-65b9b69679-96kl8   1/1     Running   0          30m   192.168.2.7   compute2.cmacr.ae
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-   There it is, on &lt;code dir="ltr"&gt;compute2&lt;/code&gt;. Since this is a layer 2 let's see what those two addresses
-   look like in the ARP table
-&lt;/p&gt;&lt;PRE&gt;$ arp -a
-? (10.0.10.2) at b8:ae:ed:7d:19:6 on en0 ifscope [ethernet]
-? (10.0.42.0) at b8:ae:ed:7d:19:6 on en0 ifscope [ethernet]
-&lt;/PRE&gt;&lt;p&gt;
-   And there you have it: the same MAC address. Hopefully by stepping through the flow of traffic
-   so far, it becomes a little clearer how layer 2 mode in MetalLB works.
-&lt;/p&gt;&lt;p&gt;
-   Our cluster is now set up to receive external traffic, from the rest of our LAN. Perfect!
-   Though, those IPs that MetalLB is leasing are dynamic. We don't want to have to keep track of which
-   service has which IP by asking k8s…
-&lt;/p&gt;&lt;h2&gt;
-🗞 Watch out for 'Part 2: Hosting your own dynamic DNS solution'
-&lt;/h2&gt;&lt;p&gt;
-Next time I'll detail how I simplify reaching these services with human friendly DNS records ✨
-&lt;/p&gt;&lt;p&gt;
-  Thanks for reading! 👋
-&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 14:47:01 -0500</pubDate></item><item><title>Tripping over the potholes in too many libraries</title><link>https://lobste.rs/s/mxa5ze</link><description>&lt;p&gt;
+That depends on your particular situation.&lt;/p&gt;&lt;h4 dir="ltr"&gt;Learn how to build fast, production-ready Docker images—read the rest of the &lt;a href="https://pythonspeed.com/docker/" dir="ltr"&gt;Docker packaging guide for Python&lt;/a&gt;.&lt;/h4&gt;&lt;h3&gt;Learn practical Docker and Python software engineering skills, every week&lt;/h3&gt;&lt;p&gt;You need to stay competitive in the job market—but there's too much to learn, and you don’t know where to start.&lt;/p&gt;&lt;p&gt;Join over 2100 Python developers and data scientists learning practical tools and techniques, from Docker packaging to Python best practices, with a free new article in your inbox every week.&lt;/p&gt;&lt;div data-element="fields" data-stacked="false"&gt;&lt;button data-element="submit"&gt;&lt;span&gt;Learn practical software engineering skills&lt;/span&gt;&lt;/button&gt;&lt;/div&gt;</description><pubDate>Mon, 10 Aug 2020 11:54:49 -0500</pubDate></item><item><title>That UPS you bought for your home server may not be as useful as you think</title><link>https://lobste.rs/s/vzjgdm</link><description>&lt;p&gt;Some years ago I decided to install a server at home for use as a NAS (network-attached storage) in my home network, and for an Internet-facing server. I live in a place where blackouts are very infrequent (perhaps a couple per year), but occasionally the mains drops out for only a second or two. I suspect these very short dropouts occur when substation switchgear operates, but have no way of being sure. Anyway, with a server running 24/7 I obviously wanted protection against any loss of the mains supply.&lt;/p&gt;&lt;p dir="ltr"&gt;I ended up buying a 700VA &lt;a href="https://www.apc.com/shop/uk/en/products/APC-Power-Saving-Back-UPS-700VA-230V-BS1363/P-BE700G-UK" title="APC Back-UPS ES-BE700G-UK" dir="ltr"&gt;APC Back-UPS ES-BE700G-UK&lt;/a&gt;, which has four mains sockets that are battery-backed and also have surge protection, plus another four mains sockets that have surge protection but are not battery-backed. Additionally, it has two RJ45 sockets to provide pass-through filtering for an Ethernet connection. It also has a USB port for connection to the server so that it can transmit unsolicited status information to the server (including requesting the server to shutdown) and can also be interrogated by the server using the &lt;code dir="ltr"&gt;apcaccess&lt;/code&gt; command. The &lt;a href="http://www.apcupsd.org/" title="APC UPS daemon" dir="ltr"&gt;APC UPS daemon&lt;/a&gt; works with this model of UPS, and was relatively easy to set up. APC, formerly American Power Conversion Corporation, is a subsidiary of European company Schneider Electric. My UPS was manufactured in The Philippines.&lt;/p&gt;&lt;p&gt;I have three devices plugged into the battery-backed sockets on the APC UPS: the server, an external 6TB USB HDD connected to the server for automated daily backups by the server, and a 5-port Ethernet switch. The battery in the UPS would provide between 15 and 20 minutes of power when the mains fails, although I have configured the UPS to trigger the server to shutdown when 30 per cent of the battery power remains, as battery life is reduced considerably if its power is allowed to drain completely. In case you’re wondering why my router is not also plugged into the UPS, due to the position of the broadband provider’s socket the router is in a different room and I have therefore had to connect it to a different UPS, an iLEPO multi-functional DC UPS (the ECO PLUS 412P, which is tiny but can keep the router powered for several hours). Obviously the router needs to be connected to a UPS, otherwise the server would not be able to send me e-mails when there is a mains power cut. Being able to receive UPS status e-mails from the server is important to me when I am away from home on work trips.&lt;/p&gt;&lt;p&gt;So I thought I had covered all bases, and, indeed, the UPS proved useful on several occasions. I would quite often be on a work trip and receive an e-mail from the server informing me that mains power to the UPS had been lost, then another e-mail soon after informing me that mains power to the UPS had returned. Only once did the power cut last longer than the battery capacity, and the server was shutdown automatically.&lt;/p&gt;&lt;p&gt;Now, the life of the 12-volt lead-acid battery in the APC UPS is supposed to last approximately three to five years. The life will depend on how many times the battery is discharged and ambient temperature.&lt;/p&gt;&lt;p dir="ltr"&gt;While I was away from home on a long work trip, I could no longer connect to my server and I had not received an e-mail from the server informing me of any problem. Luckily it was near the end of my trip so I was not too inconvenienced. When I arrived home I found that the UPS was sounding an alarm and was not supplying power to the server even though there was mains supply to the UPS. It transpired that the UPS battery had suddenly died without warning and could no longer hold a charge, and this had happened &lt;em dir="ltr"&gt;while there was mains supply to the UPS&lt;/em&gt;, i.e. there had not been a power cut while I was away. Fortunately there was no loss of data on the server; I was able to run &lt;code dir="ltr"&gt;fsck&lt;/code&gt; during boot-up.&lt;/p&gt;&lt;p dir="ltr"&gt;This failure was annoying on two counts. Firstly, the battery was only about thirteen months old (the manufacturing date stamped on the UPS box was only two or three months before the date I purchased the UPS). Secondly, I certainly did not expect the UPS to stop supplying power to the server while there was mains supply to the UPS. The APC white paper on UPS topologies, ‘&lt;a href="https://download.schneider-electric.com/files?p_Doc_Ref=SPD_SADE-5TNM3Y_EN" title="The Different Types of UPS Systems" dir="ltr"&gt;The Different Types of UPS Systems&lt;/a&gt;‘, does not make this behaviour clear.&lt;/p&gt;&lt;p dir="ltr"&gt;It turns out that the type of UPS topology (‘Standby’ — see the model’s &lt;a href="https://www.apc.com/shop/uk/en/products/APC-Power-Saving-Back-UPS-700VA-230V-BS1363/P-BE700G-UK" title="BE700G-UK Technical Specifications" dir="ltr"&gt;Technical Specifications&lt;/a&gt;) in this model of UPS does not continue to provide power to connected equipment when the UPS battery either fails or is disconnected for whatever reason when there is mains power supply to the UPS. A quick search of the Web showed me that I was not alone in discovering this ‘feature’: an APC Back-UPS 350 owner posted ‘&lt;a href="https://www.cnet.com/forums/discussions/ups-battery-backup-useless-when-the-battery-dies-319380/" title="UPS Battery Backup -- useless when the battery dies?" dir="ltr"&gt;UPS Battery Backup — useless when the battery dies?&lt;/a&gt;‘.&lt;/p&gt;&lt;p&gt;From what I have read, the so-called ‘Line Interactive’ UPS topology does not suffer this shortcoming, so, the next time I have to buy a UPS for a piece of equipment that requires power 24/7, I will buy a line-interactive UPS rather than a standby UPS. But, before purchasing, I will be sure to ask the manufacturer what the precise model would do if its battery fails or is disconnected while there is mains supply to the UPS. The APC line-interactive UPSs are more expensive than the APC Back-UPS models; now I know why. It’s a pity I was not aware of the shortcoming of the Back-UPS models, as I would have spent more and bought a UPS that continues to work when the battery dies while there is mains supply. I would also hope the UPS would issue an alarm if the battery has failed or is disconnected while there is mains supply. Be sure to ask the manufacturer all these questions if you cannot tolerate a sudden loss of power to your equipment if the battery dies while there is mains supply.&lt;/p&gt;&lt;p&gt;Anyway, after checking that the dead battery was indeed useless I replaced it with a new Yuasa battery that has lasted nearly three years now. I will be replacing it shortly as a precaution, even though it has not had to be used much at all since I installed it. I have not replaced the APC Back-UPS model but I will be replacing the battery at least every three years just to be cautious, and of course taking the old batteries to my local waste disposal centre to be recycled properly. By the way, it is possible to purchase a 12-volt battery manufactured by one of the reputable battery manufacturers such as Yuasa with the same specification as the APC battery, for a significantly lower price than APC charges for replacement batteries (which I suspect are badged by APC in any case).&lt;/p&gt;&lt;h3&gt;Share this:&lt;/h3&gt;</description><pubDate>Sun, 09 Aug 2020 14:37:13 -0500</pubDate></item><item><title>Tripping over the potholes in too many libraries</title><link>https://lobste.rs/s/mxa5ze</link><description>&lt;p&gt;
 While on my most recent break from writing, I pondered a bunch of things 
 that keep seeming to come up in issues of reliability or maintainability 
 in software.  At least one of them is probably not going to make me many 
@@ -2355,7 +2355,89 @@ POSIX-ish filesystems.
 This whole thing goes into even darker places, but I think I'll stop 
 there for now.  Needless to say, I have more to write on this larger 
 topic in the future.
-&lt;/p&gt;</description><pubDate>Sun, 09 Aug 2020 23:37:11 -0500</pubDate></item><item><title>Exploiting vBulletin: “A Tale of a Patch Fail”</title><link>https://lobste.rs/s/vcxzjl</link><description>&lt;p dir="ltr"&gt;On September 23, 2019 &lt;a href="https://seclists.org/fulldisclosure/2019/Sep/31" dir="ltr"&gt;an undisclosed researcher released a bug which allowed for PHP remote code execution in vBulletin 5.0 through 5.4&lt;/a&gt;. This bug (CVE-2019-16759) was labeled as a ‘bugdoor’ because of its simplicity by a &lt;a href="https://twitter.com/cbekrar/status/1176803541047861249?" dir="ltr"&gt;popular vulnerability broker&lt;/a&gt; and was marked with a &lt;a href="https://nvd.nist.gov/vuln/detail/CVE-2019-16759" dir="ltr"&gt;CVSS 3.x score of 9.8&lt;/a&gt; giving it a critical rating. &lt;/p&gt;&lt;p&gt;Today, we’re going to talk about how the patch that was supplied for the vulnerability was inadequate in blocking exploitation, show how to bypass the resulting fix, and releasing a bash one-liner resulting in remote code execution in the latest vBulletin software.&lt;/p&gt;&lt;h2&gt;CVE-2019-16759&lt;/h2&gt;&lt;p&gt;The vulnerability mentioned above was later formally labeled “CVE-2019-16759” and a patch was issued on September 25, 2019. Although the patch was provided in just under 3 days, the patch seemed, at the time, to fix the proof of concept exploit provided by the un-named finder. &lt;/p&gt;&lt;p&gt;The patch(s) consisted of three main changes provided in 2 sets of patches, the first being shown below.&lt;/p&gt;&lt;PRE&gt;120
+&lt;/p&gt;</description><pubDate>Sun, 09 Aug 2020 23:37:11 -0500</pubDate></item><item><title>r2con2020</title><link>https://lobste.rs/s/lhafbc</link><description>&lt;div dir="ltr"&gt;
+.-[&lt;font dir="ltr"&gt;ɹ◁◁&lt;/font&gt;]-------------------.
+| &lt;font dir="ltr"&gt; ___  ___ ___ ___ _  _ &lt;/font&gt; |_____________________________________________________________
+| &lt;font dir="ltr"&gt;| _ \(__ \  _|   | \| |&lt;/font&gt; |                                                             |
+| &lt;font dir="ltr"&gt;|   (/ __/ (_, 0 |    |&lt;/font&gt; |  &lt;font dir="ltr"&gt;When:&lt;/font&gt; 4 days in September (from 2020-09-02 to 2020-09-05)  |
+| &lt;font dir="ltr"&gt;|_\__|___|___|___|_|\_|&lt;/font&gt; |  &lt;font dir="ltr"&gt;Schedule:&lt;/font&gt; Talks available in &lt;a href="https://www.radare.org/con/2020/assets/r2con2020schedule.pdf" dir="ltr"&gt;PDF&lt;/a&gt; (GMT+2)                   |
+| &lt;font dir="ltr"&gt; ____  ___  ____  ___  &lt;/font&gt; |  &lt;font dir="ltr"&gt;Ticket Price:&lt;/font&gt; $0 :D                                        |
+| &lt;font dir="ltr"&gt;(__  \/   \(__  \/   \ &lt;/font&gt; |  &lt;font dir="ltr"&gt;CFP:&lt;/font&gt; Closed                                                |
+| &lt;font dir="ltr"&gt;/  __/  0  /  __/  0  |&lt;/font&gt; |  &lt;font dir="ltr"&gt;Anouncements:&lt;/font&gt; &lt;a href="https://twitter.com/radareorg" dir="ltr"&gt;Twitter&lt;/a&gt;, &lt;a href="https://t.me/r2con2020" dir="ltr"&gt;Telegram&lt;/a&gt;                            |
+| &lt;font dir="ltr"&gt;|____|\___/|____|\___/ &lt;/font&gt; |  &lt;font dir="ltr"&gt;Contact us&lt;/font&gt; via &lt;a href="mailto:r2con@radare.org" dir="ltr"&gt;mail&lt;/a&gt;, &lt;a href="https://t.me/joinchat/ACR-Fk9ubHzj8sSpDLl2bQ" dir="ltr"&gt;Telegram&lt;/a&gt;                              |
+| &lt;font dir="ltr"&gt;                       &lt;/font&gt; |  &lt;font dir="ltr"&gt;Party:&lt;/font&gt; &lt;i dir="ltr"&gt;Chiptune concert and virtual beers&lt;/i&gt;                  |
+`---.---------------------'                                                             |
+ _  |                                                                                   |
+|_|-+--[ &lt;font dir="ltr"&gt;CONFERENCE&lt;/font&gt; ]-------------------------------------------------------------------(
+    |                                                                                   |
+    | Thanks to the COVID19 global pandemic we decided to make the conference online.   |
+    |                                                                                   |
+    | r2con is a the annual conference about &lt;a href="https://radare.org/" dir="ltr"&gt;radare2&lt;/a&gt;                                    |
+    | The conference aims to gather all the r2 users and developers around the world to |
+    | enjoy a 4 day event full of experiments, hacking, teaching, discussing and coding |
+    | stuff while having fun and drinking beers (safely at home).                       |
+ _  |                                                                                   |
+|_|-+--[ &lt;font dir="ltr"&gt;COMPETITIONS&lt;/font&gt; ]-----------------------------------------------------------------(
+    |                                                                                   |
+    | As we did in previous editions we will be holding them, but in remote, and prizes |
+    | for the winners will be sent to their homes directly for free. (see below)        |
+    |                                                                                   |
+    | * &lt;b dir="ltr"&gt;r2wars&lt;/b&gt; - the codewars-style assembly game on top of r2                          |
+    | * &lt;b dir="ltr"&gt;Hackathon&lt;/b&gt; - fix bugs and implement things in r2                                 |
+    | * &lt;b dir="ltr"&gt;CTF&lt;/b&gt; - capture the flag reversing challenges to solve with r2                    |
+    | * &lt;b dir="ltr"&gt;GSoC&lt;/b&gt; - Google Summer of Code 2020                                               |
+    |                                                                                   |
+    `-----------------------------------------------------------------------------------'
+	
+&lt;/div&gt;&lt;h2&gt;r2wars&lt;/h2&gt;&lt;div dir="ltr"&gt;
+This game is inspired by &lt;a href="https://en.wikipedia.org/wiki/Core_War" dir="ltr"&gt;CoreWar&lt;/a&gt;, but running on top of radare2's ESIL emulation. 
+To win please submit your bots written in assembly (this time we will accept x86-32, arm64,
+arm32, mips) which will run in the same memory space trying to make the othe r bot crash by
+corrupting their memory.
+
+To learn more check out the following links:
+
+* &lt;a href="https://github.com/radareorg/r2wars" dir="ltr"&gt;https://github.com/radareorg/r2wars&lt;/a&gt; 
+* &lt;a href="https://www.youtube.com/results?search_query=r2wars" dir="ltr"&gt;https://www.youtube.com/results?search_query=r2wars&lt;/a&gt; 
+* &lt;a href="https://github.com/radare/radare2/labels/r2wars" dir="ltr"&gt;https://github.com/radare/radare2/labels/r2wars&lt;/a&gt; 
+
+ 
+&lt;/div&gt;&lt;h2&gt;Hackathon&lt;/h2&gt;&lt;div dir="ltr"&gt;
+
+This competition consists in fixing as much issues as possible of the ones labelled as
+"hackathon" in the radare repository &amp;amp; the cutter repository, for the new contributors.
+For new people that wants to participate in the Hackathon we suggest to check the
+issues labelled with `good first issue`:
+
+* &lt;a href="https://github.com/radareorg/radare2/issues?q=is%3Aopen+label%3A%22good+first+issue%22+label%3Ahackaton" dir="ltr"&gt;1st issue radare2&lt;/a&gt;
+* &lt;a href="https://github.com/radareorg/cutter/issues?q=is%3Aopen+label%3A%22good+first+issue%22+label%3Ahackaton" dir="ltr"&gt;1st issue cutter&lt;/a&gt;
+
+To participate in the radare2CON 2020 hackathon use the labels:
+
+* &lt;a href="https://github.com/radareorg/radare2/labels/hackaton" dir="ltr"&gt;radare2 hackaton label&lt;/a&gt;
+* &lt;a href="https://github.com/radareorg/cutter/labels/hackaton" dir="ltr"&gt;cutter hackaton label&lt;/a&gt;
+
+
+&lt;/div&gt;&lt;h2&gt;CTF&lt;/h2&gt;&lt;div&gt;
+
+The R2Con CTF is a Jeopardy CaptureTheFlag style competition that must be solved with r2.
+You are given several questions, tasks &amp;amp; challenges related to different categories of
+RE which may be solved using radare2. Players get points by solving them. Using hints
+to solve the challenges lowers the score.
+
+
+&lt;/div&gt;&lt;h2&gt;GSoC&lt;/h2&gt;&lt;div dir="ltr"&gt;
+
+This is the 7th Summer Of Code competition of radare2, this time we got accepted by
+Google in the GSoC, which allows us to bring the oportunity to some students to
+learn more about C, reverse engineering and r2 itself thanks to our mentoring. 
+
+The selected students will be presenting their work at the end of summer during the r2con.
+
+To learn more about checkout this link: &lt;a href="https://www.radare.org/gsoc/2020" dir="ltr"&gt;https://www.radare.org/gsoc/2020&lt;/a&gt;
+&lt;br dir="ltr"&gt;
+
+&lt;/div&gt;</description><pubDate>Mon, 10 Aug 2020 15:22:23 -0500</pubDate></item><item><title>Exploiting vBulletin: “A Tale of a Patch Fail”</title><link>https://lobste.rs/s/vcxzjl</link><description>&lt;p dir="ltr"&gt;On September 23, 2019 &lt;a href="https://seclists.org/fulldisclosure/2019/Sep/31" dir="ltr"&gt;an undisclosed researcher released a bug which allowed for PHP remote code execution in vBulletin 5.0 through 5.4&lt;/a&gt;. This bug (CVE-2019-16759) was labeled as a ‘bugdoor’ because of its simplicity by a &lt;a href="https://twitter.com/cbekrar/status/1176803541047861249?" dir="ltr"&gt;popular vulnerability broker&lt;/a&gt; and was marked with a &lt;a href="https://nvd.nist.gov/vuln/detail/CVE-2019-16759" dir="ltr"&gt;CVSS 3.x score of 9.8&lt;/a&gt; giving it a critical rating. &lt;/p&gt;&lt;p&gt;Today, we’re going to talk about how the patch that was supplied for the vulnerability was inadequate in blocking exploitation, show how to bypass the resulting fix, and releasing a bash one-liner resulting in remote code execution in the latest vBulletin software.&lt;/p&gt;&lt;h2&gt;CVE-2019-16759&lt;/h2&gt;&lt;p&gt;The vulnerability mentioned above was later formally labeled “CVE-2019-16759” and a patch was issued on September 25, 2019. Although the patch was provided in just under 3 days, the patch seemed, at the time, to fix the proof of concept exploit provided by the un-named finder. &lt;/p&gt;&lt;p&gt;The patch(s) consisted of three main changes provided in 2 sets of patches, the first being shown below.&lt;/p&gt;&lt;PRE&gt;120
 121
 122
 123
@@ -4581,89 +4663,43 @@ Sean Bryant, Sebastian Zimmer, Fernando, Stefano Probst, Lina Cambridge, Тим
 Michael Alyn Miller, o0Ignition0o, Zaki, Raphael Gaschignard, Romain
 Ruetschi, Ignacio Vergara, Pascal, Jane Lusby, Nicolas Goy, Ted Mielczarek,
 Someone, Jérémy Gtld, Ryszard Sommefeldt, Jesús Higueras.
-&lt;/p&gt;</description><pubDate>Sun, 09 Aug 2020 10:59:58 -0500</pubDate></item><item><title>Running Word Star on vDos</title><link>https://www.sfwriter.com/ws-vdos.htm</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/xi92pc/running_word_star_on_vdos"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 09 Aug 2020 11:49:39 -0500</pubDate></item><item><title>r2con2020</title><link>https://lobste.rs/s/lhafbc</link><description>&lt;div dir="ltr"&gt;
-.-[&lt;font dir="ltr"&gt;ɹ◁◁&lt;/font&gt;]-------------------.
-| &lt;font dir="ltr"&gt; ___  ___ ___ ___ _  _ &lt;/font&gt; |_____________________________________________________________
-| &lt;font dir="ltr"&gt;| _ \(__ \  _|   | \| |&lt;/font&gt; |                                                             |
-| &lt;font dir="ltr"&gt;|   (/ __/ (_, 0 |    |&lt;/font&gt; |  &lt;font dir="ltr"&gt;When:&lt;/font&gt; 4 days in September (from 2020-09-02 to 2020-09-05)  |
-| &lt;font dir="ltr"&gt;|_\__|___|___|___|_|\_|&lt;/font&gt; |  &lt;font dir="ltr"&gt;Schedule:&lt;/font&gt; Talks available in &lt;a href="https://www.radare.org/con/2020/assets/r2con2020schedule.pdf" dir="ltr"&gt;PDF&lt;/a&gt; (GMT+2)                   |
-| &lt;font dir="ltr"&gt; ____  ___  ____  ___  &lt;/font&gt; |  &lt;font dir="ltr"&gt;Ticket Price:&lt;/font&gt; $0 :D                                        |
-| &lt;font dir="ltr"&gt;(__  \/   \(__  \/   \ &lt;/font&gt; |  &lt;font dir="ltr"&gt;CFP:&lt;/font&gt; Closed                                                |
-| &lt;font dir="ltr"&gt;/  __/  0  /  __/  0  |&lt;/font&gt; |  &lt;font dir="ltr"&gt;Anouncements:&lt;/font&gt; &lt;a href="https://twitter.com/radareorg" dir="ltr"&gt;Twitter&lt;/a&gt;, &lt;a href="https://t.me/r2con2020" dir="ltr"&gt;Telegram&lt;/a&gt;                            |
-| &lt;font dir="ltr"&gt;|____|\___/|____|\___/ &lt;/font&gt; |  &lt;font dir="ltr"&gt;Contact us&lt;/font&gt; via &lt;a href="mailto:r2con@radare.org" dir="ltr"&gt;mail&lt;/a&gt;, &lt;a href="https://t.me/joinchat/ACR-Fk9ubHzj8sSpDLl2bQ" dir="ltr"&gt;Telegram&lt;/a&gt;                              |
-| &lt;font dir="ltr"&gt;                       &lt;/font&gt; |  &lt;font dir="ltr"&gt;Party:&lt;/font&gt; &lt;i dir="ltr"&gt;Chiptune concert and virtual beers&lt;/i&gt;                  |
-`---.---------------------'                                                             |
- _  |                                                                                   |
-|_|-+--[ &lt;font dir="ltr"&gt;CONFERENCE&lt;/font&gt; ]-------------------------------------------------------------------(
-    |                                                                                   |
-    | Thanks to the COVID19 global pandemic we decided to make the conference online.   |
-    |                                                                                   |
-    | r2con is a the annual conference about &lt;a href="https://radare.org/" dir="ltr"&gt;radare2&lt;/a&gt;                                    |
-    | The conference aims to gather all the r2 users and developers around the world to |
-    | enjoy a 4 day event full of experiments, hacking, teaching, discussing and coding |
-    | stuff while having fun and drinking beers (safely at home).                       |
- _  |                                                                                   |
-|_|-+--[ &lt;font dir="ltr"&gt;COMPETITIONS&lt;/font&gt; ]-----------------------------------------------------------------(
-    |                                                                                   |
-    | As we did in previous editions we will be holding them, but in remote, and prizes |
-    | for the winners will be sent to their homes directly for free. (see below)        |
-    |                                                                                   |
-    | * &lt;b dir="ltr"&gt;r2wars&lt;/b&gt; - the codewars-style assembly game on top of r2                          |
-    | * &lt;b dir="ltr"&gt;Hackathon&lt;/b&gt; - fix bugs and implement things in r2                                 |
-    | * &lt;b dir="ltr"&gt;CTF&lt;/b&gt; - capture the flag reversing challenges to solve with r2                    |
-    | * &lt;b dir="ltr"&gt;GSoC&lt;/b&gt; - Google Summer of Code 2020                                               |
-    |                                                                                   |
-    `-----------------------------------------------------------------------------------'
-	
-&lt;/div&gt;&lt;h2&gt;r2wars&lt;/h2&gt;&lt;div dir="ltr"&gt;
-This game is inspired by &lt;a href="https://en.wikipedia.org/wiki/Core_War" dir="ltr"&gt;CoreWar&lt;/a&gt;, but running on top of radare2's ESIL emulation. 
-To win please submit your bots written in assembly (this time we will accept x86-32, arm64,
-arm32, mips) which will run in the same memory space trying to make the othe r bot crash by
-corrupting their memory.
-
-To learn more check out the following links:
-
-* &lt;a href="https://github.com/radareorg/r2wars" dir="ltr"&gt;https://github.com/radareorg/r2wars&lt;/a&gt; 
-* &lt;a href="https://www.youtube.com/results?search_query=r2wars" dir="ltr"&gt;https://www.youtube.com/results?search_query=r2wars&lt;/a&gt; 
-* &lt;a href="https://github.com/radare/radare2/labels/r2wars" dir="ltr"&gt;https://github.com/radare/radare2/labels/r2wars&lt;/a&gt; 
-
- 
-&lt;/div&gt;&lt;h2&gt;Hackathon&lt;/h2&gt;&lt;div dir="ltr"&gt;
-
-This competition consists in fixing as much issues as possible of the ones labelled as
-"hackathon" in the radare repository &amp;amp; the cutter repository, for the new contributors.
-For new people that wants to participate in the Hackathon we suggest to check the
-issues labelled with `good first issue`:
-
-* &lt;a href="https://github.com/radareorg/radare2/issues?q=is%3Aopen+label%3A%22good+first+issue%22+label%3Ahackaton" dir="ltr"&gt;1st issue radare2&lt;/a&gt;
-* &lt;a href="https://github.com/radareorg/cutter/issues?q=is%3Aopen+label%3A%22good+first+issue%22+label%3Ahackaton" dir="ltr"&gt;1st issue cutter&lt;/a&gt;
-
-To participate in the radare2CON 2020 hackathon use the labels:
-
-* &lt;a href="https://github.com/radareorg/radare2/labels/hackaton" dir="ltr"&gt;radare2 hackaton label&lt;/a&gt;
-* &lt;a href="https://github.com/radareorg/cutter/labels/hackaton" dir="ltr"&gt;cutter hackaton label&lt;/a&gt;
-
-
-&lt;/div&gt;&lt;h2&gt;CTF&lt;/h2&gt;&lt;div&gt;
-
-The R2Con CTF is a Jeopardy CaptureTheFlag style competition that must be solved with r2.
-You are given several questions, tasks &amp;amp; challenges related to different categories of
-RE which may be solved using radare2. Players get points by solving them. Using hints
-to solve the challenges lowers the score.
-
-
-&lt;/div&gt;&lt;h2&gt;GSoC&lt;/h2&gt;&lt;div dir="ltr"&gt;
-
-This is the 7th Summer Of Code competition of radare2, this time we got accepted by
-Google in the GSoC, which allows us to bring the oportunity to some students to
-learn more about C, reverse engineering and r2 itself thanks to our mentoring. 
-
-The selected students will be presenting their work at the end of summer during the r2con.
-
-To learn more about checkout this link: &lt;a href="https://www.radare.org/gsoc/2020" dir="ltr"&gt;https://www.radare.org/gsoc/2020&lt;/a&gt;
-&lt;br dir="ltr"&gt;
-
-&lt;/div&gt;</description><pubDate>Mon, 10 Aug 2020 15:22:23 -0500</pubDate></item><item><title>Adding a fiber link to my home network</title><link>https://lobste.rs/s/k67kzq</link><description>&lt;div dir="ltr"&gt;
+&lt;/p&gt;</description><pubDate>Sun, 09 Aug 2020 10:59:58 -0500</pubDate></item><item><title>Running Word Star on vDos</title><link>https://www.sfwriter.com/ws-vdos.htm</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/xi92pc/running_word_star_on_vdos"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 09 Aug 2020 11:49:39 -0500</pubDate></item><item><title>A Best in Class iOS App</title><link>https://lobste.rs/s/8zx2vc</link><description>&lt;section&gt;&lt;small dir="ltr"&gt;Written by &lt;a href="https://www.twitter.com/jordanmorgan10" dir="ltr"&gt;Jordan Morgan&lt;/a&gt; • Feb 25th, 2019&lt;/small&gt;&lt;/section&gt;&lt;section&gt;&lt;small&gt;Updated Jul 7th, 2020&lt;/small&gt;&lt;/section&gt;&lt;BLOCKQUOTE&gt;
+  &lt;p dir="ltr"&gt;Get the public Github Issue version of this list &lt;a href="https://gist.github.com/DreamingInBinary/0ccd49e3578c5ae1ebb20632c6c3af73" dir="ltr"&gt;here&lt;/a&gt;.&lt;/p&gt;
+&lt;/BLOCKQUOTE&gt;&lt;BLOCKQUOTE&gt;
+  &lt;p dir="ltr"&gt;Updated to reflect iOS 14.&lt;/p&gt;
+&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;For as long as I’ve been a part of this industry, I’ve watched incredible, well-deserving apps take home an Apple Design Award. And &lt;em dir="ltr"&gt;that’s&lt;/em&gt; my endgame.&lt;/p&gt;&lt;p&gt;So, years ago, I set out to create a list that succinctly answers only one question:&lt;/p&gt;&lt;p&gt;&lt;strong&gt;What things can I quantify that help make an app great?&lt;/strong&gt;&lt;/p&gt;&lt;p&gt;I believe I’ve created such a list that helps answer that question. Yours might look different, but this one is mine. It attempts to take all of the emotion and (mostly) opinions out of it. I want to capture what Apple says is great, not what other people may define it as. Though those opinions can assuredly be of value, they don’t give out A.D.A.s - only Apple does.&lt;/p&gt;&lt;p&gt;Here’s a quick brief on my methodology behind how I created it:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;First, and most importantly, I read iOS’ Human Interface Guidelines annually from top to bottom after the GM releases of the upcoming version of iOS. This list applies to primarily the latest version of iOS and iPadOS.&lt;/LI&gt;&lt;LI&gt;Where there’s smoke, there’s fire. If Apple has said on record that “This is great” about an app, I include whatever that thing or interaction was. These things aren’t clandestine trade secrets, but rather they are things that Apple or an Apple design evangelist publicly gave their seal of approval to.&lt;/LI&gt;&lt;LI&gt;Lastly, remember this is largely a “yes/no” list. As such, it’s only part of the equation of what makes a truly great app. Innovation, technology and user experience all have to come together. It’s about enriching people’s day to day interactions with our apps, and knowing who uses them extremely well.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;That’s it.&lt;/p&gt;&lt;BLOCKQUOTE&gt;
+  &lt;p dir="ltr"&gt;As always, if you’ve got an item or two that belongs on this list, by all means create a pull request to get it added in by visiting the link at the bottom of the post.&lt;/p&gt;
+&lt;/BLOCKQUOTE&gt;&lt;p&gt;The five sections it covers are:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Accessibility:&lt;/strong&gt; Designing for everyone is the right thing to do, and the best apps do it and they do it exceptionally well.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Platform Technology:&lt;/strong&gt; Apple loves it when apps utilize their new APIs to great effect, you should too. It’s not about shoehorning features, it’s about looking at your product and seeing how to utilize iOS around it.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;User Experience:&lt;/strong&gt; Don’t make people think. Your app should have a core function that acts as a thesis to a paper - and your UX is the body that supports it.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Design:&lt;/strong&gt; Explaining design is hard, but you know a good one when you see it. This section lists some things those apps which are thoughtfully created do.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;App Store Presence:&lt;/strong&gt; This is by far the most nascent category I’ve been tracking, so its list is short. It includes best practices for the App Store.&lt;/LI&gt;&lt;/OL&gt;&lt;h3&gt;Accessibility is First Class&lt;/h3&gt;&lt;UL&gt;&lt;LI&gt;Voice Over is fully supported and the &lt;a href="https://developer.apple.com/documentation/uikit/uiaccessibilitycustomrotor" dir="ltr"&gt;rotor&lt;/a&gt; control is implemented by including the relevant headings. Using Screen Curtain yields an experience that’s not only usable, but up to par with the regular app using only Voice Over.&lt;/LI&gt;&lt;LI&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;&lt;a href="https://developer.apple.com/documentation/objectivec/nsobject/1615091-accessibilityperformescape" dir="ltr"&gt;Escape&lt;/a&gt;&lt;/strong&gt;: A two-finger Z-shaped gesture that dismisses a modal dialog, or goes back one level in a navigation hierarchy.
+        &lt;UL&gt;&lt;LI&gt;&lt;code&gt;func accessibilityPerformEscape() -&amp;gt; Bool&lt;/code&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;UL&gt;&lt;LI&gt;&lt;code&gt;func accessibilityPerformMagicTap() -&amp;gt; Bool&lt;/code&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;UL&gt;&lt;LI&gt;&lt;code&gt;func accessibilityScroll(_ direction: UIAccessibilityScrollDirection) -&amp;gt; Bool&lt;/code&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;&lt;a href="https://developer.apple.com/documentation/objectivec/nsobject/1615076-accessibilityincrement" dir="ltr"&gt;Increment&lt;/a&gt;&lt;/strong&gt;: A one-finger swipe up that increments a value in an element.
+        &lt;UL&gt;&lt;LI&gt;&lt;code&gt;func accessibilityIncrement()&lt;/code&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;UL&gt;&lt;LI&gt;&lt;code&gt;func accessibilityDecrement()&lt;/code&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://developer.apple.com/documentation/objectivec/nsobject/3197989-accessibilityuserinputlabels?language=swift" dir="ltr"&gt;Voice Control&lt;/a&gt; is also supported, and appropriate &lt;a href="https://developer.apple.com/documentation/objectivec/nsobject/3197989-accessibilityuserinputlabels?language=objc" dir="ltr"&gt;&lt;code dir="ltr"&gt;accessibilityUserInputLabels&lt;/code&gt;&lt;/a&gt; are set if needed.&lt;/LI&gt;&lt;LI&gt;Your app respects the following settings:
+    &lt;UL&gt;&lt;LI&gt;Including Bold Text.&lt;/LI&gt;&lt;LI&gt;High Contrast Cursors.&lt;/LI&gt;&lt;LI&gt;Reduce Transparency.&lt;/LI&gt;&lt;LI&gt;Dark Mode.&lt;/LI&gt;&lt;LI&gt;Reducing Motion.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;When presenting new controllers, you set the Voice Over Cursor to an &lt;a href="https://developer.apple.com/library/archive/featuredarticles/ViewControllerPGforiPhoneOS/SupportingAccessibility.html#//apple_ref/doc/uid/TP40007457-CH12-SW1" dir="ltr"&gt;appropriate element&lt;/a&gt; if the top-most left element doesn’t make sense:
+  &lt;code dir="ltr"&gt;UIAccessibilityPostNotification(.screenChangedNotification, myHeading);&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Context considering, you use &lt;code dir="ltr"&gt;accessibilityIgnoresInvertColors&lt;/code&gt; for images and video.&lt;/LI&gt;&lt;LI&gt;If punctuation should be spoken in your accessibility text, you use an attributed string to set &lt;code dir="ltr"&gt;accessibilitySpeechPunctuation&lt;/code&gt; to &lt;code dir="ltr"&gt;true&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;You group content logically using accessibility containers for efficient navigation.&lt;/LI&gt;&lt;LI&gt;Adaptive and supports all devices and multitasking scenarios elegantly.&lt;/LI&gt;&lt;LI&gt;Fully supports dynamic type.&lt;/LI&gt;&lt;LI&gt;Readable text uses &lt;code dir="ltr"&gt;readableContentGuide&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;Color blind support and a 7:1 color contrast ratio.&lt;/LI&gt;&lt;LI&gt;Smart Invert Color Support and the app responds well to color inversion.&lt;/LI&gt;&lt;LI&gt;All bar buttons have their landscapeImagePhone and largeContentSizeImage properties set.&lt;/LI&gt;&lt;LI&gt;Controls are grouped in a way that makes navigation trivial with &lt;code dir="ltr"&gt;shouldGroupAccessibilityChildren&lt;/code&gt; if they aren’t already.&lt;/LI&gt;&lt;LI&gt;You use system vended items for common bar buttons, quick actions, tab and navigation bar items (i.e. such as save, done, etc.).&lt;/LI&gt;&lt;LI&gt;All glyphs have their accessibility images set (i.e. &lt;code dir="ltr"&gt;adjustsImageSizeForAccessibilityContentSizeCategory&lt;/code&gt;).&lt;/LI&gt;&lt;LI&gt;Includes closed captions and audio descriptions, all images and icons have alternative text set.&lt;/LI&gt;&lt;LI&gt;Full rotor control support is provided via &lt;code dir="ltr"&gt;UIAccessibilityCustomAction&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;Leading and trailing margins are used for constraints to support left to right languages.&lt;/LI&gt;&lt;LI&gt;If you’ve got UI that doesn’t inherit from &lt;code dir="ltr"&gt;UIView&lt;/code&gt; or &lt;code dir="ltr"&gt;UIControl&lt;/code&gt;, you leverage &lt;a href="https://developer.apple.com/documentation/uikit/uiaccessibilityelement" dir="ltr"&gt;&lt;code dir="ltr"&gt;UIAccessibilityElement&lt;/code&gt;&lt;/a&gt; to make it accessible if needed.&lt;/LI&gt;&lt;LI&gt;If you include your own videos, you &lt;a href="https://developer.apple.com/documentation/avfoundation/media_playback_and_selection/adding_subtitles_and_alternative_audio_tracks" dir="ltr"&gt;add necessary subtitle and audio tracks&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;The User Interface appears flawlessly when tested using Double Length Pseudo-languages.&lt;/LI&gt;&lt;LI&gt;Using &lt;code dir="ltr"&gt;NSShowNonLocalizedStrings&lt;/code&gt; yields no results.&lt;/LI&gt;&lt;LI&gt;If you support drag and drop, &lt;a href="https://developer.apple.com/videos/play/wwdc2018/241/" dir="ltr"&gt;UIAccessibilityLocationDescriptors&lt;/a&gt; are all set. You’ll also leverage &lt;a href="https://developer.apple.com/documentation/objectivec/nsobject/2891001-accessibilitydragsourcedescripto" dir="ltr"&gt;&lt;code dir="ltr"&gt;accessibilityDragSourceDescriptors&lt;/code&gt;&lt;/a&gt; and &lt;a href="https://developer.apple.com/documentation/objectivec/nsobject/2891048-accessibilitydroppointdescriptor" dir="ltr"&gt;&lt;code dir="ltr"&gt;accessibilityDropPointDescriptors&lt;/code&gt;&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;For modally presented views, there is a clear button available to dismiss it instead of relying solely on a swipe gesture.&lt;/LI&gt;&lt;LI&gt;In iMessage Sticker extensions, accessibility labels are provided.&lt;/LI&gt;&lt;LI&gt;Magic taps are supported for the app’s most common functionality.&lt;/LI&gt;&lt;LI&gt;It uses &lt;code dir="ltr"&gt;CFBundleSpokenName&lt;/code&gt; if the app’s name could potentially be mispronounced by the system (i..e CoolApp23 would be “CoolApp Twenty Three”).&lt;/LI&gt;&lt;LI&gt;You only request permissions from iOS until you truly need them. From the HIG:
+    &lt;BLOCKQUOTE&gt;
+      &lt;p dir="ltr"&gt;“When your request is clearly related to the current context, you help people understand your app’s intentions.”&lt;/p&gt;
+    &lt;/BLOCKQUOTE&gt;&lt;/LI&gt;&lt;LI&gt;At the end of the day, you’re considering and building for all of these accessibility technologies (some of these deal with Mac Catalyst):
+    &lt;UL&gt;&lt;LI&gt;Alternate pointer actions&lt;/LI&gt;&lt;LI&gt;Slow keys&lt;/LI&gt;&lt;LI&gt;Larger text&lt;/LI&gt;&lt;LI&gt;Header pointer&lt;/LI&gt;&lt;LI&gt;Speak screen&lt;/LI&gt;&lt;LI&gt;Guided access&lt;/LI&gt;&lt;LI&gt;Typing feedback&lt;/LI&gt;&lt;LI&gt;Full keyboard access&lt;/LI&gt;&lt;LI&gt;Assistive Touch&lt;/LI&gt;&lt;LI&gt;Reduce Motion&lt;/LI&gt;&lt;LI&gt;Voice Control&lt;/LI&gt;&lt;LI&gt;Reachability&lt;/LI&gt;&lt;LI&gt;Live Listen&lt;/LI&gt;&lt;LI&gt;RTT/TTY&lt;/LI&gt;&lt;LI&gt;Accessibility Keyboard&lt;/LI&gt;&lt;LI&gt;Zoom&lt;/LI&gt;&lt;LI&gt;Magnifier&lt;/LI&gt;&lt;LI&gt;VoiceOver&lt;/LI&gt;&lt;LI&gt;Sticky Keys&lt;/LI&gt;&lt;LI&gt;Switch Control&lt;/LI&gt;&lt;LI&gt;Speak Selection&lt;/LI&gt;&lt;LI&gt;Display Accommodations&lt;/LI&gt;&lt;LI&gt;Audio Descriptions&lt;/LI&gt;&lt;LI&gt;Mouse Keys&lt;/LI&gt;&lt;LI&gt;Hover Text&lt;/LI&gt;&lt;LI&gt;Large Text&lt;/LI&gt;&lt;LI&gt;Braille&lt;/LI&gt;&lt;LI&gt;Dwell&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;From the above, the main things to address broadly are &lt;strong dir="ltr"&gt;Vision&lt;/strong&gt;, &lt;strong dir="ltr"&gt;Hearing&lt;/strong&gt;, &lt;strong dir="ltr"&gt;Physical and Motor&lt;/strong&gt; and &lt;strong dir="ltr"&gt;Literacy and Learning&lt;/strong&gt;.&lt;/LI&gt;&lt;LI&gt;Lastly, running the entire app through Accessibility Inspector produced no warnings and turning on Screen Curtain to navigate the app works flawlessly.&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;iOS Technology is Tightly Integrated&lt;/h3&gt;&lt;UL&gt;&lt;LI&gt;Contextual menus are integrated for long presses, showing previews where appropriate.
+    &lt;UL&gt;&lt;LI&gt;Find a good balance on what to include. Having too many options can be overwhelming.&lt;/LI&gt;&lt;LI&gt;Use glyphs to reinforce each action’s meaning.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;Edit menus are used in the right places, and don’t conflict with a context menu.&lt;/LI&gt;&lt;LI&gt;You opt for pull down style menus over action sheets, and use them to reduce modality throughout your app to keep the focus squarely on the content.
+    &lt;UL&gt;&lt;LI&gt;Action sheets are still used to confirm a destructive action. It provides enough friction to ensure the user really wants to perform the deletion.&lt;/LI&gt;&lt;LI&gt;You also don’t include a cancel menu item. Canceling is an implicit action the system provides by tapping outside of the menu bounds.&lt;/LI&gt;&lt;LI&gt;You use menus for disambiguation, navigation, selection or showing more options.&lt;/LI&gt;&lt;LI&gt;You offer a menu to present more “power user” functionality when long pressing on bar buttons if necessary, in addition to providing the standard action for tapping them.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;It fully supports dark mode.&lt;/LI&gt;&lt;LI&gt;Multiple spaces and scene support for iPadOS.
+    &lt;UL&gt;&lt;LI&gt;You leverage the idea of a primary window versus an auxiliary window. One provides access to your full feature set, while the other helps users complete a focused, singular task and is usually closed afterwards.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;Full multitasking support.&lt;/LI&gt;&lt;LI&gt;Home screen quick action support.&lt;/LI&gt;&lt;LI&gt;If you offer a sign in, Sign in with Apple is included.
+    &lt;/LI&gt;&lt;LI&gt;Spotlight search and indexing support.&lt;/LI&gt;&lt;LI&gt;You have custom &lt;code dir="ltr"&gt;UIPointerInteraction&lt;/code&gt; support if your app needs it, and your interface supports cursor support correctly.
+    &lt;UL&gt;&lt;LI&gt;You don’t force any interaction paradigm over another (i.e. touch is as viable as pointer or keyboard, and vice-versa).&lt;/LI&gt;&lt;LI&gt;You use the correct content effects consistently (highlight, lift and hover).&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;Effective energy management (i.e. supports low power mode and reacts to it).&lt;/LI&gt;&lt;LI&gt;Keyboard shortcuts have been added. The app could be used almost, or completely, with solely the use of a keyboard.
+    &lt;UL&gt;&lt;LI&gt;Modifier keys along with mouse or pointer clicks are supported.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;It supports handoff on Mac (if applicable).&lt;/LI&gt;&lt;LI&gt;Meaningful extensions are included with the app, whether it’s via a share extension, action extension, file providers, sticker pack, custom keyboard, etc.
+    &lt;UL&gt;&lt;LI&gt;Those extensions are carefully thought out. For example, a widget isn’t a mini app but strives to provide glanceable, actionable information.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;For table and collection view cells that make sense to focus, &lt;a href="https://developer.apple.com/documentation/uikit/uicollectionview/3573920-selectionfollowsfocus" dir="ltr"&gt;&lt;code dir="ltr"&gt;selectionFollowsFocus&lt;/code&gt;&lt;/a&gt; is set.&lt;/LI&gt;&lt;LI&gt;Callback urls are supplied and documented so other apps may integrate with it (x-callback-url)/.&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;UIMenuController&lt;/code&gt; support if necessary via overriding &lt;code dir="ltr"&gt;UIResponderStandardEditActions&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;You supply custom icons to enhance a user’s personal connection to your app if they want it.&lt;/LI&gt;&lt;LI&gt;If you display links, consider using &lt;a href="https://developer.apple.com/documentation/linkpresentation/lplinkview" dir="ltr"&gt;LPLinkView&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;Deep Siri Intent support:
+    &lt;UL&gt;&lt;LI&gt;You donate shortcut actions that the user has already taken.&lt;/LI&gt;&lt;LI&gt;You suggest shortcuts for the user’s “Shortcuts from your Apps” section in the Shortcuts app by suggesting them to &lt;code dir="ltr"&gt;INVoiceShortcutCenter&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;Integrate with Wind Down if it makes sense.&lt;/LI&gt;&lt;LI&gt;If you support more than a few shortcuts, include a UI to view them all.&lt;/LI&gt;&lt;LI&gt;Also include intent phrases to help coach users.&lt;/LI&gt;&lt;LI&gt;Alternate app names are included when appropriate.&lt;/LI&gt;&lt;LI&gt;Watchface support.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;If it makes sense, document sharing is supported via the file provider.&lt;/LI&gt;&lt;LI&gt;Drag and drop has first class support:
+    &lt;UL&gt;&lt;LI&gt;A fully fleshed out &lt;code dir="ltr"&gt;NSItemProvider&lt;/code&gt; exists for custom objects.&lt;/LI&gt;&lt;LI&gt;Editable controls for data entry should also accept its contents via a drop.&lt;/LI&gt;&lt;LI&gt;This is used for reordering, should the app support it.&lt;/LI&gt;&lt;LI&gt;“If you can drag it, it can make a new window.”&lt;/LI&gt;&lt;LI&gt;If data could be copied, moved, inserted or duplicated it should also do so via drag and drop.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;If it makes sense, data can be shared via AirDrop.&lt;/LI&gt;&lt;LI&gt;Natural language processing support if necessary.&lt;/LI&gt;&lt;LI&gt;All tab bar images are vector .pdf images or have each corresponding size included to ensure they adapt correctly and are vended to accessibility modals properly.&lt;/LI&gt;&lt;LI&gt;Any displayed Live Photo will animate when force touched and utilize &lt;code dir="ltr"&gt;PHLivePhotoImageView&lt;/code&gt; for playback.&lt;/LI&gt;&lt;LI&gt;For system specific features such as Live Photos or ARKit experiences, you use system badge to indicate they are available (i.e. a live photo or ARKit badge).&lt;/LI&gt;&lt;LI&gt;If it makes sense, it supports printing via &lt;code dir="ltr"&gt;UIPrintInteractionController&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;There are no calls to &lt;code dir="ltr"&gt;UIGraphicsBeginImageContextWithOptions&lt;/code&gt;, and &lt;code dir="ltr"&gt;UIGraphicsImageRenderer&lt;/code&gt; is used instead.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://developer.apple.com/library/archive/documentation/General/Conceptual/AppSearch/WebContent.html#//apple_ref/doc/uid/TP40016308-CH8-SW1" dir="ltr"&gt;Universal Links&lt;/a&gt; are supported, especially if your app’s content is available online.&lt;/LI&gt;&lt;LI&gt;If you need to secure data, you opt to user &lt;a href="https://developer.apple.com/documentation/localauthentication/labiometrytype" dir="ltr"&gt;Touch or Face ID&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;You vend useful interactions for the current context via &lt;code dir="ltr"&gt;UIActivity&lt;/code&gt; and &lt;code dir="ltr"&gt;UIActivityViewController&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;If it’s relevant for your app, you supply an App Clip.&lt;/LI&gt;&lt;LI&gt;When you use system capabilities, such as ARKit, you lean on platform defined conventions to help users get started. For example, to get an ARKit experience started you’d typically use &lt;code dir="ltr"&gt;ARCoachingOverlayView&lt;/code&gt; instead of rolling your own solution.&lt;/LI&gt;&lt;LI&gt;Finally, running the Analyze function in Xcode yields no errors, warnings or suggestions.&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;The User Experience is Top of Mind&lt;/h3&gt;&lt;UL&gt;&lt;LI&gt;Supports &lt;a href="https://developer.apple.com/library/content/documentation/Cocoa/Conceptual/UndoArchitecture/UndoArchitecture.html" dir="ltr"&gt;native&lt;/a&gt; “undo” and “redo” actions, typically from shaking or from the system defined gestures.&lt;/LI&gt;&lt;LI&gt;The content type of all text views and text fields is included, and the correct keyboard type is used for the current context. The keyboard’s language identifier is integrated correctly.&lt;/LI&gt;&lt;LI&gt;You support &lt;a href="https://developer.apple.com/documentation/uikit/uitableviewdelegate/3183943-tableview?language=objc" dir="ltr"&gt;two finger drag to edit gestures&lt;/a&gt; in table and collection views.&lt;/LI&gt;&lt;LI&gt;If you’re using a custom input view in place of keyboard, you provide the audible tap noise using &lt;code dir="ltr"&gt;UIDevice.playInputClick()&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;If you’ve got customized text inputs, you support &lt;code dir="ltr"&gt;UIScribbleInteraction&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;If you’ve customized the back button image for navigation controller, you’ve also set a &lt;a href="https://sarunw.com/posts/what-is-backindicatortransitionmaskimage/?utm_campaign=iOS%2BDev%2BWeekly&amp;amp;utm_medium=web&amp;amp;utm_source=iOS%2BDev%2BWeekly%2BIssue%2B460" dir="ltr"&gt;&lt;code dir="ltr"&gt;backIndicatorTransitionMaskImage&lt;/code&gt;&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;If you have searching capabilities, it &lt;a href="https://developer.apple.com/documentation/uikit/uisearchtextfield" dir="ltr"&gt;supports field tokens&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;Handles the keyboard being undocked on the iPad, if views are constrained to it via an &lt;code dir="ltr"&gt;inputAccessoryView&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;If data is quantifiable while data transfer is occurring, a progress indicator is used over an activity indicator.&lt;/LI&gt;&lt;LI&gt;It’s localized for all territories it’s released in.&lt;/LI&gt;&lt;LI&gt;Text tends to not truncate and it &lt;em dir="ltr"&gt;never&lt;/em&gt; clips but rather it’s always readable.&lt;/LI&gt;&lt;LI&gt;All tappable interface elements are at least 44 by 44 points.&lt;/LI&gt;&lt;LI&gt;The entire app binary is under 30 megabytes. (&lt;em dir="ltr"&gt;No source here, this is based off a multitude of data points.&lt;/em&gt;)&lt;/LI&gt;&lt;LI&gt;Delete actions always are followed by a confirmation prompt.&lt;/LI&gt;&lt;LI&gt;If your app stores rich information files like a Keynote presentation, it uses the Quick Look API to preview it.&lt;/LI&gt;&lt;LI&gt;Robust &lt;code dir="ltr"&gt;NSUserActivity&lt;/code&gt; support for:
+    &lt;UL&gt;&lt;LI&gt;State restoration&lt;/LI&gt;&lt;LI&gt;Handoff&lt;/LI&gt;&lt;LI&gt;Drag and drop for creating new windows&lt;/LI&gt;&lt;LI&gt;Core spotlight&lt;/LI&gt;&lt;LI&gt;Donating to Siri for &lt;code dir="ltr"&gt;INIntent&lt;/code&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;It uses the correct audio settings and responds to audio interruption gracefully, if audio can be played at all within it.&lt;/LI&gt;&lt;LI&gt;Custom edit options are supported when text or an image is selected, if appropriate.&lt;/LI&gt;&lt;LI&gt;The user is provided ample time to form an opinion about your app before you request a rating, and you opt for the built-in &lt;code dir="ltr"&gt;SKStoreReviewController&lt;/code&gt; to ask for it.&lt;/LI&gt;&lt;LI&gt;The launch screen is branding free and closely resembles the first screen of the app.&lt;/LI&gt;&lt;LI&gt;When displaying video using &lt;code dir="ltr"&gt;AVplayerViewController&lt;/code&gt; or your own player, you display content at its original aspect ratio and don’t include extra padding around the frame which would cause the video the appear smaller in full-screen and fit-to-screen modes.&lt;/LI&gt;&lt;LI&gt;Before opening a link that could lead to another app in a web view or &lt;code dir="ltr"&gt;SFSafariViewController&lt;/code&gt;, try calling &lt;code dir="ltr"&gt;UIApplication&lt;/code&gt;’s &lt;code dir="ltr"&gt;openURL:&lt;/code&gt; with the &lt;a href="https://recoursive.com/2019/02/22/preflight_universal_links/" dir="ltr"&gt;&lt;code dir="ltr"&gt;UIApplicationOpenURLOptionUniversalLinksOnly&lt;/code&gt;&lt;/a&gt; option first.&lt;/LI&gt;&lt;LI&gt;Table views deselect selected rows in &lt;a href="https://gist.github.com/smileyborg/ec4812c146f575cd006d98d681108ba8" dir="ltr"&gt;viewDidAppear&lt;/a&gt; when popping back to them.&lt;/LI&gt;&lt;LI&gt;If you’re loading in data, let the user know the progress of the operation either using &lt;a href="https://developer.apple.com/documentation/uikit/uiprogressview" dir="ltr"&gt;determinate or indeterminate views&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;Notifications supply a value for &lt;a href="https://developer.apple.com/documentation/usernotifications/unnotificationcategory/2873736-hiddenpreviewsbodyplaceholder" dir="ltr"&gt;hiddenPreviewsBodyPlaceholder&lt;/a&gt; and a detail view.
+    &lt;UL&gt;&lt;LI&gt;You also consider using a short, memorable sound if it makes sense for the notification using &lt;code dir="ltr"&gt;UNNotificationSound&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;You supply a detail view to expand on the context of the notification. If a user can accomplish the task within the notification without having to open the app, that’s a good thing.&lt;/LI&gt;&lt;LI&gt;You also let users edit their notification preferences within your own app.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;UITextInputAssistantItem&lt;/code&gt; items are used to support common tasks on iPad that are at home within the shortcuts bar.&lt;/LI&gt;&lt;LI&gt;When performing CRUD operations on a table or collection view, you opt to animate these changes using a diffable datasource instead of &lt;code dir="ltr"&gt;reloadData&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;Testing for leaks and freed memory is part of your workflow, as consuming an unnecessary amount of memory and power hampers everyone.&lt;/LI&gt;&lt;LI&gt;If you have long running tasks, you keep the UI free and up to date by using &lt;a href="https://developer.apple.com/documentation/backgroundtasks/" dir="ltr"&gt;background tasks&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;When using system materials, you accompany the content contained within them with a matching vibrancy effect (i.e. you don’t mix and match different semantic effects).&lt;/LI&gt;&lt;LI&gt;You tend to use the system’s semantic colors instead of hard coding your own. If you do have custom colors, they adapt to both light and dark mode, increased contrast and transparency reduction scenarios.
+    &lt;UL&gt;&lt;LI&gt;You also use semantic colors in a consistent way, and don’t redefine their meaning (i.e. use Link for a label color).&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;You defer from providing custom gestures towards the edge of the screen. If it’s appropriate (such as for viewing media), you override &lt;a href="https://developer.apple.com/documentation/uikit/uiviewcontroller/2887512-preferredscreenedgesdeferringsys" dir="ltr"&gt;&lt;code dir="ltr"&gt;preferredScreenEdgesDeferringSystemGestures&lt;/code&gt;&lt;/a&gt; as needed.&lt;/LI&gt;&lt;LI&gt;If you have user interface elements constrained by the keyboard’s frame, you handle situations where it may be undocked, floating or split.&lt;/LI&gt;&lt;LI&gt;If you support &lt;code dir="ltr"&gt;PencilKit&lt;/code&gt;, include your own undo and redo buttons in a &lt;a href="https://developer.apple.com/design/human-interface-guidelines/ios/user-interaction/apple-pencil/" dir="ltr"&gt;compact environment&lt;/a&gt;.
+    &lt;UL&gt;&lt;LI&gt;Additionally, ensure the system-wide double tap gesture doesn’t modify any content if it’s been customized by your app.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;Navigation is clear and foolproof. You use either flat, hierarchical or content/UX driven navigation.
+    &lt;UL&gt;&lt;LI&gt;You use a sidebar to flatten your information hierarchy if it makes sense. For example, if you app has several folders, playlists or similar collections.&lt;/LI&gt;&lt;LI&gt;If you use a tab bar, aim for 3-5 items. If you need the “More” tab, you’re likely going in the wrong direction.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;Modality is used sparingly, and clearly brings them back to where they were when dismissed.&lt;/LI&gt;&lt;LI&gt;Your design also considers text and your app’s voice or messaging as part of the design and experience, and it stays consistent.
+    &lt;UL&gt;&lt;LI&gt;You don’t mix playful error messages juxtaposed with serious ones.&lt;/LI&gt;&lt;LI&gt;iOS technology, or any other technical term, is made for anyone to understand (i.e. you’d use ‘Scan the tag’ instead of ‘Activate NFC reading Session’ or similar.).&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;The Design Drips with Polish&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;Correct system margins are used throughout the app, and no hard coded ones are used (i.e. layoutMarginsGuide, safeAreaLayoutGuide, etc.)&lt;/LI&gt;&lt;LI&gt;Haptic feedback is used throughout the system to complement user interactions, and they are not overdone.
+    &lt;UL&gt;&lt;LI&gt;The right haptics are used at the right time. For example, you use &lt;code dir="ltr"&gt;.selection&lt;/code&gt; for only selection changes instead of something like &lt;code dir="ltr"&gt;.rigid&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;For example, they often accompany visual and auditory feedback.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;You utilize SF Symbols for common iOS glyphs on apps running iOS 13 and later. You show the dedicated ones for system APIs (i.e. the glyphs exclusively for iCloud usage).
+    &lt;UL&gt;&lt;LI&gt;If you use custom ones or custom glyphs, they adapt well to all environments.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;Controller transitions feel natural and fluid. Great examples are Calendar and Photos.&lt;/LI&gt;&lt;LI&gt;You opt for vector assets to combat the differing resolutions and avoid any blurry assets.&lt;/LI&gt;&lt;LI&gt;Your content is always the focus, and you constantly challenge if that’s true throughout the development cycles.&lt;/LI&gt;&lt;LI&gt;Particular and specific user experience guidelines are followed:
+    &lt;UL&gt;&lt;LI&gt;No segment controls are used in toolbars, and they have five or less options.&lt;/LI&gt;&lt;LI&gt;There are no toolbars and tab bars in the same screen.&lt;/LI&gt;&lt;LI&gt;Destructive actions are the top choice in action sheets.&lt;/LI&gt;&lt;LI&gt;Alerts, if used, ideally have to two choices and titles have no punctuation. They avoid using Yes and No as choices.
+        &lt;UL&gt;&lt;LI&gt;If you need more than two choices, you opt for an action sheet.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;Any picker’s height is equal to about 5 list values.&lt;/LI&gt;&lt;LI&gt;If a progress indicator is in a bar, it should have the unfolded portion of the track clear. Otherwise, it is colored to denote the amount of work left to do.&lt;/LI&gt;&lt;LI&gt;Network activity indicators are only shown if the network requests lasts a few seconds or more.&lt;/LI&gt;&lt;LI&gt;Popovers on iPhones are avoided.&lt;/LI&gt;&lt;LI&gt;You discard work only when a user actively taps a “Cancel” button. For example, if someone taps outside of a popover - their work is saved.&lt;/LI&gt;&lt;LI&gt;Switches are exclusively used within a table (or a list style collection view) row.&lt;/LI&gt;&lt;LI&gt;Pages controls are always centered at the bottom of the screen.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;You aspire to ship on all of Apple’s platforms (iOS iPhone + iPad, watchOS, tvOS and macOS).&lt;/LI&gt;&lt;LI&gt;Animations are tasteful and reinforce, or introduce, actions. They aren’t confusing and likely mimic real physical laws.&lt;/LI&gt;&lt;LI&gt;In general, you reduce modality where possible to keep the focus on the content.&lt;/LI&gt;&lt;LI&gt;You supply all high-resolution assets for images (@1/2/3x).&lt;/LI&gt;&lt;LI&gt;You use the right asset format for a given scenario:
+    &lt;UL&gt;&lt;LI&gt;PNG for icons and bitmap/raster artwork.&lt;/LI&gt;&lt;LI&gt;JPEG for photos.&lt;/LI&gt;&lt;LI&gt;PDF for glyphs and vector artwork.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;Controller specific configurations are thoughtfully implemented:
+    &lt;UL&gt;&lt;LI&gt;Status bars are only hidden in exchange for equal value.&lt;/LI&gt;&lt;LI&gt;Pointer locking only occurs when it boosts the experience.&lt;/LI&gt;&lt;LI&gt;The home indicator is only hidden during rich media experiences.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;Full width buttons respect UIKit margins and don’t extend edge to edge of the screen.&lt;/LI&gt;&lt;LI&gt;Colors are used to denote value and purpose and don’t provide mixed signals. For example, enabled and disabled controls aren’t colored the same or a red triangle conveys a problem but only if red isn’t used everywhere else in your app.&lt;/LI&gt;&lt;LI&gt;If you create rich media apps or apps primarily used for reading and watching, you provide a sensible value for &lt;a href="https://developer.apple.com/documentation/bundleresources/information_property_list/uiwhitepointadaptivitystyle" dir="ltr"&gt;&lt;code dir="ltr"&gt;UIWhitePointAdaptivityStyle&lt;/code&gt;&lt;/a&gt; to adjust along with True Tone.&lt;/LI&gt;&lt;LI&gt;You handle color management well, and ensure any P3 colors display fine on sRGB devices.&lt;/LI&gt;&lt;LI&gt;Your app has a voice, and you use it consistently. For example, if your app strikes a formal tone, you wouldn’t display an error message with text that’s overtly out of place or humorous.&lt;/LI&gt;&lt;LI&gt;You opt to lean on system fonts to better support all sizes, improve legibility and consistency. If you have a custom font, it provides value and has a direct purpose for being used over system fonts. They also work with all weights and dynamic type sizes.&lt;/LI&gt;&lt;LI&gt;Lastly, your app is “jank” free. You know what this means for you.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;App Store Page and Logistical Assets are Thoughtfully Crafted&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;An App Store preview video is used.&lt;/LI&gt;&lt;LI&gt;Its keywords and category were carefully researched.&lt;/LI&gt;&lt;LI&gt;A link to a privacy policy is provided.&lt;/LI&gt;&lt;LI&gt;Each supported territory is localized.&lt;/LI&gt;&lt;LI&gt;The app icon follows the golden grid:
+    &lt;UL&gt;&lt;LI&gt;It likely should include your brand’s primary color as well.&lt;/LI&gt;&lt;LI&gt;It embraces simplicity and conveys your app’s main idea.&lt;/LI&gt;&lt;LI&gt;You supply all the sizes needed for spotlight, settings, etc. Otherwise, iOS will shrink your App Store icon which won’t be ideal.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;Wrapping Up&lt;/h3&gt;&lt;p&gt;I love checklists. And this is my quality checklist that’s constantly evolving. One of the main reasons I created Spend Stack was to see if I could get it in a state where it meets or exceeds almost every single bullet point.&lt;/p&gt;&lt;p&gt;Certainly, quality takes time. If you nailed everything on this list, it’s because you’ve been working towards them for years. If you aren’t close to meeting the items listed here, no stress (it also means you probably shipped!). Take it piece by piece and work your way down.&lt;/p&gt;&lt;p&gt;And, as a wise honey-loving bear once said, “I get to where I’m going by walking away from where I’ve been.” If your app might lack some polish, better now more than ever to spend some time giving it some.&lt;/p&gt;&lt;p&gt;Until next time ✌️.&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 11:33:25 -0500</pubDate></item><item><title>Adding a fiber link to my home network</title><link>https://lobste.rs/s/k67kzq</link><description>&lt;div dir="ltr"&gt;
 	    &lt;span dir="ltr"&gt;published 2020-08-09&lt;/span&gt;
 	    
 	  
@@ -4875,5 +4911,4 @@ process overall, and I would recommend it in other situations as well.&lt;/p&gt;
 patience to learn how to put a field assembly connector onto a fiber cable.&lt;/p&gt;&lt;p&gt;If labor cost is expensive in your country or you just like doing things
 yourself, I can definitely recommend this approach. In case you mess the
 connector up and don’t want to fix it yourself, you can always call an
-electrician!&lt;/p&gt;&lt;p&gt;Stay tuned for the next part, where I upgrade the 1G link to a 10G link!&lt;/p&gt;</description><pubDate>Sun, 09 Aug 2020 10:39:56 -0500</pubDate></item><item><title>Code Coverage Best Practices</title><link>https://lobste.rs/s/5rcuob</link><description>&lt;div itemprop="articleBody"&gt;
-                          By Carlos Arguelles, Marko Ivanković‎, and Adam Bender&lt;/div&gt;&lt;div&gt;&lt;i&gt;We have spent several decades driving software testing initiatives in various very large software companies. One of the areas that we have consistently advocated for is the use of code coverage data to assess risk and identify gaps in testing. However, the value of code coverage is a highly debated subject with strong opinions, and a surprisingly polarizing topic. Every time code coverage is mentioned in any large group of people, seemingly endless arguments ensue. These tend to lead the conversation away from any productive progress, as people securely bunker in their respective camps. The purpose of this document is to give you tools to steer people on all ends of the spectrum to find common ground so that you can move forward and use coverage information pragmatically. We put forth best practices in the domain of code coverage to work effectively with code health.&lt;/i&gt;&lt;/div&gt;&lt;UL&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;Code coverage provides significant benefits to the developer workflow.&lt;/span&gt; It is not a perfect measure of test quality, but it does offer a reasonable, objective, industry standard metric with actionable data. It does not require significant human interaction, it applies universally to all products, and there are ample tools available in the industry for most languages. You must treat it with the understanding that it’s a lossy and indirect metric that compresses a lot of information into a single number so it should not be your only source of truth.&amp;nbsp; Instead, use it in conjunction with other techniques to create a more holistic assessment of your testing efforts.&lt;/LI&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;It is an open research question whether code coverage alone reduces defects,&lt;/span&gt; but our experience shows that efforts in increasing code coverage can often lead to culture changes in engineering excellence that in the long run reduce defects. For example, teams that give code coverage priority tend to treat testing as a first class citizen, and tend to bake stronger testability into their product design, so that they can achieve their testing goals with less effort. All this in turn leads to writing higher quality code to begin with (more modular, cleaner contracts in their APIs, more manageable code reviews, etc.). They also start caring more about their overall health, and engineering and operational excellence.&lt;/LI&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;A &lt;u dir="ltr"&gt;high&lt;/u&gt; code coverage percentage does not guarantee high quality in the test coverage.&lt;/span&gt; Focusing on getting the number as close as possible to 100% leads to a false sense of security. It could also be wasteful, burning machine cycles and creating technical debt from low-value tests that now need to be maintained. Bad code being pushed to production due to missing tests could happen either because (a) your tests did not cover a specific path of code, a test gap that is easy to identify with code coverage analysis, or (b) because your tests did not cover a specific edge case in an area that did have code coverage, which is difficult or impossible to catch with code coverage analysis. Code coverage does not guarantee that the covered lines or branches have been tested &lt;i dir="ltr"&gt;correctly&lt;/i&gt;, it just guarantees that they have been executed by a test. Be mindful of copy/pasting tests just for the sake of increasing coverage, or adding tests with little actual value, to comply with the number. A better technique to assess whether you’re adequately exercising the lines your tests cover, and adequately asserting on failures, is &lt;a href="https://research.google/pubs/pub46584/" dir="ltr"&gt;mutation&lt;/a&gt; testing.&lt;/LI&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;But a &lt;u dir="ltr"&gt;low&lt;/u&gt; code coverage number does guarantee that large areas of the product are going completely untested&lt;/span&gt; by automation on every single deployment. This increases our risk of pushing bad code to production, so it should receive attention. &lt;i dir="ltr"&gt;In fact a lot of the value of code coverage data is to highlight not what’s covered, but what’s not covered.&lt;/i&gt;&lt;/LI&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;There is no “ideal code coverage number” that universally applies to all products.&lt;/span&gt; The level of testing you want/need for a set of code should be a function of (a) business impact/criticality of the code; (b) how often you will need to touch/change the code; (c) how much longer you expect the code to live, its complexity, and domain variables. We cannot mandate every single team should have x% code coverage; this is a business decision best made by the owners of the product with domain-specific knowledge. Any mandate to reach x% code coverage should be accompanied by infrastructure investments to make testing easy, such as integrating tools into the developer workflow. Be mindful that engineers may start treating your target like a checkbox and avoid increasing coverage beyond the target, even if doing so would be prudent.&lt;/LI&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;In general code coverage of a lot of products is below the bar; we should aim at significantly improving code coverage across the board.&lt;/span&gt; Although there is no “ideal code coverage number,” at Google we offer the general guidelines of 60% as “acceptable”, 75% as “commendable” and 90% as “exemplary.” However we like to stay away from broad top-down mandates and encourage every team to select the value that makes sense for their business needs.&lt;/LI&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;We should not be obsessing on how to get from 90% code coverage to 95%.&lt;/span&gt; The gains of increasing code coverage beyond a certain point are logarithmic. But we should be taking concrete steps to get from 30% to 70% and always making sure new code meets our desired threshold.&lt;/LI&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;More important than the percentage of lines covered is human judgment over the actual lines of code (and behaviors)&amp;nbsp; that aren’t being covered&lt;/span&gt; (analyzing the gaps in testing) and whether this risk is acceptable or not. What’s not covered is more meaningful than what is covered. Pragmatic discussions over specific lines of code not covered that take place during the code review process are more valuable than over-indexing on an arbitrary target number. We have found out that embedding code coverage into your code review process makes code reviews faster and easier. Not all code is equally important, for example testing debug log lines is often not as important, so when developers can see not just the coverage number, but each covered line highlighted as part of the code review, they will make sure that the most important code is covered.&amp;nbsp;&lt;/LI&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;Just because your product has low code coverage doesn’t mean you can’t take concrete, incremental steps to improve it over time.&lt;/span&gt; Inheriting a legacy system with poor testing and poor testability can be daunting, and you may not feel empowered to turn it around, or even know where to start. But at the very least, you can adopt the ‘boy-scout rule’ (leave the campground cleaner than you found it). Over time, and incrementally, you will get to a healthy location.&lt;/LI&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;Make sure that frequently changing code is covered.&lt;/span&gt; While project wide goals above 90% are most likely not worth it, per-commit coverage goals of 99% are reasonable, and 90% is a good lower threshold. We need to ensure that our tests are not getting worse over time.&lt;/LI&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;Unit test code coverage is only a piece of the puzzle.&lt;/span&gt; Integration/System test code coverage is important too. And the aggregate view of the coverage of all sources in your Pipeline (unit and integration) is paramount, as it gives you the bigger picture of how much of your code is not exercised by your test automation as it makes its way in your pipeline to a production environment. One thing you should be aware of is while unit tests have high correlation between executed and evaluated code, some of the coverage from integration tests and end-to-end tests is incidental and not deliberate. But incorporating code coverage from integration tests can help you avoid situations where you have a false sense of security that even though you’re not covering code in your unit tests, you think you’re covering it in your integration tests.&lt;/LI&gt;&lt;LI&gt;&lt;span dir="ltr"&gt;We should gate deployments that do not meet our code coverage standards.&lt;/span&gt; Teams should debate and decide which gating mechanism makes sense to them. You should however be careful that it doesn’t turn into being treated as a checkbox that is required to be filled, as it can backfire (pressure to 'hit the metric' almost never yields the desired outcome). There are many mechanisms available:&amp;nbsp; gate on coverage for all code vs gate on coverage to new code only; gate on a specific hard-coded code coverage number vs gate on delta from prior version, specific parts of the code to ignore or focus on. And then, commit to upholding these as a team. Drops in code coverage violating the gate should prevent the code from being checked in and reaching production.&amp;nbsp;&lt;/LI&gt;&lt;/UL&gt;&lt;div&gt;&lt;i dir="ltr"&gt;If you would like to learn more about Google's coverage infrastructure, we welcome you to read our paper “Coverage at Google” which can be found &lt;a href="https://research.google/pubs/pub48413/" dir="ltr"&gt;here&lt;/a&gt;.&lt;/i&gt;&lt;/div&gt;&lt;img alt="Share on Twitter" height="24" src="https://www.gstatic.com/images/icons/material/system/2x/post_twitter_black_24dp.png" width="24"&gt;&lt;img alt="Share on Facebook" height="24" src="https://www.gstatic.com/images/icons/material/system/2x/post_facebook_black_24dp.png" width="24"&gt;</description><pubDate>Mon, 10 Aug 2020 04:11:38 -0500</pubDate></item></channel></rss>
+electrician!&lt;/p&gt;&lt;p&gt;Stay tuned for the next part, where I upgrade the 1G link to a 10G link!&lt;/p&gt;</description><pubDate>Sun, 09 Aug 2020 10:39:56 -0500</pubDate></item></channel></rss>
