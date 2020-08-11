@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0"><channel><title>lobstre.rs rss with inlined content</title><link>http://n-gate.com</link><description>webshit condom</description><lastBuildDate>Tue, 11 Aug 2020 07:39:40 -0500</lastBuildDate><item><title>Tags and Flags</title><link>https://lobste.rs/s/wdjrcd</link><description>&lt;p&gt;Hey folks,&lt;/p&gt;&lt;p dir="ltr"&gt;You may have noticed we took about 2.5 hours of downtime this morning for a
+<rss version="2.0"><channel><title>lobstre.rs rss with inlined content</title><link>http://n-gate.com</link><description>webshit condom</description><lastBuildDate>Tue, 11 Aug 2020 07:46:31 -0500</lastBuildDate><item><title>Tags and Flags</title><link>https://lobste.rs/s/wdjrcd</link><description>&lt;p&gt;Hey folks,&lt;/p&gt;&lt;p dir="ltr"&gt;You may have noticed we took about 2.5 hours of downtime this morning for a
 performance improvement.
 Previously we memoized the number of &lt;code dir="ltr"&gt;upvotes&lt;/code&gt; and &lt;code dir="ltr"&gt;downvotes&lt;/code&gt; on both the &lt;code dir="ltr"&gt;stories&lt;/code&gt; and &lt;code dir="ltr"&gt;comments&lt;/code&gt; tables.
 Many queries sorted by score, which they had to calculate per-row with &lt;code dir="ltr"&gt;upvotes - downvotes&lt;/code&gt;.
@@ -284,7 +284,260 @@ And if you’re still drawing a blank, consider another project.&lt;/p&gt;&lt;OL
   users, overwork, or any other social problems in the course of your work?
   Please &lt;a href="mailto:sir@cmpwn.com" dir="ltr"&gt;email me&lt;/a&gt; — I know how you
   feel, and I can lend a sympathetic ear and share some veteran advice.
-&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 11:04:00 -0500</pubDate></item><item><title>sled theoretical performance guide</title><link>https://lobste.rs/s/2ftlzt</link><description>&lt;img src="https://img.shields.io/github/stars/spacejam/sled.svg?style=social" alt="github" width="94" height="20"&gt;&lt;img src="https://docs.rs/sled/badge.svg" alt="documentation"&gt;&lt;img src="https://img.shields.io/discord/509773073294295082.svg?logo=discord" alt="chat" width="111" height="20"&gt;&lt;img src="https://img.shields.io/opencollective/backers/sled" alt="sponsors" width="70" height="20"&gt;&lt;p&gt;This guide covers timeless ideas that are helpful to keep in mind while working with
+&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 11:04:00 -0500</pubDate></item><item><title>"Cloud-like" Infrastructure at Home - Part 1: LoadBalancers on the Metal</title><link>https://lobste.rs/s/rty4wa</link><description>&lt;p&gt;
+This is the introductory post to a series outlining how I achieve "Cloud-like" application deployments
+on my personal servers.  If you're interested in Platform Engineering/SRE/DevOps, read on!
+&lt;/p&gt;&lt;h2&gt;
+☁️ What does "Cloud-like" mean?
+&lt;/h2&gt;&lt;p&gt;
+I'm using this phrase to express a set of capabilities that engineers have come to expect from cloud
+  providers in their offerings for hosting infrastructure. Namely: load balancers, dynamic DNS, certificate
+  leasing, and perhaps a few others.
+&lt;/p&gt;&lt;h2&gt;
+🤷 Who's this post for?
+&lt;/h2&gt;&lt;p&gt;
+I'm guessing by now you have at least some interest in the subject, so I'll state some assumptions:
+&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p&gt;
+You're somewhat familiar with Kubernetes &amp;amp; its configuration with YAML
+&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
+You're somewhat familiar with basic networking concepts, like DHCP, DNS, TCP/IP, ARP
+&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
+You're not looking for a guide to set-up self-hosted Kubernetes
+(I'll write about how I do this in a future post) - we're going to be working with an already running
+cluster
+&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;
+All set then? Let's dive in!
+&lt;/p&gt;&lt;h2&gt;
+💡 What're we solving today?
+&lt;/h2&gt;&lt;h3&gt;
+LAN routable traffic to services hosted in Kubernetes
+&lt;/h3&gt;&lt;p&gt;
+Say we have a web service we want to deploy - let's call it "coffee" ☕
+&lt;/p&gt;&lt;p&gt;
+   We deploy it into k8s (Kubernetes) and can access it by using
+&lt;/p&gt;&lt;PRE&gt;$ kubectl port-forward coffee-5b8f7c69bd-9x6sk 8080:80
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+   Now we can visit &lt;code dir="ltr"&gt;localhost:8080/&lt;/code&gt; to reach our service - great!
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+   But we don't want to have to rely on &lt;code dir="ltr"&gt;kubectl&lt;/code&gt; to handle the proxying for us.
+   What about other devices on the network that we want to be able to access the &lt;code dir="ltr"&gt;coffee&lt;/code&gt; service?
+&lt;/p&gt;&lt;p&gt;
+   Well, once we've gotten through this post, we'll end up getting a LAN accessible web
+   service we can reach via a segment of our LAN address space - like any other physical device on
+   the network - just by deploying k8s manifests.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+   No need to pick out an IP address and set up static routes, no need for any &lt;code dir="ltr"&gt;iptables&lt;/code&gt; magic 🔮
+&lt;/p&gt;&lt;h3&gt;
+Accessing Kubernetes services via IP
+&lt;/h3&gt;&lt;p dir="ltr"&gt;
+When deploying a pod of containers providing a network application, we can expose its port
+   so it's accessible using a &lt;a href="https://kubernetes.io/docs/concepts/services-networking/service" dir="ltr"&gt;&lt;code dir="ltr"&gt;Service&lt;/code&gt;&lt;/a&gt;. Here's what a &lt;code dir="ltr"&gt;Service&lt;/code&gt; accompanying a &lt;code dir="ltr"&gt;Deployment&lt;/code&gt; for
+   &lt;code dir="ltr"&gt;coffee&lt;/code&gt; might look like:
+&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="yaml" dir="ltr"&gt;---
+&lt;span dir="ltr"&gt;kind&lt;/span&gt;: Deployment
+&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: apps/v1
+&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
+&lt;span dir="ltr"&gt;spec&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;replicas&lt;/span&gt;: &lt;span dir="ltr"&gt;1&lt;/span&gt;
+  &lt;span dir="ltr"&gt;selector&lt;/span&gt;:
+    &lt;span dir="ltr"&gt;matchLabels&lt;/span&gt;:
+      &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
+  &lt;span dir="ltr"&gt;template&lt;/span&gt;:
+    &lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
+      &lt;span dir="ltr"&gt;labels&lt;/span&gt;:
+        &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
+    &lt;span dir="ltr"&gt;spec&lt;/span&gt;:
+      &lt;span dir="ltr"&gt;containers&lt;/span&gt;:
+      - &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
+        &lt;span dir="ltr"&gt;image&lt;/span&gt;: example/coffee
+        &lt;span dir="ltr"&gt;ports&lt;/span&gt;:
+        - &lt;span dir="ltr"&gt;name&lt;/span&gt;: api
+          &lt;span dir="ltr"&gt;containerPort&lt;/span&gt;: &lt;span dir="ltr"&gt;80&lt;/span&gt;
+
+---
+&lt;span dir="ltr"&gt;kind&lt;/span&gt;: Service
+&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: v1
+&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
+&lt;span dir="ltr"&gt;spec&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;selector&lt;/span&gt;:
+    &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
+  &lt;span dir="ltr"&gt;ports&lt;/span&gt;:
+  - &lt;span dir="ltr"&gt;name&lt;/span&gt;: api
+    &lt;span dir="ltr"&gt;port&lt;/span&gt;: &lt;span dir="ltr"&gt;8080&lt;/span&gt;
+    &lt;span dir="ltr"&gt;targetPort&lt;/span&gt;: coffee&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+   After evaluating this manifest, our k8s cluster would have a &lt;code dir="ltr"&gt;coffee&lt;/code&gt; service that's available
+   within the cluster network. Other pods within the same namespace could simply call out to &lt;code dir="ltr"&gt;http://coffee:8080&lt;/code&gt;,
+   or pods deployed in other namespaces could reach it via &lt;code dir="ltr"&gt;http://coffee.example:8080&lt;/code&gt; (&lt;code dir="ltr"&gt;example&lt;/code&gt; being the
+   namespace we deployed the &lt;code dir="ltr"&gt;coffee&lt;/code&gt; resources to).
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+   By default, we'll get a &lt;code dir="ltr"&gt;ClusterIP&lt;/code&gt; type &lt;code dir="ltr"&gt;Service&lt;/code&gt;. I won't go into much detail here about k8s &lt;code dir="ltr"&gt;Service&lt;/code&gt;
+   objects, but it's useful to outline the available &lt;code dir="ltr"&gt;ServiceTypes&lt;/code&gt;, in particular &lt;a href="https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types" dir="ltr"&gt;"publishing" services&lt;/a&gt;.
+&lt;/p&gt;&lt;h3&gt;
+Publishing ServiceTypes
+&lt;/h3&gt;&lt;p dir="ltr"&gt;
+Let's take a look at each type, leaning on excerpts from &lt;a href="https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types" dir="ltr"&gt;the official documentation&lt;/a&gt;.
+&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
+&lt;code dir="ltr"&gt;ClusterIP&lt;/code&gt;: Exposes the Service on a cluster-internal IP. Choosing this value makes the Service only
+   reachable from within the cluster. This is the default ServiceType.
+&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
+We can quite plainly see this is a no-go for what we want, we want our service to be reachable outside
+    the cluster.
+&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
+&lt;code dir="ltr"&gt;NodePort&lt;/code&gt;: Exposes the Service on each Node’s IP at a static port (the NodePort).
+   A ClusterIP Service, to which the NodePort Service routes, is automatically created.
+   You’ll be able to contact the NodePort Service, from outside the cluster, by requesting
+   &amp;lt;NodeIP&amp;gt;:&amp;lt;NodePort&amp;gt;.
+&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
+This looks like it meets our needs in terms of external (to the cluster, not our LAN) access.
+   But on second thought, this means we have to worry about maintaining unique port numbers for each
+   service. If a service's pods are scheduled onto a node with another service already occupying that port,
+   it won't be able to operate. It also begs the question "how do we know which node, and thus which NodeIP
+   we'll be using to reach the service?"
+&lt;/p&gt;&lt;p&gt;
+   No dice.
+&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
+&lt;code dir="ltr"&gt;ExternalName&lt;/code&gt;: Maps the Service to the contents of the externalName field (e.g. foo.bar.example.com),
+   by returning a CNAME record with its value. No proxying of any kind is set up.
+&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
+Hmm, this doesn't seem like a good fit either. There's no mention of traffic being routable for cluster
+   external networking. It's simply about mapping external DNS records to services within the cluster, for
+   other cluster residents.
+&lt;/p&gt;&lt;p&gt;
+   Next!
+&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
+&lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt;: Exposes the Service externally using a cloud provider’s load balancer. NodePort and
+   ClusterIP Services, to which the external load balancer routes, are automatically created.
+&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
+This sounds perfect! Except… we're not deploying to some cloud environment. We don't have a cloud
+   provider's solution to provision load balancers.
+&lt;/p&gt;&lt;p&gt;
+   …Or do we? 👈😎👈
+&lt;/p&gt;&lt;h2&gt;
+⚖️ LoadBalancers on the metal
+&lt;/h2&gt;&lt;p dir="ltr"&gt;
+Turns out a service of type &lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt; is actually achievable, without the cloud provider! 🌩️
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+  &lt;a href="https://metallb.universe.tf/" dir="ltr"&gt;MetalLB&lt;/a&gt; is a project that aims to bring the &lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt; ServiceType to k8s clusters provisioned
+  on bare metal - and does so very well.
+&lt;/p&gt;&lt;h3&gt;
+Deployment &amp;amp; configuration
+&lt;/h3&gt;&lt;p&gt;
+MetalLB has two modes of operation: BGP &amp;amp; Layer2. Both are self explanatory, if you're familiar with
+   the respective network protocols - I won't be expanding on either, as it's out of scope for this write-up.
+&lt;/p&gt;&lt;p&gt;
+   For our implementation, we're going to keep things simple and go with Layer2.
+&lt;/p&gt;&lt;p&gt;
+   MetalLB is deployed entirely with native k8s manifests. How you choose to deploy your YAML is up to you.
+   There are a few options:
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;
+Raw YAML manifests
+&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
+I personally use &lt;a href="https://argoproj.github.io/projects/argo-cd" dir="ltr"&gt;ArgoCD&lt;/a&gt; to deploy the Helm chart, but details on that are for another post.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+   The installation documentation is straight forward and can be found &lt;a href="https://metallb.universe.tf/installation/" dir="ltr"&gt;here&lt;/a&gt;.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+   Let's focus on the configuration. MetalLB evaluates its configuration through a &lt;a href="https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/" dir="ltr"&gt;&lt;code dir="ltr"&gt;ConfigMap&lt;/code&gt;&lt;/a&gt;.
+   For the Layer2 configuration, it's as simple as picking out an IP range you want your services
+   to be allocated an address from.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+   My LAN is &lt;code dir="ltr"&gt;10.0.0.0/16&lt;/code&gt;, I opted to slice out &lt;code dir="ltr"&gt;10.0.42.0/24&lt;/code&gt;. So my configuration looks like:
+&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="yaml" dir="ltr"&gt;&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: v1
+&lt;span dir="ltr"&gt;kind&lt;/span&gt;: ConfigMap
+&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;namespace&lt;/span&gt;: metallb-system
+  &lt;span dir="ltr"&gt;name&lt;/span&gt;: config
+&lt;span dir="ltr"&gt;data&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;config&lt;/span&gt;: &lt;span dir="ltr"&gt;|
+&lt;/span&gt;&lt;span dir="ltr"&gt;    address-pools:&lt;/span&gt;
+      - &lt;span dir="ltr"&gt;name&lt;/span&gt;: default
+        &lt;span dir="ltr"&gt;protocol&lt;/span&gt;: layer2
+        &lt;span dir="ltr"&gt;addresses&lt;/span&gt;:
+          - &lt;span dir="ltr"&gt;10.0.42.0&lt;/span&gt;/&lt;span dir="ltr"&gt;24&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+   If we configure MetalLB with this, we can then deploy &lt;code dir="ltr"&gt;Service&lt;/code&gt; objects with &lt;code dir="ltr"&gt;spec.type: LoadBalancer&lt;/code&gt;
+   in their manifest and expect to get an IP leased from the &lt;code dir="ltr"&gt;10.0.42.0/24&lt;/code&gt; pool.
+&lt;/p&gt;&lt;h3&gt;
+Take it for a spin
+&lt;/h3&gt;&lt;p dir="ltr"&gt;
+Let's update our &lt;code dir="ltr"&gt;coffee&lt;/code&gt; service manifest to set &lt;code dir="ltr"&gt;spec.type&lt;/code&gt; to &lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt;
+&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="yaml" dir="ltr"&gt;---
+&lt;span dir="ltr"&gt;kind&lt;/span&gt;: Service
+&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: v1
+&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
+&lt;span dir="ltr"&gt;spec&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;selector&lt;/span&gt;:
+    &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
+  &lt;span dir="ltr"&gt;ports&lt;/span&gt;:
+    - &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
+      &lt;span dir="ltr"&gt;port&lt;/span&gt;: &lt;span dir="ltr"&gt;8080&lt;/span&gt;
+      &lt;span dir="ltr"&gt;targetPort&lt;/span&gt;: coffee
+  &lt;span dir="ltr"&gt;type&lt;/span&gt;: LoadBalancer &lt;span dir="ltr"&gt;# &amp;lt;- here&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+   Applying this will yield something like
+&lt;/p&gt;&lt;PRE&gt;$ kubectl describe svc coffee
+Name:                     coffee
+Namespace:                default
+Labels:                   &amp;lt;none&amp;gt;
+Annotations:              Selector:  app=coffee
+Type:                     LoadBalancer
+IP:                       172.16.57.10
+LoadBalancer Ingress:     10.0.42.0
+Port:                     api  8080/TCP
+TargetPort:               coffee/TCP
+NodePort:                 api  30786/TCP
+Endpoints:                192.168.2.7:8080
+Session Affinity:         None
+External Traffic Policy:  Cluster
+Events:
+  Type    Reason       Age    From                Message
+  ----    ------       ----   ----                -------
+  Normal  IPAllocated  9s  metallb-controller  Assigned IP "10.0.42.0"
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+   For those of us who aren't networking wizards, something may look a bit strange here: &lt;code dir="ltr"&gt;10.0.0.42.0&lt;/code&gt;.
+   Rest assured, that's actually a routable address. Most day-to-day DHCP configurations will
+   start the allocation range at &lt;code dir="ltr"&gt;X.X.X.1&lt;/code&gt;, but there's no need here.
+&lt;/p&gt;&lt;p&gt;
+   So, if our service is alive, we should be able to establish a TCP session with it.
+   Let's try with good old netcat
+&lt;/p&gt;&lt;PRE&gt;$ nc -vz 10.0.42.0 8080
+Connection to 10.0.42.0 port 8080 [tcp/http] succeeded!
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+   Woo! If we look a little closer with a simple &lt;code dir="ltr"&gt;ping&lt;/code&gt;, we'll see something interesting:
+&lt;/p&gt;&lt;PRE&gt;$ ping 10.0.42.0
+PING 10.0.42.0 (10.0.42.0): 56 data bytes
+Request timeout for icmp_seq 0
+92 bytes from 10.0.10.2: Redirect Host(New addr: 10.0.42.0)
+Vr HL TOS  Len   ID Flg  off TTL Pro  cks      Src      Dst
+ 4  5  00 0054 903f   0 0000  3f  01 ac67 10.0.1.3  10.0.42.0
+&lt;/PRE&gt;&lt;p&gt;
+   It's not that it didn't respond to the ICMP request, it's that we got
+&lt;/p&gt;&lt;PRE&gt;92 bytes from 10.0.10.2: Redirect Host(New addr: 10.0.42.0)
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+   That address, &lt;code dir="ltr"&gt;10.0.10.2&lt;/code&gt;, is the IP for &lt;code dir="ltr"&gt;compute2&lt;/code&gt;, an active compute node in my cluster.
+   Let's take a look at where &lt;code dir="ltr"&gt;coffee&lt;/code&gt;'s pod was scheduled
+&lt;/p&gt;&lt;PRE&gt;NAME                      READY   STATUS    RESTARTS   AGE   IP            NODE
+coffee-65b9b69679-96kl8   1/1     Running   0          30m   192.168.2.7   compute2.cmacr.ae
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+   There it is, on &lt;code dir="ltr"&gt;compute2&lt;/code&gt;. Since this is a layer 2 let's see what those two addresses
+   look like in the ARP table
+&lt;/p&gt;&lt;PRE&gt;$ arp -a
+? (10.0.10.2) at b8:ae:ed:7d:19:6 on en0 ifscope [ethernet]
+? (10.0.42.0) at b8:ae:ed:7d:19:6 on en0 ifscope [ethernet]
+&lt;/PRE&gt;&lt;p&gt;
+   And there you have it: the same MAC address. Hopefully by stepping through the flow of traffic
+   so far, it becomes a little clearer how layer 2 mode in MetalLB works.
+&lt;/p&gt;&lt;p&gt;
+   Our cluster is now set up to receive external traffic, from the rest of our LAN. Perfect!
+   Though, those IPs that MetalLB is leasing are dynamic. We don't want to have to keep track of which
+   service has which IP by asking k8s…
+&lt;/p&gt;&lt;h2&gt;
+🗞 Watch out for 'Part 2: Hosting your own dynamic DNS solution'
+&lt;/h2&gt;&lt;p&gt;
+Next time I'll detail how I simplify reaching these services with human friendly DNS records ✨
+&lt;/p&gt;&lt;p&gt;
+  Thanks for reading! 👋
+&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 14:47:01 -0500</pubDate></item><item><title>sled theoretical performance guide</title><link>https://lobste.rs/s/2ftlzt</link><description>&lt;img src="https://img.shields.io/github/stars/spacejam/sled.svg?style=social" alt="github" width="94" height="20"&gt;&lt;img src="https://docs.rs/sled/badge.svg" alt="documentation"&gt;&lt;img src="https://img.shields.io/discord/509773073294295082.svg?logo=discord" alt="chat" width="111" height="20"&gt;&lt;img src="https://img.shields.io/opencollective/backers/sled" alt="sponsors" width="70" height="20"&gt;&lt;p&gt;This guide covers timeless ideas that are helpful to keep in mind while working with
 systems where performance matters. Many of these ideas are fairly “durable”
 and will apply regardless of what hardware, programming language, operating
 system, or decade you are working in.&lt;/p&gt;&lt;p&gt;Stay tuned for follow-up articles that will drill into hardware and
@@ -1062,260 +1315,7 @@ that is unlikely to be possible without extreme expense. Gaining confidence in p
 positive impacts before investing significant effort is ultimately about
 respecting yourself and your teammates. Be considerate.&lt;/p&gt;&lt;p dir="ltr"&gt;If you found this article to be useful, please consider &lt;a href="https://github.com/sponsors/spacejam" dir="ltr"&gt;supporting my efforts
 efforts&lt;/a&gt; to share knowledge and
-productionize cutting edge database research with implementations in Rust :)&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 08:48:26 -0500</pubDate></item><item><title>"Cloud-like" Infrastructure at Home - Part 1: LoadBalancers on the Metal</title><link>https://lobste.rs/s/rty4wa</link><description>&lt;p&gt;
-This is the introductory post to a series outlining how I achieve "Cloud-like" application deployments
-on my personal servers.  If you're interested in Platform Engineering/SRE/DevOps, read on!
-&lt;/p&gt;&lt;h2&gt;
-☁️ What does "Cloud-like" mean?
-&lt;/h2&gt;&lt;p&gt;
-I'm using this phrase to express a set of capabilities that engineers have come to expect from cloud
-  providers in their offerings for hosting infrastructure. Namely: load balancers, dynamic DNS, certificate
-  leasing, and perhaps a few others.
-&lt;/p&gt;&lt;h2&gt;
-🤷 Who's this post for?
-&lt;/h2&gt;&lt;p&gt;
-I'm guessing by now you have at least some interest in the subject, so I'll state some assumptions:
-&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p&gt;
-You're somewhat familiar with Kubernetes &amp;amp; its configuration with YAML
-&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
-You're somewhat familiar with basic networking concepts, like DHCP, DNS, TCP/IP, ARP
-&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
-You're not looking for a guide to set-up self-hosted Kubernetes
-(I'll write about how I do this in a future post) - we're going to be working with an already running
-cluster
-&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;
-All set then? Let's dive in!
-&lt;/p&gt;&lt;h2&gt;
-💡 What're we solving today?
-&lt;/h2&gt;&lt;h3&gt;
-LAN routable traffic to services hosted in Kubernetes
-&lt;/h3&gt;&lt;p&gt;
-Say we have a web service we want to deploy - let's call it "coffee" ☕
-&lt;/p&gt;&lt;p&gt;
-   We deploy it into k8s (Kubernetes) and can access it by using
-&lt;/p&gt;&lt;PRE&gt;$ kubectl port-forward coffee-5b8f7c69bd-9x6sk 8080:80
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-   Now we can visit &lt;code dir="ltr"&gt;localhost:8080/&lt;/code&gt; to reach our service - great!
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-   But we don't want to have to rely on &lt;code dir="ltr"&gt;kubectl&lt;/code&gt; to handle the proxying for us.
-   What about other devices on the network that we want to be able to access the &lt;code dir="ltr"&gt;coffee&lt;/code&gt; service?
-&lt;/p&gt;&lt;p&gt;
-   Well, once we've gotten through this post, we'll end up getting a LAN accessible web
-   service we can reach via a segment of our LAN address space - like any other physical device on
-   the network - just by deploying k8s manifests.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-   No need to pick out an IP address and set up static routes, no need for any &lt;code dir="ltr"&gt;iptables&lt;/code&gt; magic 🔮
-&lt;/p&gt;&lt;h3&gt;
-Accessing Kubernetes services via IP
-&lt;/h3&gt;&lt;p dir="ltr"&gt;
-When deploying a pod of containers providing a network application, we can expose its port
-   so it's accessible using a &lt;a href="https://kubernetes.io/docs/concepts/services-networking/service" dir="ltr"&gt;&lt;code dir="ltr"&gt;Service&lt;/code&gt;&lt;/a&gt;. Here's what a &lt;code dir="ltr"&gt;Service&lt;/code&gt; accompanying a &lt;code dir="ltr"&gt;Deployment&lt;/code&gt; for
-   &lt;code dir="ltr"&gt;coffee&lt;/code&gt; might look like:
-&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="yaml" dir="ltr"&gt;---
-&lt;span dir="ltr"&gt;kind&lt;/span&gt;: Deployment
-&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: apps/v1
-&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
-&lt;span dir="ltr"&gt;spec&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;replicas&lt;/span&gt;: &lt;span dir="ltr"&gt;1&lt;/span&gt;
-  &lt;span dir="ltr"&gt;selector&lt;/span&gt;:
-    &lt;span dir="ltr"&gt;matchLabels&lt;/span&gt;:
-      &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
-  &lt;span dir="ltr"&gt;template&lt;/span&gt;:
-    &lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
-      &lt;span dir="ltr"&gt;labels&lt;/span&gt;:
-        &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
-    &lt;span dir="ltr"&gt;spec&lt;/span&gt;:
-      &lt;span dir="ltr"&gt;containers&lt;/span&gt;:
-      - &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
-        &lt;span dir="ltr"&gt;image&lt;/span&gt;: example/coffee
-        &lt;span dir="ltr"&gt;ports&lt;/span&gt;:
-        - &lt;span dir="ltr"&gt;name&lt;/span&gt;: api
-          &lt;span dir="ltr"&gt;containerPort&lt;/span&gt;: &lt;span dir="ltr"&gt;80&lt;/span&gt;
-
----
-&lt;span dir="ltr"&gt;kind&lt;/span&gt;: Service
-&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: v1
-&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
-&lt;span dir="ltr"&gt;spec&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;selector&lt;/span&gt;:
-    &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
-  &lt;span dir="ltr"&gt;ports&lt;/span&gt;:
-  - &lt;span dir="ltr"&gt;name&lt;/span&gt;: api
-    &lt;span dir="ltr"&gt;port&lt;/span&gt;: &lt;span dir="ltr"&gt;8080&lt;/span&gt;
-    &lt;span dir="ltr"&gt;targetPort&lt;/span&gt;: coffee&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-   After evaluating this manifest, our k8s cluster would have a &lt;code dir="ltr"&gt;coffee&lt;/code&gt; service that's available
-   within the cluster network. Other pods within the same namespace could simply call out to &lt;code dir="ltr"&gt;http://coffee:8080&lt;/code&gt;,
-   or pods deployed in other namespaces could reach it via &lt;code dir="ltr"&gt;http://coffee.example:8080&lt;/code&gt; (&lt;code dir="ltr"&gt;example&lt;/code&gt; being the
-   namespace we deployed the &lt;code dir="ltr"&gt;coffee&lt;/code&gt; resources to).
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-   By default, we'll get a &lt;code dir="ltr"&gt;ClusterIP&lt;/code&gt; type &lt;code dir="ltr"&gt;Service&lt;/code&gt;. I won't go into much detail here about k8s &lt;code dir="ltr"&gt;Service&lt;/code&gt;
-   objects, but it's useful to outline the available &lt;code dir="ltr"&gt;ServiceTypes&lt;/code&gt;, in particular &lt;a href="https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types" dir="ltr"&gt;"publishing" services&lt;/a&gt;.
-&lt;/p&gt;&lt;h3&gt;
-Publishing ServiceTypes
-&lt;/h3&gt;&lt;p dir="ltr"&gt;
-Let's take a look at each type, leaning on excerpts from &lt;a href="https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types" dir="ltr"&gt;the official documentation&lt;/a&gt;.
-&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
-&lt;code dir="ltr"&gt;ClusterIP&lt;/code&gt;: Exposes the Service on a cluster-internal IP. Choosing this value makes the Service only
-   reachable from within the cluster. This is the default ServiceType.
-&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
-We can quite plainly see this is a no-go for what we want, we want our service to be reachable outside
-    the cluster.
-&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
-&lt;code dir="ltr"&gt;NodePort&lt;/code&gt;: Exposes the Service on each Node’s IP at a static port (the NodePort).
-   A ClusterIP Service, to which the NodePort Service routes, is automatically created.
-   You’ll be able to contact the NodePort Service, from outside the cluster, by requesting
-   &amp;lt;NodeIP&amp;gt;:&amp;lt;NodePort&amp;gt;.
-&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
-This looks like it meets our needs in terms of external (to the cluster, not our LAN) access.
-   But on second thought, this means we have to worry about maintaining unique port numbers for each
-   service. If a service's pods are scheduled onto a node with another service already occupying that port,
-   it won't be able to operate. It also begs the question "how do we know which node, and thus which NodeIP
-   we'll be using to reach the service?"
-&lt;/p&gt;&lt;p&gt;
-   No dice.
-&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
-&lt;code dir="ltr"&gt;ExternalName&lt;/code&gt;: Maps the Service to the contents of the externalName field (e.g. foo.bar.example.com),
-   by returning a CNAME record with its value. No proxying of any kind is set up.
-&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
-Hmm, this doesn't seem like a good fit either. There's no mention of traffic being routable for cluster
-   external networking. It's simply about mapping external DNS records to services within the cluster, for
-   other cluster residents.
-&lt;/p&gt;&lt;p&gt;
-   Next!
-&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
-&lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt;: Exposes the Service externally using a cloud provider’s load balancer. NodePort and
-   ClusterIP Services, to which the external load balancer routes, are automatically created.
-&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
-This sounds perfect! Except… we're not deploying to some cloud environment. We don't have a cloud
-   provider's solution to provision load balancers.
-&lt;/p&gt;&lt;p&gt;
-   …Or do we? 👈😎👈
-&lt;/p&gt;&lt;h2&gt;
-⚖️ LoadBalancers on the metal
-&lt;/h2&gt;&lt;p dir="ltr"&gt;
-Turns out a service of type &lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt; is actually achievable, without the cloud provider! 🌩️
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-  &lt;a href="https://metallb.universe.tf/" dir="ltr"&gt;MetalLB&lt;/a&gt; is a project that aims to bring the &lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt; ServiceType to k8s clusters provisioned
-  on bare metal - and does so very well.
-&lt;/p&gt;&lt;h3&gt;
-Deployment &amp;amp; configuration
-&lt;/h3&gt;&lt;p&gt;
-MetalLB has two modes of operation: BGP &amp;amp; Layer2. Both are self explanatory, if you're familiar with
-   the respective network protocols - I won't be expanding on either, as it's out of scope for this write-up.
-&lt;/p&gt;&lt;p&gt;
-   For our implementation, we're going to keep things simple and go with Layer2.
-&lt;/p&gt;&lt;p&gt;
-   MetalLB is deployed entirely with native k8s manifests. How you choose to deploy your YAML is up to you.
-   There are a few options:
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;
-Raw YAML manifests
-&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
-I personally use &lt;a href="https://argoproj.github.io/projects/argo-cd" dir="ltr"&gt;ArgoCD&lt;/a&gt; to deploy the Helm chart, but details on that are for another post.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-   The installation documentation is straight forward and can be found &lt;a href="https://metallb.universe.tf/installation/" dir="ltr"&gt;here&lt;/a&gt;.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-   Let's focus on the configuration. MetalLB evaluates its configuration through a &lt;a href="https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/" dir="ltr"&gt;&lt;code dir="ltr"&gt;ConfigMap&lt;/code&gt;&lt;/a&gt;.
-   For the Layer2 configuration, it's as simple as picking out an IP range you want your services
-   to be allocated an address from.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-   My LAN is &lt;code dir="ltr"&gt;10.0.0.0/16&lt;/code&gt;, I opted to slice out &lt;code dir="ltr"&gt;10.0.42.0/24&lt;/code&gt;. So my configuration looks like:
-&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="yaml" dir="ltr"&gt;&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: v1
-&lt;span dir="ltr"&gt;kind&lt;/span&gt;: ConfigMap
-&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;namespace&lt;/span&gt;: metallb-system
-  &lt;span dir="ltr"&gt;name&lt;/span&gt;: config
-&lt;span dir="ltr"&gt;data&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;config&lt;/span&gt;: &lt;span dir="ltr"&gt;|
-&lt;/span&gt;&lt;span dir="ltr"&gt;    address-pools:&lt;/span&gt;
-      - &lt;span dir="ltr"&gt;name&lt;/span&gt;: default
-        &lt;span dir="ltr"&gt;protocol&lt;/span&gt;: layer2
-        &lt;span dir="ltr"&gt;addresses&lt;/span&gt;:
-          - &lt;span dir="ltr"&gt;10.0.42.0&lt;/span&gt;/&lt;span dir="ltr"&gt;24&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-   If we configure MetalLB with this, we can then deploy &lt;code dir="ltr"&gt;Service&lt;/code&gt; objects with &lt;code dir="ltr"&gt;spec.type: LoadBalancer&lt;/code&gt;
-   in their manifest and expect to get an IP leased from the &lt;code dir="ltr"&gt;10.0.42.0/24&lt;/code&gt; pool.
-&lt;/p&gt;&lt;h3&gt;
-Take it for a spin
-&lt;/h3&gt;&lt;p dir="ltr"&gt;
-Let's update our &lt;code dir="ltr"&gt;coffee&lt;/code&gt; service manifest to set &lt;code dir="ltr"&gt;spec.type&lt;/code&gt; to &lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt;
-&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="yaml" dir="ltr"&gt;---
-&lt;span dir="ltr"&gt;kind&lt;/span&gt;: Service
-&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: v1
-&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
-&lt;span dir="ltr"&gt;spec&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;selector&lt;/span&gt;:
-    &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
-  &lt;span dir="ltr"&gt;ports&lt;/span&gt;:
-    - &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
-      &lt;span dir="ltr"&gt;port&lt;/span&gt;: &lt;span dir="ltr"&gt;8080&lt;/span&gt;
-      &lt;span dir="ltr"&gt;targetPort&lt;/span&gt;: coffee
-  &lt;span dir="ltr"&gt;type&lt;/span&gt;: LoadBalancer &lt;span dir="ltr"&gt;# &amp;lt;- here&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
-   Applying this will yield something like
-&lt;/p&gt;&lt;PRE&gt;$ kubectl describe svc coffee
-Name:                     coffee
-Namespace:                default
-Labels:                   &amp;lt;none&amp;gt;
-Annotations:              Selector:  app=coffee
-Type:                     LoadBalancer
-IP:                       172.16.57.10
-LoadBalancer Ingress:     10.0.42.0
-Port:                     api  8080/TCP
-TargetPort:               coffee/TCP
-NodePort:                 api  30786/TCP
-Endpoints:                192.168.2.7:8080
-Session Affinity:         None
-External Traffic Policy:  Cluster
-Events:
-  Type    Reason       Age    From                Message
-  ----    ------       ----   ----                -------
-  Normal  IPAllocated  9s  metallb-controller  Assigned IP "10.0.42.0"
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-   For those of us who aren't networking wizards, something may look a bit strange here: &lt;code dir="ltr"&gt;10.0.0.42.0&lt;/code&gt;.
-   Rest assured, that's actually a routable address. Most day-to-day DHCP configurations will
-   start the allocation range at &lt;code dir="ltr"&gt;X.X.X.1&lt;/code&gt;, but there's no need here.
-&lt;/p&gt;&lt;p&gt;
-   So, if our service is alive, we should be able to establish a TCP session with it.
-   Let's try with good old netcat
-&lt;/p&gt;&lt;PRE&gt;$ nc -vz 10.0.42.0 8080
-Connection to 10.0.42.0 port 8080 [tcp/http] succeeded!
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-   Woo! If we look a little closer with a simple &lt;code dir="ltr"&gt;ping&lt;/code&gt;, we'll see something interesting:
-&lt;/p&gt;&lt;PRE&gt;$ ping 10.0.42.0
-PING 10.0.42.0 (10.0.42.0): 56 data bytes
-Request timeout for icmp_seq 0
-92 bytes from 10.0.10.2: Redirect Host(New addr: 10.0.42.0)
-Vr HL TOS  Len   ID Flg  off TTL Pro  cks      Src      Dst
- 4  5  00 0054 903f   0 0000  3f  01 ac67 10.0.1.3  10.0.42.0
-&lt;/PRE&gt;&lt;p&gt;
-   It's not that it didn't respond to the ICMP request, it's that we got
-&lt;/p&gt;&lt;PRE&gt;92 bytes from 10.0.10.2: Redirect Host(New addr: 10.0.42.0)
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-   That address, &lt;code dir="ltr"&gt;10.0.10.2&lt;/code&gt;, is the IP for &lt;code dir="ltr"&gt;compute2&lt;/code&gt;, an active compute node in my cluster.
-   Let's take a look at where &lt;code dir="ltr"&gt;coffee&lt;/code&gt;'s pod was scheduled
-&lt;/p&gt;&lt;PRE&gt;NAME                      READY   STATUS    RESTARTS   AGE   IP            NODE
-coffee-65b9b69679-96kl8   1/1     Running   0          30m   192.168.2.7   compute2.cmacr.ae
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-   There it is, on &lt;code dir="ltr"&gt;compute2&lt;/code&gt;. Since this is a layer 2 let's see what those two addresses
-   look like in the ARP table
-&lt;/p&gt;&lt;PRE&gt;$ arp -a
-? (10.0.10.2) at b8:ae:ed:7d:19:6 on en0 ifscope [ethernet]
-? (10.0.42.0) at b8:ae:ed:7d:19:6 on en0 ifscope [ethernet]
-&lt;/PRE&gt;&lt;p&gt;
-   And there you have it: the same MAC address. Hopefully by stepping through the flow of traffic
-   so far, it becomes a little clearer how layer 2 mode in MetalLB works.
-&lt;/p&gt;&lt;p&gt;
-   Our cluster is now set up to receive external traffic, from the rest of our LAN. Perfect!
-   Though, those IPs that MetalLB is leasing are dynamic. We don't want to have to keep track of which
-   service has which IP by asking k8s…
-&lt;/p&gt;&lt;h2&gt;
-🗞 Watch out for 'Part 2: Hosting your own dynamic DNS solution'
-&lt;/h2&gt;&lt;p&gt;
-Next time I'll detail how I simplify reaching these services with human friendly DNS records ✨
-&lt;/p&gt;&lt;p&gt;
-  Thanks for reading! 👋
-&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 14:47:01 -0500</pubDate></item><item><title>Cookie-based Spring Security Session</title><link>https://lobste.rs/s/xddnlr</link><description>&lt;h3&gt;&lt;a href="https://www.innoq.com/en/blog/cookie-based-spring-security-session/#springsecurityarchitecture"&gt;Spring Security architecture&lt;/a&gt;&lt;/h3&gt;&lt;p dir="ltr"&gt;Spring Security integrates into Spring web as a servlet request filter
+productionize cutting edge database research with implementations in Rust :)&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 08:48:26 -0500</pubDate></item><item><title>Cookie-based Spring Security Session</title><link>https://lobste.rs/s/xddnlr</link><description>&lt;h3&gt;&lt;a href="https://www.innoq.com/en/blog/cookie-based-spring-security-session/#springsecurityarchitecture"&gt;Spring Security architecture&lt;/a&gt;&lt;/h3&gt;&lt;p dir="ltr"&gt;Spring Security integrates into Spring web as a servlet request filter
 (see &lt;a href="https://docs.spring.io/spring-security/site/docs/5.3.3.RELEASE/reference/html5/#servlet-architecture" dir="ltr"&gt;Chapter 9 of the Spring Security Reference&lt;/a&gt;).
 The &lt;code dir="ltr"&gt;FilterChainProxy&lt;/code&gt; is the central filter class and contains a parallel &lt;code dir="ltr"&gt;SecurityFilterChain&lt;/code&gt;
 (see &lt;a href="https://docs.spring.io/spring-security/site/docs/5.3.3.RELEASE/reference/html5/#servlet-securityfilterchain" dir="ltr"&gt;Chapter 9.4 of the Spring Security Reference&lt;/a&gt;).
@@ -1890,7 +1890,63 @@ I did have to go back and do some optimizations. The original AS3 code was writt
 It's also worth noting that if I wasn't planning on significantly expanding the scope of the original game, if I were literally just trying to save the game from dying alongside Flash, then OpenFL, AIR, or Ruffle seem like they'd be the smarter option. I didn't spoil the hat DLC in this post for my health -- it provides vital context for this particular decision.
 &lt;/p&gt;&lt;p dir="ltr"&gt;
 Shipping this game felt like a goodbye. I loved working in Flash. At the time, it was the best way to get your games in front of people with zero friction, in a way that seemed like they'd live forever -- SWFs from the 90s still work flawlessly in the latest Flash player, decades later. Seeing the world try to transition over to HTML5 when it clearly wasn't good enough yet was agonizing to watch. (And frankly, &lt;a href="https://twitter.com/mcclure111/status/996859737693212672" dir="ltr"&gt;it's getting worse rather than better&lt;/a&gt;. My bet is that we're never again going to see the browser as a serviceable game platform as long as the owners of the two most popular browsers also own phone app stores.) I made this remaster partly to sell a new game, but also out of a genuine desire to preserve my corner of game history. Thanks for revisiting it with me!
-&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 19:09:50 -0500</pubDate></item><item><title>A Grammar of Data Manipulation</title><link>https://lobste.rs/s/aqvglm</link><description>&lt;h2 dir="ltr"&gt;
+&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 19:09:50 -0500</pubDate></item><item><title>Pysa: Open Source static analysis for Python code</title><link>https://lobste.rs/s/pjun96</link><description>&lt;div dir="ltr"&gt;
+			POSTED ON &lt;span dir="ltr"&gt;&lt;time datetime="2020-08-07T09:00:36-07:00" dir="ltr"&gt;AUG 7, 2020&lt;/time&gt;&lt;/span&gt; TO &lt;span dir="ltr"&gt;&lt;a href="https://engineering.fb.com/category/security/" rel="category tag" dir="ltr"&gt;Security&lt;/a&gt;&lt;/span&gt;
+			&lt;/div&gt;&lt;div&gt;Pysa: An open source static analysis tool to detect and prevent security issues in Python code&lt;/div&gt;&lt;img width="485" height="273" src="https://engineering.fb.com/wp-content/uploads/2020/08/Zoncolon_heroBlueA-1.jpg" alt="Pysa: An open source static analysis tool to detect and prevent security issues in Python code"&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;Today, we are sharing details about &lt;/span&gt;&lt;a href="https://pyre-check.org/docs/pysa-basics.html" rel="noopener" dir="ltr"&gt;&lt;span dir="ltr"&gt;Pysa&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt;, an &lt;/span&gt;&lt;a href="https://github.com/facebook/pyre-check/" rel="noopener" dir="ltr"&gt;&lt;span dir="ltr"&gt;open source&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt; static analysis tool we’ve built to detect and prevent security and privacy issues in Python code. Last year, we shared how we built &lt;/span&gt;&lt;a href="https://engineering.fb.com/security/zoncolan/" dir="ltr"&gt;&lt;span dir="ltr"&gt;Zoncolan&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt;, a static analysis tool that helps us analyze more than 100 million lines of &lt;/span&gt;&lt;a href="https://hacklang.org/" rel="noopener" dir="ltr"&gt;&lt;span dir="ltr"&gt;Hack&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt; code and has helped engineers prevent thousands of potential security issues. That success inspired us to develop Pysa, which is an acronym for Python Static Analyzer.&amp;nbsp;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;Pysa is a security-focused tool built on top of our type checker for Python, &lt;/span&gt;&lt;a href="https://pyre-check.org/docs/overview.html" rel="noopener" dir="ltr"&gt;&lt;span dir="ltr"&gt;Pyre&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt;. It’s used to look at code and analyze how data flows through it. Analyzing data flows is useful because many security and privacy issues can be modeled as data flowing into a place it shouldn’t.&lt;/span&gt;&lt;/p&gt;&lt;p&gt;&lt;span&gt;Pysa helps us detect a wide range of issues. For example, we use it to check whether our Python code properly makes use of certain internal frameworks, which are designed to prevent access to, or disclosure of, user data based on technical privacy policies. Pysa also detects common web app security issues, like XSS and SQL injection. Like Zoncolan has done for Hack code, Pysa has helped us scale our application security efforts for Python, most notably the codebase that powers Instagram’s servers.&lt;/span&gt;&lt;/p&gt;&lt;h2&gt;&lt;span&gt;Pysa on Instagram&lt;/span&gt;&lt;/h2&gt;&lt;p&gt;&lt;span&gt;Our largest repository of Python code is the millions of lines that power Instagram’s servers. Automated analyzers like Pysa are an important tool for maintaining quality and security in this codebase. When we run Pysa on a developer’s proposed code change, the tool provides results in about an hour rather than the weeks or months it could take to review manually. These rapid results help us find and prevent an issue fast enough to keep it from being introduced into our codebase. The results go either directly to the developer or to security engineers, depending on the type of issue detected and the signal-to-noise ratio of our detections for that specific issue.&lt;/span&gt;&lt;/p&gt;&lt;h2&gt;&lt;span&gt;Open-sourcing Pysa&lt;/span&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;We’ve made Pysa open source, together with&lt;/span&gt;&lt;a href="https://github.com/facebook/pyre-check/tree/master/stubs/taint" rel="noopener" dir="ltr"&gt; &lt;span dir="ltr"&gt;many of the definitions&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt; required to help it find security issues, so that others can use the tool for their own Python code. Because we use open source Python server frameworks such as &lt;/span&gt;&lt;a href="https://github.com/django/django" rel="noopener" dir="ltr"&gt;&lt;span dir="ltr"&gt;Django&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt; and &lt;/span&gt;&lt;a href="https://github.com/tornadoweb/tornado" rel="noopener" dir="ltr"&gt;&lt;span dir="ltr"&gt;Tornado&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt; for our own products, Pysa can start finding security issues in projects using these frameworks from the first run. Using Pysa for frameworks we don’t already have coverage for is generally as simple as adding a few lines of configuration to tell Pysa where data enters the server.&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;We’ve used Pysa to detect and disclose security issues on open source Python projects, such as &lt;/span&gt;&lt;a href="https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2019-19775" rel="noopener" dir="ltr"&gt;&lt;span dir="ltr"&gt;CVE-2019-19775&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt;. We’ve also worked with the&lt;/span&gt;&lt;a href="https://github.com/zulip/zulip" rel="noopener" dir="ltr"&gt; &lt;span dir="ltr"&gt;Zulip&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt; open source project to incorporate Pysa into its codebase. &lt;/span&gt;&lt;/p&gt;&lt;h2&gt;&lt;span&gt;How Pysa works&lt;/span&gt;&lt;/h2&gt;&lt;p&gt;&lt;span dir="ltr"&gt;Pysa was developed with the lessons learned from Zoncolan in mind. It uses the same algorithms to perform static analysis and even shares some code with Zoncolan. Like Zoncolan, Pysa tracks flows of data through a program. The user defines sources (places where important data originates) as well as sinks (places where the data from the source shouldn’t end up). For security applications, the most common kinds of sources are places where user-controlled data enters the application, such as Django’s &lt;code dir="ltr"&gt;&lt;a href="https://docs.djangoproject.com/en/3.0/ref/request-response/#django.http.HttpRequest.GET" rel="noopener" dir="ltr"&gt;HttpRequest.GET&lt;/a&gt;&lt;/code&gt; dictionary. Sinks tend to be much more varied but can include APIs that execute code, such as &lt;code dir="ltr"&gt;eval&lt;/code&gt;, or APIs that access the file system, such as &lt;code dir="ltr"&gt;os.open&lt;/code&gt;. Pysa performs iterative rounds of analysis to build summaries to determine which functions return data from a source and which functions have parameters that eventually reach a sink. If Pysa finds that a source eventually connects to a sink, it reports an issue. Visualizing this process creates a tree, with the issue at the apex and sources and sinks at the leaves:&lt;br dir="ltr"&gt;
+&lt;/span&gt;&lt;/p&gt;&lt;img alt="If Pysa finds that a source eventually connects to a sink, it reports an issue. Visualizing this process creates a tree, with the issue at the apex and sources and sinks at the leaves:" width="1920" height="864" src="https://engineering.fb.com/wp-content/uploads/2020/08/Pysa2-1.jpg"&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;To be able to perform interprocedural analysis — following flows of data across function calls — we needed to be able to map function invocations to their implementations. To do this, we needed to use all available information in the code, including optional static types (when present). We use our static type checker, called &lt;/span&gt;&lt;a href="https://pyre-check.org/docs/overview.html" rel="noopener" dir="ltr"&gt;&lt;span dir="ltr"&gt;Pyre&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt;, to understand this information. While Pysa relies heavily on Pyre and the two share a repository, it’s important to note that they are separate products with separate applications.&amp;nbsp;&lt;/span&gt;&lt;/p&gt;&lt;h2&gt;&lt;span&gt;False positives and negatives&lt;/span&gt;&lt;/h2&gt;&lt;p&gt;&lt;span&gt;Our security engineers are the primary users of Pysa within Facebook. Like any engineers that use automated tools for detection, we’ve had to decide how to deal with false positives and false negatives.&lt;/span&gt;&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;span&gt;False positives occur when a tool reports that a security issue is present where none actually exists.&amp;nbsp;&lt;/span&gt;&lt;/LI&gt;&lt;LI&gt;&lt;span&gt;False negatives occur when a tool fails to detect and report when a real security issue is present.&lt;/span&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;&lt;span&gt;Because of the importance of catching security issues, we built Pysa to avoid false negatives and catch as many issues as possible. Reducing false negatives, however, may require trade-offs that increase false positives. Too many false positives could in turn cause alert fatigue and risk real issues being missed in the noise.&lt;/span&gt;&lt;/p&gt;&lt;p&gt;&lt;span&gt;We built two kinds of functionality into Pysa to give users the tools to remove false positives: sanitizers and features.&lt;/span&gt;&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;a href="https://pyre-check.org/docs/pysa-basics.html#sanitizers" rel="noopener" dir="ltr"&gt;&lt;span dir="ltr"&gt;Sanitizers&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt; are a blunt tool: During the analysis process, they tell Pysa to completely stop following a data flow after it passes through a function or attribute. They allow users to encode their domain-specific knowledge about transformations that will always render data benign from a security or privacy perspective.&lt;/span&gt;&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://pyre-check.org/docs/pysa-features.html" rel="noopener" dir="ltr"&gt;&lt;span dir="ltr"&gt;Features&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt; allow a more nuanced approach: Features are little pieces of metadata that Pysa can attach to flows of data as they are being tracked throughout the code. Unlike sanitizers, adding features doesn’t remove any issues from Pysa’s results.&lt;/span&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;&lt;span&gt;Features and other metadata can be used to filter the results after analysis is done. Filters are usually written for a specific source-sink pair to ignore issues where data was rendered benign for a specific kind of sink, but not for all kinds of sinks.&lt;/span&gt;&lt;/p&gt;&lt;h2&gt;&lt;span&gt;Example&lt;/span&gt;&lt;/h2&gt;&lt;p&gt;&lt;span&gt;To understand where Pysa is most useful, imagine the following code was used to load a user’s profile:&lt;/span&gt;&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;# views&lt;span dir="ltr"&gt;/&lt;/span&gt;user&lt;span dir="ltr"&gt;.&lt;/span&gt;py
+&lt;span dir="ltr"&gt;async&lt;/span&gt; def &lt;span dir="ltr"&gt;get_profile&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;request&lt;span dir="ltr"&gt;:&lt;/span&gt; HttpRequest&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;-&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; HttpResponse&lt;span dir="ltr"&gt;:&lt;/span&gt;
+   profile &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;load_profile&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;request&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;GET&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;'user_id'&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+   &lt;span dir="ltr"&gt;...&lt;/span&gt;
+ 
+# controller&lt;span dir="ltr"&gt;/&lt;/span&gt;user&lt;span dir="ltr"&gt;.&lt;/span&gt;py
+&lt;span dir="ltr"&gt;async&lt;/span&gt; def &lt;span dir="ltr"&gt;load_profile&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;user_id&lt;span dir="ltr"&gt;:&lt;/span&gt; str&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
+   user &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;load_user&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;user_id&lt;span dir="ltr"&gt;)&lt;/span&gt; # Loads a user safely&lt;span dir="ltr"&gt;;&lt;/span&gt; no &lt;span dir="ltr"&gt;SQL&lt;/span&gt; injection
+   pictures &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;load_pictures&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;user&lt;span dir="ltr"&gt;.&lt;/span&gt;id&lt;span dir="ltr"&gt;)&lt;/span&gt;
+   &lt;span dir="ltr"&gt;...&lt;/span&gt;
+ 
+# model&lt;span dir="ltr"&gt;/&lt;/span&gt;media&lt;span dir="ltr"&gt;.&lt;/span&gt;py
+&lt;span dir="ltr"&gt;async&lt;/span&gt; def &lt;span dir="ltr"&gt;load_pictures&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;user_id&lt;span dir="ltr"&gt;:&lt;/span&gt; str&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
+   query &lt;span dir="ltr"&gt;=&lt;/span&gt; f&lt;span dir="ltr"&gt;""&lt;/span&gt;"
+      &lt;span dir="ltr"&gt;SELECT&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt;
+      &lt;span dir="ltr"&gt;FROM&lt;/span&gt; pictures
+      &lt;span dir="ltr"&gt;WHERE&lt;/span&gt; user_id &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;user_id&lt;span dir="ltr"&gt;}&lt;/span&gt;
+   &lt;span dir="ltr"&gt;""&lt;/span&gt;"
+   result &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;run_query&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;query&lt;span dir="ltr"&gt;)&lt;/span&gt;
+   &lt;span dir="ltr"&gt;...&lt;/span&gt;
+ 
+# model&lt;span dir="ltr"&gt;/&lt;/span&gt;shared&lt;span dir="ltr"&gt;.&lt;/span&gt;py
+&lt;span dir="ltr"&gt;async&lt;/span&gt; def &lt;span dir="ltr"&gt;run_query&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;query&lt;span dir="ltr"&gt;:&lt;/span&gt; str&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
+   connection &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;create_sql_connection&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+   result &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;await&lt;/span&gt; connection&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;execute&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;query&lt;span dir="ltr"&gt;)&lt;/span&gt;
+   &lt;span dir="ltr"&gt;...&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;&lt;span dir="ltr"&gt;As it stands, the potential SQL injection in &lt;code dir="ltr"&gt;load_pictures&lt;/code&gt; is not exploitable, because that function will only ever receive the valid &lt;code dir="ltr"&gt;user_id&lt;/code&gt; that resulted from calling &lt;code dir="ltr"&gt;load_user&lt;/code&gt; in the &lt;code dir="ltr"&gt;load_profile&lt;/code&gt; function. When configured correctly, Pysa would probably not report an issue here.&lt;/span&gt;&lt;/p&gt;&lt;p&gt;&lt;span&gt;Now, imagine that an enterprising engineer working on the controller layer of the application realized that fetching the user and picture data concurrently returns results faster:&lt;/span&gt;&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;# controller&lt;span dir="ltr"&gt;/&lt;/span&gt;user&lt;span dir="ltr"&gt;.&lt;/span&gt;py
+&lt;span dir="ltr"&gt;async&lt;/span&gt; def &lt;span dir="ltr"&gt;load_profile&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;user_id&lt;span dir="ltr"&gt;:&lt;/span&gt; str&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
+   user&lt;span dir="ltr"&gt;,&lt;/span&gt; pictures &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;await&lt;/span&gt; asyncio&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;gather&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;
+       &lt;span dir="ltr"&gt;load_user&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;user_id&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+       &lt;span dir="ltr"&gt;load_pictures&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;user_id&lt;span dir="ltr"&gt;)&lt;/span&gt; # no longer &lt;span dir="ltr"&gt;'user.id'&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;
+   &lt;span dir="ltr"&gt;)&lt;/span&gt;
+   &lt;span dir="ltr"&gt;...&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;&lt;span dir="ltr"&gt;This change may look innocuous but actually ends up connecting the user-controlled &lt;code dir="ltr"&gt;user_id&lt;/code&gt; string directly to the SQL injection issue in &lt;code dir="ltr"&gt;load_pictures&lt;/code&gt;. &amp;nbsp;In a large application with many layers between the entry point and database queries, this engineer might never realize that the data is fully user controlled, or that a SQL injection issue lurks in one of the functions called. This, however, is exactly what Pysa was designed to know. If an engineer proposed a change like this on Instagram, Pysa could detect that there was data flowing all the way from user-controlled input to a SQL query and flag the issue.&lt;/span&gt;&lt;/p&gt;&lt;h2&gt;&lt;span&gt;Limitations&lt;/span&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;Fundamentally, there is &lt;/span&gt;&lt;a href="https://www.scientificamerican.com/article/why-is-turings-halting-pr/" rel="noopener" dir="ltr"&gt;&lt;span dir="ltr"&gt;no way to build a perfect static analyzer&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt;. Pysa has limitations based on its choice to address security issues related to data flow, together with design decisions that trade off performance for precision and accuracy. Python, as a dynamic language, has unique features that underlie some of those design decisions.&lt;/span&gt;&lt;/p&gt;&lt;h3&gt;&lt;span&gt;Problem space&lt;/span&gt;&lt;/h3&gt;&lt;p&gt;&lt;span&gt;Pysa is built to discover only data flow–related security issues, but not all security or privacy issues can be modeled as flows of data. Consider this example code:&lt;/span&gt;&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;def &lt;span dir="ltr"&gt;admin_operation&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;request&lt;span dir="ltr"&gt;:&lt;/span&gt; HttpRequest&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
+  &lt;span dir="ltr"&gt;if&lt;/span&gt; not &lt;span dir="ltr"&gt;user_is_admin&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
+      &lt;span dir="ltr"&gt;return&lt;/span&gt; Http404
+ 
+  &lt;span dir="ltr"&gt;delete_user&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;request&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;GET&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;"user_to_delete"&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;&lt;span dir="ltr"&gt;Pysa is not the right tool to ensure that an authorization check, such as &lt;code dir="ltr"&gt;user_is_admin&lt;/code&gt;, was triggered before a privileged operation, such as &lt;code dir="ltr"&gt;delete_user&lt;/code&gt;. Pysa could detect data from &lt;code dir="ltr"&gt;request.GET&lt;/code&gt; flowing into &lt;code dir="ltr"&gt;delete_user&lt;/code&gt;, but that data doesn’t ever pass through the &lt;code dir="ltr"&gt;user_is_admin&lt;/code&gt; check. This code could be rewritten to make the problem modelable by Pysa, or to make it safer by embedding the permission check in the administrative &lt;code dir="ltr"&gt;delete_user&lt;/code&gt; operation, but it serves to show that Pysa can’t detect all forms of security issues.&lt;/span&gt;&lt;/p&gt;&lt;h3&gt;&lt;span&gt;Resource constraints&lt;/span&gt;&lt;/h3&gt;&lt;p&gt;&lt;span&gt;We’ve had to make design decisions so that Pysa can finish its analysis before developers’ proposed changes land. For example, when Pysa is tracking data flows into too many attributes of an object, it sometimes has to simplify and treat the whole object as containing that data, which could lead to false positives.&lt;/span&gt;&lt;/p&gt;&lt;p&gt;&lt;span&gt;Development time is also a resource constraint, which has caused us to make trade-offs on which Python features we support. For example, Pysa doesn’t yet include decorators in the call graph when invoking functions, and thus might miss issues that occur within decorators.&amp;nbsp;&lt;/span&gt;&lt;/p&gt;&lt;h3&gt;&lt;span&gt;Python as a dynamic language&lt;/span&gt;&lt;/h3&gt;&lt;p&gt;&lt;span&gt;Some of the features that make Python such a flexible language also make it harder to statically analyze. For example, it’s difficult to track flows of data through method calls without type information. In the following code, it’s impossible to tell which implementation of fly is called:&lt;/span&gt;&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;class&lt;/span&gt; &lt;span dir="ltr"&gt;Bird&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
+  def &lt;span dir="ltr"&gt;fly&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;self&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;...&lt;/span&gt;
+ 
+&lt;span dir="ltr"&gt;class&lt;/span&gt; &lt;span dir="ltr"&gt;Airplane&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
+  def &lt;span dir="ltr"&gt;fly&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;self&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;...&lt;/span&gt;
+ 
+def &lt;span dir="ltr"&gt;take_off&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;x&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
+  x&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;fly&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;  # Which &lt;span dir="ltr"&gt;function&lt;/span&gt; does &lt;span dir="ltr"&gt;this&lt;/span&gt; call&lt;span dir="ltr"&gt;?&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;This isn’t to say Pysa can’t run on untyped code; it can and has found security issues in fully untyped projects, but&lt;/span&gt;&lt;a href="https://pyre-check.org/docs/pysa-coverage.html" rel="noopener" dir="ltr"&gt; &lt;span dir="ltr"&gt;a little effort to add coverage&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt; for important types is needed.&lt;/span&gt;&lt;/p&gt;&lt;p&gt;&lt;span&gt;The dynamism of Python also places another limitation on Pysa. Consider the following code:&lt;/span&gt;&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;def &lt;span dir="ltr"&gt;secret_eval&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;request&lt;span dir="ltr"&gt;:&lt;/span&gt; HttpRequest&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;
+  os &lt;span dir="ltr"&gt;=&lt;/span&gt; importlib&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;import_module&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"os"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+ 
+  # Pysa won&lt;span dir="ltr"&gt;'t know what '&lt;/span&gt;os&lt;span dir="ltr"&gt;' is, and thus won'&lt;/span&gt;t
+  # catch &lt;span dir="ltr"&gt;this&lt;/span&gt; remote code execution issue
+  os&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;system&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;request&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;GET&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;"command"&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;There is a code execution vulnerability in this code, but Pysa wouldn’t catch it because the &lt;code dir="ltr"&gt;os&lt;/code&gt; module is dynamically imported and Pysa doesn’t realize that that’s what the local &lt;code dir="ltr"&gt;os&lt;/code&gt; variable represents. Python lets you dynamically import virtually any code at any point. Python also lets you change what a function call on virtually any object will do. While Pysa could be updated to parse the “&lt;/span&gt;&lt;span dir="ltr"&gt;os&lt;/span&gt;&lt;span dir="ltr"&gt;” string in the above example and detect the issue, the dynamism of Python means there are endless pathological examples of flows of data that Pysa cannot detect.&lt;/span&gt;&lt;/p&gt;&lt;h2&gt;&lt;span&gt;Results&lt;/span&gt;&lt;/h2&gt;&lt;p&gt;&lt;span&gt;Pysa helps security engineers both detect existing issues in a codebase and prevent new ones from being introduced via proposed code changes. In the first half of 2020, Pysa detected 44 percent of the issues that our engineers found in the Instagram server codebase.&lt;/span&gt;&lt;/p&gt;&lt;p&gt;&lt;span&gt;Across all vulnerability types, Pysa detected 330 unique issues in proposed code changes which we categorized by severity. In total, 49 (15 percent) were significant issues, and 131 (40 percent) of the remaining results were real but had mitigating circumstances that made them less severe. Even with Pysa’s bias to avoid false negatives and our willingness to accept a good number of false positives, we still managed to cap false positives at 150 (45 percent) of the reported issues.&lt;/span&gt;&lt;/p&gt;&lt;p&gt;&lt;span&gt;We regularly review issues reported through other avenues, such as our bug bounty program, to ensure that we correct any false negatives. Each detection for a vulnerability type is tunable. Through continuous refinement, security engineers have been able to move the more refined types to report 100 percent valid issues.&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;Overall, we are happy with the trade-offs we’ve made with Pysa to help security engineers scale, but there is always room to improve. We built Pysa for continuous improvement, thanks to &lt;/span&gt;&lt;span dir="ltr"&gt;a close collaboration between security engineers and software engineers. &lt;/span&gt;&lt;span dir="ltr"&gt;This has allowed us to iterate quickly and build a tool that suits our needs in a way that we could never have done with an off-the-shelf solution.&lt;/span&gt; &lt;span dir="ltr"&gt;This collaboration has already resulted in additions and refinements to how Pysa works. For example, it has helped us improve how we browse traces for issues, which makes it easier to identify when an issue is a false positive.&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;Pysa is following in the footsteps of Zoncolan by allowing us to automate the detection of security issues in our Python code. It has enabled us to detect security issues in our own code and in open source projects. Pysa is free, &lt;/span&gt;&lt;a href="https://github.com/facebook/pyre-check/" rel="noopener" dir="ltr"&gt;&lt;span dir="ltr"&gt;open source&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt;, and available for anyone to start analyzing their Python code by following along with &lt;/span&gt;&lt;a href="https://pyre-check.org/docs/pysa-basics.html" rel="noopener" dir="ltr"&gt;&lt;span dir="ltr"&gt;the documentation&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt; and&lt;/span&gt;&lt;a href="https://github.com/facebook/pyre-check/tree/master/pysa_tutorial" rel="noopener" dir="ltr"&gt; &lt;span dir="ltr"&gt;tutorial&lt;/span&gt;&lt;/a&gt;&lt;span dir="ltr"&gt;. We would love for you to give it a try!&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;br dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;br dir="ltr"&gt;
+&lt;/span&gt;&lt;i dir="ltr"&gt;&lt;span dir="ltr"&gt;Building Pysa and putting it to use has been a massive undertaking. Thank you to all these people for their contributions to the effort: Maxime Arthaud, Apurv Bhargava, Jia Chen, Manuel Fahndrich, Lorenzo Fontana, Dominik Gabi, Nolan Alexander Jimenez, Zack Landau, Mark Mendoza, Eray Mitrani, Ibrahim Mohamed, Maggie Moss, Radu Nesiu, Nicholas O’Brien, Edward Qiu, Pradeep Kumar Srinivasan, and Shannon Zhu.&lt;/span&gt;&lt;/i&gt;&lt;/p&gt;&lt;img width="1920" height="1079" alt="Open-sourcing PCIcrawler: A Python-based command-line interface tool to debug PCI issues at scale" src="https://engineering.fb.com/wp-content/uploads/2020/08/ENG-blog-OSiB-dark-blue-hero.jpg?w=1920"&gt;</description><pubDate>Tue, 11 Aug 2020 07:46:31 -0500</pubDate></item><item><title>A Grammar of Data Manipulation</title><link>https://lobste.rs/s/aqvglm</link><description>&lt;h2 dir="ltr"&gt;
 Cheatsheet&lt;/h2&gt;&lt;img src="https://raw.githubusercontent.com/rstudio/cheatsheets/master/pngs/thumbnails/data-transformation-cheatsheet-thumbs.png" width="455" height="252"&gt;&lt;h2 dir="ltr"&gt;
 Usage&lt;/h2&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;a href="https://rdrr.io/r/base/library.html" dir="ltr"&gt;library&lt;/a&gt;&lt;/span&gt;(&lt;span dir="ltr"&gt;dplyr&lt;/span&gt;)
 
@@ -2625,7 +2681,7 @@ many of the decisions which govern our current tools were.  If CSS was designed
 the way it is just to satisfy the constraints of 1996, then maybe that gives
 us permission 20 years later to do things a little differently.&lt;/p&gt;&lt;p&gt;In our next blog post we expose the tremendous innovation that allowed a copper wire to
 evolve from morse code to 10 Gbps Cat6 ethernet. Subscribe below
-to be notified when it’s released.&lt;/p&gt;&lt;h3&gt;Like this post? Share it with your followers.&lt;/h3&gt;&lt;h3&gt;Sign up to get our next post delivered to your inbox.&lt;/h3&gt;&lt;div&gt;&lt;button type="submit"&gt;&lt;span&gt;Sign up&lt;/span&gt;&lt;/button&gt;&lt;/div&gt;</description><pubDate>Mon, 10 Aug 2020 11:47:23 -0500</pubDate></item><item><title>Video Summarizer - browser extension that speeds up videos if there's noone talking</title><link>https://lobste.rs/s/xqq32e</link><description>&lt;h1&gt;Video summarizer &lt;/h1&gt;&lt;img src="https://github.com/SoptikHa2/video-summarizer/raw/master/extension-firefox/icon.svg" width="64" height="64"&gt;&lt;p&gt;A tool and browser extensions that determines if people in video are currently talking or not, and speeds up the video accordingly. Great for long lecture videos for skipping time spent writing on a whiteboard.&lt;/p&gt;&lt;img src="https://github.com/SoptikHa2/video-summarizer/raw/master/ff-vidsum-showcase.png" width="419" height="236"&gt;&lt;p dir="ltr"&gt;
+to be notified when it’s released.&lt;/p&gt;&lt;h3&gt;Like this post? Share it with your followers.&lt;/h3&gt;&lt;h3&gt;Sign up to get our next post delivered to your inbox.&lt;/h3&gt;&lt;div&gt;&lt;button type="submit"&gt;&lt;span&gt;Sign up&lt;/span&gt;&lt;/button&gt;&lt;/div&gt;</description><pubDate>Mon, 10 Aug 2020 11:47:23 -0500</pubDate></item><item><title>History of Computer Architecture and RISC (Dave Patterson)</title><link>https://www.youtube.com/watch?v=1FtEGIp3a_M</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/362yk7/history_computer_architecture_risc_dave"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Tue, 11 Aug 2020 04:37:35 -0500</pubDate></item><item><title>Video Summarizer - browser extension that speeds up videos if there's noone talking</title><link>https://lobste.rs/s/xqq32e</link><description>&lt;h1&gt;Video summarizer &lt;/h1&gt;&lt;img src="https://github.com/SoptikHa2/video-summarizer/raw/master/extension-firefox/icon.svg" width="64" height="64"&gt;&lt;p&gt;A tool and browser extensions that determines if people in video are currently talking or not, and speeds up the video accordingly. Great for long lecture videos for skipping time spent writing on a whiteboard.&lt;/p&gt;&lt;img src="https://github.com/SoptikHa2/video-summarizer/raw/master/ff-vidsum-showcase.png" width="419" height="236"&gt;&lt;p dir="ltr"&gt;
 (&lt;em dir="ltr"&gt;Click to view video showcase&lt;/em&gt;)&lt;/p&gt;&lt;img src="https://github.com/SoptikHa2/video-summarizer/raw/master/ff-vidsum-ui.png" width="305" height="398"&gt;&lt;p&gt;This extension analyses video (typically youtube one, but shall work with any HTML video) and, depending on current loundness of the video, speeds it up at different rates. One can for example speed up teacher talking at 1.5x rate, and speed up teacher writing something at whiteboard at 4x rate.&lt;/p&gt;&lt;p&gt;This saves quite a bit of time, especially during watching long lectures.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://addons.mozilla.org/en-US/firefox/addon/video-summarizer/" rel="nofollow" dir="ltr"&gt;&lt;strong dir="ltr"&gt;Get it for Firefox&lt;/strong&gt;&lt;/a&gt; (Important: Videos that are controlled by this extension are stored on my server. So most videos are not indexed and thus not managed by this extension yet! To index a video, navigate to it and click on the addon icon located next to URL bar. After few seconds, the video should be ready to view through the extension.)&lt;/p&gt;&lt;p dir="ltr"&gt;Google Chrome and chromium-based browsers are not currently supported. Mostly because it costs money to buy developer account. &lt;a href="https://paypal.me/stastnysoptik" rel="nofollow" dir="ltr"&gt;Support me&lt;/a&gt; if you like my work. If I receive 25USD or whatever google development account costs, I'll make a chrome extension.&lt;/p&gt;&lt;h2&gt;How does it work&lt;/h2&gt;&lt;p&gt;There are two parts to this extension: frontend and backend. Backend indexes videos: downloads them via youtube-dl, extracts sound with ffmpeg and analyzes it with shell and awk (yes, the server is written entirely with gnu coreutils). Generally we seek parts of videos that are greatly below or above average sound of the video. This way, we can determine which parts of video are loud and which are silent.&lt;/p&gt;&lt;p&gt;When frontend navigates to a page, it checks if there is a HTML5 video. If so, it hashes current URL (after removing uninteresting query parameters and such) and sends it to server, which determines if it has current video cached. Frontend may receive response, which tells it which parts of video are loud or silent. In the opposite case, a button in extension popup panel (the thing that appears when one clicks the extension button next to url bar) appears that allows user to submit video to server for indexation. This generally takes about ten seconds for short videos (sub-10 minutes).&lt;/p&gt;&lt;h2&gt;Usage&lt;/h2&gt;&lt;p&gt;There are multiple sections here in the repo.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;a href="https://github.com/SoptikHa2/video-summarizer/blob/master/rust-desktop-cli" dir="ltr"&gt;rust-desktop-cli&lt;/a&gt; (unmantained obsolete cli. It works, but uses ffmpeg and is a bit slow)&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/SoptikHa2/video-summarizer/blob/master/extension-backend" dir="ltr"&gt;extension-backend&lt;/a&gt; (shell &amp;amp; gnu coreutils-powered backend that analyzes video sound, caches it, and serves via http server)&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/SoptikHa2/video-summarizer/blob/master/extension-firefox" dir="ltr"&gt;extension-firefox&lt;/a&gt; (firefox extension that speeds up videos based on backend response) &lt;a href="https://addons.mozilla.org/en-US/firefox/addon/video-summarizer/" rel="nofollow" dir="ltr"&gt;Get it for Firefox&lt;/a&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Results&lt;/h2&gt;&lt;p dir="ltr"&gt;Everything was tested with ffmpeg 4.2, and video summarizer 1.1.1 (the rust cli). Settings: &lt;code dir="ltr"&gt;-l 1.5 -s 100&lt;/code&gt;.&lt;/p&gt;&lt;table dir="ltr"&gt;
 &lt;thead dir="ltr"&gt;
 &lt;tr dir="ltr"&gt;
@@ -2775,37 +2831,4 @@ The selected students will be presenting their work at the end of summer during 
 To learn more about checkout this link: &lt;a href="https://www.radare.org/gsoc/2020" dir="ltr"&gt;https://www.radare.org/gsoc/2020&lt;/a&gt;
 &lt;br dir="ltr"&gt;
 
-&lt;/div&gt;</description><pubDate>Mon, 10 Aug 2020 15:22:23 -0500</pubDate></item><item><title>WarpSQL: High performance analytics for MySQL</title><link>https://lobste.rs/s/vljcbr</link><description>&lt;p dir="ltr"&gt;WarpSQL is a MySQL &lt;em dir="ltr"&gt;distribution&lt;/em&gt; that is focused on OLAP performance.  It is not a goal of WarpSQL to be a &lt;em dir="ltr"&gt;fork&lt;/em&gt; of MySQL, but instead a set of modules which leverage the pluggable features of MySQL 8 to provide improved OLAP performance.  &lt;/p&gt;&lt;p dir="ltr"&gt;WarpSQL currently ships an alpha release of the WARP storage engine.  The WARP storage engine is based on &lt;a href="https://sdm.lbl.gov/fastbit/" dir="ltr"&gt;Fastbit&lt;/a&gt; 2.0.3, which is a column store with word aligned hybrid compressed bitmap indexes. WARP storage engine is an acronym for word-aligned relational partitioned storage engine.  Fastbit is a mature database technology which has been used in areas such as particle physics and grid computing.&lt;/p&gt;&lt;p&gt;The WARP storage engine automatically indexes tables to match the queries executed against WARP storage engine backed tables.&lt;/p&gt;&lt;p&gt;While in alpha WarpSQL is available as source which you must compile.  WarpSQL doesn’t currently have any dependencies which vary from the vanilla server distribution.  The Fastbit 2.0.3 source will automatically be fetched and patched for building the server.  &lt;/p&gt;&lt;p dir="ltr"&gt;You may find the server source here: &lt;a href="https://github.com/greenlion/warp" dir="ltr"&gt;https://github.com/greenlion/warp&lt;/a&gt;&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 22:12:42 -0500</pubDate></item><item><title>History of Computer Architecture and RISC (Dave Patterson)</title><link>https://www.youtube.com/watch?v=1FtEGIp3a_M</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/362yk7/history_computer_architecture_risc_dave"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Tue, 11 Aug 2020 04:37:35 -0500</pubDate></item><item><title>Ideas for Programmers Looking Beyond Web Development</title><link>https://lobste.rs/s/b4rfzt</link><description>&lt;div dir="ltr"&gt;
-        &lt;time datetime="2020-07-10" dir="ltr"&gt;
-          2020-07-10
-        &lt;/time&gt;
-        
-        (8 min read)
-      &lt;/div&gt;&lt;p&gt;A majority of programmers work in the massive field of web development, because there are so many jobs, resources and problems to solve! This is especially true for self-taught developers like myself or bootcamp grads. With that, there are also many people looking to try something other than web-development, whether it be out of boredom, curiousity or passion for another area of computer science.&lt;/p&gt;&lt;p dir="ltr"&gt;I'm particularly a fan of this, as while web-development got me hooked into programming (and is partially what I do now), exploring other types of work made me a much &lt;em dir="ltr"&gt;much&lt;/em&gt; better engineer. I think that two months of working on backend development at Shopify helped me grow less than a three-month side project for which I built a very simple raytracer. My experience has also been that it's very hard to break out of web development since there's activation energy, and it's harder to be as impactful, so I'm hoping this will help.&lt;/p&gt;&lt;h2 dir="ltr"&gt;Projects&lt;a href="https://carolchen.me/blog/past-webdev/#projects" aria-label="Anchor link for: projects" dir="ltr"&gt; &lt;/a&gt;
-&lt;/h2&gt;&lt;p&gt;Projects listed in vague order of increasing difficulty / time committment. I have not done all these of course, but I at least know someone who did / have some special respect for the creator.&lt;/p&gt;&lt;p&gt;This is one of the single most impactful projects I've done! With a raytracer you can model objects in 3D space and generate images for what they'd look like by applying your own colours, angles and lightning. It uses a little bit of math and teaches introductory graphics. The most fun part about raytracing is the development cycle, since you can instantly test software (limited by how fast your computer is) and see the result, without having to worry about hidden bugs.&lt;/p&gt;&lt;p&gt;I estimate for it to take less than a week if you work on it full time and a month if doing it in free time. There is also "Ray Tracing the Next Week" and "Ray Tracing the Rest of Your Life" if you want more!&lt;/p&gt;&lt;p dir="ltr"&gt;The LLVM tutorial helps you to build an entire programming language with LLVM which is insanely fun and relevant to software we use everyday. It also includes teachings about JITs! I recommend &lt;em dir="ltr"&gt;not&lt;/em&gt; following the OCaml tutorials as the tutorials are old and you'll have trouble installing dependencies (like I did). I really like compilers as an area of focus because unlike graphics or GPU programming, your work is relevant to anyone who is a programmer.&lt;/p&gt;&lt;p&gt;I estimate this to take a week full time and 2+ weeks doing it in free time and no more than two months.&lt;/p&gt;&lt;p dir="ltr"&gt;I put this one after the LLVM tutorial just because it is longer, but Crafting Interpreters is an &lt;em dir="ltr"&gt;excellent&lt;/em&gt; resource. It actually teaches you how to build two interpreters, one with Java and another with C and also covers VMs and garbage collection. I think the type of interpreters you'll build through Crafting Interpreters will help you understand CRuby and CPython source code more than the LLVM Tutorial will help you understand Rust source code.&lt;/p&gt;&lt;p&gt;I recommend starting on the second interpreter iff you have a solid impression of how interpreters tend to work and you're familiar with programming in C as well as data structures. I estimate the entirety of Crafting Interpreters to take 3 - 6 weeks full time or a few months part time (more variable since it's longer and there are more opportunities to challenge yourself).&lt;/p&gt;&lt;p&gt;This collection of resources / docs is created by Open AI and generally impressed me in quality of documentation (I generally have very little faith in big companies being able to document things well). It's not a tutorial, but is good at giving the full picture (how to get into the career, lingo, example implementations, etc). It also provides two exercises that are fairly long as well as fun information such as PyTorch vs Tensorflow comparisons.&lt;/p&gt;&lt;p&gt;I think of all the resources I listed, this one gets you the closest to a career change (partially just the nature of the ML field). I only list one Machine Learning related resource because other good intro-to-ML guides have good page rank (though I think Spinning Up in Deep RL has underrated pagerank). &lt;/p&gt;&lt;p&gt;Some resources for people who already have some background in AI (read the Wikipedia definitions and did Tensorflow/Pytorch tutorials): &lt;/p&gt;&lt;p&gt;Raft is a consensus algorithm. I'm not going to describe further, but it's an algorithm to solve problems with distributed systems -- something you may be familiar with! Unlike many of the projects I've listed, Raft will require a lot of reading / research to build background knowledge. Implementing Raft requires knowledge about operating systems, systems programming in general, networks and concurrency. I feel that it'll also test more software engineering skills since the process will include lots of logging, tests and error handling.&lt;/p&gt;&lt;p&gt;I'm not going to give time estimates about Raft since I've read a lot but haven't implemented it. More importantly, it depends on your background. If I had to say, it would be at least a week full time.&lt;/p&gt;&lt;h3 dir="ltr"&gt;Building an Operating System&lt;a href="https://carolchen.me/blog/past-webdev/#building-an-operating-system" aria-label="Anchor link for: building-an-operating-system" dir="ltr"&gt; &lt;/a&gt;
-&lt;/h3&gt;&lt;p&gt;This one seems fun but I've only briefly attempted it.&lt;/p&gt;&lt;p&gt;Though challenging and a long project, I recommend OS dev because it's a surprisingly common project (you can probably find more resources for this than say, Raft). The difficult parts with this project is that it's more open-ended, longer even to get to a minimal project and the development cycle is a bit more painful.&lt;/p&gt;&lt;p&gt;Estimate 4+ weeks full time for a minimal-ish OS.&lt;/p&gt;&lt;h3 dir="ltr"&gt;Miscellaneous&lt;a href="https://carolchen.me/blog/past-webdev/#miscellaneous" aria-label="Anchor link for: miscellaneous" dir="ltr"&gt; &lt;/a&gt;
-&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Computer Vision&lt;/strong&gt;. I didn't list any tutorials for this since none are particularly special, but &lt;a href="https://opencv.org/" dir="ltr"&gt;OpenCV&lt;/a&gt; is powerful and there are a whole bunch of projects that can come out of it! The documentation is not as polished as most web-dev documentation which I think makes it extra fun.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Blockchain&lt;/strong&gt;. I'm generally pretty clueless about blockchain, so not listing any resources but I'm leaving it here in case anyone has ideas.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Regex&lt;/strong&gt;. This is not a career, nor is it distinct from webdev, but it certainly exercises your brain in a different way and is a unique skill! Being able to write regexes off the top of my head has been a great help to my software engineering. I learned/practiced through &lt;a href="https://carolchen.me/blog/past-webdev/regexcrossword.com/" dir="ltr"&gt;Regex Crosswords&lt;/a&gt;.&lt;/p&gt;&lt;h2 dir="ltr"&gt;Activities and References&lt;a href="https://carolchen.me/blog/past-webdev/#activities-and-references" aria-label="Anchor link for: activities-and-references" dir="ltr"&gt; &lt;/a&gt;
-&lt;/h2&gt;&lt;h3 dir="ltr"&gt;Competitive Programming&lt;a href="https://carolchen.me/blog/past-webdev/#competitive-programming" aria-label="Anchor link for: competitive-programming" dir="ltr"&gt; &lt;/a&gt;
-&lt;/h3&gt;&lt;p dir="ltr"&gt;Hesistant about including this since it's sometimes just "leetcoding" but I think competitive programming was formative to my programming skills. &lt;a href="https://carolchen.me/blog/past-webdev/codeforces.com/" dir="ltr"&gt;Codeforces&lt;/a&gt; has weekly contests (also see TopCoder, DMOJ). Some of the problems are more traditional data science and algorithms, but sites like Codeforces over Leetcode will have some more adhoc and math focused puzzles. Speaking of math, &lt;a href="https://projecteuler.net/" dir="ltr"&gt;Project Euler&lt;/a&gt; is also a great source of problems. I also like throwing away writing good code sometimes and just writing code for me!&lt;/p&gt;&lt;h3 dir="ltr"&gt;Kaggle for Data Science and Machine Learning&lt;a href="https://carolchen.me/blog/past-webdev/#kaggle-for-data-science-and-machine-learning" aria-label="Anchor link for: kaggle-for-data-science-and-machine-learning" dir="ltr"&gt; &lt;/a&gt;
-&lt;/h3&gt;&lt;p dir="ltr"&gt;Kaggle is a platform where users receive datasets and try to predict / compute some values in a contest format. They also have some open datasets with various tutorials on how to work with them, such as the &lt;a href="https://www.kaggle.com/c/titanic" dir="ltr"&gt;Titanic Dataset&lt;/a&gt;.&lt;/p&gt;&lt;h2 dir="ltr"&gt;General Things&lt;a href="https://carolchen.me/blog/past-webdev/#general-things" aria-label="Anchor link for: general-things" dir="ltr"&gt; &lt;/a&gt;
-&lt;/h2&gt;&lt;h3 dir="ltr"&gt;Begone Stack Overflow, Hello Papers&lt;a href="https://carolchen.me/blog/past-webdev/#begone-stack-overflow-hello-papers" aria-label="Anchor link for: begone-stack-overflow-hello-papers" dir="ltr"&gt; &lt;/a&gt;
-&lt;/h3&gt;&lt;p dir="ltr"&gt;As a web developer, a lot of my learning was throug Stack Overflow, videos and Medium articles. I think my learning of compilers was high-friction because of my unwillingness to read papers (which I'm still working on). This is not applicable to &lt;em dir="ltr"&gt;everything&lt;/em&gt;, for example machine learning has a lot of strong Stack Overflow resources through uses of libraries (though you'll definitely need to read papers for ML), and for learning to do reverse engineering, individual blog posts with write-ups are probably your best resource. In general, you may have to relearn how you filter / search through content.&lt;/p&gt;&lt;h3 dir="ltr"&gt;Open Source&lt;a href="https://carolchen.me/blog/past-webdev/#open-source" aria-label="Anchor link for: open-source" dir="ltr"&gt; &lt;/a&gt;
-&lt;/h3&gt;&lt;p&gt;Something missing from this article is "after I learn these skills, how do I get a job?", and the reason it's missing is because I'd be talking out of my ass if I tried to answer that. However, I do some know reliable ways through which that has been done and Open Source is definitely one of them!&lt;/p&gt;&lt;p&gt;Spend some time looking into different projects and start working up towards contributions. I recommend larger projects for exposure and also because they'll have better support systems for new contributors. I know numerous people who somewhat bypassed education through side projects and gained skills entirely through working on OSS!&lt;/p&gt;&lt;div dir="ltr"&gt;
-      ---
-      &lt;br dir="ltr"&gt;
-      Thanks for reading &amp;lt;3
-      &lt;br dir="ltr"&gt;
-      I'm generally open to being contacted, find/contact me via:
-      &lt;a href="https://twitter.com/kipperrii" dir="ltr"&gt;
-        
-      &lt;/a&gt;
-      &lt;a href="https://github.com/kipply" dir="ltr"&gt;
-        
-      &lt;/a&gt;
-      &lt;a href="https://www.instagram.com/kipperrii/" dir="ltr"&gt;
-        
-      &lt;/a&gt;
-      &lt;a href="mailto:hello@carolchen.me" dir="ltr"&gt;
-        
-      &lt;/a&gt;
-    &lt;/div&gt;</description><pubDate>Sun, 09 Aug 2020 14:59:21 -0500</pubDate></item></channel></rss>
+&lt;/div&gt;</description><pubDate>Mon, 10 Aug 2020 15:22:23 -0500</pubDate></item><item><title>WarpSQL: High performance analytics for MySQL</title><link>https://lobste.rs/s/vljcbr</link><description>&lt;p dir="ltr"&gt;WarpSQL is a MySQL &lt;em dir="ltr"&gt;distribution&lt;/em&gt; that is focused on OLAP performance.  It is not a goal of WarpSQL to be a &lt;em dir="ltr"&gt;fork&lt;/em&gt; of MySQL, but instead a set of modules which leverage the pluggable features of MySQL 8 to provide improved OLAP performance.  &lt;/p&gt;&lt;p dir="ltr"&gt;WarpSQL currently ships an alpha release of the WARP storage engine.  The WARP storage engine is based on &lt;a href="https://sdm.lbl.gov/fastbit/" dir="ltr"&gt;Fastbit&lt;/a&gt; 2.0.3, which is a column store with word aligned hybrid compressed bitmap indexes. WARP storage engine is an acronym for word-aligned relational partitioned storage engine.  Fastbit is a mature database technology which has been used in areas such as particle physics and grid computing.&lt;/p&gt;&lt;p&gt;The WARP storage engine automatically indexes tables to match the queries executed against WARP storage engine backed tables.&lt;/p&gt;&lt;p&gt;While in alpha WarpSQL is available as source which you must compile.  WarpSQL doesn’t currently have any dependencies which vary from the vanilla server distribution.  The Fastbit 2.0.3 source will automatically be fetched and patched for building the server.  &lt;/p&gt;&lt;p dir="ltr"&gt;You may find the server source here: &lt;a href="https://github.com/greenlion/warp" dir="ltr"&gt;https://github.com/greenlion/warp&lt;/a&gt;&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 22:12:42 -0500</pubDate></item></channel></rss>
