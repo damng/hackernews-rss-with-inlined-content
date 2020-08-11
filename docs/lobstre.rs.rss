@@ -181,7 +181,260 @@ And if you’re still drawing a blank, consider another project.&lt;/p&gt;&lt;OL
   users, overwork, or any other social problems in the course of your work?
   Please &lt;a href="mailto:sir@cmpwn.com" dir="ltr"&gt;email me&lt;/a&gt; — I know how you
   feel, and I can lend a sympathetic ear and share some veteran advice.
-&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 11:04:00 -0500</pubDate></item><item><title>sled theoretical performance guide</title><link>https://lobste.rs/s/2ftlzt</link><description>&lt;img src="https://img.shields.io/github/stars/spacejam/sled.svg?style=social" alt="github" width="94" height="20"&gt;&lt;img src="https://docs.rs/sled/badge.svg" alt="documentation"&gt;&lt;img src="https://img.shields.io/discord/509773073294295082.svg?logo=discord" alt="chat" width="111" height="20"&gt;&lt;img src="https://img.shields.io/opencollective/backers/sled" alt="sponsors" width="70" height="20"&gt;&lt;p&gt;This guide covers timeless ideas that are helpful to keep in mind while working with
+&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 11:04:00 -0500</pubDate></item><item><title>"Cloud-like" Infrastructure at Home - Part 1: LoadBalancers on the Metal</title><link>https://lobste.rs/s/rty4wa</link><description>&lt;p&gt;
+This is the introductory post to a series outlining how I achieve "Cloud-like" application deployments
+on my personal servers.  If you're interested in Platform Engineering/SRE/DevOps, read on!
+&lt;/p&gt;&lt;h2&gt;
+☁️ What does "Cloud-like" mean?
+&lt;/h2&gt;&lt;p&gt;
+I'm using this phrase to express a set of capabilities that engineers have come to expect from cloud
+  providers in their offerings for hosting infrastructure. Namely: load balancers, dynamic DNS, certificate
+  leasing, and perhaps a few others.
+&lt;/p&gt;&lt;h2&gt;
+🤷 Who's this post for?
+&lt;/h2&gt;&lt;p&gt;
+I'm guessing by now you have at least some interest in the subject, so I'll state some assumptions:
+&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p&gt;
+You're somewhat familiar with Kubernetes &amp;amp; its configuration with YAML
+&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
+You're somewhat familiar with basic networking concepts, like DHCP, DNS, TCP/IP, ARP
+&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
+You're not looking for a guide to set-up self-hosted Kubernetes
+(I'll write about how I do this in a future post) - we're going to be working with an already running
+cluster
+&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;
+All set then? Let's dive in!
+&lt;/p&gt;&lt;h2&gt;
+💡 What're we solving today?
+&lt;/h2&gt;&lt;h3&gt;
+LAN routable traffic to services hosted in Kubernetes
+&lt;/h3&gt;&lt;p&gt;
+Say we have a web service we want to deploy - let's call it "coffee" ☕
+&lt;/p&gt;&lt;p&gt;
+   We deploy it into k8s (Kubernetes) and can access it by using
+&lt;/p&gt;&lt;PRE&gt;$ kubectl port-forward coffee-5b8f7c69bd-9x6sk 8080:80
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+   Now we can visit &lt;code dir="ltr"&gt;localhost:8080/&lt;/code&gt; to reach our service - great!
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+   But we don't want to have to rely on &lt;code dir="ltr"&gt;kubectl&lt;/code&gt; to handle the proxying for us.
+   What about other devices on the network that we want to be able to access the &lt;code dir="ltr"&gt;coffee&lt;/code&gt; service?
+&lt;/p&gt;&lt;p&gt;
+   Well, once we've gotten through this post, we'll end up getting a LAN accessible web
+   service we can reach via a segment of our LAN address space - like any other physical device on
+   the network - just by deploying k8s manifests.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+   No need to pick out an IP address and set up static routes, no need for any &lt;code dir="ltr"&gt;iptables&lt;/code&gt; magic 🔮
+&lt;/p&gt;&lt;h3&gt;
+Accessing Kubernetes services via IP
+&lt;/h3&gt;&lt;p dir="ltr"&gt;
+When deploying a pod of containers providing a network application, we can expose its port
+   so it's accessible using a &lt;a href="https://kubernetes.io/docs/concepts/services-networking/service" dir="ltr"&gt;&lt;code dir="ltr"&gt;Service&lt;/code&gt;&lt;/a&gt;. Here's what a &lt;code dir="ltr"&gt;Service&lt;/code&gt; accompanying a &lt;code dir="ltr"&gt;Deployment&lt;/code&gt; for
+   &lt;code dir="ltr"&gt;coffee&lt;/code&gt; might look like:
+&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="yaml" dir="ltr"&gt;---
+&lt;span dir="ltr"&gt;kind&lt;/span&gt;: Deployment
+&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: apps/v1
+&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
+&lt;span dir="ltr"&gt;spec&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;replicas&lt;/span&gt;: &lt;span dir="ltr"&gt;1&lt;/span&gt;
+  &lt;span dir="ltr"&gt;selector&lt;/span&gt;:
+    &lt;span dir="ltr"&gt;matchLabels&lt;/span&gt;:
+      &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
+  &lt;span dir="ltr"&gt;template&lt;/span&gt;:
+    &lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
+      &lt;span dir="ltr"&gt;labels&lt;/span&gt;:
+        &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
+    &lt;span dir="ltr"&gt;spec&lt;/span&gt;:
+      &lt;span dir="ltr"&gt;containers&lt;/span&gt;:
+      - &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
+        &lt;span dir="ltr"&gt;image&lt;/span&gt;: example/coffee
+        &lt;span dir="ltr"&gt;ports&lt;/span&gt;:
+        - &lt;span dir="ltr"&gt;name&lt;/span&gt;: api
+          &lt;span dir="ltr"&gt;containerPort&lt;/span&gt;: &lt;span dir="ltr"&gt;80&lt;/span&gt;
+
+---
+&lt;span dir="ltr"&gt;kind&lt;/span&gt;: Service
+&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: v1
+&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
+&lt;span dir="ltr"&gt;spec&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;selector&lt;/span&gt;:
+    &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
+  &lt;span dir="ltr"&gt;ports&lt;/span&gt;:
+  - &lt;span dir="ltr"&gt;name&lt;/span&gt;: api
+    &lt;span dir="ltr"&gt;port&lt;/span&gt;: &lt;span dir="ltr"&gt;8080&lt;/span&gt;
+    &lt;span dir="ltr"&gt;targetPort&lt;/span&gt;: coffee&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+   After evaluating this manifest, our k8s cluster would have a &lt;code dir="ltr"&gt;coffee&lt;/code&gt; service that's available
+   within the cluster network. Other pods within the same namespace could simply call out to &lt;code dir="ltr"&gt;http://coffee:8080&lt;/code&gt;,
+   or pods deployed in other namespaces could reach it via &lt;code dir="ltr"&gt;http://coffee.example:8080&lt;/code&gt; (&lt;code dir="ltr"&gt;example&lt;/code&gt; being the
+   namespace we deployed the &lt;code dir="ltr"&gt;coffee&lt;/code&gt; resources to).
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+   By default, we'll get a &lt;code dir="ltr"&gt;ClusterIP&lt;/code&gt; type &lt;code dir="ltr"&gt;Service&lt;/code&gt;. I won't go into much detail here about k8s &lt;code dir="ltr"&gt;Service&lt;/code&gt;
+   objects, but it's useful to outline the available &lt;code dir="ltr"&gt;ServiceTypes&lt;/code&gt;, in particular &lt;a href="https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types" dir="ltr"&gt;"publishing" services&lt;/a&gt;.
+&lt;/p&gt;&lt;h3&gt;
+Publishing ServiceTypes
+&lt;/h3&gt;&lt;p dir="ltr"&gt;
+Let's take a look at each type, leaning on excerpts from &lt;a href="https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types" dir="ltr"&gt;the official documentation&lt;/a&gt;.
+&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
+&lt;code dir="ltr"&gt;ClusterIP&lt;/code&gt;: Exposes the Service on a cluster-internal IP. Choosing this value makes the Service only
+   reachable from within the cluster. This is the default ServiceType.
+&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
+We can quite plainly see this is a no-go for what we want, we want our service to be reachable outside
+    the cluster.
+&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
+&lt;code dir="ltr"&gt;NodePort&lt;/code&gt;: Exposes the Service on each Node’s IP at a static port (the NodePort).
+   A ClusterIP Service, to which the NodePort Service routes, is automatically created.
+   You’ll be able to contact the NodePort Service, from outside the cluster, by requesting
+   &amp;lt;NodeIP&amp;gt;:&amp;lt;NodePort&amp;gt;.
+&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
+This looks like it meets our needs in terms of external (to the cluster, not our LAN) access.
+   But on second thought, this means we have to worry about maintaining unique port numbers for each
+   service. If a service's pods are scheduled onto a node with another service already occupying that port,
+   it won't be able to operate. It also begs the question "how do we know which node, and thus which NodeIP
+   we'll be using to reach the service?"
+&lt;/p&gt;&lt;p&gt;
+   No dice.
+&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
+&lt;code dir="ltr"&gt;ExternalName&lt;/code&gt;: Maps the Service to the contents of the externalName field (e.g. foo.bar.example.com),
+   by returning a CNAME record with its value. No proxying of any kind is set up.
+&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
+Hmm, this doesn't seem like a good fit either. There's no mention of traffic being routable for cluster
+   external networking. It's simply about mapping external DNS records to services within the cluster, for
+   other cluster residents.
+&lt;/p&gt;&lt;p&gt;
+   Next!
+&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
+&lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt;: Exposes the Service externally using a cloud provider’s load balancer. NodePort and
+   ClusterIP Services, to which the external load balancer routes, are automatically created.
+&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
+This sounds perfect! Except… we're not deploying to some cloud environment. We don't have a cloud
+   provider's solution to provision load balancers.
+&lt;/p&gt;&lt;p&gt;
+   …Or do we? 👈😎👈
+&lt;/p&gt;&lt;h2&gt;
+⚖️ LoadBalancers on the metal
+&lt;/h2&gt;&lt;p dir="ltr"&gt;
+Turns out a service of type &lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt; is actually achievable, without the cloud provider! 🌩️
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+  &lt;a href="https://metallb.universe.tf/" dir="ltr"&gt;MetalLB&lt;/a&gt; is a project that aims to bring the &lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt; ServiceType to k8s clusters provisioned
+  on bare metal - and does so very well.
+&lt;/p&gt;&lt;h3&gt;
+Deployment &amp;amp; configuration
+&lt;/h3&gt;&lt;p&gt;
+MetalLB has two modes of operation: BGP &amp;amp; Layer2. Both are self explanatory, if you're familiar with
+   the respective network protocols - I won't be expanding on either, as it's out of scope for this write-up.
+&lt;/p&gt;&lt;p&gt;
+   For our implementation, we're going to keep things simple and go with Layer2.
+&lt;/p&gt;&lt;p&gt;
+   MetalLB is deployed entirely with native k8s manifests. How you choose to deploy your YAML is up to you.
+   There are a few options:
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;
+Raw YAML manifests
+&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
+I personally use &lt;a href="https://argoproj.github.io/projects/argo-cd" dir="ltr"&gt;ArgoCD&lt;/a&gt; to deploy the Helm chart, but details on that are for another post.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+   The installation documentation is straight forward and can be found &lt;a href="https://metallb.universe.tf/installation/" dir="ltr"&gt;here&lt;/a&gt;.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+   Let's focus on the configuration. MetalLB evaluates its configuration through a &lt;a href="https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/" dir="ltr"&gt;&lt;code dir="ltr"&gt;ConfigMap&lt;/code&gt;&lt;/a&gt;.
+   For the Layer2 configuration, it's as simple as picking out an IP range you want your services
+   to be allocated an address from.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+   My LAN is &lt;code dir="ltr"&gt;10.0.0.0/16&lt;/code&gt;, I opted to slice out &lt;code dir="ltr"&gt;10.0.42.0/24&lt;/code&gt;. So my configuration looks like:
+&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="yaml" dir="ltr"&gt;&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: v1
+&lt;span dir="ltr"&gt;kind&lt;/span&gt;: ConfigMap
+&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;namespace&lt;/span&gt;: metallb-system
+  &lt;span dir="ltr"&gt;name&lt;/span&gt;: config
+&lt;span dir="ltr"&gt;data&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;config&lt;/span&gt;: &lt;span dir="ltr"&gt;|
+&lt;/span&gt;&lt;span dir="ltr"&gt;    address-pools:&lt;/span&gt;
+      - &lt;span dir="ltr"&gt;name&lt;/span&gt;: default
+        &lt;span dir="ltr"&gt;protocol&lt;/span&gt;: layer2
+        &lt;span dir="ltr"&gt;addresses&lt;/span&gt;:
+          - &lt;span dir="ltr"&gt;10.0.42.0&lt;/span&gt;/&lt;span dir="ltr"&gt;24&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+   If we configure MetalLB with this, we can then deploy &lt;code dir="ltr"&gt;Service&lt;/code&gt; objects with &lt;code dir="ltr"&gt;spec.type: LoadBalancer&lt;/code&gt;
+   in their manifest and expect to get an IP leased from the &lt;code dir="ltr"&gt;10.0.42.0/24&lt;/code&gt; pool.
+&lt;/p&gt;&lt;h3&gt;
+Take it for a spin
+&lt;/h3&gt;&lt;p dir="ltr"&gt;
+Let's update our &lt;code dir="ltr"&gt;coffee&lt;/code&gt; service manifest to set &lt;code dir="ltr"&gt;spec.type&lt;/code&gt; to &lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt;
+&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="yaml" dir="ltr"&gt;---
+&lt;span dir="ltr"&gt;kind&lt;/span&gt;: Service
+&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: v1
+&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
+&lt;span dir="ltr"&gt;spec&lt;/span&gt;:
+  &lt;span dir="ltr"&gt;selector&lt;/span&gt;:
+    &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
+  &lt;span dir="ltr"&gt;ports&lt;/span&gt;:
+    - &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
+      &lt;span dir="ltr"&gt;port&lt;/span&gt;: &lt;span dir="ltr"&gt;8080&lt;/span&gt;
+      &lt;span dir="ltr"&gt;targetPort&lt;/span&gt;: coffee
+  &lt;span dir="ltr"&gt;type&lt;/span&gt;: LoadBalancer &lt;span dir="ltr"&gt;# &amp;lt;- here&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+   Applying this will yield something like
+&lt;/p&gt;&lt;PRE&gt;$ kubectl describe svc coffee
+Name:                     coffee
+Namespace:                default
+Labels:                   &amp;lt;none&amp;gt;
+Annotations:              Selector:  app=coffee
+Type:                     LoadBalancer
+IP:                       172.16.57.10
+LoadBalancer Ingress:     10.0.42.0
+Port:                     api  8080/TCP
+TargetPort:               coffee/TCP
+NodePort:                 api  30786/TCP
+Endpoints:                192.168.2.7:8080
+Session Affinity:         None
+External Traffic Policy:  Cluster
+Events:
+  Type    Reason       Age    From                Message
+  ----    ------       ----   ----                -------
+  Normal  IPAllocated  9s  metallb-controller  Assigned IP "10.0.42.0"
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+   For those of us who aren't networking wizards, something may look a bit strange here: &lt;code dir="ltr"&gt;10.0.0.42.0&lt;/code&gt;.
+   Rest assured, that's actually a routable address. Most day-to-day DHCP configurations will
+   start the allocation range at &lt;code dir="ltr"&gt;X.X.X.1&lt;/code&gt;, but there's no need here.
+&lt;/p&gt;&lt;p&gt;
+   So, if our service is alive, we should be able to establish a TCP session with it.
+   Let's try with good old netcat
+&lt;/p&gt;&lt;PRE&gt;$ nc -vz 10.0.42.0 8080
+Connection to 10.0.42.0 port 8080 [tcp/http] succeeded!
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+   Woo! If we look a little closer with a simple &lt;code dir="ltr"&gt;ping&lt;/code&gt;, we'll see something interesting:
+&lt;/p&gt;&lt;PRE&gt;$ ping 10.0.42.0
+PING 10.0.42.0 (10.0.42.0): 56 data bytes
+Request timeout for icmp_seq 0
+92 bytes from 10.0.10.2: Redirect Host(New addr: 10.0.42.0)
+Vr HL TOS  Len   ID Flg  off TTL Pro  cks      Src      Dst
+ 4  5  00 0054 903f   0 0000  3f  01 ac67 10.0.1.3  10.0.42.0
+&lt;/PRE&gt;&lt;p&gt;
+   It's not that it didn't respond to the ICMP request, it's that we got
+&lt;/p&gt;&lt;PRE&gt;92 bytes from 10.0.10.2: Redirect Host(New addr: 10.0.42.0)
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+   That address, &lt;code dir="ltr"&gt;10.0.10.2&lt;/code&gt;, is the IP for &lt;code dir="ltr"&gt;compute2&lt;/code&gt;, an active compute node in my cluster.
+   Let's take a look at where &lt;code dir="ltr"&gt;coffee&lt;/code&gt;'s pod was scheduled
+&lt;/p&gt;&lt;PRE&gt;NAME                      READY   STATUS    RESTARTS   AGE   IP            NODE
+coffee-65b9b69679-96kl8   1/1     Running   0          30m   192.168.2.7   compute2.cmacr.ae
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+   There it is, on &lt;code dir="ltr"&gt;compute2&lt;/code&gt;. Since this is a layer 2 let's see what those two addresses
+   look like in the ARP table
+&lt;/p&gt;&lt;PRE&gt;$ arp -a
+? (10.0.10.2) at b8:ae:ed:7d:19:6 on en0 ifscope [ethernet]
+? (10.0.42.0) at b8:ae:ed:7d:19:6 on en0 ifscope [ethernet]
+&lt;/PRE&gt;&lt;p&gt;
+   And there you have it: the same MAC address. Hopefully by stepping through the flow of traffic
+   so far, it becomes a little clearer how layer 2 mode in MetalLB works.
+&lt;/p&gt;&lt;p&gt;
+   Our cluster is now set up to receive external traffic, from the rest of our LAN. Perfect!
+   Though, those IPs that MetalLB is leasing are dynamic. We don't want to have to keep track of which
+   service has which IP by asking k8s…
+&lt;/p&gt;&lt;h2&gt;
+🗞 Watch out for 'Part 2: Hosting your own dynamic DNS solution'
+&lt;/h2&gt;&lt;p&gt;
+Next time I'll detail how I simplify reaching these services with human friendly DNS records ✨
+&lt;/p&gt;&lt;p&gt;
+  Thanks for reading! 👋
+&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 14:47:01 -0500</pubDate></item><item><title>sled theoretical performance guide</title><link>https://lobste.rs/s/2ftlzt</link><description>&lt;img src="https://img.shields.io/github/stars/spacejam/sled.svg?style=social" alt="github" width="94" height="20"&gt;&lt;img src="https://docs.rs/sled/badge.svg" alt="documentation"&gt;&lt;img src="https://img.shields.io/discord/509773073294295082.svg?logo=discord" alt="chat" width="111" height="20"&gt;&lt;img src="https://img.shields.io/opencollective/backers/sled" alt="sponsors" width="70" height="20"&gt;&lt;p&gt;This guide covers timeless ideas that are helpful to keep in mind while working with
 systems where performance matters. Many of these ideas are fairly “durable”
 and will apply regardless of what hardware, programming language, operating
 system, or decade you are working in.&lt;/p&gt;&lt;p&gt;Stay tuned for follow-up articles that will drill into hardware and
@@ -959,260 +1212,7 @@ that is unlikely to be possible without extreme expense. Gaining confidence in p
 positive impacts before investing significant effort is ultimately about
 respecting yourself and your teammates. Be considerate.&lt;/p&gt;&lt;p dir="ltr"&gt;If you found this article to be useful, please consider &lt;a href="https://github.com/sponsors/spacejam" dir="ltr"&gt;supporting my efforts
 efforts&lt;/a&gt; to share knowledge and
-productionize cutting edge database research with implementations in Rust :)&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 08:48:26 -0500</pubDate></item><item><title>"Cloud-like" Infrastructure at Home - Part 1: LoadBalancers on the Metal</title><link>https://lobste.rs/s/rty4wa</link><description>&lt;p&gt;
-This is the introductory post to a series outlining how I achieve "Cloud-like" application deployments
-on my personal servers.  If you're interested in Platform Engineering/SRE/DevOps, read on!
-&lt;/p&gt;&lt;h2&gt;
-☁️ What does "Cloud-like" mean?
-&lt;/h2&gt;&lt;p&gt;
-I'm using this phrase to express a set of capabilities that engineers have come to expect from cloud
-  providers in their offerings for hosting infrastructure. Namely: load balancers, dynamic DNS, certificate
-  leasing, and perhaps a few others.
-&lt;/p&gt;&lt;h2&gt;
-🤷 Who's this post for?
-&lt;/h2&gt;&lt;p&gt;
-I'm guessing by now you have at least some interest in the subject, so I'll state some assumptions:
-&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p&gt;
-You're somewhat familiar with Kubernetes &amp;amp; its configuration with YAML
-&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
-You're somewhat familiar with basic networking concepts, like DHCP, DNS, TCP/IP, ARP
-&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
-You're not looking for a guide to set-up self-hosted Kubernetes
-(I'll write about how I do this in a future post) - we're going to be working with an already running
-cluster
-&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;
-All set then? Let's dive in!
-&lt;/p&gt;&lt;h2&gt;
-💡 What're we solving today?
-&lt;/h2&gt;&lt;h3&gt;
-LAN routable traffic to services hosted in Kubernetes
-&lt;/h3&gt;&lt;p&gt;
-Say we have a web service we want to deploy - let's call it "coffee" ☕
-&lt;/p&gt;&lt;p&gt;
-   We deploy it into k8s (Kubernetes) and can access it by using
-&lt;/p&gt;&lt;PRE&gt;$ kubectl port-forward coffee-5b8f7c69bd-9x6sk 8080:80
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-   Now we can visit &lt;code dir="ltr"&gt;localhost:8080/&lt;/code&gt; to reach our service - great!
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-   But we don't want to have to rely on &lt;code dir="ltr"&gt;kubectl&lt;/code&gt; to handle the proxying for us.
-   What about other devices on the network that we want to be able to access the &lt;code dir="ltr"&gt;coffee&lt;/code&gt; service?
-&lt;/p&gt;&lt;p&gt;
-   Well, once we've gotten through this post, we'll end up getting a LAN accessible web
-   service we can reach via a segment of our LAN address space - like any other physical device on
-   the network - just by deploying k8s manifests.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-   No need to pick out an IP address and set up static routes, no need for any &lt;code dir="ltr"&gt;iptables&lt;/code&gt; magic 🔮
-&lt;/p&gt;&lt;h3&gt;
-Accessing Kubernetes services via IP
-&lt;/h3&gt;&lt;p dir="ltr"&gt;
-When deploying a pod of containers providing a network application, we can expose its port
-   so it's accessible using a &lt;a href="https://kubernetes.io/docs/concepts/services-networking/service" dir="ltr"&gt;&lt;code dir="ltr"&gt;Service&lt;/code&gt;&lt;/a&gt;. Here's what a &lt;code dir="ltr"&gt;Service&lt;/code&gt; accompanying a &lt;code dir="ltr"&gt;Deployment&lt;/code&gt; for
-   &lt;code dir="ltr"&gt;coffee&lt;/code&gt; might look like:
-&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="yaml" dir="ltr"&gt;---
-&lt;span dir="ltr"&gt;kind&lt;/span&gt;: Deployment
-&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: apps/v1
-&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
-&lt;span dir="ltr"&gt;spec&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;replicas&lt;/span&gt;: &lt;span dir="ltr"&gt;1&lt;/span&gt;
-  &lt;span dir="ltr"&gt;selector&lt;/span&gt;:
-    &lt;span dir="ltr"&gt;matchLabels&lt;/span&gt;:
-      &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
-  &lt;span dir="ltr"&gt;template&lt;/span&gt;:
-    &lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
-      &lt;span dir="ltr"&gt;labels&lt;/span&gt;:
-        &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
-    &lt;span dir="ltr"&gt;spec&lt;/span&gt;:
-      &lt;span dir="ltr"&gt;containers&lt;/span&gt;:
-      - &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
-        &lt;span dir="ltr"&gt;image&lt;/span&gt;: example/coffee
-        &lt;span dir="ltr"&gt;ports&lt;/span&gt;:
-        - &lt;span dir="ltr"&gt;name&lt;/span&gt;: api
-          &lt;span dir="ltr"&gt;containerPort&lt;/span&gt;: &lt;span dir="ltr"&gt;80&lt;/span&gt;
-
----
-&lt;span dir="ltr"&gt;kind&lt;/span&gt;: Service
-&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: v1
-&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
-&lt;span dir="ltr"&gt;spec&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;selector&lt;/span&gt;:
-    &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
-  &lt;span dir="ltr"&gt;ports&lt;/span&gt;:
-  - &lt;span dir="ltr"&gt;name&lt;/span&gt;: api
-    &lt;span dir="ltr"&gt;port&lt;/span&gt;: &lt;span dir="ltr"&gt;8080&lt;/span&gt;
-    &lt;span dir="ltr"&gt;targetPort&lt;/span&gt;: coffee&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-   After evaluating this manifest, our k8s cluster would have a &lt;code dir="ltr"&gt;coffee&lt;/code&gt; service that's available
-   within the cluster network. Other pods within the same namespace could simply call out to &lt;code dir="ltr"&gt;http://coffee:8080&lt;/code&gt;,
-   or pods deployed in other namespaces could reach it via &lt;code dir="ltr"&gt;http://coffee.example:8080&lt;/code&gt; (&lt;code dir="ltr"&gt;example&lt;/code&gt; being the
-   namespace we deployed the &lt;code dir="ltr"&gt;coffee&lt;/code&gt; resources to).
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-   By default, we'll get a &lt;code dir="ltr"&gt;ClusterIP&lt;/code&gt; type &lt;code dir="ltr"&gt;Service&lt;/code&gt;. I won't go into much detail here about k8s &lt;code dir="ltr"&gt;Service&lt;/code&gt;
-   objects, but it's useful to outline the available &lt;code dir="ltr"&gt;ServiceTypes&lt;/code&gt;, in particular &lt;a href="https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types" dir="ltr"&gt;"publishing" services&lt;/a&gt;.
-&lt;/p&gt;&lt;h3&gt;
-Publishing ServiceTypes
-&lt;/h3&gt;&lt;p dir="ltr"&gt;
-Let's take a look at each type, leaning on excerpts from &lt;a href="https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types" dir="ltr"&gt;the official documentation&lt;/a&gt;.
-&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
-&lt;code dir="ltr"&gt;ClusterIP&lt;/code&gt;: Exposes the Service on a cluster-internal IP. Choosing this value makes the Service only
-   reachable from within the cluster. This is the default ServiceType.
-&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
-We can quite plainly see this is a no-go for what we want, we want our service to be reachable outside
-    the cluster.
-&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
-&lt;code dir="ltr"&gt;NodePort&lt;/code&gt;: Exposes the Service on each Node’s IP at a static port (the NodePort).
-   A ClusterIP Service, to which the NodePort Service routes, is automatically created.
-   You’ll be able to contact the NodePort Service, from outside the cluster, by requesting
-   &amp;lt;NodeIP&amp;gt;:&amp;lt;NodePort&amp;gt;.
-&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
-This looks like it meets our needs in terms of external (to the cluster, not our LAN) access.
-   But on second thought, this means we have to worry about maintaining unique port numbers for each
-   service. If a service's pods are scheduled onto a node with another service already occupying that port,
-   it won't be able to operate. It also begs the question "how do we know which node, and thus which NodeIP
-   we'll be using to reach the service?"
-&lt;/p&gt;&lt;p&gt;
-   No dice.
-&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
-&lt;code dir="ltr"&gt;ExternalName&lt;/code&gt;: Maps the Service to the contents of the externalName field (e.g. foo.bar.example.com),
-   by returning a CNAME record with its value. No proxying of any kind is set up.
-&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
-Hmm, this doesn't seem like a good fit either. There's no mention of traffic being routable for cluster
-   external networking. It's simply about mapping external DNS records to services within the cluster, for
-   other cluster residents.
-&lt;/p&gt;&lt;p&gt;
-   Next!
-&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
-&lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt;: Exposes the Service externally using a cloud provider’s load balancer. NodePort and
-   ClusterIP Services, to which the external load balancer routes, are automatically created.
-&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;
-This sounds perfect! Except… we're not deploying to some cloud environment. We don't have a cloud
-   provider's solution to provision load balancers.
-&lt;/p&gt;&lt;p&gt;
-   …Or do we? 👈😎👈
-&lt;/p&gt;&lt;h2&gt;
-⚖️ LoadBalancers on the metal
-&lt;/h2&gt;&lt;p dir="ltr"&gt;
-Turns out a service of type &lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt; is actually achievable, without the cloud provider! 🌩️
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-  &lt;a href="https://metallb.universe.tf/" dir="ltr"&gt;MetalLB&lt;/a&gt; is a project that aims to bring the &lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt; ServiceType to k8s clusters provisioned
-  on bare metal - and does so very well.
-&lt;/p&gt;&lt;h3&gt;
-Deployment &amp;amp; configuration
-&lt;/h3&gt;&lt;p&gt;
-MetalLB has two modes of operation: BGP &amp;amp; Layer2. Both are self explanatory, if you're familiar with
-   the respective network protocols - I won't be expanding on either, as it's out of scope for this write-up.
-&lt;/p&gt;&lt;p&gt;
-   For our implementation, we're going to keep things simple and go with Layer2.
-&lt;/p&gt;&lt;p&gt;
-   MetalLB is deployed entirely with native k8s manifests. How you choose to deploy your YAML is up to you.
-   There are a few options:
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;
-Raw YAML manifests
-&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
-I personally use &lt;a href="https://argoproj.github.io/projects/argo-cd" dir="ltr"&gt;ArgoCD&lt;/a&gt; to deploy the Helm chart, but details on that are for another post.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-   The installation documentation is straight forward and can be found &lt;a href="https://metallb.universe.tf/installation/" dir="ltr"&gt;here&lt;/a&gt;.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-   Let's focus on the configuration. MetalLB evaluates its configuration through a &lt;a href="https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/" dir="ltr"&gt;&lt;code dir="ltr"&gt;ConfigMap&lt;/code&gt;&lt;/a&gt;.
-   For the Layer2 configuration, it's as simple as picking out an IP range you want your services
-   to be allocated an address from.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-   My LAN is &lt;code dir="ltr"&gt;10.0.0.0/16&lt;/code&gt;, I opted to slice out &lt;code dir="ltr"&gt;10.0.42.0/24&lt;/code&gt;. So my configuration looks like:
-&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="yaml" dir="ltr"&gt;&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: v1
-&lt;span dir="ltr"&gt;kind&lt;/span&gt;: ConfigMap
-&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;namespace&lt;/span&gt;: metallb-system
-  &lt;span dir="ltr"&gt;name&lt;/span&gt;: config
-&lt;span dir="ltr"&gt;data&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;config&lt;/span&gt;: &lt;span dir="ltr"&gt;|
-&lt;/span&gt;&lt;span dir="ltr"&gt;    address-pools:&lt;/span&gt;
-      - &lt;span dir="ltr"&gt;name&lt;/span&gt;: default
-        &lt;span dir="ltr"&gt;protocol&lt;/span&gt;: layer2
-        &lt;span dir="ltr"&gt;addresses&lt;/span&gt;:
-          - &lt;span dir="ltr"&gt;10.0.42.0&lt;/span&gt;/&lt;span dir="ltr"&gt;24&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-   If we configure MetalLB with this, we can then deploy &lt;code dir="ltr"&gt;Service&lt;/code&gt; objects with &lt;code dir="ltr"&gt;spec.type: LoadBalancer&lt;/code&gt;
-   in their manifest and expect to get an IP leased from the &lt;code dir="ltr"&gt;10.0.42.0/24&lt;/code&gt; pool.
-&lt;/p&gt;&lt;h3&gt;
-Take it for a spin
-&lt;/h3&gt;&lt;p dir="ltr"&gt;
-Let's update our &lt;code dir="ltr"&gt;coffee&lt;/code&gt; service manifest to set &lt;code dir="ltr"&gt;spec.type&lt;/code&gt; to &lt;code dir="ltr"&gt;LoadBalancer&lt;/code&gt;
-&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="yaml" dir="ltr"&gt;---
-&lt;span dir="ltr"&gt;kind&lt;/span&gt;: Service
-&lt;span dir="ltr"&gt;apiVersion&lt;/span&gt;: v1
-&lt;span dir="ltr"&gt;metadata&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
-&lt;span dir="ltr"&gt;spec&lt;/span&gt;:
-  &lt;span dir="ltr"&gt;selector&lt;/span&gt;:
-    &lt;span dir="ltr"&gt;app&lt;/span&gt;: coffee
-  &lt;span dir="ltr"&gt;ports&lt;/span&gt;:
-    - &lt;span dir="ltr"&gt;name&lt;/span&gt;: coffee
-      &lt;span dir="ltr"&gt;port&lt;/span&gt;: &lt;span dir="ltr"&gt;8080&lt;/span&gt;
-      &lt;span dir="ltr"&gt;targetPort&lt;/span&gt;: coffee
-  &lt;span dir="ltr"&gt;type&lt;/span&gt;: LoadBalancer &lt;span dir="ltr"&gt;# &amp;lt;- here&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
-   Applying this will yield something like
-&lt;/p&gt;&lt;PRE&gt;$ kubectl describe svc coffee
-Name:                     coffee
-Namespace:                default
-Labels:                   &amp;lt;none&amp;gt;
-Annotations:              Selector:  app=coffee
-Type:                     LoadBalancer
-IP:                       172.16.57.10
-LoadBalancer Ingress:     10.0.42.0
-Port:                     api  8080/TCP
-TargetPort:               coffee/TCP
-NodePort:                 api  30786/TCP
-Endpoints:                192.168.2.7:8080
-Session Affinity:         None
-External Traffic Policy:  Cluster
-Events:
-  Type    Reason       Age    From                Message
-  ----    ------       ----   ----                -------
-  Normal  IPAllocated  9s  metallb-controller  Assigned IP "10.0.42.0"
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-   For those of us who aren't networking wizards, something may look a bit strange here: &lt;code dir="ltr"&gt;10.0.0.42.0&lt;/code&gt;.
-   Rest assured, that's actually a routable address. Most day-to-day DHCP configurations will
-   start the allocation range at &lt;code dir="ltr"&gt;X.X.X.1&lt;/code&gt;, but there's no need here.
-&lt;/p&gt;&lt;p&gt;
-   So, if our service is alive, we should be able to establish a TCP session with it.
-   Let's try with good old netcat
-&lt;/p&gt;&lt;PRE&gt;$ nc -vz 10.0.42.0 8080
-Connection to 10.0.42.0 port 8080 [tcp/http] succeeded!
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-   Woo! If we look a little closer with a simple &lt;code dir="ltr"&gt;ping&lt;/code&gt;, we'll see something interesting:
-&lt;/p&gt;&lt;PRE&gt;$ ping 10.0.42.0
-PING 10.0.42.0 (10.0.42.0): 56 data bytes
-Request timeout for icmp_seq 0
-92 bytes from 10.0.10.2: Redirect Host(New addr: 10.0.42.0)
-Vr HL TOS  Len   ID Flg  off TTL Pro  cks      Src      Dst
- 4  5  00 0054 903f   0 0000  3f  01 ac67 10.0.1.3  10.0.42.0
-&lt;/PRE&gt;&lt;p&gt;
-   It's not that it didn't respond to the ICMP request, it's that we got
-&lt;/p&gt;&lt;PRE&gt;92 bytes from 10.0.10.2: Redirect Host(New addr: 10.0.42.0)
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-   That address, &lt;code dir="ltr"&gt;10.0.10.2&lt;/code&gt;, is the IP for &lt;code dir="ltr"&gt;compute2&lt;/code&gt;, an active compute node in my cluster.
-   Let's take a look at where &lt;code dir="ltr"&gt;coffee&lt;/code&gt;'s pod was scheduled
-&lt;/p&gt;&lt;PRE&gt;NAME                      READY   STATUS    RESTARTS   AGE   IP            NODE
-coffee-65b9b69679-96kl8   1/1     Running   0          30m   192.168.2.7   compute2.cmacr.ae
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-   There it is, on &lt;code dir="ltr"&gt;compute2&lt;/code&gt;. Since this is a layer 2 let's see what those two addresses
-   look like in the ARP table
-&lt;/p&gt;&lt;PRE&gt;$ arp -a
-? (10.0.10.2) at b8:ae:ed:7d:19:6 on en0 ifscope [ethernet]
-? (10.0.42.0) at b8:ae:ed:7d:19:6 on en0 ifscope [ethernet]
-&lt;/PRE&gt;&lt;p&gt;
-   And there you have it: the same MAC address. Hopefully by stepping through the flow of traffic
-   so far, it becomes a little clearer how layer 2 mode in MetalLB works.
-&lt;/p&gt;&lt;p&gt;
-   Our cluster is now set up to receive external traffic, from the rest of our LAN. Perfect!
-   Though, those IPs that MetalLB is leasing are dynamic. We don't want to have to keep track of which
-   service has which IP by asking k8s…
-&lt;/p&gt;&lt;h2&gt;
-🗞 Watch out for 'Part 2: Hosting your own dynamic DNS solution'
-&lt;/h2&gt;&lt;p&gt;
-Next time I'll detail how I simplify reaching these services with human friendly DNS records ✨
-&lt;/p&gt;&lt;p&gt;
-  Thanks for reading! 👋
-&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 14:47:01 -0500</pubDate></item><item><title>Privacy Focused Analytics From Scratch</title><link>https://lobste.rs/s/naiw9w</link><description>&lt;h1 dir="ltr"&gt;Privacy Focused Analytics From Scratch &lt;/h1&gt;&lt;p dir="ltr"&gt;August 10, 2020 &lt;span dir="ltr"&gt;— &lt;a href="https://healeycodes.com/tags/python" dir="ltr"&gt;Python&lt;/a&gt;&lt;/span&gt;&lt;/p&gt;&lt;p&gt;I wanted to learn more about web analytics so I budgeted myself a few hours and built a toy analytics system.&lt;/p&gt;&lt;p dir="ltr"&gt;The goal was to collect information about page views in a &lt;em dir="ltr"&gt;privacy focused&lt;/em&gt; manner so that no GDPR notice is required. With that in mind, I made these decisions:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Events on a website aren’t attributed to a particular user (no reading or setting cookies)&lt;/LI&gt;&lt;LI&gt;No personally-identifying information is stored on disk&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;The system should be able to be used on a third-party host (e.g. GitHub Pages) and the alterations to an existing codebase should be minimal i.e. including a HTML snippet. The web server that captures the tracking requests can be hosted on anything that runs Flask.&lt;/p&gt;&lt;p&gt;The following analytics should be available:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;What pages users visit&lt;/LI&gt;&lt;LI&gt;Where users are referred from&lt;/LI&gt;&lt;LI&gt;What browsers and screen sizes are used&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Tracking Pixels&lt;/h2&gt;&lt;p&gt;A page view can be captured by sending a request to the analytics server. This happens when a browser loads an image. By including an 1x1 transparent image (a tracking pixel) we can initiate this request.&lt;/p&gt;&lt;p&gt;I implemented two methods, one that works with JavaScript enabled and one that works without.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Dynamically add an &lt;code dir="ltr"&gt;&amp;lt;img&amp;gt;&lt;/code&gt; element with the data encoded in the search parameters of the URL&lt;/LI&gt;&lt;LI&gt;(In the case of no JavaScript) Render an &lt;code dir="ltr"&gt;&amp;lt;img&amp;gt;&lt;/code&gt; element with the path and title in the search parameters of the URL&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;They are toggled by the &lt;code dir="ltr"&gt;&amp;lt;script&amp;gt;&lt;/code&gt;/&lt;code dir="ltr"&gt;&amp;lt;noscript&amp;gt;&lt;/code&gt; pattern.&lt;/p&gt;&lt;p&gt;We’ll get some data from the search parameters and the rest from the request’s headers. Here’s the HTML snippet that includes both methods.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;script&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;
+productionize cutting edge database research with implementations in Rust :)&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 08:48:26 -0500</pubDate></item><item><title>Privacy Focused Analytics From Scratch</title><link>https://lobste.rs/s/naiw9w</link><description>&lt;h1 dir="ltr"&gt;Privacy Focused Analytics From Scratch &lt;/h1&gt;&lt;p dir="ltr"&gt;August 10, 2020 &lt;span dir="ltr"&gt;— &lt;a href="https://healeycodes.com/tags/python" dir="ltr"&gt;Python&lt;/a&gt;&lt;/span&gt;&lt;/p&gt;&lt;p&gt;I wanted to learn more about web analytics so I budgeted myself a few hours and built a toy analytics system.&lt;/p&gt;&lt;p dir="ltr"&gt;The goal was to collect information about page views in a &lt;em dir="ltr"&gt;privacy focused&lt;/em&gt; manner so that no GDPR notice is required. With that in mind, I made these decisions:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Events on a website aren’t attributed to a particular user (no reading or setting cookies)&lt;/LI&gt;&lt;LI&gt;No personally-identifying information is stored on disk&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;The system should be able to be used on a third-party host (e.g. GitHub Pages) and the alterations to an existing codebase should be minimal i.e. including a HTML snippet. The web server that captures the tracking requests can be hosted on anything that runs Flask.&lt;/p&gt;&lt;p&gt;The following analytics should be available:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;What pages users visit&lt;/LI&gt;&lt;LI&gt;Where users are referred from&lt;/LI&gt;&lt;LI&gt;What browsers and screen sizes are used&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Tracking Pixels&lt;/h2&gt;&lt;p&gt;A page view can be captured by sending a request to the analytics server. This happens when a browser loads an image. By including an 1x1 transparent image (a tracking pixel) we can initiate this request.&lt;/p&gt;&lt;p&gt;I implemented two methods, one that works with JavaScript enabled and one that works without.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Dynamically add an &lt;code dir="ltr"&gt;&amp;lt;img&amp;gt;&lt;/code&gt; element with the data encoded in the search parameters of the URL&lt;/LI&gt;&lt;LI&gt;(In the case of no JavaScript) Render an &lt;code dir="ltr"&gt;&amp;lt;img&amp;gt;&lt;/code&gt; element with the path and title in the search parameters of the URL&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;They are toggled by the &lt;code dir="ltr"&gt;&amp;lt;script&amp;gt;&lt;/code&gt;/&lt;code dir="ltr"&gt;&amp;lt;noscript&amp;gt;&lt;/code&gt; pattern.&lt;/p&gt;&lt;p&gt;We’ll get some data from the search parameters and the rest from the request’s headers. Here’s the HTML snippet that includes both methods.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;script&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;
   &lt;span dir="ltr"&gt;// The tracking pixel path can be hosted anywhere&lt;/span&gt;
   &lt;span dir="ltr"&gt;// but here it's located on the same host for the test page&lt;/span&gt;
   &lt;span dir="ltr"&gt;const&lt;/span&gt; website &lt;span dir="ltr"&gt;=&lt;/span&gt; document&lt;span dir="ltr"&gt;.&lt;/span&gt;location&lt;span dir="ltr"&gt;.&lt;/span&gt;protocol &lt;span dir="ltr"&gt;+&lt;/span&gt; &lt;span dir="ltr"&gt;"//"&lt;/span&gt; &lt;span dir="ltr"&gt;+&lt;/span&gt; document&lt;span dir="ltr"&gt;.&lt;/span&gt;location&lt;span dir="ltr"&gt;.&lt;/span&gt;host
@@ -1445,7 +1445,403 @@ I did have to go back and do some optimizations. The original AS3 code was writt
 It's also worth noting that if I wasn't planning on significantly expanding the scope of the original game, if I were literally just trying to save the game from dying alongside Flash, then OpenFL, AIR, or Ruffle seem like they'd be the smarter option. I didn't spoil the hat DLC in this post for my health -- it provides vital context for this particular decision.
 &lt;/p&gt;&lt;p dir="ltr"&gt;
 Shipping this game felt like a goodbye. I loved working in Flash. At the time, it was the best way to get your games in front of people with zero friction, in a way that seemed like they'd live forever -- SWFs from the 90s still work flawlessly in the latest Flash player, decades later. Seeing the world try to transition over to HTML5 when it clearly wasn't good enough yet was agonizing to watch. (And frankly, &lt;a href="https://twitter.com/mcclure111/status/996859737693212672" dir="ltr"&gt;it's getting worse rather than better&lt;/a&gt;. My bet is that we're never again going to see the browser as a serviceable game platform as long as the owners of the two most popular browsers also own phone app stores.) I made this remaster partly to sell a new game, but also out of a genuine desire to preserve my corner of game history. Thanks for revisiting it with me!
-&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 19:09:50 -0500</pubDate></item><item><title>Haskell Love 2020</title><link>http://www.youtube.com/playlist?list=PLBqWQH1MiwBSK9wuaATNS701c43VYVTuc</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/usqmnt/haskell_love_2020"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 09:38:41 -0500</pubDate></item><item><title>Cookie-based Spring Security Session</title><link>https://lobste.rs/s/xddnlr</link><description>&lt;h3&gt;&lt;a href="https://www.innoq.com/en/blog/cookie-based-spring-security-session/#springsecurityarchitecture"&gt;Spring Security architecture&lt;/a&gt;&lt;/h3&gt;&lt;p dir="ltr"&gt;Spring Security integrates into Spring web as a servlet request filter
+&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 19:09:50 -0500</pubDate></item><item><title>Haskell Love 2020</title><link>http://www.youtube.com/playlist?list=PLBqWQH1MiwBSK9wuaATNS701c43VYVTuc</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/usqmnt/haskell_love_2020"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 09:38:41 -0500</pubDate></item><item><title>sh(1) simple combined log analytics for static sites (wip)</title><link>https://lobste.rs/s/omc5xf</link><description>&lt;p&gt;combined log&lt;/p&gt;&lt;h2&gt;cblv(1)&lt;/h2&gt;&lt;h3&gt;NAME&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblv&lt;/strong&gt; - combined log views&lt;/p&gt;&lt;h3&gt;SYNOPSIS&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblv&lt;/strong&gt;
+[&lt;em dir="ltr"&gt;file&amp;nbsp;...&lt;/em&gt;]&lt;/p&gt;&lt;h3&gt;DESCRIPTION&lt;/h3&gt;&lt;p dir="ltr"&gt;The
+&lt;strong dir="ltr"&gt;cblv&lt;/strong&gt;
+utility reads
+each
+[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
+in
+&lt;em dir="ltr"&gt;Combined Log Format&lt;/em&gt;
+and prints only the
+&lt;em dir="ltr"&gt;views&lt;/em&gt;
+to standard output.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;views&lt;/em&gt;
+are defined as
+&lt;em dir="ltr"&gt;GET&lt;/em&gt;
+requests
+to paths ending in
+&lt;em dir="ltr"&gt;/&lt;/em&gt;
+or
+&lt;em dir="ltr"&gt;.html&lt;/em&gt;
+that returned a
+&lt;em dir="ltr"&gt;200&lt;/em&gt;
+HTTP response status code.&lt;/p&gt;&lt;p dir="ltr"&gt;If
+[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
+is omitted,
+&lt;strong dir="ltr"&gt;cblv&lt;/strong&gt;
+reads from standard input.&lt;/p&gt;&lt;h3&gt;EXIT STATUS&lt;/h3&gt;&lt;p dir="ltr"&gt;The &lt;strong dir="ltr"&gt;cblv&lt;/strong&gt; utility exits&amp;nbsp;0 on success, and&amp;nbsp;&amp;gt;0 if an error occurs.&lt;/p&gt;&lt;h3&gt;EXAMPLES&lt;/h3&gt;&lt;p dir="ltr"&gt;Print all
+&lt;em dir="ltr"&gt;views&lt;/em&gt;
+from
+&lt;em dir="ltr"&gt;/var/www/logs/access.log:&lt;/em&gt;&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ cblv /var/www/logs/access.log&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;SEE ALSO&lt;/h3&gt;&lt;p&gt;awk(1)
+httpd(8)
+httpd.conf(5)
+clv(1)&lt;/p&gt;&lt;h2&gt;cblu(1)&lt;/h2&gt;&lt;h3&gt;NAME&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblu&lt;/strong&gt; - combined log uniques&lt;/p&gt;&lt;h3&gt;SYNOPSIS&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblu&lt;/strong&gt;
+[&lt;em dir="ltr"&gt;file&amp;nbsp;...&lt;/em&gt;]&lt;/p&gt;&lt;h3&gt;DESCRIPTION&lt;/h3&gt;&lt;p dir="ltr"&gt;The
+&lt;strong dir="ltr"&gt;cblu&lt;/strong&gt;
+utility reads
+each
+[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
+in
+&lt;em dir="ltr"&gt;Combined Log Format&lt;/em&gt;
+and prints only the
+&lt;em dir="ltr"&gt;uniques&lt;/em&gt;
+to standard output.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;uniques&lt;/em&gt;
+are defined as unique remote hosts
+that made at least one
+&lt;em dir="ltr"&gt;GET&lt;/em&gt;
+request to paths ending in
+&lt;em dir="ltr"&gt;/&lt;/em&gt;
+or
+&lt;em dir="ltr"&gt;.html&lt;/em&gt;
+that returned a
+&lt;em dir="ltr"&gt;200&lt;/em&gt;
+HTTP response status code.&lt;/p&gt;&lt;p dir="ltr"&gt;If
+[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
+is omitted,
+&lt;strong dir="ltr"&gt;cblu&lt;/strong&gt;
+reads from standard input.&lt;/p&gt;&lt;h3&gt;EXIT STATUS&lt;/h3&gt;&lt;p dir="ltr"&gt;The &lt;strong dir="ltr"&gt;cblu&lt;/strong&gt; utility exits&amp;nbsp;0 on success, and&amp;nbsp;&amp;gt;0 if an error occurs.&lt;/p&gt;&lt;h3&gt;EXAMPLES&lt;/h3&gt;&lt;p dir="ltr"&gt;Print all
+&lt;em dir="ltr"&gt;uniques&lt;/em&gt;
+from
+&lt;em dir="ltr"&gt;/var/www/logs/access.log:&lt;/em&gt;&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ cblu /var/www/logs/access.log&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;SEE ALSO&lt;/h3&gt;&lt;p&gt;awk(1)
+httpd(8)
+httpd.conf(5)
+clu(1)&lt;/p&gt;&lt;h2&gt;cblp(1)&lt;/h2&gt;&lt;h3&gt;NAME&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblp&lt;/strong&gt; - combined log pages&lt;/p&gt;&lt;h3&gt;SYNOPSIS&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblp&lt;/strong&gt;
+[&lt;em dir="ltr"&gt;file&amp;nbsp;...&lt;/em&gt;]&lt;/p&gt;&lt;h3&gt;DESCRIPTION&lt;/h3&gt;&lt;p dir="ltr"&gt;The
+&lt;strong dir="ltr"&gt;cblp&lt;/strong&gt;
+utility reads
+each
+[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
+in
+&lt;em dir="ltr"&gt;Combined Log Format&lt;/em&gt;
+and prints a list of
+&lt;em dir="ltr"&gt;pages&lt;/em&gt;
+to standard output including the request count.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;pages&lt;/em&gt;
+are defined as
+&lt;em dir="ltr"&gt;paths&lt;/em&gt;
+ending in
+&lt;em dir="ltr"&gt;/&lt;/em&gt;
+or
+&lt;em dir="ltr"&gt;.html&lt;/em&gt;
+to which
+&lt;em dir="ltr"&gt;GET&lt;/em&gt;
+requests have been made that returned a
+&lt;em dir="ltr"&gt;200&lt;/em&gt;
+HTTP response status code.&lt;/p&gt;&lt;p dir="ltr"&gt;If
+[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
+is omitted,
+&lt;strong dir="ltr"&gt;cblp&lt;/strong&gt;
+reads from standard input.&lt;/p&gt;&lt;h3&gt;EXIT STATUS&lt;/h3&gt;&lt;p dir="ltr"&gt;The &lt;strong dir="ltr"&gt;cblp&lt;/strong&gt; utility exits&amp;nbsp;0 on success, and&amp;nbsp;&amp;gt;0 if an error occurs.&lt;/p&gt;&lt;h3&gt;EXAMPLES&lt;/h3&gt;&lt;p dir="ltr"&gt;Print all
+&lt;em dir="ltr"&gt;pages&lt;/em&gt;
+and their respective request count
+from
+&lt;em dir="ltr"&gt;/var/www/logs/access.log&lt;/em&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ cblp /var/www/logs/access.log&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;SEE ALSO&lt;/h3&gt;&lt;p&gt;awk(1)
+httpd(8)
+httpd.conf(5)
+clp(1)&lt;/p&gt;&lt;h2&gt;cblr(1)&lt;/h2&gt;&lt;h3&gt;NAME&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblr&lt;/strong&gt; - combined log referrer&lt;/p&gt;&lt;h3&gt;SYNOPSIS&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblr&lt;/strong&gt;
+[&lt;em dir="ltr"&gt;file&amp;nbsp;...&lt;/em&gt;]&lt;/p&gt;&lt;h3&gt;DESCRIPTION&lt;/h3&gt;&lt;p dir="ltr"&gt;The
+&lt;strong dir="ltr"&gt;cblr&lt;/strong&gt;
+utility reads
+each
+[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
+in
+&lt;em dir="ltr"&gt;Combined Log Format&lt;/em&gt;
+and prints a list of
+&lt;em dir="ltr"&gt;referrers&lt;/em&gt;
+to standard output including the request count.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;referrers&lt;/em&gt;
+are defined as the address of the webpage which is linked to a
+&lt;em dir="ltr"&gt;path&lt;/em&gt;
+ending in
+&lt;em dir="ltr"&gt;/&lt;/em&gt;
+or
+&lt;em dir="ltr"&gt;.html&lt;/em&gt;
+to which
+&lt;em dir="ltr"&gt;GET&lt;/em&gt;
+requests have been made that returned a
+&lt;em dir="ltr"&gt;200&lt;/em&gt;
+HTTP response status code.&lt;/p&gt;&lt;p dir="ltr"&gt;If
+[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
+is omitted,
+&lt;strong dir="ltr"&gt;cblr&lt;/strong&gt;
+reads from standard input.&lt;/p&gt;&lt;h3&gt;EXIT STATUS&lt;/h3&gt;&lt;p dir="ltr"&gt;The &lt;strong dir="ltr"&gt;cblr&lt;/strong&gt; utility exits&amp;nbsp;0 on success, and&amp;nbsp;&amp;gt;0 if an error occurs.&lt;/p&gt;&lt;h3&gt;EXAMPLES&lt;/h3&gt;&lt;p dir="ltr"&gt;Print all
+&lt;em dir="ltr"&gt;referrers&lt;/em&gt;
+and their respective request count
+from
+&lt;em dir="ltr"&gt;/var/www/logs/access.log&lt;/em&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ cblr /var/www/logs/access.log&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;SEE ALSO&lt;/h3&gt;&lt;p&gt;awk(1)
+httpd(8)
+httpd.conf(5)&lt;/p&gt;&lt;h2&gt;cblvv(1)&lt;/h2&gt;&lt;h3&gt;NAME&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblvv&lt;/strong&gt; - combined log (virtual host) views&lt;/p&gt;&lt;h3&gt;SYNOPSIS&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblvv&lt;/strong&gt;
+[&lt;em dir="ltr"&gt;file&amp;nbsp;...&lt;/em&gt;]&lt;/p&gt;&lt;h3&gt;DESCRIPTION&lt;/h3&gt;&lt;p dir="ltr"&gt;The
+&lt;strong dir="ltr"&gt;cblvv&lt;/strong&gt;
+utility reads
+each
+[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
+in
+&lt;em dir="ltr"&gt;Combined Log Format with Virtual Host&lt;/em&gt;
+and prints only the
+&lt;em dir="ltr"&gt;views&lt;/em&gt;
+to standard output.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;views&lt;/em&gt;
+are defined as
+&lt;em dir="ltr"&gt;GET&lt;/em&gt;
+requests to paths ending in
+&lt;em dir="ltr"&gt;/&lt;/em&gt;
+or
+&lt;em dir="ltr"&gt;.html&lt;/em&gt;
+that returned a
+&lt;em dir="ltr"&gt;200&lt;/em&gt;
+HTTP response status code.&lt;/p&gt;&lt;p dir="ltr"&gt;If
+[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
+is omitted,
+&lt;strong dir="ltr"&gt;cblvv&lt;/strong&gt;
+reads from standard input.&lt;/p&gt;&lt;h3&gt;EXIT STATUS&lt;/h3&gt;&lt;p dir="ltr"&gt;The &lt;strong dir="ltr"&gt;cblvv&lt;/strong&gt; utility exits&amp;nbsp;0 on success, and&amp;nbsp;&amp;gt;0 if an error occurs.&lt;/p&gt;&lt;h3&gt;EXAMPLES&lt;/h3&gt;&lt;p dir="ltr"&gt;Print all
+&lt;em dir="ltr"&gt;views&lt;/em&gt;
+from
+&lt;em dir="ltr"&gt;/var/www/logs/access.log:&lt;/em&gt;&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ cblvv /var/www/logs/access.log&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;SEE ALSO&lt;/h3&gt;&lt;p&gt;awk(1)
+httpd(8)
+httpd.conf(5)
+clv(1)&lt;/p&gt;&lt;h2&gt;cblvu(1)&lt;/h2&gt;&lt;h3&gt;NAME&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblvu&lt;/strong&gt; - combined log (virtual host) uniques&lt;/p&gt;&lt;h3&gt;SYNOPSIS&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblvu&lt;/strong&gt;
+[&lt;em dir="ltr"&gt;file&amp;nbsp;...&lt;/em&gt;]&lt;/p&gt;&lt;h3&gt;DESCRIPTION&lt;/h3&gt;&lt;p dir="ltr"&gt;The
+&lt;strong dir="ltr"&gt;cblvu&lt;/strong&gt;
+utility reads
+each
+[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
+in
+&lt;em dir="ltr"&gt;Combined Log Format with Virtual Hosts&lt;/em&gt;
+and prints only the
+&lt;em dir="ltr"&gt;uniques&lt;/em&gt;
+to standard output.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;uniques&lt;/em&gt;
+to standard output.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;uniques&lt;/em&gt;
+are defined as unique remote hosts
+that made at least one
+&lt;em dir="ltr"&gt;GET&lt;/em&gt;
+request
+for files with an
+&lt;em dir="ltr"&gt;.html&lt;/em&gt;
+extension, including the
+&lt;em dir="ltr"&gt;/&lt;/em&gt;
+path that returned a
+&lt;em dir="ltr"&gt;200&lt;/em&gt;
+HTTP response status code.&lt;/p&gt;&lt;p dir="ltr"&gt;If
+[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
+is omitted,
+&lt;strong dir="ltr"&gt;cblvu&lt;/strong&gt;
+reads from standard input.&lt;/p&gt;&lt;h3&gt;EXIT STATUS&lt;/h3&gt;&lt;p dir="ltr"&gt;The &lt;strong dir="ltr"&gt;cblvu&lt;/strong&gt; utility exits&amp;nbsp;0 on success, and&amp;nbsp;&amp;gt;0 if an error occurs.&lt;/p&gt;&lt;h3&gt;EXAMPLES&lt;/h3&gt;&lt;p dir="ltr"&gt;Print all
+&lt;em dir="ltr"&gt;uniques&lt;/em&gt;
+from
+&lt;em dir="ltr"&gt;/var/www/logs/access.log:&lt;/em&gt;&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ cblvu /var/www/logs/access.log&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;SEE ALSO&lt;/h3&gt;&lt;p&gt;awk(1)
+httpd(8)
+httpd.conf(5)
+clu(1)&lt;/p&gt;&lt;h2&gt;cblvp(1)&lt;/h2&gt;&lt;h3&gt;NAME&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblvp&lt;/strong&gt; - combined log (virtual host) pages&lt;/p&gt;&lt;h3&gt;SYNOPSIS&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblvp&lt;/strong&gt;
+[&lt;em dir="ltr"&gt;file&amp;nbsp;...&lt;/em&gt;]&lt;/p&gt;&lt;h3&gt;DESCRIPTION&lt;/h3&gt;&lt;p dir="ltr"&gt;The
+&lt;strong dir="ltr"&gt;cblvp&lt;/strong&gt;
+utility reads
+each
+[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
+in
+&lt;em dir="ltr"&gt;Combined Log Format with Virtual Host&lt;/em&gt;
+and prints a list of
+&lt;em dir="ltr"&gt;pages&lt;/em&gt;
+to standard output including the request count.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;pages&lt;/em&gt;
+are defined as
+&lt;em dir="ltr"&gt;paths&lt;/em&gt;
+ending in
+&lt;em dir="ltr"&gt;/&lt;/em&gt;
+or
+&lt;em dir="ltr"&gt;.html&lt;/em&gt;
+to which
+&lt;em dir="ltr"&gt;GET&lt;/em&gt;
+requests have been made that returned a
+&lt;em dir="ltr"&gt;200&lt;/em&gt;
+HTTP response status code.&lt;/p&gt;&lt;p dir="ltr"&gt;If
+[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
+is omitted,
+&lt;strong dir="ltr"&gt;cblvp&lt;/strong&gt;
+reads from standard input.&lt;/p&gt;&lt;h3&gt;EXIT STATUS&lt;/h3&gt;&lt;p dir="ltr"&gt;The &lt;strong dir="ltr"&gt;cblvp&lt;/strong&gt; utility exits&amp;nbsp;0 on success, and&amp;nbsp;&amp;gt;0 if an error occurs.&lt;/p&gt;&lt;h3&gt;EXAMPLES&lt;/h3&gt;&lt;p dir="ltr"&gt;Print all
+&lt;em dir="ltr"&gt;pages&lt;/em&gt;
+and their respective request count
+from
+&lt;em dir="ltr"&gt;/var/www/logs/access.log&lt;/em&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ cblvp /var/www/logs/access.log&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;SEE ALSO&lt;/h3&gt;&lt;p&gt;awk(1)
+httpd(8)
+httpd.conf(5)
+clp(1)&lt;/p&gt;&lt;h2&gt;cblvr(1)&lt;/h2&gt;&lt;h3&gt;NAME&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblvr&lt;/strong&gt; - combined log (virtual host) referrer&lt;/p&gt;&lt;h3&gt;SYNOPSIS&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblvr&lt;/strong&gt;
+[&lt;em dir="ltr"&gt;file&amp;nbsp;...&lt;/em&gt;]&lt;/p&gt;&lt;h3&gt;DESCRIPTION&lt;/h3&gt;&lt;p dir="ltr"&gt;The
+&lt;strong dir="ltr"&gt;cblvr&lt;/strong&gt;
+utility reads
+each
+[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
+in
+&lt;em dir="ltr"&gt;Combined Log Format Virtual Host&lt;/em&gt;
+and prints a list of
+&lt;em dir="ltr"&gt;referrers&lt;/em&gt;
+to standard output including the request count.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;referrers&lt;/em&gt;
+are defined as the address of the webpage which is linked to a
+&lt;em dir="ltr"&gt;path&lt;/em&gt;
+ending in
+&lt;em dir="ltr"&gt;/&lt;/em&gt;
+or
+&lt;em dir="ltr"&gt;.html&lt;/em&gt;
+to which
+&lt;em dir="ltr"&gt;GET&lt;/em&gt;
+requests have been made that returned a
+&lt;em dir="ltr"&gt;200&lt;/em&gt;
+HTTP response status code.&lt;/p&gt;&lt;p dir="ltr"&gt;If
+[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
+is omitted,
+&lt;strong dir="ltr"&gt;cblvr&lt;/strong&gt;
+reads from standard input.&lt;/p&gt;&lt;h3&gt;EXIT STATUS&lt;/h3&gt;&lt;p dir="ltr"&gt;The &lt;strong dir="ltr"&gt;cblvr&lt;/strong&gt; utility exits&amp;nbsp;0 on success, and&amp;nbsp;&amp;gt;0 if an error occurs.&lt;/p&gt;&lt;h3&gt;EXAMPLES&lt;/h3&gt;&lt;p dir="ltr"&gt;Print all
+&lt;em dir="ltr"&gt;referrers&lt;/em&gt;
+and their respective request count
+from
+&lt;em dir="ltr"&gt;/var/www/logs/access.log&lt;/em&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ cblvr /var/www/logs/access.log&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;SEE ALSO&lt;/h3&gt;&lt;p&gt;awk(1)
+httpd(8)
+httpd.conf(5)&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 14:57:22 -0500</pubDate></item><item><title>Unacceptable, where is my privacy?</title><link>https://lobste.rs/s/armsaf</link><description>&lt;img src="https://unacceptable-privacy.github.io/images/amazon_echo.jpg" alt="Smart Speakers" width="423" height="475"&gt;&lt;h2&gt;Exploring Accidental Triggers of Smart Speakers&lt;/h2&gt;&lt;p dir="ltr"&gt;Lea Schönherr, Maximilian Golla, Thorsten Eisenhofer, Jan Wiele, Dorothea Kolossa, and Thorsten Holz
+                            &lt;br dir="ltr"&gt;
+                            &lt;a href="https://www.ruhr-uni-bochum.de/en" dir="ltr"&gt;Ruhr University Bochum&lt;/a&gt; &amp;amp; &lt;a href="https://www.mpi-sp.org/" dir="ltr"&gt;Max Planck Institute for Security and Privacy&lt;/a&gt;
+                        &lt;/p&gt;&lt;p dir="ltr"&gt;
+                            &lt;b dir="ltr"&gt;tl;dr:&lt;/b&gt; A comprehensive study of accidental triggers of smart speakers.
+                        &lt;/p&gt;&lt;h1&gt;Overview&lt;/h1&gt;&lt;h2&gt;{Unacceptable}, will it rain today?&lt;/h2&gt;&lt;p dir="ltr"&gt;
+                        Voice assistants in smart speakers analyze every sound in their environment for their &lt;mark dir="ltr"&gt;wake word&lt;/mark&gt;, e.g., «Alexa» or «Hey Siri», before uploading the audio stream to the cloud.
+                        This supports users' privacy by only capturing the necessary audio and not recording anything else.
+                        The sensitivity of the wake word detection tries to strike a balance between data protection and technical optimization, but &lt;b dir="ltr"&gt;can be tricked&lt;/b&gt; using similar words or sounds that result in an accidental trigger.
+                    &lt;/p&gt;&lt;p dir="ltr"&gt;
+                        In July 2019, we started measuring and analyzing &lt;mark dir="ltr"&gt;accidental triggers&lt;/mark&gt; of smart speakers.
+                        We automated the process of finding accidental triggers and &lt;b dir="ltr"&gt;measured their prevalence&lt;/b&gt; across 11 smart speakers from 8 different manufacturers using professional audio datasets and everyday media such as &lt;b dir="ltr"&gt;TV&amp;nbsp;shows&lt;/b&gt; and &lt;b dir="ltr"&gt;newscasts&lt;/b&gt;.
+                    &lt;/p&gt;&lt;img src="https://unacceptable-privacy.github.io/images/setup.jpg" alt="Our Measurement Setup: Light Sensors" width="455" height="303"&gt;&lt;img src="https://unacceptable-privacy.github.io/images/schema.png" alt="Our Measurement Setup: Schema" width="455" height="303"&gt;&lt;h2&gt;Setup&lt;/h2&gt;&lt;p dir="ltr"&gt;
+                        Our setup consists of a &lt;b dir="ltr"&gt;loudspeaker&lt;/b&gt; that is playing media files from a &lt;b dir="ltr"&gt;computer&lt;/b&gt;.
+                        We use &lt;b dir="ltr"&gt;light sensors&lt;/b&gt; to monitor the LED activity indicators of a group of smart speakers.
+                        All speakers are connected to the Internet over &lt;b dir="ltr"&gt;Wi-Fi&lt;/b&gt;.
+                        To verify the measurement results, we record a video of each measurement via a &lt;b dir="ltr"&gt;webcam&lt;/b&gt; with a built-in microphone.
+                        Moreover, we record &lt;b dir="ltr"&gt;network traces&lt;/b&gt; to analyze the speakers' activity on a network level.
+                        The entire setup is connected to a network-controllable &lt;b dir="ltr"&gt;power socket&lt;/b&gt; that we use to power cycle the speakers in case of failures or non-responsiveness.
+                        We play a &lt;b dir="ltr"&gt;test signal&lt;/b&gt; in-between media playbacks to ensure that all smart speakers work and trigger as intended.
+                    &lt;/p&gt;&lt;h2&gt;Findings: «AH L EH K S AH»&lt;/h2&gt;&lt;p dir="ltr"&gt;
+                        Our setup was able to identify &lt;mark dir="ltr"&gt;more than 1,000 sequences&lt;/mark&gt; that incorrectly trigger smart speakers.
+                        For example, we found that depending on the pronunciation, &lt;mark dir="ltr"&gt;«Alexa» reacts to the words "unacceptable"&lt;/mark&gt; and "election," while «Google» often triggers to "OK, cool."
+                        «Siri» can be fooled by "a city," «Cortana» by "Montana," «Computer» by "Peter," «Amazon» by "and the zone," and «Echo» by "tobacco."
+                        See &lt;b dir="ltr"&gt;videos&lt;/b&gt; with examples of such accidental triggers &lt;a href="https://unacceptable-privacy.github.io/index.html#examples" dir="ltr"&gt;here&lt;/a&gt;.
+                    &lt;/p&gt;&lt;p dir="ltr"&gt;
+                        In our paper, we analyze a diverse set of audio sources, explore gender and language biases, and measure the reproducibility of the identified triggers.
+                        To better understand accidental triggers, we describe a method to craft them artificially. By reverse-engineering the communication channel of an Amazon Echo, we are able to provide novel insights on how commercial companies deal with such problematic triggers in practice.
+                        Finally, we analyze the &lt;b dir="ltr"&gt;privacy implications of accidental triggers&lt;/b&gt; and discuss potential mechanisms to improve the privacy of smart speakers.
+                    &lt;/p&gt;&lt;img src="https://unacceptable-privacy.github.io/images/photoresistor.jpg" alt="Photoresistor Attached to the LED Activity Indicator of a Smart Speaker" width="455" height="303"&gt;&lt;h2&gt;Photo Gallery&lt;/h2&gt;&lt;img src="https://unacceptable-privacy.github.io/images/gallery/1-small.jpg" alt="Our Measurement Setup: Overview" width="400" height="267"&gt;&lt;img src="https://unacceptable-privacy.github.io/images/gallery/2-small.jpg" alt="Our Measurement Setup: Smart Speakers" width="400" height="267"&gt;&lt;img src="https://unacceptable-privacy.github.io/images/gallery/3-small.jpg" alt="Our Measurement Setup: Loudspeaker" width="400" height="267"&gt;&lt;img src="https://unacceptable-privacy.github.io/images/gallery/4-small.jpg" alt="Our Measurement Setup: Light Sensors" width="400" height="267"&gt;&lt;img src="https://unacceptable-privacy.github.io/images/gallery/5-small.jpg" alt="Accessing an Amazon Echo Speaker" width="400" height="267"&gt;&lt;img src="https://unacceptable-privacy.github.io/images/gallery/6-small.jpg" alt="Decrypting Echo's Network Communication" width="400" height="267"&gt;&lt;h1&gt;Evaluated Voice Assistants&lt;/h1&gt;&lt;table class="table table-sm table-striped" dir="ltr"&gt;
+                  &lt;thead class="thead-dark" dir="ltr"&gt;
+                    &lt;tr dir="ltr"&gt;
+                      &lt;th scope="col" dir="ltr"&gt;No.&lt;/th&gt;
+                      &lt;th scope="col" dir="ltr"&gt;Assistant&lt;/th&gt;
+                      &lt;th scope="col" dir="ltr"&gt;Wake Word(s)&lt;/th&gt;
+                      &lt;th scope="col" dir="ltr"&gt;Language&lt;/th&gt;
+                      &lt;th scope="col" dir="ltr"&gt;Smart Speaker&lt;/th&gt;
+                    &lt;/tr&gt;
+                  &lt;/thead&gt;
+                  &lt;tbody dir="ltr"&gt;
+                    &lt;tr dir="ltr"&gt;
+                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;1&lt;/th&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;Amazon: Alexa&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;«Alexa»&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;en_US, de_DE&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;Amazon: Echo Dot (v3)&lt;/td&gt;
+                    &lt;/tr&gt;
+                    &lt;tr dir="ltr"&gt;
+                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;2&lt;/th&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;Amazon: Alexa&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;«Computer»&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;en_US, de_DE&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;Amazon: Echo Dot (v3)&lt;/td&gt;
+                    &lt;/tr&gt;
+                    &lt;tr dir="ltr"&gt;
+                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;3&lt;/th&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;Amazon: Alexa&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;«Echo»&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;en_US, de_DE&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;Amazon: Echo Dot (v3)&lt;/td&gt;
+                    &lt;/tr&gt;
+                    &lt;tr dir="ltr"&gt;
+                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;4&lt;/th&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;Amazon: Alexa&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;«Amazon»&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;en_US, de_DE&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;Amazon: Echo Dot (v3)&lt;/td&gt;
+                    &lt;/tr&gt;
+                    &lt;tr dir="ltr"&gt;
+                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;5&lt;/th&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;Google: Assistant&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;«OK/Hey Google»&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;en_US, de_DE&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;Google: Home Mini&lt;/td&gt;
+                    &lt;/tr&gt;
+                    &lt;tr dir="ltr"&gt;
+                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;6&lt;/th&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;Apple: Siri&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;«Hey Siri»&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;en_US, de_DE&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;Apple: HomePod&lt;/td&gt;
+                    &lt;/tr&gt;
+                    &lt;tr dir="ltr"&gt;
+                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;7&lt;/th&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;Microsoft: Cortana&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;«Hey/- Cortana»&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;en_US&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;Harman Kardon: Invoke&lt;/td&gt;
+                    &lt;/tr&gt;
+                    &lt;tr dir="ltr"&gt;
+                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;8&lt;/th&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;Xiaomi: Xiao AI&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;«Xiǎo ài tóngxué»&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;zh_CN&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;Xiaomi: Mi AI Speaker&lt;/td&gt;
+                    &lt;/tr&gt;
+                    &lt;tr dir="ltr"&gt;
+                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;9&lt;/th&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;Tencent: Xiaowei&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;«Jiǔsì'èr líng»&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;zh_CN&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;Tencent: Tīngtīng TS-T1&lt;/td&gt;
+                    &lt;/tr&gt;
+                    &lt;tr dir="ltr"&gt;
+                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;10&lt;/th&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;Baidu: DuerOS&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;«Xiǎo dù xiǎo dù»&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;zh_CN&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;Baidu: NV6101 (1C)&lt;/td&gt;
+                    &lt;/tr&gt;
+                    &lt;tr dir="ltr"&gt;
+                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;11&lt;/th&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;SoundHound: Houndify&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;«Hallo/Hey/Hi Magenta»&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;de_DE&lt;/td&gt;
+                      &lt;td class="align-middle" dir="ltr"&gt;Deutsche Telekom: Magenta Speaker&lt;/td&gt;
+                    &lt;/tr&gt;
+                  &lt;/tbody&gt;
+                &lt;/table&gt;&lt;h1&gt;Examples&lt;/h1&gt;&lt;h2&gt;Accidental Triggers&lt;/h2&gt;&lt;p dir="ltr"&gt;
+                        &lt;span dir="ltr"&gt;&lt;b dir="ltr"&gt;Note&lt;/b&gt;&lt;/span&gt;:
+                        The audio processing and speech recognition system in smart speakers may involve &lt;a href="https://www.usenix.org/conference/usenixsecurity18/presentation/kumar" dir="ltr"&gt;non-deterministic&lt;/a&gt; processes.
+                        Moreover, voice assistants like Alexa are based on cloud-assisted constantly evolving language models.
+                        Thus, the examples shown below &lt;mark dir="ltr"&gt;might not work with your voice assistant&lt;/mark&gt; at home.
+                    &lt;/p&gt;&lt;h2&gt;«Alexa» Local+Cloud Trigger&lt;/h2&gt;&lt;p dir="ltr"&gt;
+                                "&lt;mark dir="ltr"&gt;A letter&lt;/mark&gt;" is confused with «Alexa.»
+                                This trigger is able to fool the &lt;span dir="ltr"&gt;local&lt;/span&gt;, as well as, the &lt;span dir="ltr"&gt;cloud-based&lt;/span&gt; wake word model.
+                            &lt;/p&gt;&lt;p dir="ltr"&gt;
+                                &lt;a href="https://www.imdb.com/title/tt1837864/" dir="ltr"&gt;Game of Thrones - S01E08 - The Pointy End&lt;/a&gt;.&lt;br dir="ltr"&gt;
+                                &lt;b dir="ltr"&gt;Type&lt;/b&gt;: TV Show, &lt;b dir="ltr"&gt;Network&lt;/b&gt;: HBO (US), &lt;b dir="ltr"&gt;Originally Aired&lt;/b&gt;: June 5, 2011, &lt;b dir="ltr"&gt;Found&lt;/b&gt;: October 23, 2019, &lt;b dir="ltr"&gt;Timestamp&lt;/b&gt;: ~42:00.
+                            &lt;/p&gt;&lt;h2&gt;«Alexa» Local Trigger&lt;/h2&gt;&lt;p dir="ltr"&gt;
+                                "&lt;mark dir="ltr"&gt;We like some privacy&lt;/mark&gt;" is confused with «Alexa.»
+                                This trigger is able to fool the &lt;span dir="ltr"&gt;local&lt;/span&gt; wake word model only.
+                            &lt;/p&gt;&lt;p dir="ltr"&gt;
+                                &lt;a href="https://www.imdb.com/title/tt2178798/" dir="ltr"&gt;Game of Thrones - S03E04 - And Now His Watch Is Ended&lt;/a&gt;.&lt;br dir="ltr"&gt;
+                                &lt;b dir="ltr"&gt;Type&lt;/b&gt;: TV Show, &lt;b dir="ltr"&gt;Network&lt;/b&gt;: HBO (US), &lt;b dir="ltr"&gt;Originally Aired&lt;/b&gt;: April 21, 2013, &lt;b dir="ltr"&gt;Found&lt;/b&gt;: December 12, 2019, &lt;b dir="ltr"&gt;Timestamp&lt;/b&gt;: ~32:10.
+                            &lt;/p&gt;&lt;h2&gt;«Hey Siri» Local+Cloud Trigger&lt;/h2&gt;&lt;p dir="ltr"&gt;
+                                "&lt;mark dir="ltr"&gt;Hey Jerry&lt;/mark&gt;" is confused with «Hey Siri.»
+                                This trigger is able to fool the &lt;span dir="ltr"&gt;local&lt;/span&gt;, as well as, the &lt;span dir="ltr"&gt;cloud-based&lt;/span&gt; wake word model.
+                            &lt;/p&gt;&lt;p dir="ltr"&gt;
+                                &lt;a href="https://www.imdb.com/title/tt1627464/" dir="ltr"&gt;Modern Family - S02E06 - Halloween&lt;/a&gt;.&lt;br dir="ltr"&gt;
+                                &lt;b dir="ltr"&gt;Type&lt;/b&gt;: TV Show, &lt;b dir="ltr"&gt;Network&lt;/b&gt;: ABC, &lt;b dir="ltr"&gt;Originally Aired&lt;/b&gt;: October 27, 2010, &lt;b dir="ltr"&gt;Found&lt;/b&gt;: December 25, 2019, &lt;b dir="ltr"&gt;Timestamp&lt;/b&gt;: ~04:35.
+                            &lt;/p&gt;&lt;h2&gt;«OK Google» Local Trigger&lt;/h2&gt;&lt;p dir="ltr"&gt;
+                                "&lt;mark dir="ltr"&gt;Okay, who is reading&lt;/mark&gt;" is confused with «OK Google.»
+                                This trigger is able to fool the &lt;span dir="ltr"&gt;local&lt;/span&gt; wake word model only.
+                            &lt;/p&gt;&lt;p dir="ltr"&gt;
+                                &lt;a href="https://www.imdb.com/title/tt1569106/" dir="ltr"&gt;Modern Family - S01E13 - Fifteen Percent&lt;/a&gt;.&lt;br dir="ltr"&gt;
+                                &lt;b dir="ltr"&gt;Type&lt;/b&gt;: TV Show, &lt;b dir="ltr"&gt;Network&lt;/b&gt;: ABC, &lt;b dir="ltr"&gt;Originally Aired&lt;/b&gt;: January 20, 2010, &lt;b dir="ltr"&gt;Found&lt;/b&gt;: October 20, 2019, &lt;b dir="ltr"&gt;Timestamp&lt;/b&gt;: ~21:50.
+                              &lt;/p&gt;&lt;h1&gt;Protect Your Privacy&lt;/h1&gt;&lt;p dir="ltr"&gt;
+                        Visit the links below to learn more about your smart speaker voice recordings and what you can do to better &lt;mark dir="ltr"&gt;protect your privacy&lt;/mark&gt;.
+                    &lt;/p&gt;</description><pubDate>Tue, 11 Aug 2020 01:47:39 -0500</pubDate></item><item><title>Cookie-based Spring Security Session</title><link>https://lobste.rs/s/xddnlr</link><description>&lt;h3&gt;&lt;a href="https://www.innoq.com/en/blog/cookie-based-spring-security-session/#springsecurityarchitecture"&gt;Spring Security architecture&lt;/a&gt;&lt;/h3&gt;&lt;p dir="ltr"&gt;Spring Security integrates into Spring web as a servlet request filter
 (see &lt;a href="https://docs.spring.io/spring-security/site/docs/5.3.3.RELEASE/reference/html5/#servlet-architecture" dir="ltr"&gt;Chapter 9 of the Spring Security Reference&lt;/a&gt;).
 The &lt;code dir="ltr"&gt;FilterChainProxy&lt;/code&gt; is the central filter class and contains a parallel &lt;code dir="ltr"&gt;SecurityFilterChain&lt;/code&gt;
 (see &lt;a href="https://docs.spring.io/spring-security/site/docs/5.3.3.RELEASE/reference/html5/#servlet-securityfilterchain" dir="ltr"&gt;Chapter 9.4 of the Spring Security Reference&lt;/a&gt;).
@@ -2118,435 +2514,7 @@ many of the decisions which govern our current tools were.  If CSS was designed
 the way it is just to satisfy the constraints of 1996, then maybe that gives
 us permission 20 years later to do things a little differently.&lt;/p&gt;&lt;p&gt;In our next blog post we expose the tremendous innovation that allowed a copper wire to
 evolve from morse code to 10 Gbps Cat6 ethernet. Subscribe below
-to be notified when it’s released.&lt;/p&gt;&lt;h3&gt;Like this post? Share it with your followers.&lt;/h3&gt;&lt;h3&gt;Sign up to get our next post delivered to your inbox.&lt;/h3&gt;&lt;div&gt;&lt;button type="submit"&gt;&lt;span&gt;Sign up&lt;/span&gt;&lt;/button&gt;&lt;/div&gt;</description><pubDate>Mon, 10 Aug 2020 11:47:23 -0500</pubDate></item><item><title>sh(1) simple combined log analytics for static sites (wip)</title><link>https://lobste.rs/s/omc5xf</link><description>&lt;p&gt;combined log&lt;/p&gt;&lt;h2&gt;cblv(1)&lt;/h2&gt;&lt;h3&gt;NAME&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblv&lt;/strong&gt; - combined log views&lt;/p&gt;&lt;h3&gt;SYNOPSIS&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblv&lt;/strong&gt;
-[&lt;em dir="ltr"&gt;file&amp;nbsp;...&lt;/em&gt;]&lt;/p&gt;&lt;h3&gt;DESCRIPTION&lt;/h3&gt;&lt;p dir="ltr"&gt;The
-&lt;strong dir="ltr"&gt;cblv&lt;/strong&gt;
-utility reads
-each
-[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
-in
-&lt;em dir="ltr"&gt;Combined Log Format&lt;/em&gt;
-and prints only the
-&lt;em dir="ltr"&gt;views&lt;/em&gt;
-to standard output.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;views&lt;/em&gt;
-are defined as
-&lt;em dir="ltr"&gt;GET&lt;/em&gt;
-requests
-to paths ending in
-&lt;em dir="ltr"&gt;/&lt;/em&gt;
-or
-&lt;em dir="ltr"&gt;.html&lt;/em&gt;
-that returned a
-&lt;em dir="ltr"&gt;200&lt;/em&gt;
-HTTP response status code.&lt;/p&gt;&lt;p dir="ltr"&gt;If
-[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
-is omitted,
-&lt;strong dir="ltr"&gt;cblv&lt;/strong&gt;
-reads from standard input.&lt;/p&gt;&lt;h3&gt;EXIT STATUS&lt;/h3&gt;&lt;p dir="ltr"&gt;The &lt;strong dir="ltr"&gt;cblv&lt;/strong&gt; utility exits&amp;nbsp;0 on success, and&amp;nbsp;&amp;gt;0 if an error occurs.&lt;/p&gt;&lt;h3&gt;EXAMPLES&lt;/h3&gt;&lt;p dir="ltr"&gt;Print all
-&lt;em dir="ltr"&gt;views&lt;/em&gt;
-from
-&lt;em dir="ltr"&gt;/var/www/logs/access.log:&lt;/em&gt;&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ cblv /var/www/logs/access.log&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;SEE ALSO&lt;/h3&gt;&lt;p&gt;awk(1)
-httpd(8)
-httpd.conf(5)
-clv(1)&lt;/p&gt;&lt;h2&gt;cblu(1)&lt;/h2&gt;&lt;h3&gt;NAME&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblu&lt;/strong&gt; - combined log uniques&lt;/p&gt;&lt;h3&gt;SYNOPSIS&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblu&lt;/strong&gt;
-[&lt;em dir="ltr"&gt;file&amp;nbsp;...&lt;/em&gt;]&lt;/p&gt;&lt;h3&gt;DESCRIPTION&lt;/h3&gt;&lt;p dir="ltr"&gt;The
-&lt;strong dir="ltr"&gt;cblu&lt;/strong&gt;
-utility reads
-each
-[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
-in
-&lt;em dir="ltr"&gt;Combined Log Format&lt;/em&gt;
-and prints only the
-&lt;em dir="ltr"&gt;uniques&lt;/em&gt;
-to standard output.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;uniques&lt;/em&gt;
-are defined as unique remote hosts
-that made at least one
-&lt;em dir="ltr"&gt;GET&lt;/em&gt;
-request to paths ending in
-&lt;em dir="ltr"&gt;/&lt;/em&gt;
-or
-&lt;em dir="ltr"&gt;.html&lt;/em&gt;
-that returned a
-&lt;em dir="ltr"&gt;200&lt;/em&gt;
-HTTP response status code.&lt;/p&gt;&lt;p dir="ltr"&gt;If
-[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
-is omitted,
-&lt;strong dir="ltr"&gt;cblu&lt;/strong&gt;
-reads from standard input.&lt;/p&gt;&lt;h3&gt;EXIT STATUS&lt;/h3&gt;&lt;p dir="ltr"&gt;The &lt;strong dir="ltr"&gt;cblu&lt;/strong&gt; utility exits&amp;nbsp;0 on success, and&amp;nbsp;&amp;gt;0 if an error occurs.&lt;/p&gt;&lt;h3&gt;EXAMPLES&lt;/h3&gt;&lt;p dir="ltr"&gt;Print all
-&lt;em dir="ltr"&gt;uniques&lt;/em&gt;
-from
-&lt;em dir="ltr"&gt;/var/www/logs/access.log:&lt;/em&gt;&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ cblu /var/www/logs/access.log&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;SEE ALSO&lt;/h3&gt;&lt;p&gt;awk(1)
-httpd(8)
-httpd.conf(5)
-clu(1)&lt;/p&gt;&lt;h2&gt;cblp(1)&lt;/h2&gt;&lt;h3&gt;NAME&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblp&lt;/strong&gt; - combined log pages&lt;/p&gt;&lt;h3&gt;SYNOPSIS&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblp&lt;/strong&gt;
-[&lt;em dir="ltr"&gt;file&amp;nbsp;...&lt;/em&gt;]&lt;/p&gt;&lt;h3&gt;DESCRIPTION&lt;/h3&gt;&lt;p dir="ltr"&gt;The
-&lt;strong dir="ltr"&gt;cblp&lt;/strong&gt;
-utility reads
-each
-[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
-in
-&lt;em dir="ltr"&gt;Combined Log Format&lt;/em&gt;
-and prints a list of
-&lt;em dir="ltr"&gt;pages&lt;/em&gt;
-to standard output including the request count.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;pages&lt;/em&gt;
-are defined as
-&lt;em dir="ltr"&gt;paths&lt;/em&gt;
-ending in
-&lt;em dir="ltr"&gt;/&lt;/em&gt;
-or
-&lt;em dir="ltr"&gt;.html&lt;/em&gt;
-to which
-&lt;em dir="ltr"&gt;GET&lt;/em&gt;
-requests have been made that returned a
-&lt;em dir="ltr"&gt;200&lt;/em&gt;
-HTTP response status code.&lt;/p&gt;&lt;p dir="ltr"&gt;If
-[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
-is omitted,
-&lt;strong dir="ltr"&gt;cblp&lt;/strong&gt;
-reads from standard input.&lt;/p&gt;&lt;h3&gt;EXIT STATUS&lt;/h3&gt;&lt;p dir="ltr"&gt;The &lt;strong dir="ltr"&gt;cblp&lt;/strong&gt; utility exits&amp;nbsp;0 on success, and&amp;nbsp;&amp;gt;0 if an error occurs.&lt;/p&gt;&lt;h3&gt;EXAMPLES&lt;/h3&gt;&lt;p dir="ltr"&gt;Print all
-&lt;em dir="ltr"&gt;pages&lt;/em&gt;
-and their respective request count
-from
-&lt;em dir="ltr"&gt;/var/www/logs/access.log&lt;/em&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ cblp /var/www/logs/access.log&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;SEE ALSO&lt;/h3&gt;&lt;p&gt;awk(1)
-httpd(8)
-httpd.conf(5)
-clp(1)&lt;/p&gt;&lt;h2&gt;cblr(1)&lt;/h2&gt;&lt;h3&gt;NAME&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblr&lt;/strong&gt; - combined log referrer&lt;/p&gt;&lt;h3&gt;SYNOPSIS&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblr&lt;/strong&gt;
-[&lt;em dir="ltr"&gt;file&amp;nbsp;...&lt;/em&gt;]&lt;/p&gt;&lt;h3&gt;DESCRIPTION&lt;/h3&gt;&lt;p dir="ltr"&gt;The
-&lt;strong dir="ltr"&gt;cblr&lt;/strong&gt;
-utility reads
-each
-[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
-in
-&lt;em dir="ltr"&gt;Combined Log Format&lt;/em&gt;
-and prints a list of
-&lt;em dir="ltr"&gt;referrers&lt;/em&gt;
-to standard output including the request count.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;referrers&lt;/em&gt;
-are defined as the address of the webpage which is linked to a
-&lt;em dir="ltr"&gt;path&lt;/em&gt;
-ending in
-&lt;em dir="ltr"&gt;/&lt;/em&gt;
-or
-&lt;em dir="ltr"&gt;.html&lt;/em&gt;
-to which
-&lt;em dir="ltr"&gt;GET&lt;/em&gt;
-requests have been made that returned a
-&lt;em dir="ltr"&gt;200&lt;/em&gt;
-HTTP response status code.&lt;/p&gt;&lt;p dir="ltr"&gt;If
-[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
-is omitted,
-&lt;strong dir="ltr"&gt;cblr&lt;/strong&gt;
-reads from standard input.&lt;/p&gt;&lt;h3&gt;EXIT STATUS&lt;/h3&gt;&lt;p dir="ltr"&gt;The &lt;strong dir="ltr"&gt;cblr&lt;/strong&gt; utility exits&amp;nbsp;0 on success, and&amp;nbsp;&amp;gt;0 if an error occurs.&lt;/p&gt;&lt;h3&gt;EXAMPLES&lt;/h3&gt;&lt;p dir="ltr"&gt;Print all
-&lt;em dir="ltr"&gt;referrers&lt;/em&gt;
-and their respective request count
-from
-&lt;em dir="ltr"&gt;/var/www/logs/access.log&lt;/em&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ cblr /var/www/logs/access.log&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;SEE ALSO&lt;/h3&gt;&lt;p&gt;awk(1)
-httpd(8)
-httpd.conf(5)&lt;/p&gt;&lt;h2&gt;cblvv(1)&lt;/h2&gt;&lt;h3&gt;NAME&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblvv&lt;/strong&gt; - combined log (virtual host) views&lt;/p&gt;&lt;h3&gt;SYNOPSIS&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblvv&lt;/strong&gt;
-[&lt;em dir="ltr"&gt;file&amp;nbsp;...&lt;/em&gt;]&lt;/p&gt;&lt;h3&gt;DESCRIPTION&lt;/h3&gt;&lt;p dir="ltr"&gt;The
-&lt;strong dir="ltr"&gt;cblvv&lt;/strong&gt;
-utility reads
-each
-[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
-in
-&lt;em dir="ltr"&gt;Combined Log Format with Virtual Host&lt;/em&gt;
-and prints only the
-&lt;em dir="ltr"&gt;views&lt;/em&gt;
-to standard output.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;views&lt;/em&gt;
-are defined as
-&lt;em dir="ltr"&gt;GET&lt;/em&gt;
-requests to paths ending in
-&lt;em dir="ltr"&gt;/&lt;/em&gt;
-or
-&lt;em dir="ltr"&gt;.html&lt;/em&gt;
-that returned a
-&lt;em dir="ltr"&gt;200&lt;/em&gt;
-HTTP response status code.&lt;/p&gt;&lt;p dir="ltr"&gt;If
-[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
-is omitted,
-&lt;strong dir="ltr"&gt;cblvv&lt;/strong&gt;
-reads from standard input.&lt;/p&gt;&lt;h3&gt;EXIT STATUS&lt;/h3&gt;&lt;p dir="ltr"&gt;The &lt;strong dir="ltr"&gt;cblvv&lt;/strong&gt; utility exits&amp;nbsp;0 on success, and&amp;nbsp;&amp;gt;0 if an error occurs.&lt;/p&gt;&lt;h3&gt;EXAMPLES&lt;/h3&gt;&lt;p dir="ltr"&gt;Print all
-&lt;em dir="ltr"&gt;views&lt;/em&gt;
-from
-&lt;em dir="ltr"&gt;/var/www/logs/access.log:&lt;/em&gt;&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ cblvv /var/www/logs/access.log&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;SEE ALSO&lt;/h3&gt;&lt;p&gt;awk(1)
-httpd(8)
-httpd.conf(5)
-clv(1)&lt;/p&gt;&lt;h2&gt;cblvu(1)&lt;/h2&gt;&lt;h3&gt;NAME&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblvu&lt;/strong&gt; - combined log (virtual host) uniques&lt;/p&gt;&lt;h3&gt;SYNOPSIS&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblvu&lt;/strong&gt;
-[&lt;em dir="ltr"&gt;file&amp;nbsp;...&lt;/em&gt;]&lt;/p&gt;&lt;h3&gt;DESCRIPTION&lt;/h3&gt;&lt;p dir="ltr"&gt;The
-&lt;strong dir="ltr"&gt;cblvu&lt;/strong&gt;
-utility reads
-each
-[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
-in
-&lt;em dir="ltr"&gt;Combined Log Format with Virtual Hosts&lt;/em&gt;
-and prints only the
-&lt;em dir="ltr"&gt;uniques&lt;/em&gt;
-to standard output.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;uniques&lt;/em&gt;
-to standard output.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;uniques&lt;/em&gt;
-are defined as unique remote hosts
-that made at least one
-&lt;em dir="ltr"&gt;GET&lt;/em&gt;
-request
-for files with an
-&lt;em dir="ltr"&gt;.html&lt;/em&gt;
-extension, including the
-&lt;em dir="ltr"&gt;/&lt;/em&gt;
-path that returned a
-&lt;em dir="ltr"&gt;200&lt;/em&gt;
-HTTP response status code.&lt;/p&gt;&lt;p dir="ltr"&gt;If
-[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
-is omitted,
-&lt;strong dir="ltr"&gt;cblvu&lt;/strong&gt;
-reads from standard input.&lt;/p&gt;&lt;h3&gt;EXIT STATUS&lt;/h3&gt;&lt;p dir="ltr"&gt;The &lt;strong dir="ltr"&gt;cblvu&lt;/strong&gt; utility exits&amp;nbsp;0 on success, and&amp;nbsp;&amp;gt;0 if an error occurs.&lt;/p&gt;&lt;h3&gt;EXAMPLES&lt;/h3&gt;&lt;p dir="ltr"&gt;Print all
-&lt;em dir="ltr"&gt;uniques&lt;/em&gt;
-from
-&lt;em dir="ltr"&gt;/var/www/logs/access.log:&lt;/em&gt;&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ cblvu /var/www/logs/access.log&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;SEE ALSO&lt;/h3&gt;&lt;p&gt;awk(1)
-httpd(8)
-httpd.conf(5)
-clu(1)&lt;/p&gt;&lt;h2&gt;cblvp(1)&lt;/h2&gt;&lt;h3&gt;NAME&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblvp&lt;/strong&gt; - combined log (virtual host) pages&lt;/p&gt;&lt;h3&gt;SYNOPSIS&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblvp&lt;/strong&gt;
-[&lt;em dir="ltr"&gt;file&amp;nbsp;...&lt;/em&gt;]&lt;/p&gt;&lt;h3&gt;DESCRIPTION&lt;/h3&gt;&lt;p dir="ltr"&gt;The
-&lt;strong dir="ltr"&gt;cblvp&lt;/strong&gt;
-utility reads
-each
-[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
-in
-&lt;em dir="ltr"&gt;Combined Log Format with Virtual Host&lt;/em&gt;
-and prints a list of
-&lt;em dir="ltr"&gt;pages&lt;/em&gt;
-to standard output including the request count.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;pages&lt;/em&gt;
-are defined as
-&lt;em dir="ltr"&gt;paths&lt;/em&gt;
-ending in
-&lt;em dir="ltr"&gt;/&lt;/em&gt;
-or
-&lt;em dir="ltr"&gt;.html&lt;/em&gt;
-to which
-&lt;em dir="ltr"&gt;GET&lt;/em&gt;
-requests have been made that returned a
-&lt;em dir="ltr"&gt;200&lt;/em&gt;
-HTTP response status code.&lt;/p&gt;&lt;p dir="ltr"&gt;If
-[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
-is omitted,
-&lt;strong dir="ltr"&gt;cblvp&lt;/strong&gt;
-reads from standard input.&lt;/p&gt;&lt;h3&gt;EXIT STATUS&lt;/h3&gt;&lt;p dir="ltr"&gt;The &lt;strong dir="ltr"&gt;cblvp&lt;/strong&gt; utility exits&amp;nbsp;0 on success, and&amp;nbsp;&amp;gt;0 if an error occurs.&lt;/p&gt;&lt;h3&gt;EXAMPLES&lt;/h3&gt;&lt;p dir="ltr"&gt;Print all
-&lt;em dir="ltr"&gt;pages&lt;/em&gt;
-and their respective request count
-from
-&lt;em dir="ltr"&gt;/var/www/logs/access.log&lt;/em&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ cblvp /var/www/logs/access.log&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;SEE ALSO&lt;/h3&gt;&lt;p&gt;awk(1)
-httpd(8)
-httpd.conf(5)
-clp(1)&lt;/p&gt;&lt;h2&gt;cblvr(1)&lt;/h2&gt;&lt;h3&gt;NAME&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblvr&lt;/strong&gt; - combined log (virtual host) referrer&lt;/p&gt;&lt;h3&gt;SYNOPSIS&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;cblvr&lt;/strong&gt;
-[&lt;em dir="ltr"&gt;file&amp;nbsp;...&lt;/em&gt;]&lt;/p&gt;&lt;h3&gt;DESCRIPTION&lt;/h3&gt;&lt;p dir="ltr"&gt;The
-&lt;strong dir="ltr"&gt;cblvr&lt;/strong&gt;
-utility reads
-each
-[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
-in
-&lt;em dir="ltr"&gt;Combined Log Format Virtual Host&lt;/em&gt;
-and prints a list of
-&lt;em dir="ltr"&gt;referrers&lt;/em&gt;
-to standard output including the request count.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;referrers&lt;/em&gt;
-are defined as the address of the webpage which is linked to a
-&lt;em dir="ltr"&gt;path&lt;/em&gt;
-ending in
-&lt;em dir="ltr"&gt;/&lt;/em&gt;
-or
-&lt;em dir="ltr"&gt;.html&lt;/em&gt;
-to which
-&lt;em dir="ltr"&gt;GET&lt;/em&gt;
-requests have been made that returned a
-&lt;em dir="ltr"&gt;200&lt;/em&gt;
-HTTP response status code.&lt;/p&gt;&lt;p dir="ltr"&gt;If
-[&lt;em dir="ltr"&gt;file ...&lt;/em&gt;]
-is omitted,
-&lt;strong dir="ltr"&gt;cblvr&lt;/strong&gt;
-reads from standard input.&lt;/p&gt;&lt;h3&gt;EXIT STATUS&lt;/h3&gt;&lt;p dir="ltr"&gt;The &lt;strong dir="ltr"&gt;cblvr&lt;/strong&gt; utility exits&amp;nbsp;0 on success, and&amp;nbsp;&amp;gt;0 if an error occurs.&lt;/p&gt;&lt;h3&gt;EXAMPLES&lt;/h3&gt;&lt;p dir="ltr"&gt;Print all
-&lt;em dir="ltr"&gt;referrers&lt;/em&gt;
-and their respective request count
-from
-&lt;em dir="ltr"&gt;/var/www/logs/access.log&lt;/em&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ cblvr /var/www/logs/access.log&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;SEE ALSO&lt;/h3&gt;&lt;p&gt;awk(1)
-httpd(8)
-httpd.conf(5)&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 14:57:22 -0500</pubDate></item><item><title>Mypyc - Mypy to Python C Extension Compiler</title><link>https://lobste.rs/s/3c1oog</link><description>&lt;h1&gt;mypyc: Mypy to Python C Extension Compiler&lt;/h1&gt;&lt;p&gt;&lt;em&gt;Mypyc is (mostly) not yet useful for general Python development.&lt;/em&gt;&lt;/p&gt;&lt;p&gt;Mypyc is a compiler that compiles mypy-annotated, statically typed
-Python modules into CPython C extensions. Currently our primary focus
-is on making mypy faster through compilation -- the default mypy wheels
-are compiled with mypyc.  Compiled mypy is about 4x faster than
-without compilation.&lt;/p&gt;&lt;p&gt;Mypyc compiles what is essentially a Python language variant using "strict"
-semantics. This means (among some other things):&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Most type annotations are enforced at runtime (raising &lt;code dir="ltr"&gt;TypeError&lt;/code&gt; on mismatch)&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Classes are compiled into extension classes without &lt;code dir="ltr"&gt;__dict__&lt;/code&gt;
-(much, but not quite, like if they used &lt;code dir="ltr"&gt;__slots__&lt;/code&gt;)&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Monkey patching doesn't work&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Instance attributes won't fall back to class attributes if undefined&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Also there are still a bunch of bad bugs and unsupported features :)&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Compiled modules can import arbitrary Python modules, and compiled modules
-can be used from other Python modules.  Typically mypyc is used to only
-compile modules that contain performance bottlenecks.&lt;/p&gt;&lt;p&gt;You can run compiled modules also as normal, interpreted Python
-modules, since mypyc targets valid Python code. This means that
-all Python developer tools and debuggers can be used.&lt;/p&gt;&lt;h2&gt;Linux Requirements&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;A recent enough C/C++ build environment&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Python 3.5+&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Windows Requirements&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;Windows has been tested with Windows 10 and MSVC 2017.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Python 3.5+&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Quick Start for Contributors&lt;/h2&gt;&lt;p dir="ltr"&gt;First clone the mypy git repository &lt;em dir="ltr"&gt;and git submodules&lt;/em&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ git clone --recurse-submodules https://github.com/python/mypy.git
-$ cd mypy
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Optionally create a virtualenv (recommended):&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ virtualenv -p python3 &amp;lt;directory&amp;gt;
-$ source &amp;lt;directory&amp;gt;/bin/activate
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Then install the dependencies:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ python3 -m pip install -r test-requirements.txt
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Now you can run the tests:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ pytest mypyc
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Look at the &lt;a href="https://github.com/mypyc/mypyc/issues" dir="ltr"&gt;issue tracker&lt;/a&gt;
-for things to work on. Please express your interest in working on an
-issue by adding a comment before doing any significant work, since
-development is currently very active and there is real risk of duplicate
-work.&lt;/p&gt;&lt;p&gt;Note that the issue tracker is still hosted on the mypyc project, not
-with mypy itself.&lt;/p&gt;&lt;h2&gt;Documentation&lt;/h2&gt;&lt;p dir="ltr"&gt;We have some &lt;a href="https://github.com/python/mypy/blob/master/mypyc/doc/dev-intro.md" dir="ltr"&gt;developer documentation&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;Development Status and Roadmap&lt;/h2&gt;&lt;p&gt;These are the current planned major milestones:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p&gt;[DONE] Support a smallish but useful Python subset. Focus on compiling
-single modules, while the rest of the program is interpreted and does not
-need to be type checked.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;[DONE] Support compiling multiple modules as a single compilation unit (or
-dynamic linking of compiled modules).  Without this inter-module
-calls will use slower Python-level objects, wrapper functions and
-Python namespaces.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;[DONE] Mypyc can compile mypy.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;[DONE] Optimize some important performance bottlenecks.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;[PARTIALLY DONE] Generate useful errors for code that uses unsupported Python
-features instead of crashing or generating bad code.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;[DONE] Release a version of mypy that includes a compiled mypy.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;OL&gt;&lt;LI&gt;More feature/compatibility work. (100% compatibility with Python is distinctly
-an anti-goal, but more than we have now is a good idea.)&lt;/LI&gt;&lt;LI&gt;[DONE] Support compiling Black, which is a prominent tool that could benefit
-and has maintainer buy-in.
-(Let us know if you maintain another Python tool or library and are
-interested in working with us on this!)&lt;/LI&gt;&lt;LI&gt;More optimization! Code size reductions in particular are likely to
-be valuable and will speed up mypyc compilation.&lt;/LI&gt;&lt;/OL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;We'll see! Adventure is out there!&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Mon, 10 Aug 2020 07:44:03 -0500</pubDate></item><item><title>Writing Efficient Itanium 2 Assembly Code (2010)</title><link>https://yurichev.com/mirrors/RE/itanium.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/gmoncq/writing_efficient_itanium_2_assembly"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 21:21:15 -0500</pubDate></item><item><title>How We Got the Favicon</title><link>https://lobste.rs/s/jt2udm</link><description>&lt;p&gt;&lt;em dir="ltr"&gt;Image courtesy of&amp;nbsp;&lt;a href="https://rehansaeed.com/internet-favicon-madness/" dir="ltr"&gt;Muhammad Rehan Saeed&lt;/a&gt;&lt;/em&gt;&lt;/p&gt;&lt;p&gt;In 1999 the two largest browsers, Netscape Navigator and Microsoft Internet Explorer, were in all out war for control of the market. Looming just ahead was the release of Internet Explorer 5,&amp;nbsp;in March of 1999, a release that would give users a free browser deeply integrated into the Windows operating system, and deliver a final blow to Netscape Navigator’s market share. In the years to come, it would feature heavily in an antitrust suit brought against Microsoft.&lt;/p&gt;&lt;p&gt;All of which is to say that it was not at all unusual to see browser makers experiment with new features and ideas in the hopes of gaining some sort of advantage over their competition. Communication between the two companies was almost unheard of, and there was very little sharing of processes or code.&lt;/p&gt;&lt;p&gt;It was this kind of experimentation that led developer Bharat Shyam over at Microsoft to make a fairly simple addition while working on the Internet Explorer “favorites” feature. Already in IE 4, users could add websites to their favorites list, pretty much ripped straight from Netscape’s “bookmarks” feature. But what both browsers lacked was an easy way to navigate a long&amp;nbsp;list of websites.&lt;/p&gt;&lt;p dir="ltr"&gt;So in order to make websites stand out, Shyam added a small icon next to each website in the favorites list; a 16 x 16px image that could help users differentiate one website from another. He called this minor flourish a &lt;em dir="ltr"&gt;favicon&lt;/em&gt;, combining together “favorite” and “icon.” Today, the word favicon exists almost outside of its etymology in our vernacular, but its origin is almost deceptively&amp;nbsp;simple.&lt;/p&gt;&lt;p dir="ltr"&gt;In order to enable icons for a site, Shyam made it so that developers would simply need to create a file called&amp;nbsp;&lt;em dir="ltr"&gt;favicon.ico&amp;nbsp;&lt;/em&gt;and drop it in the root directory of their web server. Internet Explorer would know to look there for a possible icon before adding a site to a user’s favorite list.&lt;/p&gt;&lt;p dir="ltr"&gt;Shyam chose the &lt;code dir="ltr"&gt;.ico&lt;/code&gt; format because it was the standard Windows format for icons, and was used extensively by the Windows operating system. And since browsers were, at the time, developed in what were essentially vacuums, that made some kind of sense. So did&amp;nbsp;the subsequent choice of having developers drop the icon in a servers root folder, since this was typically an easy task on Windows web servers.&lt;/p&gt;&lt;p&gt;As the story goes, late one night, Shyam was working on his new favicon feature. He called over junior project manager&amp;nbsp;Ray Sun to take a look.&lt;/p&gt;&lt;p&gt;Shyam commented, “This is good, right? Check it in?”, requesting permission to check the code into the Internet Explorer codebase so it could be released in the next version. Sun didn’t think too much of it, the feature was cool and would clearly give IE an edge. So he told Shyam to go ahead and add it. And just like that, the favicon made its way into Internet Explorer 5, which would go on to become one of the largest browser releases the web has ever seen.&lt;/p&gt;&lt;p&gt;The next day, Sun was reprimanded by his manager for letting the feature get by so quickly. As it turns out, Shyam had specifically waited until later in the day, knowing that a less experienced Program Manager would give him a pass. But by then, the code had been merged in. Incidentally, you’d be surprised just how many relatively major browser features have snuck their way into releases like this.&lt;/p&gt;&lt;p dir="ltr"&gt;Either way, the feature was a pretty big hit. Developers caught on to the idea of adding favicon’s fairly quickly, and big players like Yahoo even jumped on board. Some more inquiring minds even discovered a pretty cool side effect. At first, favicons were only seen when a user added a site to their favorites list. So if you could dig through your website’s server logs and see how many times the &lt;code dir="ltr"&gt;favicon.ico&lt;/code&gt;&amp;nbsp;file was requested, you could also get a fairly accurate count of how many people had added your site as a bookmark.&lt;/p&gt;&lt;img src="https://thehistoryoftheweb.com/wp-content/uploads/1999/02/IC70810.gif?854022&amp;amp;854022" alt="What original favicons looked like" width="453" height="230"&gt;&lt;p dir="ltr"&gt;That wouldn’t last too long, though.&amp;nbsp;After a bit of time (which is often the case) web standards began to catch up. And they took a more considered and accessible approach. For one thing, there might be cases when adding a favicon file to a server’s web directory was difficult, or even impossible. So the emerging proposal in the W3C was to use the link element with a new attribute that allowed developers to define exactly where a favicon image could be found. This also gave developers the ability to use a format other than &lt;code dir="ltr"&gt;.ico&lt;/code&gt;. It looked like this:&lt;/p&gt;&lt;p&gt;&lt;span&gt;&amp;lt;link rel=”icon” href=”/path/to/icon.png”&amp;gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Wider adoption by browsers soon led to more innovation, which in turn, came with its own bumps in the road. For instance, it wasn’t long before Microsoft&amp;nbsp;began to use favicon’s not just for bookmarks, but in several different contexts, like next to a URL in the address bar (other browsers soon followed). But Microsoft’s original intention was to have one image for favorites (a &lt;code dir="ltr"&gt;shortcut&lt;/code&gt;) and one for elsewhere (an &lt;code dir="ltr"&gt;icon&lt;/code&gt;). The feature got pushed through before it could move through the W3C, but it never fully came to fruition. It did, however, leave behind a strange quirk. In older versions of IE it was necessary to define both the shortcut &lt;em dir="ltr"&gt;and&amp;nbsp;&lt;/em&gt;icon for favicons to work, even though the shortcut was not actually used anywhere. It looked like this:&lt;/p&gt;&lt;p&gt;&lt;code&gt;&amp;lt;link rel="shortcut icon" href="/path/to/icon.png?854022&amp;amp;854022"&amp;gt;&lt;/code&gt;&lt;/p&gt;&lt;p&gt;That implementation, by the way, is still supported in all browsers for historical reasons.&lt;/p&gt;&lt;p&gt;So that’s how the favicon snuck its way into Internet Explorer 5 and went on to become one of the more defining browser features. One of those quick decisions that today feels like a no-brainer. But even the smallest link in the chain comes with a story.&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 10:33:24 -0500</pubDate></item><item><title>Unacceptable, where is my privacy?</title><link>https://lobste.rs/s/armsaf</link><description>&lt;img src="https://unacceptable-privacy.github.io/images/amazon_echo.jpg" alt="Smart Speakers" width="423" height="475"&gt;&lt;h2&gt;Exploring Accidental Triggers of Smart Speakers&lt;/h2&gt;&lt;p dir="ltr"&gt;Lea Schönherr, Maximilian Golla, Thorsten Eisenhofer, Jan Wiele, Dorothea Kolossa, and Thorsten Holz
-                            &lt;br dir="ltr"&gt;
-                            &lt;a href="https://www.ruhr-uni-bochum.de/en" dir="ltr"&gt;Ruhr University Bochum&lt;/a&gt; &amp;amp; &lt;a href="https://www.mpi-sp.org/" dir="ltr"&gt;Max Planck Institute for Security and Privacy&lt;/a&gt;
-                        &lt;/p&gt;&lt;p dir="ltr"&gt;
-                            &lt;b dir="ltr"&gt;tl;dr:&lt;/b&gt; A comprehensive study of accidental triggers of smart speakers.
-                        &lt;/p&gt;&lt;h1&gt;Overview&lt;/h1&gt;&lt;h2&gt;{Unacceptable}, will it rain today?&lt;/h2&gt;&lt;p dir="ltr"&gt;
-                        Voice assistants in smart speakers analyze every sound in their environment for their &lt;mark dir="ltr"&gt;wake word&lt;/mark&gt;, e.g., «Alexa» or «Hey Siri», before uploading the audio stream to the cloud.
-                        This supports users' privacy by only capturing the necessary audio and not recording anything else.
-                        The sensitivity of the wake word detection tries to strike a balance between data protection and technical optimization, but &lt;b dir="ltr"&gt;can be tricked&lt;/b&gt; using similar words or sounds that result in an accidental trigger.
-                    &lt;/p&gt;&lt;p dir="ltr"&gt;
-                        In July 2019, we started measuring and analyzing &lt;mark dir="ltr"&gt;accidental triggers&lt;/mark&gt; of smart speakers.
-                        We automated the process of finding accidental triggers and &lt;b dir="ltr"&gt;measured their prevalence&lt;/b&gt; across 11 smart speakers from 8 different manufacturers using professional audio datasets and everyday media such as &lt;b dir="ltr"&gt;TV&amp;nbsp;shows&lt;/b&gt; and &lt;b dir="ltr"&gt;newscasts&lt;/b&gt;.
-                    &lt;/p&gt;&lt;img src="https://unacceptable-privacy.github.io/images/setup.jpg" alt="Our Measurement Setup: Light Sensors" width="455" height="303"&gt;&lt;img src="https://unacceptable-privacy.github.io/images/schema.png" alt="Our Measurement Setup: Schema" width="455" height="303"&gt;&lt;h2&gt;Setup&lt;/h2&gt;&lt;p dir="ltr"&gt;
-                        Our setup consists of a &lt;b dir="ltr"&gt;loudspeaker&lt;/b&gt; that is playing media files from a &lt;b dir="ltr"&gt;computer&lt;/b&gt;.
-                        We use &lt;b dir="ltr"&gt;light sensors&lt;/b&gt; to monitor the LED activity indicators of a group of smart speakers.
-                        All speakers are connected to the Internet over &lt;b dir="ltr"&gt;Wi-Fi&lt;/b&gt;.
-                        To verify the measurement results, we record a video of each measurement via a &lt;b dir="ltr"&gt;webcam&lt;/b&gt; with a built-in microphone.
-                        Moreover, we record &lt;b dir="ltr"&gt;network traces&lt;/b&gt; to analyze the speakers' activity on a network level.
-                        The entire setup is connected to a network-controllable &lt;b dir="ltr"&gt;power socket&lt;/b&gt; that we use to power cycle the speakers in case of failures or non-responsiveness.
-                        We play a &lt;b dir="ltr"&gt;test signal&lt;/b&gt; in-between media playbacks to ensure that all smart speakers work and trigger as intended.
-                    &lt;/p&gt;&lt;h2&gt;Findings: «AH L EH K S AH»&lt;/h2&gt;&lt;p dir="ltr"&gt;
-                        Our setup was able to identify &lt;mark dir="ltr"&gt;more than 1,000 sequences&lt;/mark&gt; that incorrectly trigger smart speakers.
-                        For example, we found that depending on the pronunciation, &lt;mark dir="ltr"&gt;«Alexa» reacts to the words "unacceptable"&lt;/mark&gt; and "election," while «Google» often triggers to "OK, cool."
-                        «Siri» can be fooled by "a city," «Cortana» by "Montana," «Computer» by "Peter," «Amazon» by "and the zone," and «Echo» by "tobacco."
-                        See &lt;b dir="ltr"&gt;videos&lt;/b&gt; with examples of such accidental triggers &lt;a href="https://unacceptable-privacy.github.io/index.html#examples" dir="ltr"&gt;here&lt;/a&gt;.
-                    &lt;/p&gt;&lt;p dir="ltr"&gt;
-                        In our paper, we analyze a diverse set of audio sources, explore gender and language biases, and measure the reproducibility of the identified triggers.
-                        To better understand accidental triggers, we describe a method to craft them artificially. By reverse-engineering the communication channel of an Amazon Echo, we are able to provide novel insights on how commercial companies deal with such problematic triggers in practice.
-                        Finally, we analyze the &lt;b dir="ltr"&gt;privacy implications of accidental triggers&lt;/b&gt; and discuss potential mechanisms to improve the privacy of smart speakers.
-                    &lt;/p&gt;&lt;img src="https://unacceptable-privacy.github.io/images/photoresistor.jpg" alt="Photoresistor Attached to the LED Activity Indicator of a Smart Speaker" width="455" height="303"&gt;&lt;h2&gt;Photo Gallery&lt;/h2&gt;&lt;img src="https://unacceptable-privacy.github.io/images/gallery/1-small.jpg" alt="Our Measurement Setup: Overview" width="400" height="267"&gt;&lt;img src="https://unacceptable-privacy.github.io/images/gallery/2-small.jpg" alt="Our Measurement Setup: Smart Speakers" width="400" height="267"&gt;&lt;img src="https://unacceptable-privacy.github.io/images/gallery/3-small.jpg" alt="Our Measurement Setup: Loudspeaker" width="400" height="267"&gt;&lt;img src="https://unacceptable-privacy.github.io/images/gallery/4-small.jpg" alt="Our Measurement Setup: Light Sensors" width="400" height="267"&gt;&lt;img src="https://unacceptable-privacy.github.io/images/gallery/5-small.jpg" alt="Accessing an Amazon Echo Speaker" width="400" height="267"&gt;&lt;img src="https://unacceptable-privacy.github.io/images/gallery/6-small.jpg" alt="Decrypting Echo's Network Communication" width="400" height="267"&gt;&lt;h1&gt;Evaluated Voice Assistants&lt;/h1&gt;&lt;table class="table table-sm table-striped" dir="ltr"&gt;
-                  &lt;thead class="thead-dark" dir="ltr"&gt;
-                    &lt;tr dir="ltr"&gt;
-                      &lt;th scope="col" dir="ltr"&gt;No.&lt;/th&gt;
-                      &lt;th scope="col" dir="ltr"&gt;Assistant&lt;/th&gt;
-                      &lt;th scope="col" dir="ltr"&gt;Wake Word(s)&lt;/th&gt;
-                      &lt;th scope="col" dir="ltr"&gt;Language&lt;/th&gt;
-                      &lt;th scope="col" dir="ltr"&gt;Smart Speaker&lt;/th&gt;
-                    &lt;/tr&gt;
-                  &lt;/thead&gt;
-                  &lt;tbody dir="ltr"&gt;
-                    &lt;tr dir="ltr"&gt;
-                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;1&lt;/th&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;Amazon: Alexa&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;«Alexa»&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;en_US, de_DE&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;Amazon: Echo Dot (v3)&lt;/td&gt;
-                    &lt;/tr&gt;
-                    &lt;tr dir="ltr"&gt;
-                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;2&lt;/th&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;Amazon: Alexa&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;«Computer»&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;en_US, de_DE&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;Amazon: Echo Dot (v3)&lt;/td&gt;
-                    &lt;/tr&gt;
-                    &lt;tr dir="ltr"&gt;
-                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;3&lt;/th&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;Amazon: Alexa&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;«Echo»&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;en_US, de_DE&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;Amazon: Echo Dot (v3)&lt;/td&gt;
-                    &lt;/tr&gt;
-                    &lt;tr dir="ltr"&gt;
-                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;4&lt;/th&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;Amazon: Alexa&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;«Amazon»&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;en_US, de_DE&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;Amazon: Echo Dot (v3)&lt;/td&gt;
-                    &lt;/tr&gt;
-                    &lt;tr dir="ltr"&gt;
-                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;5&lt;/th&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;Google: Assistant&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;«OK/Hey Google»&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;en_US, de_DE&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;Google: Home Mini&lt;/td&gt;
-                    &lt;/tr&gt;
-                    &lt;tr dir="ltr"&gt;
-                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;6&lt;/th&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;Apple: Siri&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;«Hey Siri»&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;en_US, de_DE&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;Apple: HomePod&lt;/td&gt;
-                    &lt;/tr&gt;
-                    &lt;tr dir="ltr"&gt;
-                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;7&lt;/th&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;Microsoft: Cortana&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;«Hey/- Cortana»&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;en_US&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;Harman Kardon: Invoke&lt;/td&gt;
-                    &lt;/tr&gt;
-                    &lt;tr dir="ltr"&gt;
-                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;8&lt;/th&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;Xiaomi: Xiao AI&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;«Xiǎo ài tóngxué»&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;zh_CN&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;Xiaomi: Mi AI Speaker&lt;/td&gt;
-                    &lt;/tr&gt;
-                    &lt;tr dir="ltr"&gt;
-                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;9&lt;/th&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;Tencent: Xiaowei&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;«Jiǔsì'èr líng»&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;zh_CN&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;Tencent: Tīngtīng TS-T1&lt;/td&gt;
-                    &lt;/tr&gt;
-                    &lt;tr dir="ltr"&gt;
-                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;10&lt;/th&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;Baidu: DuerOS&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;«Xiǎo dù xiǎo dù»&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;zh_CN&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;Baidu: NV6101 (1C)&lt;/td&gt;
-                    &lt;/tr&gt;
-                    &lt;tr dir="ltr"&gt;
-                      &lt;th scope="row" class="align-middle" dir="ltr"&gt;11&lt;/th&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;SoundHound: Houndify&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;«Hallo/Hey/Hi Magenta»&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;de_DE&lt;/td&gt;
-                      &lt;td class="align-middle" dir="ltr"&gt;Deutsche Telekom: Magenta Speaker&lt;/td&gt;
-                    &lt;/tr&gt;
-                  &lt;/tbody&gt;
-                &lt;/table&gt;&lt;h1&gt;Examples&lt;/h1&gt;&lt;h2&gt;Accidental Triggers&lt;/h2&gt;&lt;p dir="ltr"&gt;
-                        &lt;span dir="ltr"&gt;&lt;b dir="ltr"&gt;Note&lt;/b&gt;&lt;/span&gt;:
-                        The audio processing and speech recognition system in smart speakers may involve &lt;a href="https://www.usenix.org/conference/usenixsecurity18/presentation/kumar" dir="ltr"&gt;non-deterministic&lt;/a&gt; processes.
-                        Moreover, voice assistants like Alexa are based on cloud-assisted constantly evolving language models.
-                        Thus, the examples shown below &lt;mark dir="ltr"&gt;might not work with your voice assistant&lt;/mark&gt; at home.
-                    &lt;/p&gt;&lt;h2&gt;«Alexa» Local+Cloud Trigger&lt;/h2&gt;&lt;p dir="ltr"&gt;
-                                "&lt;mark dir="ltr"&gt;A letter&lt;/mark&gt;" is confused with «Alexa.»
-                                This trigger is able to fool the &lt;span dir="ltr"&gt;local&lt;/span&gt;, as well as, the &lt;span dir="ltr"&gt;cloud-based&lt;/span&gt; wake word model.
-                            &lt;/p&gt;&lt;p dir="ltr"&gt;
-                                &lt;a href="https://www.imdb.com/title/tt1837864/" dir="ltr"&gt;Game of Thrones - S01E08 - The Pointy End&lt;/a&gt;.&lt;br dir="ltr"&gt;
-                                &lt;b dir="ltr"&gt;Type&lt;/b&gt;: TV Show, &lt;b dir="ltr"&gt;Network&lt;/b&gt;: HBO (US), &lt;b dir="ltr"&gt;Originally Aired&lt;/b&gt;: June 5, 2011, &lt;b dir="ltr"&gt;Found&lt;/b&gt;: October 23, 2019, &lt;b dir="ltr"&gt;Timestamp&lt;/b&gt;: ~42:00.
-                            &lt;/p&gt;&lt;h2&gt;«Alexa» Local Trigger&lt;/h2&gt;&lt;p dir="ltr"&gt;
-                                "&lt;mark dir="ltr"&gt;We like some privacy&lt;/mark&gt;" is confused with «Alexa.»
-                                This trigger is able to fool the &lt;span dir="ltr"&gt;local&lt;/span&gt; wake word model only.
-                            &lt;/p&gt;&lt;p dir="ltr"&gt;
-                                &lt;a href="https://www.imdb.com/title/tt2178798/" dir="ltr"&gt;Game of Thrones - S03E04 - And Now His Watch Is Ended&lt;/a&gt;.&lt;br dir="ltr"&gt;
-                                &lt;b dir="ltr"&gt;Type&lt;/b&gt;: TV Show, &lt;b dir="ltr"&gt;Network&lt;/b&gt;: HBO (US), &lt;b dir="ltr"&gt;Originally Aired&lt;/b&gt;: April 21, 2013, &lt;b dir="ltr"&gt;Found&lt;/b&gt;: December 12, 2019, &lt;b dir="ltr"&gt;Timestamp&lt;/b&gt;: ~32:10.
-                            &lt;/p&gt;&lt;h2&gt;«Hey Siri» Local+Cloud Trigger&lt;/h2&gt;&lt;p dir="ltr"&gt;
-                                "&lt;mark dir="ltr"&gt;Hey Jerry&lt;/mark&gt;" is confused with «Hey Siri.»
-                                This trigger is able to fool the &lt;span dir="ltr"&gt;local&lt;/span&gt;, as well as, the &lt;span dir="ltr"&gt;cloud-based&lt;/span&gt; wake word model.
-                            &lt;/p&gt;&lt;p dir="ltr"&gt;
-                                &lt;a href="https://www.imdb.com/title/tt1627464/" dir="ltr"&gt;Modern Family - S02E06 - Halloween&lt;/a&gt;.&lt;br dir="ltr"&gt;
-                                &lt;b dir="ltr"&gt;Type&lt;/b&gt;: TV Show, &lt;b dir="ltr"&gt;Network&lt;/b&gt;: ABC, &lt;b dir="ltr"&gt;Originally Aired&lt;/b&gt;: October 27, 2010, &lt;b dir="ltr"&gt;Found&lt;/b&gt;: December 25, 2019, &lt;b dir="ltr"&gt;Timestamp&lt;/b&gt;: ~04:35.
-                            &lt;/p&gt;&lt;h2&gt;«OK Google» Local Trigger&lt;/h2&gt;&lt;p dir="ltr"&gt;
-                                "&lt;mark dir="ltr"&gt;Okay, who is reading&lt;/mark&gt;" is confused with «OK Google.»
-                                This trigger is able to fool the &lt;span dir="ltr"&gt;local&lt;/span&gt; wake word model only.
-                            &lt;/p&gt;&lt;p dir="ltr"&gt;
-                                &lt;a href="https://www.imdb.com/title/tt1569106/" dir="ltr"&gt;Modern Family - S01E13 - Fifteen Percent&lt;/a&gt;.&lt;br dir="ltr"&gt;
-                                &lt;b dir="ltr"&gt;Type&lt;/b&gt;: TV Show, &lt;b dir="ltr"&gt;Network&lt;/b&gt;: ABC, &lt;b dir="ltr"&gt;Originally Aired&lt;/b&gt;: January 20, 2010, &lt;b dir="ltr"&gt;Found&lt;/b&gt;: October 20, 2019, &lt;b dir="ltr"&gt;Timestamp&lt;/b&gt;: ~21:50.
-                              &lt;/p&gt;&lt;h1&gt;Protect Your Privacy&lt;/h1&gt;&lt;p dir="ltr"&gt;
-                        Visit the links below to learn more about your smart speaker voice recordings and what you can do to better &lt;mark dir="ltr"&gt;protect your privacy&lt;/mark&gt;.
-                    &lt;/p&gt;</description><pubDate>Tue, 11 Aug 2020 01:47:39 -0500</pubDate></item><item><title>Video Summarizer - browser extension that speeds up videos if there's noone talking</title><link>https://lobste.rs/s/xqq32e</link><description>&lt;h1&gt;Video summarizer &lt;/h1&gt;&lt;img src="https://github.com/SoptikHa2/video-summarizer/raw/master/extension-firefox/icon.svg" width="64" height="64"&gt;&lt;p&gt;A tool and browser extensions that determines if people in video are currently talking or not, and speeds up the video accordingly. Great for long lecture videos for skipping time spent writing on a whiteboard.&lt;/p&gt;&lt;img src="https://github.com/SoptikHa2/video-summarizer/raw/master/ff-vidsum-showcase.png" width="419" height="236"&gt;&lt;p dir="ltr"&gt;
+to be notified when it’s released.&lt;/p&gt;&lt;h3&gt;Like this post? Share it with your followers.&lt;/h3&gt;&lt;h3&gt;Sign up to get our next post delivered to your inbox.&lt;/h3&gt;&lt;div&gt;&lt;button type="submit"&gt;&lt;span&gt;Sign up&lt;/span&gt;&lt;/button&gt;&lt;/div&gt;</description><pubDate>Mon, 10 Aug 2020 11:47:23 -0500</pubDate></item><item><title>Video Summarizer - browser extension that speeds up videos if there's noone talking</title><link>https://lobste.rs/s/xqq32e</link><description>&lt;h1&gt;Video summarizer &lt;/h1&gt;&lt;img src="https://github.com/SoptikHa2/video-summarizer/raw/master/extension-firefox/icon.svg" width="64" height="64"&gt;&lt;p&gt;A tool and browser extensions that determines if people in video are currently talking or not, and speeds up the video accordingly. Great for long lecture videos for skipping time spent writing on a whiteboard.&lt;/p&gt;&lt;img src="https://github.com/SoptikHa2/video-summarizer/raw/master/ff-vidsum-showcase.png" width="419" height="236"&gt;&lt;p dir="ltr"&gt;
 (&lt;em dir="ltr"&gt;Click to view video showcase&lt;/em&gt;)&lt;/p&gt;&lt;img src="https://github.com/SoptikHa2/video-summarizer/raw/master/ff-vidsum-ui.png" width="305" height="398"&gt;&lt;p&gt;This extension analyses video (typically youtube one, but shall work with any HTML video) and, depending on current loundness of the video, speeds it up at different rates. One can for example speed up teacher talking at 1.5x rate, and speed up teacher writing something at whiteboard at 4x rate.&lt;/p&gt;&lt;p&gt;This saves quite a bit of time, especially during watching long lectures.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://addons.mozilla.org/en-US/firefox/addon/video-summarizer/" rel="nofollow" dir="ltr"&gt;&lt;strong dir="ltr"&gt;Get it for Firefox&lt;/strong&gt;&lt;/a&gt; (Important: Videos that are controlled by this extension are stored on my server. So most videos are not indexed and thus not managed by this extension yet! To index a video, navigate to it and click on the addon icon located next to URL bar. After few seconds, the video should be ready to view through the extension.)&lt;/p&gt;&lt;p dir="ltr"&gt;Google Chrome and chromium-based browsers are not currently supported. Mostly because it costs money to buy developer account. &lt;a href="https://paypal.me/stastnysoptik" rel="nofollow" dir="ltr"&gt;Support me&lt;/a&gt; if you like my work. If I receive 25USD or whatever google development account costs, I'll make a chrome extension.&lt;/p&gt;&lt;h2&gt;How does it work&lt;/h2&gt;&lt;p&gt;There are two parts to this extension: frontend and backend. Backend indexes videos: downloads them via youtube-dl, extracts sound with ffmpeg and analyzes it with shell and awk (yes, the server is written entirely with gnu coreutils). Generally we seek parts of videos that are greatly below or above average sound of the video. This way, we can determine which parts of video are loud and which are silent.&lt;/p&gt;&lt;p&gt;When frontend navigates to a page, it checks if there is a HTML5 video. If so, it hashes current URL (after removing uninteresting query parameters and such) and sends it to server, which determines if it has current video cached. Frontend may receive response, which tells it which parts of video are loud or silent. In the opposite case, a button in extension popup panel (the thing that appears when one clicks the extension button next to url bar) appears that allows user to submit video to server for indexation. This generally takes about ten seconds for short videos (sub-10 minutes).&lt;/p&gt;&lt;h2&gt;Usage&lt;/h2&gt;&lt;p&gt;There are multiple sections here in the repo.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;a href="https://github.com/SoptikHa2/video-summarizer/blob/master/rust-desktop-cli" dir="ltr"&gt;rust-desktop-cli&lt;/a&gt; (unmantained obsolete cli. It works, but uses ffmpeg and is a bit slow)&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/SoptikHa2/video-summarizer/blob/master/extension-backend" dir="ltr"&gt;extension-backend&lt;/a&gt; (shell &amp;amp; gnu coreutils-powered backend that analyzes video sound, caches it, and serves via http server)&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/SoptikHa2/video-summarizer/blob/master/extension-firefox" dir="ltr"&gt;extension-firefox&lt;/a&gt; (firefox extension that speeds up videos based on backend response) &lt;a href="https://addons.mozilla.org/en-US/firefox/addon/video-summarizer/" rel="nofollow" dir="ltr"&gt;Get it for Firefox&lt;/a&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Results&lt;/h2&gt;&lt;p dir="ltr"&gt;Everything was tested with ffmpeg 4.2, and video summarizer 1.1.1 (the rust cli). Settings: &lt;code dir="ltr"&gt;-l 1.5 -s 100&lt;/code&gt;.&lt;/p&gt;&lt;table dir="ltr"&gt;
 &lt;thead dir="ltr"&gt;
 &lt;tr dir="ltr"&gt;
@@ -2582,7 +2550,39 @@ be valuable and will speed up mypyc compilation.&lt;/LI&gt;&lt;/OL&gt;&lt;/LI&gt
 &lt;td dir="ltr"&gt;553 (38.15%)&lt;/td&gt;
 &lt;/tr&gt;
 &lt;/tbody&gt;
-&lt;/table&gt;&lt;h2&gt;Other projects&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;&lt;a href="https://github.com/soptikha2/desed" dir="ltr"&gt;desed&lt;/a&gt;, a TUI debugger for sed written in rust. Supports breakpoints, displays variables and allows one to step both forward &amp;amp; backwards. Supports live reload while editing the script.&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Mon, 10 Aug 2020 16:13:32 -0500</pubDate></item><item><title>r2con2020</title><link>https://lobste.rs/s/lhafbc</link><description>&lt;div dir="ltr"&gt;
+&lt;/table&gt;&lt;h2&gt;Other projects&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;&lt;a href="https://github.com/soptikha2/desed" dir="ltr"&gt;desed&lt;/a&gt;, a TUI debugger for sed written in rust. Supports breakpoints, displays variables and allows one to step both forward &amp;amp; backwards. Supports live reload while editing the script.&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Mon, 10 Aug 2020 16:13:32 -0500</pubDate></item><item><title>Mypyc - Mypy to Python C Extension Compiler</title><link>https://lobste.rs/s/3c1oog</link><description>&lt;h1&gt;mypyc: Mypy to Python C Extension Compiler&lt;/h1&gt;&lt;p&gt;&lt;em&gt;Mypyc is (mostly) not yet useful for general Python development.&lt;/em&gt;&lt;/p&gt;&lt;p&gt;Mypyc is a compiler that compiles mypy-annotated, statically typed
+Python modules into CPython C extensions. Currently our primary focus
+is on making mypy faster through compilation -- the default mypy wheels
+are compiled with mypyc.  Compiled mypy is about 4x faster than
+without compilation.&lt;/p&gt;&lt;p&gt;Mypyc compiles what is essentially a Python language variant using "strict"
+semantics. This means (among some other things):&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Most type annotations are enforced at runtime (raising &lt;code dir="ltr"&gt;TypeError&lt;/code&gt; on mismatch)&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Classes are compiled into extension classes without &lt;code dir="ltr"&gt;__dict__&lt;/code&gt;
+(much, but not quite, like if they used &lt;code dir="ltr"&gt;__slots__&lt;/code&gt;)&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Monkey patching doesn't work&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Instance attributes won't fall back to class attributes if undefined&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Also there are still a bunch of bad bugs and unsupported features :)&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Compiled modules can import arbitrary Python modules, and compiled modules
+can be used from other Python modules.  Typically mypyc is used to only
+compile modules that contain performance bottlenecks.&lt;/p&gt;&lt;p&gt;You can run compiled modules also as normal, interpreted Python
+modules, since mypyc targets valid Python code. This means that
+all Python developer tools and debuggers can be used.&lt;/p&gt;&lt;h2&gt;Linux Requirements&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;A recent enough C/C++ build environment&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Python 3.5+&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Windows Requirements&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;Windows has been tested with Windows 10 and MSVC 2017.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Python 3.5+&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Quick Start for Contributors&lt;/h2&gt;&lt;p dir="ltr"&gt;First clone the mypy git repository &lt;em dir="ltr"&gt;and git submodules&lt;/em&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ git clone --recurse-submodules https://github.com/python/mypy.git
+$ cd mypy
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Optionally create a virtualenv (recommended):&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ virtualenv -p python3 &amp;lt;directory&amp;gt;
+$ source &amp;lt;directory&amp;gt;/bin/activate
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Then install the dependencies:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ python3 -m pip install -r test-requirements.txt
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Now you can run the tests:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ pytest mypyc
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Look at the &lt;a href="https://github.com/mypyc/mypyc/issues" dir="ltr"&gt;issue tracker&lt;/a&gt;
+for things to work on. Please express your interest in working on an
+issue by adding a comment before doing any significant work, since
+development is currently very active and there is real risk of duplicate
+work.&lt;/p&gt;&lt;p&gt;Note that the issue tracker is still hosted on the mypyc project, not
+with mypy itself.&lt;/p&gt;&lt;h2&gt;Documentation&lt;/h2&gt;&lt;p dir="ltr"&gt;We have some &lt;a href="https://github.com/python/mypy/blob/master/mypyc/doc/dev-intro.md" dir="ltr"&gt;developer documentation&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;Development Status and Roadmap&lt;/h2&gt;&lt;p&gt;These are the current planned major milestones:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p&gt;[DONE] Support a smallish but useful Python subset. Focus on compiling
+single modules, while the rest of the program is interpreted and does not
+need to be type checked.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;[DONE] Support compiling multiple modules as a single compilation unit (or
+dynamic linking of compiled modules).  Without this inter-module
+calls will use slower Python-level objects, wrapper functions and
+Python namespaces.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;[DONE] Mypyc can compile mypy.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;[DONE] Optimize some important performance bottlenecks.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;[PARTIALLY DONE] Generate useful errors for code that uses unsupported Python
+features instead of crashing or generating bad code.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;[DONE] Release a version of mypy that includes a compiled mypy.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;OL&gt;&lt;LI&gt;More feature/compatibility work. (100% compatibility with Python is distinctly
+an anti-goal, but more than we have now is a good idea.)&lt;/LI&gt;&lt;LI&gt;[DONE] Support compiling Black, which is a prominent tool that could benefit
+and has maintainer buy-in.
+(Let us know if you maintain another Python tool or library and are
+interested in working with us on this!)&lt;/LI&gt;&lt;LI&gt;More optimization! Code size reductions in particular are likely to
+be valuable and will speed up mypyc compilation.&lt;/LI&gt;&lt;/OL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;We'll see! Adventure is out there!&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Mon, 10 Aug 2020 07:44:03 -0500</pubDate></item><item><title>Writing Efficient Itanium 2 Assembly Code (2010)</title><link>https://yurichev.com/mirrors/RE/itanium.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/gmoncq/writing_efficient_itanium_2_assembly"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 21:21:15 -0500</pubDate></item><item><title>How We Got the Favicon</title><link>https://lobste.rs/s/jt2udm</link><description>&lt;p&gt;&lt;em dir="ltr"&gt;Image courtesy of&amp;nbsp;&lt;a href="https://rehansaeed.com/internet-favicon-madness/" dir="ltr"&gt;Muhammad Rehan Saeed&lt;/a&gt;&lt;/em&gt;&lt;/p&gt;&lt;p&gt;In 1999 the two largest browsers, Netscape Navigator and Microsoft Internet Explorer, were in all out war for control of the market. Looming just ahead was the release of Internet Explorer 5,&amp;nbsp;in March of 1999, a release that would give users a free browser deeply integrated into the Windows operating system, and deliver a final blow to Netscape Navigator’s market share. In the years to come, it would feature heavily in an antitrust suit brought against Microsoft.&lt;/p&gt;&lt;p&gt;All of which is to say that it was not at all unusual to see browser makers experiment with new features and ideas in the hopes of gaining some sort of advantage over their competition. Communication between the two companies was almost unheard of, and there was very little sharing of processes or code.&lt;/p&gt;&lt;p&gt;It was this kind of experimentation that led developer Bharat Shyam over at Microsoft to make a fairly simple addition while working on the Internet Explorer “favorites” feature. Already in IE 4, users could add websites to their favorites list, pretty much ripped straight from Netscape’s “bookmarks” feature. But what both browsers lacked was an easy way to navigate a long&amp;nbsp;list of websites.&lt;/p&gt;&lt;p dir="ltr"&gt;So in order to make websites stand out, Shyam added a small icon next to each website in the favorites list; a 16 x 16px image that could help users differentiate one website from another. He called this minor flourish a &lt;em dir="ltr"&gt;favicon&lt;/em&gt;, combining together “favorite” and “icon.” Today, the word favicon exists almost outside of its etymology in our vernacular, but its origin is almost deceptively&amp;nbsp;simple.&lt;/p&gt;&lt;p dir="ltr"&gt;In order to enable icons for a site, Shyam made it so that developers would simply need to create a file called&amp;nbsp;&lt;em dir="ltr"&gt;favicon.ico&amp;nbsp;&lt;/em&gt;and drop it in the root directory of their web server. Internet Explorer would know to look there for a possible icon before adding a site to a user’s favorite list.&lt;/p&gt;&lt;p dir="ltr"&gt;Shyam chose the &lt;code dir="ltr"&gt;.ico&lt;/code&gt; format because it was the standard Windows format for icons, and was used extensively by the Windows operating system. And since browsers were, at the time, developed in what were essentially vacuums, that made some kind of sense. So did&amp;nbsp;the subsequent choice of having developers drop the icon in a servers root folder, since this was typically an easy task on Windows web servers.&lt;/p&gt;&lt;p&gt;As the story goes, late one night, Shyam was working on his new favicon feature. He called over junior project manager&amp;nbsp;Ray Sun to take a look.&lt;/p&gt;&lt;p&gt;Shyam commented, “This is good, right? Check it in?”, requesting permission to check the code into the Internet Explorer codebase so it could be released in the next version. Sun didn’t think too much of it, the feature was cool and would clearly give IE an edge. So he told Shyam to go ahead and add it. And just like that, the favicon made its way into Internet Explorer 5, which would go on to become one of the largest browser releases the web has ever seen.&lt;/p&gt;&lt;p&gt;The next day, Sun was reprimanded by his manager for letting the feature get by so quickly. As it turns out, Shyam had specifically waited until later in the day, knowing that a less experienced Program Manager would give him a pass. But by then, the code had been merged in. Incidentally, you’d be surprised just how many relatively major browser features have snuck their way into releases like this.&lt;/p&gt;&lt;p dir="ltr"&gt;Either way, the feature was a pretty big hit. Developers caught on to the idea of adding favicon’s fairly quickly, and big players like Yahoo even jumped on board. Some more inquiring minds even discovered a pretty cool side effect. At first, favicons were only seen when a user added a site to their favorites list. So if you could dig through your website’s server logs and see how many times the &lt;code dir="ltr"&gt;favicon.ico&lt;/code&gt;&amp;nbsp;file was requested, you could also get a fairly accurate count of how many people had added your site as a bookmark.&lt;/p&gt;&lt;img src="https://thehistoryoftheweb.com/wp-content/uploads/1999/02/IC70810.gif?854022&amp;amp;854022" alt="What original favicons looked like" width="453" height="230"&gt;&lt;p dir="ltr"&gt;That wouldn’t last too long, though.&amp;nbsp;After a bit of time (which is often the case) web standards began to catch up. And they took a more considered and accessible approach. For one thing, there might be cases when adding a favicon file to a server’s web directory was difficult, or even impossible. So the emerging proposal in the W3C was to use the link element with a new attribute that allowed developers to define exactly where a favicon image could be found. This also gave developers the ability to use a format other than &lt;code dir="ltr"&gt;.ico&lt;/code&gt;. It looked like this:&lt;/p&gt;&lt;p&gt;&lt;span&gt;&amp;lt;link rel=”icon” href=”/path/to/icon.png”&amp;gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Wider adoption by browsers soon led to more innovation, which in turn, came with its own bumps in the road. For instance, it wasn’t long before Microsoft&amp;nbsp;began to use favicon’s not just for bookmarks, but in several different contexts, like next to a URL in the address bar (other browsers soon followed). But Microsoft’s original intention was to have one image for favorites (a &lt;code dir="ltr"&gt;shortcut&lt;/code&gt;) and one for elsewhere (an &lt;code dir="ltr"&gt;icon&lt;/code&gt;). The feature got pushed through before it could move through the W3C, but it never fully came to fruition. It did, however, leave behind a strange quirk. In older versions of IE it was necessary to define both the shortcut &lt;em dir="ltr"&gt;and&amp;nbsp;&lt;/em&gt;icon for favicons to work, even though the shortcut was not actually used anywhere. It looked like this:&lt;/p&gt;&lt;p&gt;&lt;code&gt;&amp;lt;link rel="shortcut icon" href="/path/to/icon.png?854022&amp;amp;854022"&amp;gt;&lt;/code&gt;&lt;/p&gt;&lt;p&gt;That implementation, by the way, is still supported in all browsers for historical reasons.&lt;/p&gt;&lt;p&gt;So that’s how the favicon snuck its way into Internet Explorer 5 and went on to become one of the more defining browser features. One of those quick decisions that today feels like a no-brainer. But even the smallest link in the chain comes with a story.&lt;/p&gt;</description><pubDate>Mon, 10 Aug 2020 10:33:24 -0500</pubDate></item><item><title>r2con2020</title><link>https://lobste.rs/s/lhafbc</link><description>&lt;div dir="ltr"&gt;
 .-[&lt;font dir="ltr"&gt;ɹ◁◁&lt;/font&gt;]-------------------.
 | &lt;font dir="ltr"&gt; ___  ___ ___ ___ _  _ &lt;/font&gt; |_____________________________________________________________
 | &lt;font dir="ltr"&gt;| _ \(__ \  _|   | \| |&lt;/font&gt; |                                                             |
