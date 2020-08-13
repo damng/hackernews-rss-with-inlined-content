@@ -868,7 +868,219 @@ Hello from the Nix channel overlay!
     11 August 2020
     &lt;/p&gt;&lt;p dir="ltr"&gt;Today the Go team is very happy to announce the release of Go 1.15. You can get it from the &lt;a href="https://golang.org/dl" rel="noopener" dir="ltr"&gt;download page&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;Some of the highlights include:&lt;/p&gt;&lt;p dir="ltr"&gt;For the complete list of changes and more information about the improvements above, see the &lt;a href="https://golang.org/doc/go1.15" rel="noopener" dir="ltr"&gt;&lt;strong dir="ltr"&gt;Go 1.15 release notes&lt;/strong&gt;&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;We want to thank everyone who contributed to this release by writing code, filing bugs, providing feedback, and/or testing the beta and release candidates.
 Your contributions and diligence helped to ensure that Go 1.15 is as stable as possible.
-That said, if you notice any problems, please &lt;a href="https://golang.org/issue/new" rel="noopener" dir="ltr"&gt;file an issue&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;We hope you enjoy the new release!&lt;/p&gt;&lt;img src="https://blog.golang.org/lib/godoc/images/footer-gopher.jpg" alt="The Go Gopher" width="80" height="51"&gt;</description><pubDate>Tue, 11 Aug 2020 17:12:10 -0500</pubDate></item><item><title>Data Structures Part 1: Bulk Data</title><link>https://lobste.rs/s/t8mrxn</link><description>&lt;h1&gt; Data Structures Part 1: Bulk Data &lt;/h1&gt;&lt;p dir="ltr"&gt;Any programmer can benefit from some understanding of different &lt;a href="https://en.wikipedia.org/wiki/Data_structure" dir="ltr"&gt;data
+That said, if you notice any problems, please &lt;a href="https://golang.org/issue/new" rel="noopener" dir="ltr"&gt;file an issue&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;We hope you enjoy the new release!&lt;/p&gt;&lt;img src="https://blog.golang.org/lib/godoc/images/footer-gopher.jpg" alt="The Go Gopher" width="80" height="51"&gt;</description><pubDate>Tue, 11 Aug 2020 17:12:10 -0500</pubDate></item><item><title>File handling in Unix: tips, traps and outright badness</title><link>https://lobste.rs/s/2vj4sb</link><description>&lt;p dir="ltr"&gt;
+I wrote a
+&lt;a href="https://rachelbythebay.com/w/2020/08/09/lib/" dir="ltr"&gt;post&lt;/a&gt;
+over the weekend which said a lot about libraries letting people down, 
+and other people becoming overly dependent on them.  There was an aside 
+of sorts in there which mentioned teaching people about all of the 
+things to look out for when you're writing to a file on a 
+Unix-ish/POSIX-ish filesystem situation.  A friend reached out asking if 
+I had a post talking about that stuff, and near as I can tell, I do not.  
+&lt;/p&gt;&lt;p&gt;
+That brings us to right now.  I will attempt to lay down a few things 
+that I keep in mind any time I'm creating files.
+&lt;/p&gt;&lt;p&gt;
+First up, write(2) is not guaranteed to write the full set of data you 
+hand to it.  The first thing that probably comes to mind is "well sure, 
+the disk might be full", but that's not quite what I'm talking about.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+No, this is about the whole 
+&lt;a href="https://blog.reverberate.org/2011/04/eintr-and-pc-loser-ing-is-better-case.html" dir="ltr"&gt;"worse is better" thing&lt;/a&gt;,
+where you can get &lt;em dir="ltr"&gt;interrupted&lt;/em&gt; while you're off in some 
+syscall, doing something (like writing to a file).  Yep, write() can 
+get poked in the head by the kernel and return early, with only some of 
+its work done.  It's up to you to notice this and restart it.
+&lt;/p&gt;&lt;p&gt;
+You might notice that write() returns a ssize_t.  Hopefully most people 
+reading this know about values it might return.  Most commonly, 
+you'll get back the number of bytes you asked it to write.  That's good.  
+A bit less common is a -1, which means something broke and now you have 
+to grovel around in errno to see what actually did happen.
+&lt;/p&gt;&lt;p&gt;
+What fewer people realize is that there is a middle ground between 
+"everything" and "nothing".  Let's say you call write and tell it to 
+push 16384 bytes out to a file descriptor.  It gets interrupted for some 
+reason - maybe a signal fires off, or someone happens to attach strace 
+or gdb to your process right there.  Whatever.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Let's say it returns a value of 8192 instead, setting errno to EINTR.  
+You have to notice this was less than the value you gave it initially 
+(16384) and double back.  Note that you can't just restart the exact 
+command you did before, either, since the first half of your data has 
+already been written!  This time, you have to tell write() to start at 
+the first byte which &lt;em dir="ltr"&gt;didn't already get written&lt;/em&gt;, and adjust the 
+count downward to match.
+&lt;/p&gt;&lt;p&gt;
+If you're thinking "this means I need a pointer, and a counter, and I 
+have to do this in a loop while bumping the pointer forward and clawing 
+the counter downward", you're on the right track.  If you're also 
+thinking "hey, this might get stuck in this loop forever if some 
+pathological case happens", now you're really cooking with gas.  That 
+kind of paranoia will be rewarded when your system holds up under crazy 
+situations instead of blowing up and taking everyone else down with it.
+&lt;/p&gt;&lt;p&gt;
+There are other fun things which can happen here.  Maybe you're trying 
+to do some kind of round-robin system where you shove data into 
+multiple file descriptors as fast as you can, but some of them can't 
+keep up.  Maybe some clients are slower than others.  This causes the 
+whole thing to slow down to the speed of the slowest client.  Maybe this 
+gets you looking at non-blocking I/O, so that write() will never sit 
+there waiting for the (network) buffer to accept the entire contents of 
+what you passed it.
+&lt;/p&gt;&lt;p&gt;
+Of course, as soon as you do this, you will realize that non-blocking 
+I/O sometimes means that it can't or won't do what you asked, and will 
+return right away without doing a thing, and with errno set to EAGAIN or 
+EWOULDBLOCK.
+&lt;/p&gt;&lt;p&gt;
+If you're now thinking "huh, guess I need a buffer of my own, and then I 
+need to come back and try that write again later", you're right!  Also, 
+if you keep on going down that road, you should hit the point of saying 
+"hey, eventually I need to give up on them, because otherwise my buffers 
+will eat me alive if they become unresponsive", which is also a good 
+thing to remember.
+&lt;/p&gt;&lt;p&gt;
+If you combine this situation with the one described above (EINTR), then 
+you may come to the conclusion that you basically need a ring buffer of 
+sorts, where you append new outgoing data to it, and feed the network 
+(or disk, or printer, or whatever) with the oldest stuff that hasn't yet 
+been pushed out.  This means memory management, indices or pointers, and 
+hard decisions about when enough is enough and you have to cut them off.
+&lt;/p&gt;&lt;p&gt;
+But wait, there's more!  A write doesn't always just fail for simple 
+reasons where it returns -1 and sets errno to something like ENOSPC (the 
+disk is full).  There's also something fun called a broken pipe.  This 
+is when you go to write something to a pipe that isn't open for reading, 
+or a socket that's had its reading end closed.  If you're doing TCP 
+stuff, recall that you really have two different flows going on, and the 
+other end can totally stop reading from you any time it wants.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Big deal, you think.  It'll -1 with errno=EPIPE, right?  Yes, but.  It 
+will &lt;em dir="ltr"&gt;also&lt;/em&gt; generate a SIGPIPE unless you've explicitly handled 
+it ahead of time.  That's right, you're getting a bouncy baby signal 
+handed to you by the kernel.  You need a signal handler to eat it and do 
+something about it, or you have to explicitly say that you don't care 
+and set it to "ignored", but you can't just pretend it won't happen... 
+because it sure will.
+&lt;/p&gt;&lt;p&gt;
+So yeah, if you have programs that occasionally blow up with "Broken 
+pipe" and dump out to the shell despite you swearing up and down that 
+you are dealing with a bad return from write(), well, maybe that's why.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+What else?  How about races?  Let's say two different programs both try 
+to create the same file at the same path.  They both open 
+&lt;span title="and a movie" dir="ltr"&gt;/tmp/coolcoolcool&lt;/span&gt; for writing.  What 
+happens?  That depends on the flags used when it was being opened, and 
+whether the file was already there.
+&lt;/p&gt;&lt;p&gt;
+If you pass in O_CREAT, it'll create the file if it doesn't already 
+exist.  If you also pass in O_EXCL (so *both* O_CREAT and O_EXCL), then 
+it'll create the file if it doesn't exist, and it'll error out if it's 
+already there.
+&lt;/p&gt;&lt;p&gt;
+If two programs both try to open with O_CREAT | O_EXCL on the same path 
+at the same time, one will win and one will lose.  This is actually a 
+good thing!  This is also how you find out that you laid down a new file 
+at that place and didn't actually follow a symlink left behind by some 
+evildoer.
+&lt;/p&gt;&lt;p&gt;
+Did you get that?  If I can get you to write to a path I control, I 
+might be able to leave a symlink in that spot, pointing at a file I'd 
+like you to overwrite with something.  Maybe I can get you to write 
+something including a blob of data I pass you at a location where I can 
+drop a symlink.
+&lt;/p&gt;&lt;p&gt;
+What happens if I set up /tmp/target to point to 
+/home/you/.ssh/authorized_keys?  What if I can get you to write 
+something that might have a bunch of crap in it, but then will include a 
+newline, a public key that will let me in, and another newline?  If your 
+system allows following that symlink (some security policy things 
+prevent this), I might just find a way into your account.
+&lt;/p&gt;&lt;p&gt;
+People used to do this same thing by getting root to overwrite 
+/etc/rhosts, or /etc/shadow, or whatever else you can think of.  Some 
+systems added paranoia about not following symlinks that are not owned 
+by the same user in world-writable paths (like /tmp and friends).  Don't 
+rely on this being in place!  Do the right thing and make sure you're 
+opening the actual file.
+&lt;/p&gt;&lt;p&gt;
+Speaking of racing to write things and exclusive creation of files, 
+let's talk about atomic updates.  Recall that write() might not do all 
+of its work at once.  You may need to call it several times before the 
+entirety of your content makes it out.  How, then, do you keep other 
+processes from seeing this half-written file in the middle?
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+One approach would be to use locking.  There are things like flock() and 
+lockf() and fcntl() you could use, with the understanding that every 
+other thing also has to play by the same rules.  That is, another 
+process which reads the same path but doesn't bother to see if it's 
+locked will just barrel on ahead and see whatever's managed to land 
+there.  flock and friends are &lt;em dir="ltr"&gt;advisory locks&lt;/em&gt;, not old-school 
+MS-DOS style "you can't read this because SOMEONE has this thing open 
+somewhere" locks.
+&lt;/p&gt;&lt;p&gt;
+Another approach is to do the whole "atomic update" thing.  This is 
+where you create a temporary file, drop all of your data there, and then 
+rename it into place.
+&lt;/p&gt;&lt;p&gt;
+That is, you do all of the following:
+&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Create a file adjacent to the target path using mk*temp or similar.
+&lt;/LI&gt;&lt;LI&gt;Write your data to it
+&lt;/LI&gt;&lt;LI&gt;rename() it from the temporary name to the final name.
+&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;
+This might mean you create /home/you/.cool.conf.CLXHKJELHFJE, fill it up 
+with tasty, tasty data, and then rename() it to /home/you/cool.conf.  
+Readers of that file will either see the old one or the new one, but 
+will never see an "in between" state.
+&lt;/p&gt;&lt;p&gt;
+I should note that creating a temporary file safely is non-trivial, and 
+there are actual *system* libraries which do this properly.  In 
+particular, doing things like "I'll open a path that includes my uid, or 
+pid, or time of day, or a random number" are all crap if that's your 
+entire strategy.  You also HAVE to do the O_EXCL|O_CREAT thing to make 
+sure nobody races you to it.
+&lt;/p&gt;&lt;p&gt;
+Put it another way: if your idea of avoiding races in your temp file 
+creation is to just have a wider namespace, what keeps an evildoer (me) 
+from just grabbing every possibility first?  Disk space is cheap, right?
+You can only have so many pids, and the time of day is obviously 
+predictable, and your random number space is also similarly limited.  I 
+could just set up every one of them first and when you hit it, I win!
+&lt;/p&gt;&lt;p&gt;
+Finally, as long as we're talking about open and flags, don't forget 
+about modes.  If you want to create a file that nobody else can read, 
+you need to make it that way from the start.  You don't get to open the 
+file and then chmod() it, because if someone manages to open it in the 
+middle, they can read it (or worse).
+&lt;/p&gt;&lt;p&gt;
+This is why open() takes a mode_t, letting you tell it what sort of 
+permissions it should have.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Of course, the fun doesn't end there.  There's also the umask, which (as 
+the name kinda-sorta suggests) &lt;em dir="ltr"&gt;masks off&lt;/em&gt; some of the 
+permissions when a file is created.  That is, the more bits you have set 
+in the umask, the *fewer* bits will be set in the resulting file.  Why 
+have this?  Well, think about a program that might want to make files 
+0644 or 0664 depending on whether you are working on stuff yourself, or 
+are allowing other people in your (Unix) group to write to it.  You, 
+the user, could use the umask to pick which mode things get when they 
+are first created, without changing the program.
+&lt;/p&gt;&lt;p&gt;
+Granted, I don't know many people who use these machines this way any 
+more, but back in the days when they were truly multi-user, it made 
+sense for certain jobs.  In any case, it's still there and you still 
+have to worry about it.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+This is the kind of stuff I was talking about when I said that Unix has 
+&lt;a href="https://rachelbythebay.com/w/2014/08/19/fork/" dir="ltr"&gt;just enough potholes and bear traps&lt;/a&gt;
+to keep a whole valley going.  Knowing this kind of crap has made me 
+able to hawk my sanity-checking services for years.  It also causes no 
+end of breakage when folks (who are fortunate to not have this stuff 
+taking up mental space) run afoul of it.
+&lt;/p&gt;&lt;p&gt;
+Talk about a double-edged sword.
+&lt;/p&gt;</description><pubDate>Tue, 11 Aug 2020 17:32:09 -0500</pubDate></item><item><title>How To Make Ubuntu Work Like Windows 10</title><link>https://lobste.rs/s/1nqvyk</link><description>&lt;div dir="ltr"&gt; &lt;span dir="ltr"&gt;&lt;time datetime="2020-08-12T15:24:14+00:00" dir="ltr"&gt;12 Aug 2020&lt;/time&gt;&lt;/span&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;Last night, while walking the dog, I was listening to the &lt;a href="https://latenightlinux.com/late-night-linux-extra-episode-07/" rel="noreferrer noopener" dir="ltr"&gt;latest episode of Late Night Linux&lt;/a&gt; where Joe speaks to his friend Kyle about his use of Linux and why he has ultimately decided to stick with Windows 10 for the time being.&lt;/p&gt;&lt;p&gt;I thought this was a very interesting discussion, which ultimately boiled down to Kyle saying on a number of occasions that he didn’t like the UI/UX of the distros he had tried, and that he wanted to make Ubuntu work more like Windows 10.&lt;/p&gt;&lt;p&gt;Kyle went on to say that he’s accustom to Windows and likes the workflow, but couldn’t find any simple guides on making Ubuntu work like Windows 10. That’s where this post comes in. 🙂&lt;/p&gt;&lt;p dir="ltr"&gt;There was a couple of distros that he mentioned, including vanilla &lt;a href="https://kevq.uk/my-thoughts-on-ubuntu-20-04/" rel="noreferrer noopener" dir="ltr"&gt;Ubuntu&lt;/a&gt;, &lt;a href="https://ubuntu-mate.org/" rel="noreferrer noopener" dir="ltr"&gt;Ubuntu MATE&lt;/a&gt; &amp;amp; &lt;a href="https://xubuntu.org/" rel="noreferrer noopener" dir="ltr"&gt;Xubuntu&lt;/a&gt;. Kyle said that he couldn’t find any simple guides on emulating the Windows workflow in Ubuntu. So, I decided to write one.&lt;/p&gt;&lt;p&gt;Note: by the end of this process you will NOT have a Windows 10 clone – that isn’t the point of this post. What you will have is an Ubuntu desktop that has a workflow similar to that of Windows 10.&lt;/p&gt;&lt;h2&gt;The easy way&lt;/h2&gt;&lt;p dir="ltr"&gt;The easiest way to make Ubuntu work like Windows 10 is to download a distribution that’s already geared toward Windows migrants. &lt;a href="https://linuxmint.com/" rel="noreferrer noopener" dir="ltr"&gt;Linux Mint&lt;/a&gt; and it’s Cinnamon desktop does a fairly good job of this, but I think the UX leaves a lot to be desired. Personally, I would compare Linux Mint Cinnamon to Windows XP rather than Windows 10.&lt;/p&gt;&lt;p dir="ltr"&gt;I think that &lt;a href="https://zorinos.com/" rel="noreferrer noopener" dir="ltr"&gt;Zorin OS&lt;/a&gt; is a much better Linux distribution for Windows migrants, as it has a very similar workflow right out of the box.&lt;/p&gt;&lt;figure&gt;&lt;img width="467" height="237" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20640%20325'%3E%3C/svg%3E" alt="Zorin OS 15 desktop"&gt;&lt;figcaption dir="auto"&gt;Zorin OS 15&lt;/figcaption&gt;&lt;/figure&gt;&lt;h2&gt;The slightly harder way – make stock Ubuntu work like Windows 10&lt;/h2&gt;&lt;p dir="ltr"&gt;If you look at the default Ubuntu interface, you will see that there’s a taskbar at the top and another bar on the left. There’s no start menu, and if you press the &lt;strong dir="ltr"&gt;Activities&lt;/strong&gt; button, you don’t get a start-like menu, but instead a spread of all open windows.&lt;/p&gt;&lt;figure&gt;&lt;img width="467" height="237" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20640%20325'%3E%3C/svg%3E" alt="Default Ubuntu UI"&gt;&lt;figcaption dir="auto"&gt;Default Ubuntu UI&lt;/figcaption&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;It’s fair to say that the out-of-the-box experience of Ubuntu is &lt;strong dir="ltr"&gt;very &lt;/strong&gt;different to Windows 10.&lt;/p&gt;&lt;h2&gt;What we’re going to change&lt;/h2&gt;&lt;p&gt;In order to make Ubuntu work like Windows 10, there are few things we need to change. These are:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Remove the top and side panels.&lt;/LI&gt;&lt;LI&gt;Create a single taskbar at the bottom of the desktop.&lt;/LI&gt;&lt;LI&gt;Integrate a system tray into the taskbar.&lt;/LI&gt;&lt;LI&gt;Add a proper start menu to the taskbar.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;To give you an idea of the kind of thing we’re aiming for, here’s my Windows 10 desktop:&lt;/p&gt;&lt;figure&gt;&lt;img width="467" height="262" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20640%20360'%3E%3C/svg%3E" alt="Windows 10 desktop"&gt;&lt;/figure&gt;&lt;p&gt;There’s a lot to go through here, but it’s all relatively simple and should take no more than 30 minutes. So, let’s get cracking, shall we?&lt;/p&gt;&lt;h2&gt;Step 1 – installing extensions&lt;/h2&gt;&lt;p dir="ltr"&gt;First, you need to install the &lt;a href="https://addons.mozilla.org/en-GB/firefox/addon/gnome-shell-integration/" rel="noreferrer noopener" dir="ltr"&gt;Gnome Shell Integration addon for Firefox&lt;/a&gt;. This will allow you to install Gnome extensions right from Firefox with the click of a button.&lt;/p&gt;&lt;p dir="ltr"&gt;Next, visit the link for each of the extensions listed below and switch the black rocker from “&lt;strong dir="ltr"&gt;OFF&lt;/strong&gt;” to “&lt;strong dir="ltr"&gt;ON&lt;/strong&gt;” to install them. When you switch the rocker to “&lt;strong dir="ltr"&gt;ON&lt;/strong&gt;“, you will receive a prompt to install the extension:&lt;/p&gt;&lt;figure&gt;&lt;img width="467" height="326" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20640%20447'%3E%3C/svg%3E" alt="Gnome extension install"&gt;&lt;/figure&gt;&lt;p&gt;Here’s the list of extensions you need to install:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Dash to Panel – &lt;a href="https://extensions.gnome.org/extension/1160/dash-to-panel/" rel="noreferrer noopener" dir="ltr"&gt;https://extensions.gnome.org/extension/1160/dash-to-panel/&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;Arc Menu – &lt;a href="https://extensions.gnome.org/extension/1228/arc-menu/" rel="noreferrer noopener" dir="ltr"&gt;https://extensions.gnome.org/extension/1228/arc-menu/&lt;/a&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Step 2 – customisations&lt;/h2&gt;&lt;p&gt;You should now have a bit of a hodgepodge of panels. There will be a single panel at the bottom, and a few icons that you probably don’t recognise. Don’t worry, we’re going to fix all that now.&lt;/p&gt;&lt;h3&gt;Dash to Panel&lt;/h3&gt;&lt;p&gt; The first thing to do is sort out the Dash to Panel extension. Right-click on the bottom panel and select Dash to Panel Settings from the pop-up.&lt;/p&gt;&lt;p dir="ltr"&gt;On the &lt;strong dir="ltr"&gt;Position &lt;/strong&gt;tab, click on the &lt;strong dir="ltr"&gt;Visible&lt;/strong&gt; button next to &lt;strong dir="ltr"&gt;Show Applications button&lt;/strong&gt;. When you click this button, it should turn from grey to white. This will hide the applications button so we can replace it with the Arc menu later:&lt;/p&gt;&lt;figure&gt;&lt;img width="466" height="615" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20621%20820'%3E%3C/svg%3E" alt=""&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;Click on the &lt;strong dir="ltr"&gt;Style &lt;/strong&gt;tab and change the &lt;strong dir="ltr"&gt;Panel Size&lt;/strong&gt; to &lt;code dir="ltr"&gt;40px&lt;/code&gt;. This should make the panel a similar size to the Windows 10 taskbar. Obviously change this number to be larger or smaller as you see fit.&lt;/p&gt;&lt;figure&gt;&lt;img width="466" height="635" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20630%20858'%3E%3C/svg%3E" alt="Dash to Panel size"&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;Next, go to the &lt;strong dir="ltr"&gt;Behaviour&lt;/strong&gt; tab and click on the cog icon next to &lt;strong dir="ltr"&gt;Show window previews on hover&lt;/strong&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Then, change the &lt;strong dir="ltr"&gt;Window previews preferred size (px)&lt;/strong&gt; from &lt;code dir="ltr"&gt;240&lt;/code&gt; to &lt;code dir="ltr"&gt;120&lt;/code&gt;. Again, this should make the window preview similar to that of Windows 10 when you hover over an open application:&lt;/p&gt;&lt;figure&gt;&lt;img width="467" height="237" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20640%20325'%3E%3C/svg%3E" alt="Window preview"&gt;&lt;/figure&gt;&lt;h3&gt;System tray menu&lt;/h3&gt;&lt;p&gt;Next we need to configure the system tray menu. If you don’t know what the system tray menu is, these are the little icons that certain applications display on the taskbar, usually by the clock, when an application is running in the background.&lt;/p&gt;&lt;p&gt;These are usually application like anti-virus and file syncing tools. Here’s the system tray icons on my Windows 10 machine:&lt;/p&gt;&lt;figure&gt;&lt;img width="332" height="39" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20332%2039'%3E%3C/svg%3E" alt="System tray icons - Windows 10"&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;With Dash to Panel, the system tray icons should work out of the box. But if for whatever reason they’re not working, go back into the Dash to Panel settings and click the &lt;strong dir="ltr"&gt;Visible &lt;/strong&gt;button next to &lt;strong dir="ltr"&gt;Right Box&lt;/strong&gt; from the &lt;strong dir="ltr"&gt;Position &lt;/strong&gt;tab.&lt;/p&gt;&lt;p&gt;If everything works right, you should see the icons loaded on the panel, as shown below:&lt;/p&gt;&lt;figure&gt;&lt;img width="294" height="39" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20294%2039'%3E%3C/svg%3E" alt="System tray icons - Ubuntu"&gt;&lt;/figure&gt;&lt;h3&gt;Arc menu&lt;/h3&gt;&lt;p&gt;The last thing we need to do is make a couple of small tweaks to the Arc menu configuration so it works like Windows.&lt;/p&gt;&lt;p&gt;First, right-click on the Arc menu icon (it’s on the far left of the panel and looks like a grey “a”. Then, select Arc Menu Settings from the pop-up.&lt;/p&gt;&lt;p dir="ltr"&gt;On the &lt;strong dir="ltr"&gt;General&lt;/strong&gt; tab, under &lt;strong dir="ltr"&gt;Arc Menu Hotkey&lt;/strong&gt;, select &lt;strong dir="ltr"&gt;Left Super Key&lt;/strong&gt;. This will ensure that when you hit the Windows key on your keyboard, the Arc menu will appear, just like in Windows 10.&lt;/p&gt;&lt;figure&gt;&lt;img width="466" height="511" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20596%20654'%3E%3C/svg%3E" alt="Arc menu super key"&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;Finally, we’re going to get rid of the silly “a” icon and replace it with an Ubuntu icon. To do this, go to the &lt;strong dir="ltr"&gt;Appearance &lt;/strong&gt;tab within the settings window and click on cog button next to &lt;strong dir="ltr"&gt;Arc Menu Icon Settings&lt;/strong&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;On the sub-window that appears, click on the &lt;strong dir="ltr"&gt;Browse Icons &lt;/strong&gt;button, next to where it says &lt;strong dir="ltr"&gt;Arc Menu Icon&lt;/strong&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Another window will then appear. Select the &lt;strong dir="ltr"&gt;Distro Icons&lt;/strong&gt; tab, then the Ubuntu logo:&lt;/p&gt;&lt;figure&gt;&lt;img width="466" height="513" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20593%20653'%3E%3C/svg%3E" alt=""&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;Close the third window, so you’re back on the icon settings window. Where it says &lt;strong dir="ltr"&gt;Icon Size&lt;/strong&gt;, change it to &lt;code dir="ltr"&gt;30px&lt;/code&gt;. This should give you a nice Ubuntu themed icon that matches the rest of the panel:&lt;/p&gt;&lt;figure&gt;&lt;img width="467" height="237" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20640%20325'%3E%3C/svg%3E" alt=""&gt;&lt;/figure&gt;&lt;p&gt;That’s it! You should now have an Ubuntu desktop that works like Windows 10.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p&gt;As I said at the start of this post, my intention here wasn’t to emulate the theme of Windows 10 in this post, but rather the user experience and workflow.&lt;/p&gt;&lt;p&gt;At this point you should have the familiar single panel layout, with a good looking start menu and a system tray. However, it’s all themed in a way that still gives Ubuntu its own identity.&lt;/p&gt;&lt;p&gt;As you explore more, if you decide to change the theme of your Ubuntu desktop, the Dash to Panel and Arc menu should adapt too, so your theming remains consistent throughout.&lt;/p&gt;&lt;p&gt;I hope this post helps any new people coming over from Windows 10 to setup their environment in Ubuntu so it’s slightly more familiar than the default.&lt;/p&gt;</description><pubDate>Wed, 12 Aug 2020 10:42:45 -0500</pubDate></item><item><title>Data Structures Part 1: Bulk Data</title><link>https://lobste.rs/s/t8mrxn</link><description>&lt;h1&gt; Data Structures Part 1: Bulk Data &lt;/h1&gt;&lt;p dir="ltr"&gt;Any programmer can benefit from some understanding of different &lt;a href="https://en.wikipedia.org/wiki/Data_structure" dir="ltr"&gt;data
 structures&lt;/a&gt; and how to analyze their performance. But
 in practice, I’ve never found any use for &lt;a href="https://en.wikipedia.org/wiki/AVL_tree" dir="ltr"&gt;AVL trees&lt;/a&gt;,
 &lt;a href="https://en.wikipedia.org/wiki/Red%E2%80%93black_tree" dir="ltr"&gt;red-black trees&lt;/a&gt;,
@@ -1222,219 +1434,7 @@ block at a time, convert it into SoA, run your algorithm and write the results b
 data for a new system would be:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;An array of structures, with “holes” and permanent pointers, either allocated as one single large
 VM reservation (if possible) or as an array of fixed size blocks (of 16 K or whatever is a good
 fit for your data).&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;And for the cases where you need really fast number crunching over the data:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;A structure of arrays of tightly packed objects, grouped 8 at a time for SIMD processing and
-allocated as one single large VM reservation, or as an array of fixed-size blocks.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;Next time we’ll look at indexing this data.&lt;/p&gt;</description><pubDate>Wed, 12 Aug 2020 10:59:57 -0500</pubDate></item><item><title>File handling in Unix: tips, traps and outright badness</title><link>https://lobste.rs/s/2vj4sb</link><description>&lt;p dir="ltr"&gt;
-I wrote a
-&lt;a href="https://rachelbythebay.com/w/2020/08/09/lib/" dir="ltr"&gt;post&lt;/a&gt;
-over the weekend which said a lot about libraries letting people down, 
-and other people becoming overly dependent on them.  There was an aside 
-of sorts in there which mentioned teaching people about all of the 
-things to look out for when you're writing to a file on a 
-Unix-ish/POSIX-ish filesystem situation.  A friend reached out asking if 
-I had a post talking about that stuff, and near as I can tell, I do not.  
-&lt;/p&gt;&lt;p&gt;
-That brings us to right now.  I will attempt to lay down a few things 
-that I keep in mind any time I'm creating files.
-&lt;/p&gt;&lt;p&gt;
-First up, write(2) is not guaranteed to write the full set of data you 
-hand to it.  The first thing that probably comes to mind is "well sure, 
-the disk might be full", but that's not quite what I'm talking about.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-No, this is about the whole 
-&lt;a href="https://blog.reverberate.org/2011/04/eintr-and-pc-loser-ing-is-better-case.html" dir="ltr"&gt;"worse is better" thing&lt;/a&gt;,
-where you can get &lt;em dir="ltr"&gt;interrupted&lt;/em&gt; while you're off in some 
-syscall, doing something (like writing to a file).  Yep, write() can 
-get poked in the head by the kernel and return early, with only some of 
-its work done.  It's up to you to notice this and restart it.
-&lt;/p&gt;&lt;p&gt;
-You might notice that write() returns a ssize_t.  Hopefully most people 
-reading this know about values it might return.  Most commonly, 
-you'll get back the number of bytes you asked it to write.  That's good.  
-A bit less common is a -1, which means something broke and now you have 
-to grovel around in errno to see what actually did happen.
-&lt;/p&gt;&lt;p&gt;
-What fewer people realize is that there is a middle ground between 
-"everything" and "nothing".  Let's say you call write and tell it to 
-push 16384 bytes out to a file descriptor.  It gets interrupted for some 
-reason - maybe a signal fires off, or someone happens to attach strace 
-or gdb to your process right there.  Whatever.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Let's say it returns a value of 8192 instead, setting errno to EINTR.  
-You have to notice this was less than the value you gave it initially 
-(16384) and double back.  Note that you can't just restart the exact 
-command you did before, either, since the first half of your data has 
-already been written!  This time, you have to tell write() to start at 
-the first byte which &lt;em dir="ltr"&gt;didn't already get written&lt;/em&gt;, and adjust the 
-count downward to match.
-&lt;/p&gt;&lt;p&gt;
-If you're thinking "this means I need a pointer, and a counter, and I 
-have to do this in a loop while bumping the pointer forward and clawing 
-the counter downward", you're on the right track.  If you're also 
-thinking "hey, this might get stuck in this loop forever if some 
-pathological case happens", now you're really cooking with gas.  That 
-kind of paranoia will be rewarded when your system holds up under crazy 
-situations instead of blowing up and taking everyone else down with it.
-&lt;/p&gt;&lt;p&gt;
-There are other fun things which can happen here.  Maybe you're trying 
-to do some kind of round-robin system where you shove data into 
-multiple file descriptors as fast as you can, but some of them can't 
-keep up.  Maybe some clients are slower than others.  This causes the 
-whole thing to slow down to the speed of the slowest client.  Maybe this 
-gets you looking at non-blocking I/O, so that write() will never sit 
-there waiting for the (network) buffer to accept the entire contents of 
-what you passed it.
-&lt;/p&gt;&lt;p&gt;
-Of course, as soon as you do this, you will realize that non-blocking 
-I/O sometimes means that it can't or won't do what you asked, and will 
-return right away without doing a thing, and with errno set to EAGAIN or 
-EWOULDBLOCK.
-&lt;/p&gt;&lt;p&gt;
-If you're now thinking "huh, guess I need a buffer of my own, and then I 
-need to come back and try that write again later", you're right!  Also, 
-if you keep on going down that road, you should hit the point of saying 
-"hey, eventually I need to give up on them, because otherwise my buffers 
-will eat me alive if they become unresponsive", which is also a good 
-thing to remember.
-&lt;/p&gt;&lt;p&gt;
-If you combine this situation with the one described above (EINTR), then 
-you may come to the conclusion that you basically need a ring buffer of 
-sorts, where you append new outgoing data to it, and feed the network 
-(or disk, or printer, or whatever) with the oldest stuff that hasn't yet 
-been pushed out.  This means memory management, indices or pointers, and 
-hard decisions about when enough is enough and you have to cut them off.
-&lt;/p&gt;&lt;p&gt;
-But wait, there's more!  A write doesn't always just fail for simple 
-reasons where it returns -1 and sets errno to something like ENOSPC (the 
-disk is full).  There's also something fun called a broken pipe.  This 
-is when you go to write something to a pipe that isn't open for reading, 
-or a socket that's had its reading end closed.  If you're doing TCP 
-stuff, recall that you really have two different flows going on, and the 
-other end can totally stop reading from you any time it wants.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Big deal, you think.  It'll -1 with errno=EPIPE, right?  Yes, but.  It 
-will &lt;em dir="ltr"&gt;also&lt;/em&gt; generate a SIGPIPE unless you've explicitly handled 
-it ahead of time.  That's right, you're getting a bouncy baby signal 
-handed to you by the kernel.  You need a signal handler to eat it and do 
-something about it, or you have to explicitly say that you don't care 
-and set it to "ignored", but you can't just pretend it won't happen... 
-because it sure will.
-&lt;/p&gt;&lt;p&gt;
-So yeah, if you have programs that occasionally blow up with "Broken 
-pipe" and dump out to the shell despite you swearing up and down that 
-you are dealing with a bad return from write(), well, maybe that's why.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-What else?  How about races?  Let's say two different programs both try 
-to create the same file at the same path.  They both open 
-&lt;span title="and a movie" dir="ltr"&gt;/tmp/coolcoolcool&lt;/span&gt; for writing.  What 
-happens?  That depends on the flags used when it was being opened, and 
-whether the file was already there.
-&lt;/p&gt;&lt;p&gt;
-If you pass in O_CREAT, it'll create the file if it doesn't already 
-exist.  If you also pass in O_EXCL (so *both* O_CREAT and O_EXCL), then 
-it'll create the file if it doesn't exist, and it'll error out if it's 
-already there.
-&lt;/p&gt;&lt;p&gt;
-If two programs both try to open with O_CREAT | O_EXCL on the same path 
-at the same time, one will win and one will lose.  This is actually a 
-good thing!  This is also how you find out that you laid down a new file 
-at that place and didn't actually follow a symlink left behind by some 
-evildoer.
-&lt;/p&gt;&lt;p&gt;
-Did you get that?  If I can get you to write to a path I control, I 
-might be able to leave a symlink in that spot, pointing at a file I'd 
-like you to overwrite with something.  Maybe I can get you to write 
-something including a blob of data I pass you at a location where I can 
-drop a symlink.
-&lt;/p&gt;&lt;p&gt;
-What happens if I set up /tmp/target to point to 
-/home/you/.ssh/authorized_keys?  What if I can get you to write 
-something that might have a bunch of crap in it, but then will include a 
-newline, a public key that will let me in, and another newline?  If your 
-system allows following that symlink (some security policy things 
-prevent this), I might just find a way into your account.
-&lt;/p&gt;&lt;p&gt;
-People used to do this same thing by getting root to overwrite 
-/etc/rhosts, or /etc/shadow, or whatever else you can think of.  Some 
-systems added paranoia about not following symlinks that are not owned 
-by the same user in world-writable paths (like /tmp and friends).  Don't 
-rely on this being in place!  Do the right thing and make sure you're 
-opening the actual file.
-&lt;/p&gt;&lt;p&gt;
-Speaking of racing to write things and exclusive creation of files, 
-let's talk about atomic updates.  Recall that write() might not do all 
-of its work at once.  You may need to call it several times before the 
-entirety of your content makes it out.  How, then, do you keep other 
-processes from seeing this half-written file in the middle?
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-One approach would be to use locking.  There are things like flock() and 
-lockf() and fcntl() you could use, with the understanding that every 
-other thing also has to play by the same rules.  That is, another 
-process which reads the same path but doesn't bother to see if it's 
-locked will just barrel on ahead and see whatever's managed to land 
-there.  flock and friends are &lt;em dir="ltr"&gt;advisory locks&lt;/em&gt;, not old-school 
-MS-DOS style "you can't read this because SOMEONE has this thing open 
-somewhere" locks.
-&lt;/p&gt;&lt;p&gt;
-Another approach is to do the whole "atomic update" thing.  This is 
-where you create a temporary file, drop all of your data there, and then 
-rename it into place.
-&lt;/p&gt;&lt;p&gt;
-That is, you do all of the following:
-&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Create a file adjacent to the target path using mk*temp or similar.
-&lt;/LI&gt;&lt;LI&gt;Write your data to it
-&lt;/LI&gt;&lt;LI&gt;rename() it from the temporary name to the final name.
-&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;
-This might mean you create /home/you/.cool.conf.CLXHKJELHFJE, fill it up 
-with tasty, tasty data, and then rename() it to /home/you/cool.conf.  
-Readers of that file will either see the old one or the new one, but 
-will never see an "in between" state.
-&lt;/p&gt;&lt;p&gt;
-I should note that creating a temporary file safely is non-trivial, and 
-there are actual *system* libraries which do this properly.  In 
-particular, doing things like "I'll open a path that includes my uid, or 
-pid, or time of day, or a random number" are all crap if that's your 
-entire strategy.  You also HAVE to do the O_EXCL|O_CREAT thing to make 
-sure nobody races you to it.
-&lt;/p&gt;&lt;p&gt;
-Put it another way: if your idea of avoiding races in your temp file 
-creation is to just have a wider namespace, what keeps an evildoer (me) 
-from just grabbing every possibility first?  Disk space is cheap, right?
-You can only have so many pids, and the time of day is obviously 
-predictable, and your random number space is also similarly limited.  I 
-could just set up every one of them first and when you hit it, I win!
-&lt;/p&gt;&lt;p&gt;
-Finally, as long as we're talking about open and flags, don't forget 
-about modes.  If you want to create a file that nobody else can read, 
-you need to make it that way from the start.  You don't get to open the 
-file and then chmod() it, because if someone manages to open it in the 
-middle, they can read it (or worse).
-&lt;/p&gt;&lt;p&gt;
-This is why open() takes a mode_t, letting you tell it what sort of 
-permissions it should have.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Of course, the fun doesn't end there.  There's also the umask, which (as 
-the name kinda-sorta suggests) &lt;em dir="ltr"&gt;masks off&lt;/em&gt; some of the 
-permissions when a file is created.  That is, the more bits you have set 
-in the umask, the *fewer* bits will be set in the resulting file.  Why 
-have this?  Well, think about a program that might want to make files 
-0644 or 0664 depending on whether you are working on stuff yourself, or 
-are allowing other people in your (Unix) group to write to it.  You, 
-the user, could use the umask to pick which mode things get when they 
-are first created, without changing the program.
-&lt;/p&gt;&lt;p&gt;
-Granted, I don't know many people who use these machines this way any 
-more, but back in the days when they were truly multi-user, it made 
-sense for certain jobs.  In any case, it's still there and you still 
-have to worry about it.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-This is the kind of stuff I was talking about when I said that Unix has 
-&lt;a href="https://rachelbythebay.com/w/2014/08/19/fork/" dir="ltr"&gt;just enough potholes and bear traps&lt;/a&gt;
-to keep a whole valley going.  Knowing this kind of crap has made me 
-able to hawk my sanity-checking services for years.  It also causes no 
-end of breakage when folks (who are fortunate to not have this stuff 
-taking up mental space) run afoul of it.
-&lt;/p&gt;&lt;p&gt;
-Talk about a double-edged sword.
-&lt;/p&gt;</description><pubDate>Tue, 11 Aug 2020 17:32:09 -0500</pubDate></item><item><title>All you need to know about JavaScript Promises</title><link>https://lobste.rs/s/skxgin</link><description>&lt;p dir="ltr"&gt;This post is intended to be the ultimate JavaScript Promises tutorial: recipes and examples for everyday situations (or that’s the goal 😉). We cover all the necessary methods like &lt;code dir="ltr"&gt;then&lt;/code&gt;, &lt;code dir="ltr"&gt;catch&lt;/code&gt;, and &lt;code dir="ltr"&gt;finally&lt;/code&gt;. Also, we go over more complex situations like executing promises in parallel with &lt;code dir="ltr"&gt;Promise.all&lt;/code&gt;, timing out APIs with &lt;code dir="ltr"&gt;Promise.race&lt;/code&gt;, promise chaining and some best practices and gotchas.&lt;/p&gt;&lt;p&gt;&lt;em dir="ltr"&gt;NOTE: I’d like this post to be up-to-date with the most common use cases for promises. If you have a question about promises and it’s not answered here. Please, comment below or reach out to me directly &lt;a href="https://twitter.com/iAmAdrianMejia" rel="noopener" dir="ltr"&gt;@iAmAdrianMejia&lt;/a&gt;. I’ll look into it and update this post.&lt;/em&gt;&lt;/p&gt;&lt;p&gt;&lt;strong&gt;Related Posts:&lt;/strong&gt;&lt;/p&gt;&lt;h1&gt;JavaScript Promises&lt;/h1&gt;&lt;p&gt;A promise is an object that allows you to handle asynchronous operations. It’s an alternative to plain old callbacks.&lt;/p&gt;&lt;p&gt;Promises have many advantages over callbacks. To name a few:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Make the async code easier to read.&lt;/LI&gt;&lt;LI&gt;Provide combined error handling.&lt;/LI&gt;&lt;LI&gt;Better control flow. You can have async actions execute in parallel or series.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Callbacks tend to form deeply nested structures (a.k.a. Callback hell). Like the following:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;4&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;5&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;6&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;7&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;8&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;9&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;a(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  b(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;    c(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;      d(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;        &lt;span dir="ltr"&gt;// and so on ...&lt;/span&gt;&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;      });&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;    });&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  });&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;});&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;/PRE&gt;&lt;p&gt;If you convert those functions to promises, they can be chained producing more maintainable code. Something like this:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;4&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;5&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;6&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;Promise&lt;/span&gt;.resolve()&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  .then(a)&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  .then(b)&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  .then(c)&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  .then(d)&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  .catch(&lt;span dir="ltr"&gt;console&lt;/span&gt;.error);&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;As you can see, in the example above, the promise object exposes the methods &lt;code dir="ltr"&gt;.then&lt;/code&gt; and &lt;code dir="ltr"&gt;.catch&lt;/code&gt;. We are going to explore these methods later.&lt;/p&gt;&lt;h2&gt;How do I convert an existing callback API to promises?&lt;/h2&gt;&lt;p&gt;We can convert callbacks into promises using the Promise constructor.&lt;/p&gt;&lt;p dir="ltr"&gt;The Promise constructor takes a callback with two arguments &lt;code dir="ltr"&gt;resolve&lt;/code&gt; and &lt;code dir="ltr"&gt;reject&lt;/code&gt;.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Resolve&lt;/strong&gt;: is a callback that should be invoked when the async operation is completed.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Reject&lt;/strong&gt;: is a callback function to be invoked when an error occurs.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;The constructor returns an object immediately, the promise instance. You can get notified when the promise is “done” using the method &lt;code dir="ltr"&gt;.then&lt;/code&gt; in the promise instance. Let’s see an example.&lt;/p&gt;&lt;h3&gt;Wait, aren’t promises just callbacks?&lt;/h3&gt;&lt;p dir="ltr"&gt;Yes and no. Promises are not “just” callbacks, but they do use asynchronous callbacks on the &lt;code dir="ltr"&gt;.then&lt;/code&gt; and &lt;code dir="ltr"&gt;.catch&lt;/code&gt; methods. Promises are an abstraction on top of callbacks that allows you to chain multiple async operations and handle errors more elegantly. Let’s see it in action.&lt;/p&gt;&lt;h4&gt;Promises anti-pattern (promise hell)&lt;/h4&gt;&lt;p&gt;Before jumping into how to convert callbacks to promises, let’s see how NOT to it.&lt;/p&gt;&lt;p&gt;Please don’t convert callbacks to promises from this:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;4&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;5&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;6&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;7&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;8&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;9&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;a(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  b(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;    c(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;      d(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;        &lt;span dir="ltr"&gt;// and so on ...&lt;/span&gt;&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;      });&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;    });&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  });&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;});&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;/PRE&gt;&lt;p&gt;To this:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;4&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;5&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;6&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;7&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;8&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;9&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;a().then(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;return&lt;/span&gt; b().then(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;return&lt;/span&gt; c().then(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;      &lt;span dir="ltr"&gt;return&lt;/span&gt; d().then(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt;{&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;        &lt;span dir="ltr"&gt;// ⚠️ Please never ever do to this! ⚠️&lt;/span&gt;&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;      });&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;    });&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  });&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;});&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;/PRE&gt;&lt;p&gt;Always keep your promises as flat as you can.&lt;/p&gt;&lt;p&gt;It’s better to do this:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;4&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;a()&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  .then(b)&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  .then(c)&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  .then(d)&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;/PRE&gt;&lt;p&gt;Let’s do some real-life examples! 💪&lt;/p&gt;&lt;h3&gt;Promesifying Timeouts&lt;/h3&gt;&lt;p&gt;Let’s see an example. What do you think will be the output of the following program?&lt;/p&gt;&lt;PRE&gt;const promise = new Promise((resolve, reject) =&amp;gt; {
+allocated as one single large VM reservation, or as an array of fixed-size blocks.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;Next time we’ll look at indexing this data.&lt;/p&gt;</description><pubDate>Wed, 12 Aug 2020 10:59:57 -0500</pubDate></item><item><title>All you need to know about JavaScript Promises</title><link>https://lobste.rs/s/skxgin</link><description>&lt;p dir="ltr"&gt;This post is intended to be the ultimate JavaScript Promises tutorial: recipes and examples for everyday situations (or that’s the goal 😉). We cover all the necessary methods like &lt;code dir="ltr"&gt;then&lt;/code&gt;, &lt;code dir="ltr"&gt;catch&lt;/code&gt;, and &lt;code dir="ltr"&gt;finally&lt;/code&gt;. Also, we go over more complex situations like executing promises in parallel with &lt;code dir="ltr"&gt;Promise.all&lt;/code&gt;, timing out APIs with &lt;code dir="ltr"&gt;Promise.race&lt;/code&gt;, promise chaining and some best practices and gotchas.&lt;/p&gt;&lt;p&gt;&lt;em dir="ltr"&gt;NOTE: I’d like this post to be up-to-date with the most common use cases for promises. If you have a question about promises and it’s not answered here. Please, comment below or reach out to me directly &lt;a href="https://twitter.com/iAmAdrianMejia" rel="noopener" dir="ltr"&gt;@iAmAdrianMejia&lt;/a&gt;. I’ll look into it and update this post.&lt;/em&gt;&lt;/p&gt;&lt;p&gt;&lt;strong&gt;Related Posts:&lt;/strong&gt;&lt;/p&gt;&lt;h1&gt;JavaScript Promises&lt;/h1&gt;&lt;p&gt;A promise is an object that allows you to handle asynchronous operations. It’s an alternative to plain old callbacks.&lt;/p&gt;&lt;p&gt;Promises have many advantages over callbacks. To name a few:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Make the async code easier to read.&lt;/LI&gt;&lt;LI&gt;Provide combined error handling.&lt;/LI&gt;&lt;LI&gt;Better control flow. You can have async actions execute in parallel or series.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Callbacks tend to form deeply nested structures (a.k.a. Callback hell). Like the following:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;4&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;5&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;6&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;7&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;8&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;9&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;a(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  b(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;    c(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;      d(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;        &lt;span dir="ltr"&gt;// and so on ...&lt;/span&gt;&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;      });&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;    });&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  });&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;});&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;/PRE&gt;&lt;p&gt;If you convert those functions to promises, they can be chained producing more maintainable code. Something like this:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;4&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;5&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;6&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;Promise&lt;/span&gt;.resolve()&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  .then(a)&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  .then(b)&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  .then(c)&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  .then(d)&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  .catch(&lt;span dir="ltr"&gt;console&lt;/span&gt;.error);&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;As you can see, in the example above, the promise object exposes the methods &lt;code dir="ltr"&gt;.then&lt;/code&gt; and &lt;code dir="ltr"&gt;.catch&lt;/code&gt;. We are going to explore these methods later.&lt;/p&gt;&lt;h2&gt;How do I convert an existing callback API to promises?&lt;/h2&gt;&lt;p&gt;We can convert callbacks into promises using the Promise constructor.&lt;/p&gt;&lt;p dir="ltr"&gt;The Promise constructor takes a callback with two arguments &lt;code dir="ltr"&gt;resolve&lt;/code&gt; and &lt;code dir="ltr"&gt;reject&lt;/code&gt;.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Resolve&lt;/strong&gt;: is a callback that should be invoked when the async operation is completed.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Reject&lt;/strong&gt;: is a callback function to be invoked when an error occurs.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;The constructor returns an object immediately, the promise instance. You can get notified when the promise is “done” using the method &lt;code dir="ltr"&gt;.then&lt;/code&gt; in the promise instance. Let’s see an example.&lt;/p&gt;&lt;h3&gt;Wait, aren’t promises just callbacks?&lt;/h3&gt;&lt;p dir="ltr"&gt;Yes and no. Promises are not “just” callbacks, but they do use asynchronous callbacks on the &lt;code dir="ltr"&gt;.then&lt;/code&gt; and &lt;code dir="ltr"&gt;.catch&lt;/code&gt; methods. Promises are an abstraction on top of callbacks that allows you to chain multiple async operations and handle errors more elegantly. Let’s see it in action.&lt;/p&gt;&lt;h4&gt;Promises anti-pattern (promise hell)&lt;/h4&gt;&lt;p&gt;Before jumping into how to convert callbacks to promises, let’s see how NOT to it.&lt;/p&gt;&lt;p&gt;Please don’t convert callbacks to promises from this:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;4&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;5&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;6&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;7&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;8&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;9&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;a(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  b(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;    c(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;      d(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;        &lt;span dir="ltr"&gt;// and so on ...&lt;/span&gt;&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;      });&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;    });&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  });&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;});&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;/PRE&gt;&lt;p&gt;To this:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;4&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;5&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;6&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;7&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;8&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;9&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;a().then(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  &lt;span dir="ltr"&gt;return&lt;/span&gt; b().then(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;return&lt;/span&gt; c().then(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt; {&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;      &lt;span dir="ltr"&gt;return&lt;/span&gt; d().then(&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt; =&amp;gt;&lt;/span&gt;{&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;        &lt;span dir="ltr"&gt;// ⚠️ Please never ever do to this! ⚠️&lt;/span&gt;&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;      });&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;    });&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  });&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;});&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;/PRE&gt;&lt;p&gt;Always keep your promises as flat as you can.&lt;/p&gt;&lt;p&gt;It’s better to do this:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;4&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;a()&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  .then(b)&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  .then(c)&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;span dir="ltr"&gt;  .then(d)&lt;/span&gt;&lt;br dir="ltr"&gt;&lt;/PRE&gt;&lt;p&gt;Let’s do some real-life examples! 💪&lt;/p&gt;&lt;h3&gt;Promesifying Timeouts&lt;/h3&gt;&lt;p&gt;Let’s see an example. What do you think will be the output of the following program?&lt;/p&gt;&lt;PRE&gt;const promise = new Promise((resolve, reject) =&amp;gt; {
   setTimeout(() =&amp;gt; {
     resolve('time is up ⏰');
   }, 1e3);
@@ -1538,7 +1538,7 @@ a keyboard like this pushes you to learn a proper fingers placement on the
 home row and unlink all the habits of looking down for a key. It took time
 and a lot of practice but it paid off. Today I type comfortably on a blank
 keyboard with the average speed of 70-90 wpm and I’m still improving. It is
-a huge productivity boost.&lt;/p&gt;&lt;h2&gt;Stay updated with my weekly newsletter&lt;/h2&gt;&lt;div&gt;&lt;label for="mce-EMAIL" dir="ltr"&gt;Email Address &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;/label&gt;&lt;/div&gt;&lt;img src="https://res.cloudinary.com/bojan/image/twitter_name/w_100,h_100,c_fill,r_max/bojan_vidanovic.jpg" width="100" height="100"&gt;&lt;h2&gt;Author&lt;/h2&gt;&lt;p&gt;Bojan Vidanovic is a web developer from Italy. Currently blogging on bojanvidanovic.com and working on a few startups.&lt;/p&gt;</description><pubDate>Wed, 12 Aug 2020 05:43:30 -0500</pubDate></item><item><title>How To Make Ubuntu Work Like Windows 10</title><link>https://lobste.rs/s/1nqvyk</link><description>&lt;div dir="ltr"&gt; &lt;span dir="ltr"&gt;&lt;time datetime="2020-08-12T15:24:14+00:00" dir="ltr"&gt;12 Aug 2020&lt;/time&gt;&lt;/span&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;Last night, while walking the dog, I was listening to the &lt;a href="https://latenightlinux.com/late-night-linux-extra-episode-07/" rel="noreferrer noopener" dir="ltr"&gt;latest episode of Late Night Linux&lt;/a&gt; where Joe speaks to his friend Kyle about his use of Linux and why he has ultimately decided to stick with Windows 10 for the time being.&lt;/p&gt;&lt;p&gt;I thought this was a very interesting discussion, which ultimately boiled down to Kyle saying on a number of occasions that he didn’t like the UI/UX of the distros he had tried, and that he wanted to make Ubuntu work more like Windows 10.&lt;/p&gt;&lt;p&gt;Kyle went on to say that he’s accustom to Windows and likes the workflow, but couldn’t find any simple guides on making Ubuntu work like Windows 10. That’s where this post comes in. 🙂&lt;/p&gt;&lt;p dir="ltr"&gt;There was a couple of distros that he mentioned, including vanilla &lt;a href="https://kevq.uk/my-thoughts-on-ubuntu-20-04/" rel="noreferrer noopener" dir="ltr"&gt;Ubuntu&lt;/a&gt;, &lt;a href="https://ubuntu-mate.org/" rel="noreferrer noopener" dir="ltr"&gt;Ubuntu MATE&lt;/a&gt; &amp;amp; &lt;a href="https://xubuntu.org/" rel="noreferrer noopener" dir="ltr"&gt;Xubuntu&lt;/a&gt;. Kyle said that he couldn’t find any simple guides on emulating the Windows workflow in Ubuntu. So, I decided to write one.&lt;/p&gt;&lt;p&gt;Note: by the end of this process you will NOT have a Windows 10 clone – that isn’t the point of this post. What you will have is an Ubuntu desktop that has a workflow similar to that of Windows 10.&lt;/p&gt;&lt;h2&gt;The easy way&lt;/h2&gt;&lt;p dir="ltr"&gt;The easiest way to make Ubuntu work like Windows 10 is to download a distribution that’s already geared toward Windows migrants. &lt;a href="https://linuxmint.com/" rel="noreferrer noopener" dir="ltr"&gt;Linux Mint&lt;/a&gt; and it’s Cinnamon desktop does a fairly good job of this, but I think the UX leaves a lot to be desired. Personally, I would compare Linux Mint Cinnamon to Windows XP rather than Windows 10.&lt;/p&gt;&lt;p dir="ltr"&gt;I think that &lt;a href="https://zorinos.com/" rel="noreferrer noopener" dir="ltr"&gt;Zorin OS&lt;/a&gt; is a much better Linux distribution for Windows migrants, as it has a very similar workflow right out of the box.&lt;/p&gt;&lt;figure&gt;&lt;img width="467" height="237" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20640%20325'%3E%3C/svg%3E" alt="Zorin OS 15 desktop"&gt;&lt;figcaption dir="auto"&gt;Zorin OS 15&lt;/figcaption&gt;&lt;/figure&gt;&lt;h2&gt;The slightly harder way – make stock Ubuntu work like Windows 10&lt;/h2&gt;&lt;p dir="ltr"&gt;If you look at the default Ubuntu interface, you will see that there’s a taskbar at the top and another bar on the left. There’s no start menu, and if you press the &lt;strong dir="ltr"&gt;Activities&lt;/strong&gt; button, you don’t get a start-like menu, but instead a spread of all open windows.&lt;/p&gt;&lt;figure&gt;&lt;img width="467" height="237" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20640%20325'%3E%3C/svg%3E" alt="Default Ubuntu UI"&gt;&lt;figcaption dir="auto"&gt;Default Ubuntu UI&lt;/figcaption&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;It’s fair to say that the out-of-the-box experience of Ubuntu is &lt;strong dir="ltr"&gt;very &lt;/strong&gt;different to Windows 10.&lt;/p&gt;&lt;h2&gt;What we’re going to change&lt;/h2&gt;&lt;p&gt;In order to make Ubuntu work like Windows 10, there are few things we need to change. These are:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Remove the top and side panels.&lt;/LI&gt;&lt;LI&gt;Create a single taskbar at the bottom of the desktop.&lt;/LI&gt;&lt;LI&gt;Integrate a system tray into the taskbar.&lt;/LI&gt;&lt;LI&gt;Add a proper start menu to the taskbar.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;To give you an idea of the kind of thing we’re aiming for, here’s my Windows 10 desktop:&lt;/p&gt;&lt;figure&gt;&lt;img width="467" height="262" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20640%20360'%3E%3C/svg%3E" alt="Windows 10 desktop"&gt;&lt;/figure&gt;&lt;p&gt;There’s a lot to go through here, but it’s all relatively simple and should take no more than 30 minutes. So, let’s get cracking, shall we?&lt;/p&gt;&lt;h2&gt;Step 1 – installing extensions&lt;/h2&gt;&lt;p dir="ltr"&gt;First, you need to install the &lt;a href="https://addons.mozilla.org/en-GB/firefox/addon/gnome-shell-integration/" rel="noreferrer noopener" dir="ltr"&gt;Gnome Shell Integration addon for Firefox&lt;/a&gt;. This will allow you to install Gnome extensions right from Firefox with the click of a button.&lt;/p&gt;&lt;p dir="ltr"&gt;Next, visit the link for each of the extensions listed below and switch the black rocker from “&lt;strong dir="ltr"&gt;OFF&lt;/strong&gt;” to “&lt;strong dir="ltr"&gt;ON&lt;/strong&gt;” to install them. When you switch the rocker to “&lt;strong dir="ltr"&gt;ON&lt;/strong&gt;“, you will receive a prompt to install the extension:&lt;/p&gt;&lt;figure&gt;&lt;img width="467" height="326" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20640%20447'%3E%3C/svg%3E" alt="Gnome extension install"&gt;&lt;/figure&gt;&lt;p&gt;Here’s the list of extensions you need to install:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Dash to Panel – &lt;a href="https://extensions.gnome.org/extension/1160/dash-to-panel/" rel="noreferrer noopener" dir="ltr"&gt;https://extensions.gnome.org/extension/1160/dash-to-panel/&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;Arc Menu – &lt;a href="https://extensions.gnome.org/extension/1228/arc-menu/" rel="noreferrer noopener" dir="ltr"&gt;https://extensions.gnome.org/extension/1228/arc-menu/&lt;/a&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Step 2 – customisations&lt;/h2&gt;&lt;p&gt;You should now have a bit of a hodgepodge of panels. There will be a single panel at the bottom, and a few icons that you probably don’t recognise. Don’t worry, we’re going to fix all that now.&lt;/p&gt;&lt;h3&gt;Dash to Panel&lt;/h3&gt;&lt;p&gt; The first thing to do is sort out the Dash to Panel extension. Right-click on the bottom panel and select Dash to Panel Settings from the pop-up.&lt;/p&gt;&lt;p dir="ltr"&gt;On the &lt;strong dir="ltr"&gt;Position &lt;/strong&gt;tab, click on the &lt;strong dir="ltr"&gt;Visible&lt;/strong&gt; button next to &lt;strong dir="ltr"&gt;Show Applications button&lt;/strong&gt;. When you click this button, it should turn from grey to white. This will hide the applications button so we can replace it with the Arc menu later:&lt;/p&gt;&lt;figure&gt;&lt;img width="466" height="615" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20621%20820'%3E%3C/svg%3E" alt=""&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;Click on the &lt;strong dir="ltr"&gt;Style &lt;/strong&gt;tab and change the &lt;strong dir="ltr"&gt;Panel Size&lt;/strong&gt; to &lt;code dir="ltr"&gt;40px&lt;/code&gt;. This should make the panel a similar size to the Windows 10 taskbar. Obviously change this number to be larger or smaller as you see fit.&lt;/p&gt;&lt;figure&gt;&lt;img width="466" height="635" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20630%20858'%3E%3C/svg%3E" alt="Dash to Panel size"&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;Next, go to the &lt;strong dir="ltr"&gt;Behaviour&lt;/strong&gt; tab and click on the cog icon next to &lt;strong dir="ltr"&gt;Show window previews on hover&lt;/strong&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Then, change the &lt;strong dir="ltr"&gt;Window previews preferred size (px)&lt;/strong&gt; from &lt;code dir="ltr"&gt;240&lt;/code&gt; to &lt;code dir="ltr"&gt;120&lt;/code&gt;. Again, this should make the window preview similar to that of Windows 10 when you hover over an open application:&lt;/p&gt;&lt;figure&gt;&lt;img width="467" height="237" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20640%20325'%3E%3C/svg%3E" alt="Window preview"&gt;&lt;/figure&gt;&lt;h3&gt;System tray menu&lt;/h3&gt;&lt;p&gt;Next we need to configure the system tray menu. If you don’t know what the system tray menu is, these are the little icons that certain applications display on the taskbar, usually by the clock, when an application is running in the background.&lt;/p&gt;&lt;p&gt;These are usually application like anti-virus and file syncing tools. Here’s the system tray icons on my Windows 10 machine:&lt;/p&gt;&lt;figure&gt;&lt;img width="332" height="39" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20332%2039'%3E%3C/svg%3E" alt="System tray icons - Windows 10"&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;With Dash to Panel, the system tray icons should work out of the box. But if for whatever reason they’re not working, go back into the Dash to Panel settings and click the &lt;strong dir="ltr"&gt;Visible &lt;/strong&gt;button next to &lt;strong dir="ltr"&gt;Right Box&lt;/strong&gt; from the &lt;strong dir="ltr"&gt;Position &lt;/strong&gt;tab.&lt;/p&gt;&lt;p&gt;If everything works right, you should see the icons loaded on the panel, as shown below:&lt;/p&gt;&lt;figure&gt;&lt;img width="294" height="39" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20294%2039'%3E%3C/svg%3E" alt="System tray icons - Ubuntu"&gt;&lt;/figure&gt;&lt;h3&gt;Arc menu&lt;/h3&gt;&lt;p&gt;The last thing we need to do is make a couple of small tweaks to the Arc menu configuration so it works like Windows.&lt;/p&gt;&lt;p&gt;First, right-click on the Arc menu icon (it’s on the far left of the panel and looks like a grey “a”. Then, select Arc Menu Settings from the pop-up.&lt;/p&gt;&lt;p dir="ltr"&gt;On the &lt;strong dir="ltr"&gt;General&lt;/strong&gt; tab, under &lt;strong dir="ltr"&gt;Arc Menu Hotkey&lt;/strong&gt;, select &lt;strong dir="ltr"&gt;Left Super Key&lt;/strong&gt;. This will ensure that when you hit the Windows key on your keyboard, the Arc menu will appear, just like in Windows 10.&lt;/p&gt;&lt;figure&gt;&lt;img width="466" height="511" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20596%20654'%3E%3C/svg%3E" alt="Arc menu super key"&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;Finally, we’re going to get rid of the silly “a” icon and replace it with an Ubuntu icon. To do this, go to the &lt;strong dir="ltr"&gt;Appearance &lt;/strong&gt;tab within the settings window and click on cog button next to &lt;strong dir="ltr"&gt;Arc Menu Icon Settings&lt;/strong&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;On the sub-window that appears, click on the &lt;strong dir="ltr"&gt;Browse Icons &lt;/strong&gt;button, next to where it says &lt;strong dir="ltr"&gt;Arc Menu Icon&lt;/strong&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Another window will then appear. Select the &lt;strong dir="ltr"&gt;Distro Icons&lt;/strong&gt; tab, then the Ubuntu logo:&lt;/p&gt;&lt;figure&gt;&lt;img width="466" height="513" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20593%20653'%3E%3C/svg%3E" alt=""&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;Close the third window, so you’re back on the icon settings window. Where it says &lt;strong dir="ltr"&gt;Icon Size&lt;/strong&gt;, change it to &lt;code dir="ltr"&gt;30px&lt;/code&gt;. This should give you a nice Ubuntu themed icon that matches the rest of the panel:&lt;/p&gt;&lt;figure&gt;&lt;img width="467" height="237" src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20640%20325'%3E%3C/svg%3E" alt=""&gt;&lt;/figure&gt;&lt;p&gt;That’s it! You should now have an Ubuntu desktop that works like Windows 10.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p&gt;As I said at the start of this post, my intention here wasn’t to emulate the theme of Windows 10 in this post, but rather the user experience and workflow.&lt;/p&gt;&lt;p&gt;At this point you should have the familiar single panel layout, with a good looking start menu and a system tray. However, it’s all themed in a way that still gives Ubuntu its own identity.&lt;/p&gt;&lt;p&gt;As you explore more, if you decide to change the theme of your Ubuntu desktop, the Dash to Panel and Arc menu should adapt too, so your theming remains consistent throughout.&lt;/p&gt;&lt;p&gt;I hope this post helps any new people coming over from Windows 10 to setup their environment in Ubuntu so it’s slightly more familiar than the default.&lt;/p&gt;</description><pubDate>Wed, 12 Aug 2020 10:42:45 -0500</pubDate></item><item><title>REMS - Rigorous Engineering of Mainstream Systems</title><link>https://lobste.rs/s/6b3l1m</link><description>&lt;div&gt;&lt;span dir="ltr"&gt;
+a huge productivity boost.&lt;/p&gt;&lt;h2&gt;Stay updated with my weekly newsletter&lt;/h2&gt;&lt;div&gt;&lt;label for="mce-EMAIL" dir="ltr"&gt;Email Address &lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;/label&gt;&lt;/div&gt;&lt;img src="https://res.cloudinary.com/bojan/image/twitter_name/w_100,h_100,c_fill,r_max/bojan_vidanovic.jpg" width="100" height="100"&gt;&lt;h2&gt;Author&lt;/h2&gt;&lt;p&gt;Bojan Vidanovic is a web developer from Italy. Currently blogging on bojanvidanovic.com and working on a few startups.&lt;/p&gt;</description><pubDate>Wed, 12 Aug 2020 05:43:30 -0500</pubDate></item><item><title>REMS - Rigorous Engineering of Mainstream Systems</title><link>https://lobste.rs/s/6b3l1m</link><description>&lt;div&gt;&lt;span dir="ltr"&gt;
             &lt;b dir="ltr"&gt; OS API and Wire interfaces &lt;/b&gt;
           &lt;/span&gt;&lt;/div&gt;</description><pubDate>Wed, 12 Aug 2020 10:28:18 -0500</pubDate></item><item><title>Rusty's API Design Manifesto</title><link>https://lobste.rs/s/k4tsua</link><description>&lt;h1 jstcache="0" dir="ltr"&gt;
           &lt;span jsselect="heading" jsvalues=".innerHTML:msg" jstcache="10" dir="ltr"&gt;This site can’t be reached&lt;/span&gt;
