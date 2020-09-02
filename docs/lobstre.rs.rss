@@ -218,193 +218,7 @@ to do kernel development but it can still be one. There are plenty of reasons
 to want something better than e-mail for development. There may be some
 reasons to stay on e-mail because no better tool exists but “lowering the
 bar” or other gatekeeping nonsense is not among the reasons. I personally
-eagerly await the day I don’t have to think about e-mailing patches.&lt;/p&gt;</description><pubDate>Wed, 02 Sep 2020 03:00:23 -0500</pubDate></item><item><title>Halite III Bot Development Kit in Rust</title><link>https://lobste.rs/s/8qnkjd</link><description>&lt;main&gt;&lt;span&gt;September 2, 2020&lt;/span&gt;&lt;/main&gt;&lt;p&gt;I don’t recall the first time I found out about Halite. It was probably years ago. I do remember thinking a lot about the idea of writing your own bot that plays the game and hopefully wins. I thought about doing it in Python for a week or so, but then I gave up and forgot about it.&lt;/p&gt;&lt;p&gt;Fast forward a few years, and here I am rediscovering Halite again. This time it was much more entertaining to play with. I combined it with my enthusiasm for Rust and spent a couple of days writing what I like to call a BDK, bot development kit.&lt;/p&gt;&lt;img src="https://images.ctfassets.net/d0dqkpgki2io/624QGS4NY7DxBDBIHVuPgk/aed5f702637ef8284fa7eb44b717aa95/last.jpg" alt="halite game screenshot" title="Halite III screenshot" width="453" height="254"&gt;&lt;h2&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#game-mechanics"&gt;Game mechanics&lt;/a&gt;&lt;/h2&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Halite III is a resource management game in which players build and command ships that explore the ocean and collect halite. Ships use halite as an energy source, and the player with the most stored halite at the end of the game is the winner.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;The map is two dimensional and is usually 32 by 32 cells in size. If your ship navigates off the map the wraparound will move it to the opposite side.&lt;/p&gt;&lt;p&gt;You start with a shipyard and some amount of stored halite. The default starting halite is 4000, but that might be configurable. I haven’t yet explored all the options the halite server exposes.&lt;/p&gt;&lt;p&gt;A ship costs 1000 halite to construct. Moving it will deplete 10% of the halite stored in it. Not moving for a turn will transfer 10% of the halite stored in the cell to a ship that’s parked on it. The cells have a cap and can’t contain more than 1000 halite. They will regenerate a small amount of halite on every turn.&lt;/p&gt;&lt;p&gt;If you deplete halite around your shipyard, you can convert a ship to a drop-off. That has the potential to decrease the distance ships need to travel, therefore reducing the halite loss.&lt;/p&gt;&lt;h2&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#writing-the-bdk"&gt;Writing the BDK&lt;/a&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;It took me quite a while to find the Halite III starter kits. For some reason, their documentation seems to be broken in places. On the other hand, Halite II documentation still has working links for downloads and is much better overall. After some searching, I found &lt;a href="https://github.com/HaliteChallenge/Halite-III" title="Halite III Challenge repository" dir="ltr"&gt;this&lt;/a&gt; repo that contained instructions on how to compile the Halite III engine and starter kits in many languages.&lt;/p&gt;&lt;p dir="ltr"&gt;I also came across &lt;a href="https://github.com/rossmacarthur/halite3-rust-starter" title="Halite III rust starter" dir="ltr"&gt;this&lt;/a&gt; starter kit in Rust. I tried it, but it was hard for me to figure out the API and the game data you can get. I went through the code and figured I can probably write something similar. I wanted it to be a library to make it easily embeddable into any project.&lt;/p&gt;&lt;p&gt;The hardest part for me was figuring out how the communication protocol works. Halite server uses it to send data and receive commands from bots. For context, this is how a game of Halite is ran:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;halite \
-  --width 32 \
-  --height 32 \
-  &lt;span dir="ltr"&gt;"./bot1 --name borg"&lt;/span&gt; \
-  &lt;span dir="ltr"&gt;"./bot2 --intelligence superhuman"&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The server runs the bots as separate commands and uses their &lt;code dir="ltr"&gt;stdin&lt;/code&gt; and &lt;code dir="ltr"&gt;stdout&lt;/code&gt; pipes to communicate. The data flows into a bot through &lt;code dir="ltr"&gt;stdin&lt;/code&gt; in the form of a simple space and newline delimited protocol. I couldn’t find any materials that describe this protocol, so I’ll cover it here.&lt;/p&gt;&lt;h3&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#the-protocol"&gt;The protocol&lt;/a&gt;&lt;/h3&gt;&lt;PRE&gt;&lt;code&gt;// This is a comment and is not a part of the protocol
-
-// This protocol does not use empty lines, they are
-// here only for the formatting purposes
-
-// First line is a JSON blob that contains the
-// configuration / parameters for this specific game
-{"CAPTURE_ENABLED":false,"CAPTURE_RADIUS":3,"DEFAULT_MAP_HEIGHT":32,"DEFAULT_MAP_WIDTH":32,"DROPOFF_COST":4000,"DROPOFF_PENALTY_RATIO":4,"E        XTRACT_RATIO":4,"FACTOR_EXP_1":2.0,"FACTOR_EXP_2":2.0,"INITIAL_ENERGY":5000,"INSPIRATION_ENABLED":true,"INSPIRATION_RADIUS":4,"INSPIRATION_SHIP_COUNT":2,"INSPIRED_BON        US_MULTIPLIER":2.0,"INSPIRED_EXTRACT_RATIO":4,"INSPIRED_MOVE_COST_RATIO":10,"MAX_CELL_PRODUCTION":1000,"MAX_ENERGY":1000,"MAX_PLAYERS":16,"MAX_TURNS":400,"MAX_TURN_TH        RESHOLD":64,"MIN_CELL_PRODUCTION":900,"MIN_TURNS":400,"MIN_TURN_THRESHOLD":32,"MOVE_COST_RATIO":10,"NEW_ENTITY_ENERGY_COST":1000,"PERSISTENCE":0.7,"SHIPS_ABOVE_FOR_CA        PTURE":3,"STRICT_ERRORS":false,"game_seed":1403861864,"map_height":32,"map_width":32}
-
-// Next line contains the number of players and your
-// player id
-2 0
-
-// Now we get the positions of shipyards for every
-// player in this format -&amp;gt; player_id pos_x pos_y
-0 8 16
-1 23 16
-
-// We get the map dimensions, we'll use something small
-4 4
-
-// Now we get the starting amount of halite for every cell
-34 128 552 18
-261 4 377 854
-423 119 268 111
-932 21 76 341
-
-// The setup phase is now over, now we start getting
-// turn data
-
-// The turn number
-3
-
-// For every player we get data about ships, drop-offs,
-// and halite stored:
-// player_id num_ships num_dropoffs halite
-// then for every ship -&amp;gt; ship_id pos_x pos_y halite
-// then for every drop-off -&amp;gt; dropoff_id pos_x pos_y
-0 3 0 2314
-13 7 28 417
-14 27 3 13
-17 11 11 957
-1 4 1 3829
-7 30 23 333
-9 21 1 591
-10 15 11 5
-14 22 11 122
-1 24 31
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Sending commands is really simple. I used &lt;code dir="ltr"&gt;print!&lt;/code&gt; and &lt;code dir="ltr"&gt;println!&lt;/code&gt; macros to implement that. Here are the text representations of the commands:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;spawn ship &lt;code dir="ltr"&gt;g&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;move ship &lt;code dir="ltr"&gt;m {ship_id} {direction}&lt;/code&gt; (direction can be one of &lt;code dir="ltr"&gt;n&lt;/code&gt;, &lt;code dir="ltr"&gt;e&lt;/code&gt;, &lt;code dir="ltr"&gt;s&lt;/code&gt;, &lt;code dir="ltr"&gt;w&lt;/code&gt;, even &lt;code dir="ltr"&gt;o&lt;/code&gt; which means stay still)&lt;/LI&gt;&lt;LI&gt;convert a ship to drop-off &lt;code dir="ltr"&gt;c {ship_id}&lt;/code&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;When you’re ready to finish your turn, you need to write these commands to &lt;code dir="ltr"&gt;stdout&lt;/code&gt; with a &lt;code dir="ltr"&gt;\n&lt;/code&gt; at the end. Here’s an example:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;g c 8 m 3 n m 15 w\n
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#a-remark-about-rust"&gt;A remark about Rust&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;The details about the development and the libraries I used won’t be covered here. That might be material for a future post. I just want to say that I’m amazed that I was able to write almost the whole thing without running it once. After it was probably 90% finished, I tried running it and quickly debugged a few protocol issues I had. It was working. 😯&lt;/p&gt;&lt;p dir="ltr"&gt;There were a few problems with data ownership and lifetimes. I’m still far from comfortable when it comes to lifetimes. After I abandoned the &lt;em dir="ltr"&gt;“no clone no copy”&lt;/em&gt; idea, I was able to simplify the API.&lt;/p&gt;&lt;h3&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#how-to-install"&gt;How to install&lt;/a&gt;&lt;/h3&gt;&lt;p dir="ltr"&gt;The BDK is available on &lt;a href="https://crates.io/crates/halite3bdk" title="halite3bdk crates io page" dir="ltr"&gt;crates.io&lt;/a&gt;. You can check out the source code in &lt;a href="https://github.com/stjepangolemac/halite3bdk" title="halite3bdk source code repository" dir="ltr"&gt;the GitHub repository&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;If you use the great &lt;a href="https://github.com/killercup/cargo-edit" title="cargo edit source code repository" dir="ltr"&gt;&lt;code dir="ltr"&gt;cargo-edit&lt;/code&gt;&lt;/a&gt;, you only need to run &lt;code dir="ltr"&gt;cargo add halite3bdk&lt;/code&gt; inside your Rust project.&lt;/p&gt;&lt;h2&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#writing-your-first-halite-bot"&gt;Writing your first Halite bot&lt;/a&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;The first step is to make sure the &lt;code dir="ltr"&gt;halite&lt;/code&gt; engine is available in your &lt;code dir="ltr"&gt;$PATH&lt;/code&gt;. I couldn’t find an executable on the site, so I compiled it from the source. You’ll need to clone a repo and follow short instructions &lt;a href="https://github.com/HaliteChallenge/Halite-III/tree/master/game_engine" title="Halite engine compilation guide" dir="ltr"&gt;here&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;My primary concern was to have a simple API. I think I’ve achieved that as the minimal example is only 8 lines long (not counting the blanks).&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; halite3bdk::game::Game;
-
-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() {
-  &lt;span dir="ltr"&gt;let&lt;/span&gt; game = Game::init(&lt;span dir="ltr"&gt;"botman"&lt;/span&gt;);
-
-  &lt;span dir="ltr"&gt;loop&lt;/span&gt; {
-    game.next_turn();
-    game.end_turn();
-  }
-}&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;You import the BDK, initialize the game, then loop until the game is finished.&lt;/p&gt;&lt;p&gt;If you compile this and run the game, you’ll see your bot is not doing anything.&lt;/p&gt;&lt;video src="https://videos.ctfassets.net/d0dqkpgki2io/1BNKth4DkGMNjJCaEvCwuZ/7631bfbf6afe136524ce7f62be45b503/bot1.mp4" alt="bot1" controls=""&gt;&lt;/video&gt;&lt;p dir="ltr"&gt;Because Halite uses &lt;code dir="ltr"&gt;stdin&lt;/code&gt; and &lt;code dir="ltr"&gt;stdout&lt;/code&gt; to communicate with the bots, they can’t print anything, not even for debugging purposes. That’s why I’ve exported a &lt;code dir="ltr"&gt;logger&lt;/code&gt; utility, which will log into a file.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; halite3bdk::game::Game;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; halite3bdk::logger;
-
-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() {
-  &lt;span dir="ltr"&gt;let&lt;/span&gt; game = Game::init(&lt;span dir="ltr"&gt;"botman"&lt;/span&gt;);
-
-  &lt;span dir="ltr"&gt;// Logger can be used after the game is initialized&lt;/span&gt;
-  logger::info(&lt;span dir="ltr"&gt;"Hello world"&lt;/span&gt;);
-  logger::error(&lt;span dir="ltr"&gt;"This is weird"&lt;/span&gt;);
-  logger::abort(&lt;span dir="ltr"&gt;"Could not initialize warp drive"&lt;/span&gt;);
-}&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Now is the right time to add some behavior.&lt;/p&gt;&lt;h3&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#it-moves"&gt;It moves&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;The most basic behavior we can implement is moving all the ships in the same direction. The shipyard will now spawn ships if possible, so we have something to move.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;// import direction&lt;/span&gt;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; halite3bdk::direction::Direction;
-...
-
-game.next_turn();
-
-&lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; cmds = &lt;span dir="ltr"&gt;vec!&lt;/span&gt;[];
-&lt;span dir="ltr"&gt;let&lt;/span&gt; halite = game.my_halite();
-&lt;span dir="ltr"&gt;let&lt;/span&gt; shipyard = game.my_shipyard();
-&lt;span dir="ltr"&gt;let&lt;/span&gt; ships = game.my_ships();
-
-&lt;span dir="ltr"&gt;// We spawn some ships&lt;/span&gt;
-&lt;span dir="ltr"&gt;let&lt;/span&gt; shipyard_occupied = game.map.is_occupied(&amp;amp;shipyard.position);
-&lt;span dir="ltr"&gt;if&lt;/span&gt; halite &amp;gt; &lt;span dir="ltr"&gt;1000&lt;/span&gt; &amp;amp;&amp;amp; !shipyard_occupied {
-  &lt;span dir="ltr"&gt;let&lt;/span&gt; cmd = shipyard.spawn();
-  cmds.push(cmd);
-}
-
-&lt;span dir="ltr"&gt;// We move all ships to the north, why not&lt;/span&gt;
-ships.iter().for_each(|ship| {
-  &lt;span dir="ltr"&gt;// I need to change the method name as `move` is a&lt;/span&gt;
-  &lt;span dir="ltr"&gt;// reserved keyword and needs to be invoked like&lt;/span&gt;
-  &lt;span dir="ltr"&gt;// this, for now&lt;/span&gt;
-  &lt;span dir="ltr"&gt;let&lt;/span&gt; cmd = ship.r#&lt;span dir="ltr"&gt;move&lt;/span&gt;(Direction::North);
-  cmds.push(cmd);
-});
-
-game.register_commands(cmds);
-game.end_turn();&lt;/code&gt;&lt;/PRE&gt;&lt;video src="https://videos.ctfassets.net/d0dqkpgki2io/2oCdMbbd1TjrjoyvPzcn20/19b618bbd17ebbc9f9fd91c0b6082200/bot2.mp4" alt="bot2" controls=""&gt;&lt;/video&gt;&lt;h3&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#it-eats"&gt;It eats&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;It would be much more beneficial for this civilization to mine halite and move when there’s nothing left to mine. Let’s make them move in random directions until they find a valuable tile.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;// import random dice throw&lt;/span&gt;
-&lt;span dir="ltr"&gt;use&lt;/span&gt; halite3bdk::random::dice_usize;
-...
-
-ships.iter().for_each(|ship| {
-  &lt;span dir="ltr"&gt;let&lt;/span&gt; tile_halite = game.map.get_cell(&amp;amp;ship.position).halite;
-  &lt;span dir="ltr"&gt;let&lt;/span&gt; tile_is_worth = tile_halite &amp;gt; &lt;span dir="ltr"&gt;1000&lt;/span&gt; / &lt;span dir="ltr"&gt;10&lt;/span&gt;;
-
-  &lt;span dir="ltr"&gt;if&lt;/span&gt; !tile_is_worth {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; directions = Direction::all();
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; chosen_dir = directions[dice_usize(&lt;span dir="ltr"&gt;4&lt;/span&gt;)];
-
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; cmd = ship.r#&lt;span dir="ltr"&gt;move&lt;/span&gt;(chosen_dir);
-    cmds.push(cmd);
-  }
-
-  &lt;span dir="ltr"&gt;// we don't do anything if the tile is worth it, we keep mining &lt;/span&gt;
-});&lt;/code&gt;&lt;/PRE&gt;&lt;video src="https://videos.ctfassets.net/d0dqkpgki2io/224vhDu3mn3MibDOxYcSrQ/9177f2fb2785a22227bdb6b03f6a6768/bot3.mp4" alt="bot3" controls=""&gt;&lt;/video&gt;&lt;h3&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#it-avoids-death"&gt;It avoids death&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;It’s visible from the videos that our ships don’t really care much about their lives. They’ll move in any direction, even if it means certain death. Now they’ll start avoiding collisions.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;if&lt;/span&gt; !tile_is_worth {
-  &lt;span dir="ltr"&gt;let&lt;/span&gt; directions = Direction::all();
-  &lt;span dir="ltr"&gt;let&lt;/span&gt; chosen_dir = directions[dice_usize(&lt;span dir="ltr"&gt;4&lt;/span&gt;)];
-
-  &lt;span dir="ltr"&gt;let&lt;/span&gt; future_position = &amp;amp;ship.position.with_direction(&amp;amp;chosen_dir);
-  &lt;span dir="ltr"&gt;let&lt;/span&gt; is_safe = !game.map.is_occupied(future_position);
-
-  &lt;span dir="ltr"&gt;if&lt;/span&gt; is_safe {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; cmd = ship.r#&lt;span dir="ltr"&gt;move&lt;/span&gt;(chosen_dir);
-    cmds.push(cmd);
-  }
-}&lt;/code&gt;&lt;/PRE&gt;&lt;video src="https://videos.ctfassets.net/d0dqkpgki2io/6AxQGjD37T3sgj8mb2Eg6B/6e815cb39dee5849c8e1b2e6a5d764f1/bot4.mp4" alt="bot4" controls=""&gt;&lt;/video&gt;&lt;p&gt;The ships are a little more careful now about their movement, but they still die. The problem is that some of them might decide to move to the same tile next turn. We need to fix that.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;...
-&lt;span dir="ltr"&gt;if&lt;/span&gt; is_safe {
-  &lt;span dir="ltr"&gt;// Set this tile to occupied for next ships to know not to&lt;/span&gt;
-  &lt;span dir="ltr"&gt;// navigate there&lt;/span&gt;
-  game.map.set_occupied(future_position);
-  &lt;span dir="ltr"&gt;let&lt;/span&gt; cmd = ship.r#&lt;span dir="ltr"&gt;move&lt;/span&gt;(chosen_dir);
-  ...&lt;/code&gt;&lt;/PRE&gt;&lt;video src="https://videos.ctfassets.net/d0dqkpgki2io/2ISeyRD9WNG5c7qf1rf400/e2da06d68f3352f5abee9a29e1083bf5/bot4-improved.mp4" alt="bot4-improved" controls=""&gt;&lt;/video&gt;&lt;h3&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#its-alive"&gt;It’s alive&lt;/a&gt;&lt;/h3&gt;&lt;p dir="ltr"&gt;The only behavior left to implement is dropping off the halite when the ship is full. We’ll need some sort of container to keep track of ship states. An ordinary &lt;code dir="ltr"&gt;HashMap&lt;/code&gt; should do it.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;...
-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;enum&lt;/span&gt; &lt;span dir="ltr"&gt;ShipState&lt;/span&gt;&lt;/span&gt; {
-  Mining,
-  Returning
-}
-
-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() {
-  &lt;span dir="ltr"&gt;let&lt;/span&gt; game = Game::init(&lt;span dir="ltr"&gt;"botman"&lt;/span&gt;);
-
-  &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; ship_state: HashMap&amp;lt;&lt;span dir="ltr"&gt;u32&lt;/span&gt;, ShipState&amp;gt; = HashMap::new();
-
-  &lt;span dir="ltr"&gt;loop&lt;/span&gt; {
-  ...&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;And now we check the state for every ship.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;ships.iter().for_each(|ship| {
-  &lt;span dir="ltr"&gt;// the hashmap will not contain any states as first, so we&lt;/span&gt;
-  &lt;span dir="ltr"&gt;// use ShipState::Mining as default&lt;/span&gt;
-  &lt;span dir="ltr"&gt;match&lt;/span&gt; ship_state.get(&amp;amp;ship.id).unwrap_or(&amp;amp;ShipState::Mining) {
-    ShipState::Mining =&amp;gt; {
-      &lt;span dir="ltr"&gt;if&lt;/span&gt; ship.halite &amp;lt; &lt;span dir="ltr"&gt;1000&lt;/span&gt; {
-        &lt;span dir="ltr"&gt;// do what we did above, pick a random direction and&lt;/span&gt;
-        &lt;span dir="ltr"&gt;// move if it's safe&lt;/span&gt;
-        ...
-      } &lt;span dir="ltr"&gt;else&lt;/span&gt; {
-        &lt;span dir="ltr"&gt;// ship is full, start returning&lt;/span&gt;
-        ship_state.insert(ship.id, ShipState::Returning);
-      }
-    }
-    ShipState::Returning =&amp;gt; {
-      &lt;span dir="ltr"&gt;let&lt;/span&gt; destination = &amp;amp;shipyard.position;
-
-      &lt;span dir="ltr"&gt;if&lt;/span&gt; &amp;amp;ship.position != destination {
-        &lt;span dir="ltr"&gt;let&lt;/span&gt; next_directions = game.map.direction_to(&amp;amp;ship.position, destination);
-        &lt;span dir="ltr"&gt;let&lt;/span&gt; direction = next_directions.first();
-
-        &lt;span dir="ltr"&gt;match&lt;/span&gt; direction {
-          &lt;span dir="ltr"&gt;Some&lt;/span&gt;(dir) =&amp;gt; {
-            &lt;span dir="ltr"&gt;let&lt;/span&gt; future_position = &amp;amp;ship.position.with_direction(&amp;amp;dir);
-            &lt;span dir="ltr"&gt;let&lt;/span&gt; is_safe = !game.map.is_occupied(future_position);
-
-            &lt;span dir="ltr"&gt;if&lt;/span&gt; is_safe {
-              game.map.set_occupied(future_position);
-              &lt;span dir="ltr"&gt;let&lt;/span&gt; cmd = ship.r#&lt;span dir="ltr"&gt;move&lt;/span&gt;(*dir);
-              cmds.push(cmd);
-            }
-          }
-          &lt;span dir="ltr"&gt;None&lt;/span&gt; =&amp;gt; (),
-        }
-      } &lt;span dir="ltr"&gt;else&lt;/span&gt; {
-        &lt;span dir="ltr"&gt;// ship is home, now go back to mining&lt;/span&gt;
-        ship_state.insert(ship.id, ShipState::Mining);
-      }
-    }
-  }
-});&lt;/code&gt;&lt;/PRE&gt;&lt;video src="https://videos.ctfassets.net/d0dqkpgki2io/4CRutEDCBsoxDT1eBo48aB/9ce3f43edb3bed1782e722899567d4fe/bot5.mp4" alt="bot5" controls=""&gt;&lt;/video&gt;&lt;h2&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#future"&gt;Future&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;At this point, I’m not sure if I will continue working on the BDK. This was only a “weekend” project for me. I’ll probably play with it for a couple more days, potentially improve the API. If people try and keep using this for their own bots, I might invest some more time in it.&lt;/p&gt;&lt;h3&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#dijkstra-maps"&gt;Dijkstra maps&lt;/a&gt;&lt;/h3&gt;&lt;p dir="ltr"&gt;There’s one thing I’d like to explore for programming ship behavior, and that’s building &lt;strong dir="ltr"&gt;Dijkstra maps&lt;/strong&gt; for the environment. I came across these two posts that describe &lt;a href="http://www.roguebasin.com/index.php?title=The_Incredible_Power_of_Dijkstra_Maps" title="What are Dijkstra maps" dir="ltr"&gt;what they are&lt;/a&gt; and &lt;a href="http://www.roguebasin.com/index.php?title=Dijkstra_Maps_Visualized" title="Visualizing Dijkstra maps" dir="ltr"&gt;how can they effectively be used&lt;/a&gt; for all sorts of different behavior. It seems there aren’t any Rust libraries that expose something like this, so I might publish it as a separate crate.&lt;/p&gt;</description><pubDate>Wed, 02 Sep 2020 08:01:37 -0500</pubDate></item><item><title>FreeBSD Cluster with Pacemaker and Corosync</title><link>https://lobste.rs/s/ft2q1r</link><description>&lt;p dir="ltr"&gt;I always missed ‘proper’ cluster software for FreeBSD systems. Recently I got to run several Pacemaker/Corosync based clusters on Linux systems. I thought how to make similar high availability solutions on FreeBSD and I was really shocked when I figured out that both Pacemaker and Corosync tools are available in the FreeBSD Ports and packages as &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;net/pacemaker2&lt;/b&gt;&lt;/tt&gt; and &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;net/corosync2&lt;/b&gt;&lt;/tt&gt; respectively.&lt;/p&gt;&lt;p&gt;In this article I will check how well Pacemaker and Corosync cluster works on FreeBSD.&lt;/p&gt;&lt;img src="https://vermaden.files.wordpress.com/2020/09/pacemaker.png?w=960" alt="pacemaker" srcset="https://vermaden.files.wordpress.com/2020/09/pacemaker.png 531w, https://vermaden.files.wordpress.com/2020/09/pacemaker.png?w=150 150w, https://vermaden.files.wordpress.com/2020/09/pacemaker.png?w=300 300w" width="437" height="247"&gt;&lt;p&gt;There are many definitions of a cluster. One that I like the most is that a cluster is a system that is still redundant after losing one of its nodes (is still a cluster). This means that 3 nodes is a minimum for a cluster by that definition. The two node clusters are quite problematic because of their biggest exposure to the split brain problem. That is why often in the two node clusters additional devices or systems are added to make sure that this split brain does not happen. For example one can add third node without any resources or services just as a ‘witness’ role. Other way is to add a shared disk resource that will serve the same purpose and often its a raw volume with SCSI-3 Persistent Reservation mechanism used.&lt;/p&gt;&lt;h2&gt;Lab Setup&lt;/h2&gt;&lt;p&gt;As usual it will be entirely VirtualBox based and it will consist of 3 hosts. To not create 3 same FreeBSD installations I used 12.1-RELEASE virtual machine image available from the FreeBSD Project directly:&lt;/p&gt;&lt;p dir="ltr"&gt;There are several formats available – &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;qcow2&lt;/b&gt;&lt;/tt&gt;/&lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;raw&lt;/b&gt;&lt;/tt&gt;/&lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;vhd&lt;/b&gt;&lt;/tt&gt;/&lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;vmdk&lt;/b&gt;&lt;/tt&gt; – but as I will be using VirtualBox I used the &lt;a href="https://download.freebsd.org/ftp/releases/VM-IMAGES/12.1-RELEASE/amd64/Latest/FreeBSD-12.1-RELEASE-amd64.vmdk.xz" rel="noopener" dir="ltr"&gt;VMDK&lt;/a&gt; one.&lt;/p&gt;&lt;p&gt;Here is the list of the machines for the GlusterFS cluster:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;tt&gt;10.0.10.111&amp;nbsp; node1&lt;/tt&gt;&lt;/LI&gt;&lt;LI&gt;&lt;tt&gt;10.0.10.112&amp;nbsp; node2&lt;/tt&gt;&lt;/LI&gt;&lt;LI&gt;&lt;tt&gt;10.0.10.113&amp;nbsp; node3&lt;/tt&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Each VirtualBox virtual machine for FreeBSD is the default one (as suggested in the VirtualBox wizard) with 512 MB RAM and &lt;i dir="ltr"&gt;NAT Network&lt;/i&gt; as shown on the image below.&lt;/p&gt;&lt;img src="https://vermaden.files.wordpress.com/2020/09/machine-1.jpg?w=960" alt="machine" srcset="https://vermaden.files.wordpress.com/2020/09/machine-1.jpg 787w, https://vermaden.files.wordpress.com/2020/09/machine-1.jpg?w=150 150w, https://vermaden.files.wordpress.com/2020/09/machine-1.jpg?w=300 300w, https://vermaden.files.wordpress.com/2020/09/machine-1.jpg?w=768 768w" width="437" height="326"&gt;&lt;p dir="ltr"&gt;Here is the configuration of the &lt;i dir="ltr"&gt;NAT Network&lt;/i&gt; on VirtualBox.&lt;/p&gt;&lt;img src="https://vermaden.files.wordpress.com/2020/09/nat-network-01.jpg?w=960" alt="nat-network-01" srcset="https://vermaden.files.wordpress.com/2020/09/nat-network-01.jpg 371w, https://vermaden.files.wordpress.com/2020/09/nat-network-01.jpg?w=144 144w, https://vermaden.files.wordpress.com/2020/09/nat-network-01.jpg?w=288 288w" width="371" height="386"&gt;&lt;img src="https://vermaden.files.wordpress.com/2020/09/nat-network-02.jpg?w=960" alt="nat-network-02" srcset="https://vermaden.files.wordpress.com/2020/09/nat-network-02.jpg 730w, https://vermaden.files.wordpress.com/2020/09/nat-network-02.jpg?w=150 150w, https://vermaden.files.wordpress.com/2020/09/nat-network-02.jpg?w=300 300w" width="437" height="325"&gt;&lt;p dir="ltr"&gt;Before we will try connect to our FreeBSD machines we need to make the minimal network configuration inside each VM. Each FreeBSD machine will have such minimal &lt;tt dir="ltr"&gt;/etc/rc.conf&lt;/tt&gt; file as shown example for &lt;tt dir="ltr"&gt;node1&lt;/tt&gt; host.&lt;/p&gt;&lt;PRE&gt;root@node1:~ # &lt;strong dir="ltr"&gt;cat /etc/rc.conf&lt;/strong&gt;
+eagerly await the day I don’t have to think about e-mailing patches.&lt;/p&gt;</description><pubDate>Wed, 02 Sep 2020 03:00:23 -0500</pubDate></item><item><title>FreeBSD Cluster with Pacemaker and Corosync</title><link>https://lobste.rs/s/ft2q1r</link><description>&lt;p dir="ltr"&gt;I always missed ‘proper’ cluster software for FreeBSD systems. Recently I got to run several Pacemaker/Corosync based clusters on Linux systems. I thought how to make similar high availability solutions on FreeBSD and I was really shocked when I figured out that both Pacemaker and Corosync tools are available in the FreeBSD Ports and packages as &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;net/pacemaker2&lt;/b&gt;&lt;/tt&gt; and &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;net/corosync2&lt;/b&gt;&lt;/tt&gt; respectively.&lt;/p&gt;&lt;p&gt;In this article I will check how well Pacemaker and Corosync cluster works on FreeBSD.&lt;/p&gt;&lt;img src="https://vermaden.files.wordpress.com/2020/09/pacemaker.png?w=960" alt="pacemaker" srcset="https://vermaden.files.wordpress.com/2020/09/pacemaker.png 531w, https://vermaden.files.wordpress.com/2020/09/pacemaker.png?w=150 150w, https://vermaden.files.wordpress.com/2020/09/pacemaker.png?w=300 300w" width="437" height="247"&gt;&lt;p&gt;There are many definitions of a cluster. One that I like the most is that a cluster is a system that is still redundant after losing one of its nodes (is still a cluster). This means that 3 nodes is a minimum for a cluster by that definition. The two node clusters are quite problematic because of their biggest exposure to the split brain problem. That is why often in the two node clusters additional devices or systems are added to make sure that this split brain does not happen. For example one can add third node without any resources or services just as a ‘witness’ role. Other way is to add a shared disk resource that will serve the same purpose and often its a raw volume with SCSI-3 Persistent Reservation mechanism used.&lt;/p&gt;&lt;h2&gt;Lab Setup&lt;/h2&gt;&lt;p&gt;As usual it will be entirely VirtualBox based and it will consist of 3 hosts. To not create 3 same FreeBSD installations I used 12.1-RELEASE virtual machine image available from the FreeBSD Project directly:&lt;/p&gt;&lt;p dir="ltr"&gt;There are several formats available – &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;qcow2&lt;/b&gt;&lt;/tt&gt;/&lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;raw&lt;/b&gt;&lt;/tt&gt;/&lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;vhd&lt;/b&gt;&lt;/tt&gt;/&lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;vmdk&lt;/b&gt;&lt;/tt&gt; – but as I will be using VirtualBox I used the &lt;a href="https://download.freebsd.org/ftp/releases/VM-IMAGES/12.1-RELEASE/amd64/Latest/FreeBSD-12.1-RELEASE-amd64.vmdk.xz" rel="noopener" dir="ltr"&gt;VMDK&lt;/a&gt; one.&lt;/p&gt;&lt;p&gt;Here is the list of the machines for the GlusterFS cluster:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;tt&gt;10.0.10.111&amp;nbsp; node1&lt;/tt&gt;&lt;/LI&gt;&lt;LI&gt;&lt;tt&gt;10.0.10.112&amp;nbsp; node2&lt;/tt&gt;&lt;/LI&gt;&lt;LI&gt;&lt;tt&gt;10.0.10.113&amp;nbsp; node3&lt;/tt&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Each VirtualBox virtual machine for FreeBSD is the default one (as suggested in the VirtualBox wizard) with 512 MB RAM and &lt;i dir="ltr"&gt;NAT Network&lt;/i&gt; as shown on the image below.&lt;/p&gt;&lt;img src="https://vermaden.files.wordpress.com/2020/09/machine-1.jpg?w=960" alt="machine" srcset="https://vermaden.files.wordpress.com/2020/09/machine-1.jpg 787w, https://vermaden.files.wordpress.com/2020/09/machine-1.jpg?w=150 150w, https://vermaden.files.wordpress.com/2020/09/machine-1.jpg?w=300 300w, https://vermaden.files.wordpress.com/2020/09/machine-1.jpg?w=768 768w" width="437" height="326"&gt;&lt;p dir="ltr"&gt;Here is the configuration of the &lt;i dir="ltr"&gt;NAT Network&lt;/i&gt; on VirtualBox.&lt;/p&gt;&lt;img src="https://vermaden.files.wordpress.com/2020/09/nat-network-01.jpg?w=960" alt="nat-network-01" srcset="https://vermaden.files.wordpress.com/2020/09/nat-network-01.jpg 371w, https://vermaden.files.wordpress.com/2020/09/nat-network-01.jpg?w=144 144w, https://vermaden.files.wordpress.com/2020/09/nat-network-01.jpg?w=288 288w" width="371" height="386"&gt;&lt;img src="https://vermaden.files.wordpress.com/2020/09/nat-network-02.jpg?w=960" alt="nat-network-02" srcset="https://vermaden.files.wordpress.com/2020/09/nat-network-02.jpg 730w, https://vermaden.files.wordpress.com/2020/09/nat-network-02.jpg?w=150 150w, https://vermaden.files.wordpress.com/2020/09/nat-network-02.jpg?w=300 300w" width="437" height="325"&gt;&lt;p dir="ltr"&gt;Before we will try connect to our FreeBSD machines we need to make the minimal network configuration inside each VM. Each FreeBSD machine will have such minimal &lt;tt dir="ltr"&gt;/etc/rc.conf&lt;/tt&gt; file as shown example for &lt;tt dir="ltr"&gt;node1&lt;/tt&gt; host.&lt;/p&gt;&lt;PRE&gt;root@node1:~ # &lt;strong dir="ltr"&gt;cat /etc/rc.conf&lt;/strong&gt;
 hostname=node1
 ifconfig_em0="inet 10.0.10.111/24 up"
 defaultrouter=10.0.10.1
@@ -1074,7 +888,193 @@ Node List:
 Full List of Resources:
   * IP  (ocf::pacemaker:ifconfig):       Started node1
 
-&lt;/PRE&gt;&lt;p&gt;Seems that failover went well.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;crm&lt;/b&gt;&lt;/tt&gt; command also colors various sections of its output.&lt;/p&gt;&lt;img src="https://vermaden.files.wordpress.com/2020/09/failover.jpg?w=960" alt="failover" srcset="https://vermaden.files.wordpress.com/2020/09/failover.jpg 556w, https://vermaden.files.wordpress.com/2020/09/failover.jpg?w=150 150w, https://vermaden.files.wordpress.com/2020/09/failover.jpg?w=300 300w" width="437" height="392"&gt;&lt;p&gt;Good to know that Pacemaker and Corosync cluster runs well on FreeBSD.&lt;/p&gt;&lt;p&gt;Some work is needed to write the needed resource files but one with some time and determination can surely put FreeBSD into a very capable highly available cluster.&lt;/p&gt;&lt;div&gt;EOF&lt;/div&gt;</description><pubDate>Wed, 02 Sep 2020 17:44:56 -0500</pubDate></item><item><title>One Year of Verifpal: Understanding Verifpal’s Relationship With Cryptographic Protocol Security</title><link>https://lobste.rs/s/7zpsip</link><description>&lt;figure&gt;&lt;img width="453" height="478" src="https://symbolicsoft.files.wordpress.com/2020/09/pose3.png?w=1568" alt="" srcset="https://symbolicsoft.files.wordpress.com/2020/09/pose3.png?w=1568 1568w, https://symbolicsoft.files.wordpress.com/2020/09/pose3.png?w=142 142w, https://symbolicsoft.files.wordpress.com/2020/09/pose3.png?w=285 285w, https://symbolicsoft.files.wordpress.com/2020/09/pose3.png?w=768 768w, https://symbolicsoft.files.wordpress.com/2020/09/pose3.png?w=971 971w, https://symbolicsoft.files.wordpress.com/2020/09/pose3.png 2318w"&gt;&lt;/figure&gt;&lt;p&gt;Last week, Verifpal, our cryptographic protocol modeling and analysis framework, celebrated its one-year anniversary. In its first year, Verifpal has made some significant achievements.&lt;/p&gt;&lt;h2&gt;Improvements to Usability, Features, and Reliability&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;&lt;span dir="ltr"&gt;First&lt;/span&gt;, Verifpal has improved its relationship with users.&lt;/strong&gt; Verifpal was &lt;a href="https://nlnet.nl/news/2020/20200611-SecureVideochatVerifpal.html" dir="ltr"&gt;part of Zoom’s effort&lt;/a&gt; to modernize its cryptography. &lt;a href="https://www.youtube.com/watch?v=it_hJkVU-UA" dir="ltr"&gt;Verifpal for Visual Studio Code&lt;/a&gt; and &lt;a href="https://verifhub.verifpal.com/" dir="ltr"&gt;VerifHub&lt;/a&gt; allowed engineers to model and collaborate on cryptographic protocols more easily than ever. And &lt;a href="https://twitter.com/verifpal/status/1285662686894850050" dir="ltr"&gt;better attack traces&lt;/a&gt; allowed for easier to understand analysis results.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://pbs.twimg.com/media/EWtWLhcXsAEwUpV?format=jpg&amp;amp;name=4096x4096" alt="Verifpal for Visual Studio Code allows visualizing and analyzing Verifpal models straight inside Visual Studio Code, with easy access to documentation for primitives and other functionality by hovering with the cursor." width="453" height="272"&gt;&lt;figcaption dir="auto"&gt;Verifpal for Visual Studio Code allows visualizing and analyzing Verifpal models straight inside Visual Studio Code, with easy access to documentation for primitives and other functionality by hovering with the cursor.&lt;/figcaption&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;&lt;span dir="ltr"&gt;Second&lt;/span&gt;, Verifpal obtained new features that allow it to capture more of a protocol’s workings.&lt;/strong&gt; Verifpal gained the ability to model protocols where users can potentially input &lt;strong dir="ltr"&gt;weak or strong passwords&lt;/strong&gt;. This is very useful for modeling protocols that include user-provided passwords at points, and is a great way to separate guessable passwords from material that can actually securely be used as an encryption key of some kind.&amp;nbsp;&lt;strong dir="ltr"&gt;New primitives&lt;/strong&gt; were introduced, allowing the usage of &lt;a href="https://source.symbolic.software/verifpal/verifpal/-/commit/fbc4d7372c0fe7df484d7331f045ff5710a63d37" dir="ltr"&gt;ring signatures&lt;/a&gt;, public key encryption, &lt;a href="https://source.symbolic.software/verifpal/verifpal/-/commit/7467e8abb274778a1b668bed46d5ee67b8574478" dir="ltr"&gt;Shamir secret sharing&lt;/a&gt; and &lt;a href="https://source.symbolic.software/verifpal/verifpal/-/commit/d2261c6b0daddbdccee9ef72e06604ede463d405" dir="ltr"&gt;blind signatures&lt;/a&gt;. The &lt;em dir="ltr"&gt;leaks&lt;/em&gt; keyword now exists, allowing principals to leak constants to the attacker without necessarily sending them to another principal. &lt;strong dir="ltr"&gt;&lt;a href="https://source.symbolic.software/verifpal/verifpal/-/commit/221b85db613c6634069f323f84d21c89454db6db" dir="ltr"&gt;Phases&lt;/a&gt;&lt;/strong&gt; are an exciting new feature that allows Verifpal to reliably model post-compromise security properties such as forward secrecy or future secrecy.&amp;nbsp; &lt;strong dir="ltr"&gt;&lt;a href="https://source.symbolic.software/verifpal/verifpal/-/commit/780dc774226390eb8183c7ccfa61ed83a9d26e56" dir="ltr"&gt;Query preconditions&lt;/a&gt;&lt;/strong&gt; allow for illustration relationships between different Verifpal queries on a protocol. And dozens of small improvements and changes were made to Verifpal across its application stack.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;&lt;span dir="ltr"&gt;Finally, and most importantly&lt;/span&gt;, Verifpal improved its analysis strength and reliability.&lt;/strong&gt; As documented in a previous post, Verifpal’s formal semantics and passive attacker analysis are now &lt;a href="https://blog.symbolic.software/2020/04/14/freshness-unlinkability-model-semantics-verifpal/" dir="ltr"&gt;fully modeled in the Coq theorem prover&lt;/a&gt;. While this does not include active attacker analysis methodology, it does indicate that we can capture Verifpal’s semantics elegantly in existing formalism methods as well as a basic component of its analysis methodology. Our &lt;a href="https://verifpal.com/paper" dir="ltr"&gt;revised Verifpal paper&lt;/a&gt; goes into further detail on the Verifpal active attacker analysis methodology and describes formally how primitives are defined, deconstructed and analyzed in Verifpal. Furthermore, valuable feedback was received from over a dozen Verifpal community members that allowed detecting and fixing analysis errors, misleading analysis results and that pushed us to more concretely define the meaning and function of Verifpal queries such as freshness and authentication. These discussions occurred on the &lt;a href="https://verifpal.com/list" dir="ltr"&gt;Verifpal Mailing List&lt;/a&gt;, the &lt;a href="https://verifpal.com/discord" dir="ltr"&gt;Verifpal Discord&lt;/a&gt; as well as via private feedback.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://symbolicsoft.files.wordpress.com/2020/09/image.png?w=1024" alt="" srcset="https://symbolicsoft.files.wordpress.com/2020/09/image.png?w=1024 1024w, https://symbolicsoft.files.wordpress.com/2020/09/image.png?w=150 150w, https://symbolicsoft.files.wordpress.com/2020/09/image.png?w=300 300w, https://symbolicsoft.files.wordpress.com/2020/09/image.png?w=768 768w, https://symbolicsoft.files.wordpress.com/2020/09/image.png 1115w"&gt;&lt;figcaption dir="auto"&gt;Verifpal’s paper was revised to go into further detail regarding the analysis methodology, formal semantics and the limits of Verifpal analysis. PrimitiveSpecs were introduced in order to standardize how primitives are defined and how their semantics operate within Verifpal analysis, i.e. via the following operations:
+&lt;/PRE&gt;&lt;p&gt;Seems that failover went well.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;tt dir="ltr"&gt;&lt;b dir="ltr"&gt;crm&lt;/b&gt;&lt;/tt&gt; command also colors various sections of its output.&lt;/p&gt;&lt;img src="https://vermaden.files.wordpress.com/2020/09/failover.jpg?w=960" alt="failover" srcset="https://vermaden.files.wordpress.com/2020/09/failover.jpg 556w, https://vermaden.files.wordpress.com/2020/09/failover.jpg?w=150 150w, https://vermaden.files.wordpress.com/2020/09/failover.jpg?w=300 300w" width="437" height="392"&gt;&lt;p&gt;Good to know that Pacemaker and Corosync cluster runs well on FreeBSD.&lt;/p&gt;&lt;p&gt;Some work is needed to write the needed resource files but one with some time and determination can surely put FreeBSD into a very capable highly available cluster.&lt;/p&gt;&lt;div&gt;EOF&lt;/div&gt;</description><pubDate>Wed, 02 Sep 2020 17:44:56 -0500</pubDate></item><item><title>Halite III Bot Development Kit in Rust</title><link>https://lobste.rs/s/8qnkjd</link><description>&lt;main&gt;&lt;span&gt;September 2, 2020&lt;/span&gt;&lt;/main&gt;&lt;p&gt;I don’t recall the first time I found out about Halite. It was probably years ago. I do remember thinking a lot about the idea of writing your own bot that plays the game and hopefully wins. I thought about doing it in Python for a week or so, but then I gave up and forgot about it.&lt;/p&gt;&lt;p&gt;Fast forward a few years, and here I am rediscovering Halite again. This time it was much more entertaining to play with. I combined it with my enthusiasm for Rust and spent a couple of days writing what I like to call a BDK, bot development kit.&lt;/p&gt;&lt;img src="https://images.ctfassets.net/d0dqkpgki2io/624QGS4NY7DxBDBIHVuPgk/aed5f702637ef8284fa7eb44b717aa95/last.jpg" alt="halite game screenshot" title="Halite III screenshot" width="453" height="254"&gt;&lt;h2&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#game-mechanics"&gt;Game mechanics&lt;/a&gt;&lt;/h2&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Halite III is a resource management game in which players build and command ships that explore the ocean and collect halite. Ships use halite as an energy source, and the player with the most stored halite at the end of the game is the winner.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;The map is two dimensional and is usually 32 by 32 cells in size. If your ship navigates off the map the wraparound will move it to the opposite side.&lt;/p&gt;&lt;p&gt;You start with a shipyard and some amount of stored halite. The default starting halite is 4000, but that might be configurable. I haven’t yet explored all the options the halite server exposes.&lt;/p&gt;&lt;p&gt;A ship costs 1000 halite to construct. Moving it will deplete 10% of the halite stored in it. Not moving for a turn will transfer 10% of the halite stored in the cell to a ship that’s parked on it. The cells have a cap and can’t contain more than 1000 halite. They will regenerate a small amount of halite on every turn.&lt;/p&gt;&lt;p&gt;If you deplete halite around your shipyard, you can convert a ship to a drop-off. That has the potential to decrease the distance ships need to travel, therefore reducing the halite loss.&lt;/p&gt;&lt;h2&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#writing-the-bdk"&gt;Writing the BDK&lt;/a&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;It took me quite a while to find the Halite III starter kits. For some reason, their documentation seems to be broken in places. On the other hand, Halite II documentation still has working links for downloads and is much better overall. After some searching, I found &lt;a href="https://github.com/HaliteChallenge/Halite-III" title="Halite III Challenge repository" dir="ltr"&gt;this&lt;/a&gt; repo that contained instructions on how to compile the Halite III engine and starter kits in many languages.&lt;/p&gt;&lt;p dir="ltr"&gt;I also came across &lt;a href="https://github.com/rossmacarthur/halite3-rust-starter" title="Halite III rust starter" dir="ltr"&gt;this&lt;/a&gt; starter kit in Rust. I tried it, but it was hard for me to figure out the API and the game data you can get. I went through the code and figured I can probably write something similar. I wanted it to be a library to make it easily embeddable into any project.&lt;/p&gt;&lt;p&gt;The hardest part for me was figuring out how the communication protocol works. Halite server uses it to send data and receive commands from bots. For context, this is how a game of Halite is ran:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;halite \
+  --width 32 \
+  --height 32 \
+  &lt;span dir="ltr"&gt;"./bot1 --name borg"&lt;/span&gt; \
+  &lt;span dir="ltr"&gt;"./bot2 --intelligence superhuman"&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The server runs the bots as separate commands and uses their &lt;code dir="ltr"&gt;stdin&lt;/code&gt; and &lt;code dir="ltr"&gt;stdout&lt;/code&gt; pipes to communicate. The data flows into a bot through &lt;code dir="ltr"&gt;stdin&lt;/code&gt; in the form of a simple space and newline delimited protocol. I couldn’t find any materials that describe this protocol, so I’ll cover it here.&lt;/p&gt;&lt;h3&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#the-protocol"&gt;The protocol&lt;/a&gt;&lt;/h3&gt;&lt;PRE&gt;&lt;code&gt;// This is a comment and is not a part of the protocol
+
+// This protocol does not use empty lines, they are
+// here only for the formatting purposes
+
+// First line is a JSON blob that contains the
+// configuration / parameters for this specific game
+{"CAPTURE_ENABLED":false,"CAPTURE_RADIUS":3,"DEFAULT_MAP_HEIGHT":32,"DEFAULT_MAP_WIDTH":32,"DROPOFF_COST":4000,"DROPOFF_PENALTY_RATIO":4,"E        XTRACT_RATIO":4,"FACTOR_EXP_1":2.0,"FACTOR_EXP_2":2.0,"INITIAL_ENERGY":5000,"INSPIRATION_ENABLED":true,"INSPIRATION_RADIUS":4,"INSPIRATION_SHIP_COUNT":2,"INSPIRED_BON        US_MULTIPLIER":2.0,"INSPIRED_EXTRACT_RATIO":4,"INSPIRED_MOVE_COST_RATIO":10,"MAX_CELL_PRODUCTION":1000,"MAX_ENERGY":1000,"MAX_PLAYERS":16,"MAX_TURNS":400,"MAX_TURN_TH        RESHOLD":64,"MIN_CELL_PRODUCTION":900,"MIN_TURNS":400,"MIN_TURN_THRESHOLD":32,"MOVE_COST_RATIO":10,"NEW_ENTITY_ENERGY_COST":1000,"PERSISTENCE":0.7,"SHIPS_ABOVE_FOR_CA        PTURE":3,"STRICT_ERRORS":false,"game_seed":1403861864,"map_height":32,"map_width":32}
+
+// Next line contains the number of players and your
+// player id
+2 0
+
+// Now we get the positions of shipyards for every
+// player in this format -&amp;gt; player_id pos_x pos_y
+0 8 16
+1 23 16
+
+// We get the map dimensions, we'll use something small
+4 4
+
+// Now we get the starting amount of halite for every cell
+34 128 552 18
+261 4 377 854
+423 119 268 111
+932 21 76 341
+
+// The setup phase is now over, now we start getting
+// turn data
+
+// The turn number
+3
+
+// For every player we get data about ships, drop-offs,
+// and halite stored:
+// player_id num_ships num_dropoffs halite
+// then for every ship -&amp;gt; ship_id pos_x pos_y halite
+// then for every drop-off -&amp;gt; dropoff_id pos_x pos_y
+0 3 0 2314
+13 7 28 417
+14 27 3 13
+17 11 11 957
+1 4 1 3829
+7 30 23 333
+9 21 1 591
+10 15 11 5
+14 22 11 122
+1 24 31
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Sending commands is really simple. I used &lt;code dir="ltr"&gt;print!&lt;/code&gt; and &lt;code dir="ltr"&gt;println!&lt;/code&gt; macros to implement that. Here are the text representations of the commands:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;spawn ship &lt;code dir="ltr"&gt;g&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;move ship &lt;code dir="ltr"&gt;m {ship_id} {direction}&lt;/code&gt; (direction can be one of &lt;code dir="ltr"&gt;n&lt;/code&gt;, &lt;code dir="ltr"&gt;e&lt;/code&gt;, &lt;code dir="ltr"&gt;s&lt;/code&gt;, &lt;code dir="ltr"&gt;w&lt;/code&gt;, even &lt;code dir="ltr"&gt;o&lt;/code&gt; which means stay still)&lt;/LI&gt;&lt;LI&gt;convert a ship to drop-off &lt;code dir="ltr"&gt;c {ship_id}&lt;/code&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;When you’re ready to finish your turn, you need to write these commands to &lt;code dir="ltr"&gt;stdout&lt;/code&gt; with a &lt;code dir="ltr"&gt;\n&lt;/code&gt; at the end. Here’s an example:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;g c 8 m 3 n m 15 w\n
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#a-remark-about-rust"&gt;A remark about Rust&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;The details about the development and the libraries I used won’t be covered here. That might be material for a future post. I just want to say that I’m amazed that I was able to write almost the whole thing without running it once. After it was probably 90% finished, I tried running it and quickly debugged a few protocol issues I had. It was working. 😯&lt;/p&gt;&lt;p dir="ltr"&gt;There were a few problems with data ownership and lifetimes. I’m still far from comfortable when it comes to lifetimes. After I abandoned the &lt;em dir="ltr"&gt;“no clone no copy”&lt;/em&gt; idea, I was able to simplify the API.&lt;/p&gt;&lt;h3&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#how-to-install"&gt;How to install&lt;/a&gt;&lt;/h3&gt;&lt;p dir="ltr"&gt;The BDK is available on &lt;a href="https://crates.io/crates/halite3bdk" title="halite3bdk crates io page" dir="ltr"&gt;crates.io&lt;/a&gt;. You can check out the source code in &lt;a href="https://github.com/stjepangolemac/halite3bdk" title="halite3bdk source code repository" dir="ltr"&gt;the GitHub repository&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;If you use the great &lt;a href="https://github.com/killercup/cargo-edit" title="cargo edit source code repository" dir="ltr"&gt;&lt;code dir="ltr"&gt;cargo-edit&lt;/code&gt;&lt;/a&gt;, you only need to run &lt;code dir="ltr"&gt;cargo add halite3bdk&lt;/code&gt; inside your Rust project.&lt;/p&gt;&lt;h2&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#writing-your-first-halite-bot"&gt;Writing your first Halite bot&lt;/a&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;The first step is to make sure the &lt;code dir="ltr"&gt;halite&lt;/code&gt; engine is available in your &lt;code dir="ltr"&gt;$PATH&lt;/code&gt;. I couldn’t find an executable on the site, so I compiled it from the source. You’ll need to clone a repo and follow short instructions &lt;a href="https://github.com/HaliteChallenge/Halite-III/tree/master/game_engine" title="Halite engine compilation guide" dir="ltr"&gt;here&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;My primary concern was to have a simple API. I think I’ve achieved that as the minimal example is only 8 lines long (not counting the blanks).&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; halite3bdk::game::Game;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() {
+  &lt;span dir="ltr"&gt;let&lt;/span&gt; game = Game::init(&lt;span dir="ltr"&gt;"botman"&lt;/span&gt;);
+
+  &lt;span dir="ltr"&gt;loop&lt;/span&gt; {
+    game.next_turn();
+    game.end_turn();
+  }
+}&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;You import the BDK, initialize the game, then loop until the game is finished.&lt;/p&gt;&lt;p&gt;If you compile this and run the game, you’ll see your bot is not doing anything.&lt;/p&gt;&lt;video src="https://videos.ctfassets.net/d0dqkpgki2io/1BNKth4DkGMNjJCaEvCwuZ/7631bfbf6afe136524ce7f62be45b503/bot1.mp4" alt="bot1" controls=""&gt;&lt;/video&gt;&lt;p dir="ltr"&gt;Because Halite uses &lt;code dir="ltr"&gt;stdin&lt;/code&gt; and &lt;code dir="ltr"&gt;stdout&lt;/code&gt; to communicate with the bots, they can’t print anything, not even for debugging purposes. That’s why I’ve exported a &lt;code dir="ltr"&gt;logger&lt;/code&gt; utility, which will log into a file.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;use&lt;/span&gt; halite3bdk::game::Game;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; halite3bdk::logger;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() {
+  &lt;span dir="ltr"&gt;let&lt;/span&gt; game = Game::init(&lt;span dir="ltr"&gt;"botman"&lt;/span&gt;);
+
+  &lt;span dir="ltr"&gt;// Logger can be used after the game is initialized&lt;/span&gt;
+  logger::info(&lt;span dir="ltr"&gt;"Hello world"&lt;/span&gt;);
+  logger::error(&lt;span dir="ltr"&gt;"This is weird"&lt;/span&gt;);
+  logger::abort(&lt;span dir="ltr"&gt;"Could not initialize warp drive"&lt;/span&gt;);
+}&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Now is the right time to add some behavior.&lt;/p&gt;&lt;h3&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#it-moves"&gt;It moves&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;The most basic behavior we can implement is moving all the ships in the same direction. The shipyard will now spawn ships if possible, so we have something to move.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;// import direction&lt;/span&gt;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; halite3bdk::direction::Direction;
+...
+
+game.next_turn();
+
+&lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; cmds = &lt;span dir="ltr"&gt;vec!&lt;/span&gt;[];
+&lt;span dir="ltr"&gt;let&lt;/span&gt; halite = game.my_halite();
+&lt;span dir="ltr"&gt;let&lt;/span&gt; shipyard = game.my_shipyard();
+&lt;span dir="ltr"&gt;let&lt;/span&gt; ships = game.my_ships();
+
+&lt;span dir="ltr"&gt;// We spawn some ships&lt;/span&gt;
+&lt;span dir="ltr"&gt;let&lt;/span&gt; shipyard_occupied = game.map.is_occupied(&amp;amp;shipyard.position);
+&lt;span dir="ltr"&gt;if&lt;/span&gt; halite &amp;gt; &lt;span dir="ltr"&gt;1000&lt;/span&gt; &amp;amp;&amp;amp; !shipyard_occupied {
+  &lt;span dir="ltr"&gt;let&lt;/span&gt; cmd = shipyard.spawn();
+  cmds.push(cmd);
+}
+
+&lt;span dir="ltr"&gt;// We move all ships to the north, why not&lt;/span&gt;
+ships.iter().for_each(|ship| {
+  &lt;span dir="ltr"&gt;// I need to change the method name as `move` is a&lt;/span&gt;
+  &lt;span dir="ltr"&gt;// reserved keyword and needs to be invoked like&lt;/span&gt;
+  &lt;span dir="ltr"&gt;// this, for now&lt;/span&gt;
+  &lt;span dir="ltr"&gt;let&lt;/span&gt; cmd = ship.r#&lt;span dir="ltr"&gt;move&lt;/span&gt;(Direction::North);
+  cmds.push(cmd);
+});
+
+game.register_commands(cmds);
+game.end_turn();&lt;/code&gt;&lt;/PRE&gt;&lt;video src="https://videos.ctfassets.net/d0dqkpgki2io/2oCdMbbd1TjrjoyvPzcn20/19b618bbd17ebbc9f9fd91c0b6082200/bot2.mp4" alt="bot2" controls=""&gt;&lt;/video&gt;&lt;h3&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#it-eats"&gt;It eats&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;It would be much more beneficial for this civilization to mine halite and move when there’s nothing left to mine. Let’s make them move in random directions until they find a valuable tile.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;// import random dice throw&lt;/span&gt;
+&lt;span dir="ltr"&gt;use&lt;/span&gt; halite3bdk::random::dice_usize;
+...
+
+ships.iter().for_each(|ship| {
+  &lt;span dir="ltr"&gt;let&lt;/span&gt; tile_halite = game.map.get_cell(&amp;amp;ship.position).halite;
+  &lt;span dir="ltr"&gt;let&lt;/span&gt; tile_is_worth = tile_halite &amp;gt; &lt;span dir="ltr"&gt;1000&lt;/span&gt; / &lt;span dir="ltr"&gt;10&lt;/span&gt;;
+
+  &lt;span dir="ltr"&gt;if&lt;/span&gt; !tile_is_worth {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; directions = Direction::all();
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; chosen_dir = directions[dice_usize(&lt;span dir="ltr"&gt;4&lt;/span&gt;)];
+
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; cmd = ship.r#&lt;span dir="ltr"&gt;move&lt;/span&gt;(chosen_dir);
+    cmds.push(cmd);
+  }
+
+  &lt;span dir="ltr"&gt;// we don't do anything if the tile is worth it, we keep mining &lt;/span&gt;
+});&lt;/code&gt;&lt;/PRE&gt;&lt;video src="https://videos.ctfassets.net/d0dqkpgki2io/224vhDu3mn3MibDOxYcSrQ/9177f2fb2785a22227bdb6b03f6a6768/bot3.mp4" alt="bot3" controls=""&gt;&lt;/video&gt;&lt;h3&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#it-avoids-death"&gt;It avoids death&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;It’s visible from the videos that our ships don’t really care much about their lives. They’ll move in any direction, even if it means certain death. Now they’ll start avoiding collisions.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;if&lt;/span&gt; !tile_is_worth {
+  &lt;span dir="ltr"&gt;let&lt;/span&gt; directions = Direction::all();
+  &lt;span dir="ltr"&gt;let&lt;/span&gt; chosen_dir = directions[dice_usize(&lt;span dir="ltr"&gt;4&lt;/span&gt;)];
+
+  &lt;span dir="ltr"&gt;let&lt;/span&gt; future_position = &amp;amp;ship.position.with_direction(&amp;amp;chosen_dir);
+  &lt;span dir="ltr"&gt;let&lt;/span&gt; is_safe = !game.map.is_occupied(future_position);
+
+  &lt;span dir="ltr"&gt;if&lt;/span&gt; is_safe {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; cmd = ship.r#&lt;span dir="ltr"&gt;move&lt;/span&gt;(chosen_dir);
+    cmds.push(cmd);
+  }
+}&lt;/code&gt;&lt;/PRE&gt;&lt;video src="https://videos.ctfassets.net/d0dqkpgki2io/6AxQGjD37T3sgj8mb2Eg6B/6e815cb39dee5849c8e1b2e6a5d764f1/bot4.mp4" alt="bot4" controls=""&gt;&lt;/video&gt;&lt;p&gt;The ships are a little more careful now about their movement, but they still die. The problem is that some of them might decide to move to the same tile next turn. We need to fix that.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;...
+&lt;span dir="ltr"&gt;if&lt;/span&gt; is_safe {
+  &lt;span dir="ltr"&gt;// Set this tile to occupied for next ships to know not to&lt;/span&gt;
+  &lt;span dir="ltr"&gt;// navigate there&lt;/span&gt;
+  game.map.set_occupied(future_position);
+  &lt;span dir="ltr"&gt;let&lt;/span&gt; cmd = ship.r#&lt;span dir="ltr"&gt;move&lt;/span&gt;(chosen_dir);
+  ...&lt;/code&gt;&lt;/PRE&gt;&lt;video src="https://videos.ctfassets.net/d0dqkpgki2io/2ISeyRD9WNG5c7qf1rf400/e2da06d68f3352f5abee9a29e1083bf5/bot4-improved.mp4" alt="bot4-improved" controls=""&gt;&lt;/video&gt;&lt;h3&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#its-alive"&gt;It’s alive&lt;/a&gt;&lt;/h3&gt;&lt;p dir="ltr"&gt;The only behavior left to implement is dropping off the halite when the ship is full. We’ll need some sort of container to keep track of ship states. An ordinary &lt;code dir="ltr"&gt;HashMap&lt;/code&gt; should do it.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;...
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;enum&lt;/span&gt; &lt;span dir="ltr"&gt;ShipState&lt;/span&gt;&lt;/span&gt; {
+  Mining,
+  Returning
+}
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;/span&gt;() {
+  &lt;span dir="ltr"&gt;let&lt;/span&gt; game = Game::init(&lt;span dir="ltr"&gt;"botman"&lt;/span&gt;);
+
+  &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; ship_state: HashMap&amp;lt;&lt;span dir="ltr"&gt;u32&lt;/span&gt;, ShipState&amp;gt; = HashMap::new();
+
+  &lt;span dir="ltr"&gt;loop&lt;/span&gt; {
+  ...&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;And now we check the state for every ship.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;ships.iter().for_each(|ship| {
+  &lt;span dir="ltr"&gt;// the hashmap will not contain any states as first, so we&lt;/span&gt;
+  &lt;span dir="ltr"&gt;// use ShipState::Mining as default&lt;/span&gt;
+  &lt;span dir="ltr"&gt;match&lt;/span&gt; ship_state.get(&amp;amp;ship.id).unwrap_or(&amp;amp;ShipState::Mining) {
+    ShipState::Mining =&amp;gt; {
+      &lt;span dir="ltr"&gt;if&lt;/span&gt; ship.halite &amp;lt; &lt;span dir="ltr"&gt;1000&lt;/span&gt; {
+        &lt;span dir="ltr"&gt;// do what we did above, pick a random direction and&lt;/span&gt;
+        &lt;span dir="ltr"&gt;// move if it's safe&lt;/span&gt;
+        ...
+      } &lt;span dir="ltr"&gt;else&lt;/span&gt; {
+        &lt;span dir="ltr"&gt;// ship is full, start returning&lt;/span&gt;
+        ship_state.insert(ship.id, ShipState::Returning);
+      }
+    }
+    ShipState::Returning =&amp;gt; {
+      &lt;span dir="ltr"&gt;let&lt;/span&gt; destination = &amp;amp;shipyard.position;
+
+      &lt;span dir="ltr"&gt;if&lt;/span&gt; &amp;amp;ship.position != destination {
+        &lt;span dir="ltr"&gt;let&lt;/span&gt; next_directions = game.map.direction_to(&amp;amp;ship.position, destination);
+        &lt;span dir="ltr"&gt;let&lt;/span&gt; direction = next_directions.first();
+
+        &lt;span dir="ltr"&gt;match&lt;/span&gt; direction {
+          &lt;span dir="ltr"&gt;Some&lt;/span&gt;(dir) =&amp;gt; {
+            &lt;span dir="ltr"&gt;let&lt;/span&gt; future_position = &amp;amp;ship.position.with_direction(&amp;amp;dir);
+            &lt;span dir="ltr"&gt;let&lt;/span&gt; is_safe = !game.map.is_occupied(future_position);
+
+            &lt;span dir="ltr"&gt;if&lt;/span&gt; is_safe {
+              game.map.set_occupied(future_position);
+              &lt;span dir="ltr"&gt;let&lt;/span&gt; cmd = ship.r#&lt;span dir="ltr"&gt;move&lt;/span&gt;(*dir);
+              cmds.push(cmd);
+            }
+          }
+          &lt;span dir="ltr"&gt;None&lt;/span&gt; =&amp;gt; (),
+        }
+      } &lt;span dir="ltr"&gt;else&lt;/span&gt; {
+        &lt;span dir="ltr"&gt;// ship is home, now go back to mining&lt;/span&gt;
+        ship_state.insert(ship.id, ShipState::Mining);
+      }
+    }
+  }
+});&lt;/code&gt;&lt;/PRE&gt;&lt;video src="https://videos.ctfassets.net/d0dqkpgki2io/4CRutEDCBsoxDT1eBo48aB/9ce3f43edb3bed1782e722899567d4fe/bot5.mp4" alt="bot5" controls=""&gt;&lt;/video&gt;&lt;h2&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#future"&gt;Future&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;At this point, I’m not sure if I will continue working on the BDK. This was only a “weekend” project for me. I’ll probably play with it for a couple more days, potentially improve the API. If people try and keep using this for their own bots, I might invest some more time in it.&lt;/p&gt;&lt;h3&gt;&lt;a href="https://sgolem.com/halite-iii-bot-development-kit-in-rust#dijkstra-maps"&gt;Dijkstra maps&lt;/a&gt;&lt;/h3&gt;&lt;p dir="ltr"&gt;There’s one thing I’d like to explore for programming ship behavior, and that’s building &lt;strong dir="ltr"&gt;Dijkstra maps&lt;/strong&gt; for the environment. I came across these two posts that describe &lt;a href="http://www.roguebasin.com/index.php?title=The_Incredible_Power_of_Dijkstra_Maps" title="What are Dijkstra maps" dir="ltr"&gt;what they are&lt;/a&gt; and &lt;a href="http://www.roguebasin.com/index.php?title=Dijkstra_Maps_Visualized" title="Visualizing Dijkstra maps" dir="ltr"&gt;how can they effectively be used&lt;/a&gt; for all sorts of different behavior. It seems there aren’t any Rust libraries that expose something like this, so I might publish it as a separate crate.&lt;/p&gt;</description><pubDate>Wed, 02 Sep 2020 08:01:37 -0500</pubDate></item><item><title>One Year of Verifpal: Understanding Verifpal’s Relationship With Cryptographic Protocol Security</title><link>https://lobste.rs/s/7zpsip</link><description>&lt;figure&gt;&lt;img width="453" height="478" src="https://symbolicsoft.files.wordpress.com/2020/09/pose3.png?w=1568" alt="" srcset="https://symbolicsoft.files.wordpress.com/2020/09/pose3.png?w=1568 1568w, https://symbolicsoft.files.wordpress.com/2020/09/pose3.png?w=142 142w, https://symbolicsoft.files.wordpress.com/2020/09/pose3.png?w=285 285w, https://symbolicsoft.files.wordpress.com/2020/09/pose3.png?w=768 768w, https://symbolicsoft.files.wordpress.com/2020/09/pose3.png?w=971 971w, https://symbolicsoft.files.wordpress.com/2020/09/pose3.png 2318w"&gt;&lt;/figure&gt;&lt;p&gt;Last week, Verifpal, our cryptographic protocol modeling and analysis framework, celebrated its one-year anniversary. In its first year, Verifpal has made some significant achievements.&lt;/p&gt;&lt;h2&gt;Improvements to Usability, Features, and Reliability&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;&lt;span dir="ltr"&gt;First&lt;/span&gt;, Verifpal has improved its relationship with users.&lt;/strong&gt; Verifpal was &lt;a href="https://nlnet.nl/news/2020/20200611-SecureVideochatVerifpal.html" dir="ltr"&gt;part of Zoom’s effort&lt;/a&gt; to modernize its cryptography. &lt;a href="https://www.youtube.com/watch?v=it_hJkVU-UA" dir="ltr"&gt;Verifpal for Visual Studio Code&lt;/a&gt; and &lt;a href="https://verifhub.verifpal.com/" dir="ltr"&gt;VerifHub&lt;/a&gt; allowed engineers to model and collaborate on cryptographic protocols more easily than ever. And &lt;a href="https://twitter.com/verifpal/status/1285662686894850050" dir="ltr"&gt;better attack traces&lt;/a&gt; allowed for easier to understand analysis results.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://pbs.twimg.com/media/EWtWLhcXsAEwUpV?format=jpg&amp;amp;name=4096x4096" alt="Verifpal for Visual Studio Code allows visualizing and analyzing Verifpal models straight inside Visual Studio Code, with easy access to documentation for primitives and other functionality by hovering with the cursor." width="453" height="272"&gt;&lt;figcaption dir="auto"&gt;Verifpal for Visual Studio Code allows visualizing and analyzing Verifpal models straight inside Visual Studio Code, with easy access to documentation for primitives and other functionality by hovering with the cursor.&lt;/figcaption&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;&lt;span dir="ltr"&gt;Second&lt;/span&gt;, Verifpal obtained new features that allow it to capture more of a protocol’s workings.&lt;/strong&gt; Verifpal gained the ability to model protocols where users can potentially input &lt;strong dir="ltr"&gt;weak or strong passwords&lt;/strong&gt;. This is very useful for modeling protocols that include user-provided passwords at points, and is a great way to separate guessable passwords from material that can actually securely be used as an encryption key of some kind.&amp;nbsp;&lt;strong dir="ltr"&gt;New primitives&lt;/strong&gt; were introduced, allowing the usage of &lt;a href="https://source.symbolic.software/verifpal/verifpal/-/commit/fbc4d7372c0fe7df484d7331f045ff5710a63d37" dir="ltr"&gt;ring signatures&lt;/a&gt;, public key encryption, &lt;a href="https://source.symbolic.software/verifpal/verifpal/-/commit/7467e8abb274778a1b668bed46d5ee67b8574478" dir="ltr"&gt;Shamir secret sharing&lt;/a&gt; and &lt;a href="https://source.symbolic.software/verifpal/verifpal/-/commit/d2261c6b0daddbdccee9ef72e06604ede463d405" dir="ltr"&gt;blind signatures&lt;/a&gt;. The &lt;em dir="ltr"&gt;leaks&lt;/em&gt; keyword now exists, allowing principals to leak constants to the attacker without necessarily sending them to another principal. &lt;strong dir="ltr"&gt;&lt;a href="https://source.symbolic.software/verifpal/verifpal/-/commit/221b85db613c6634069f323f84d21c89454db6db" dir="ltr"&gt;Phases&lt;/a&gt;&lt;/strong&gt; are an exciting new feature that allows Verifpal to reliably model post-compromise security properties such as forward secrecy or future secrecy.&amp;nbsp; &lt;strong dir="ltr"&gt;&lt;a href="https://source.symbolic.software/verifpal/verifpal/-/commit/780dc774226390eb8183c7ccfa61ed83a9d26e56" dir="ltr"&gt;Query preconditions&lt;/a&gt;&lt;/strong&gt; allow for illustration relationships between different Verifpal queries on a protocol. And dozens of small improvements and changes were made to Verifpal across its application stack.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;&lt;span dir="ltr"&gt;Finally, and most importantly&lt;/span&gt;, Verifpal improved its analysis strength and reliability.&lt;/strong&gt; As documented in a previous post, Verifpal’s formal semantics and passive attacker analysis are now &lt;a href="https://blog.symbolic.software/2020/04/14/freshness-unlinkability-model-semantics-verifpal/" dir="ltr"&gt;fully modeled in the Coq theorem prover&lt;/a&gt;. While this does not include active attacker analysis methodology, it does indicate that we can capture Verifpal’s semantics elegantly in existing formalism methods as well as a basic component of its analysis methodology. Our &lt;a href="https://verifpal.com/paper" dir="ltr"&gt;revised Verifpal paper&lt;/a&gt; goes into further detail on the Verifpal active attacker analysis methodology and describes formally how primitives are defined, deconstructed and analyzed in Verifpal. Furthermore, valuable feedback was received from over a dozen Verifpal community members that allowed detecting and fixing analysis errors, misleading analysis results and that pushed us to more concretely define the meaning and function of Verifpal queries such as freshness and authentication. These discussions occurred on the &lt;a href="https://verifpal.com/list" dir="ltr"&gt;Verifpal Mailing List&lt;/a&gt;, the &lt;a href="https://verifpal.com/discord" dir="ltr"&gt;Verifpal Discord&lt;/a&gt; as well as via private feedback.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://symbolicsoft.files.wordpress.com/2020/09/image.png?w=1024" alt="" srcset="https://symbolicsoft.files.wordpress.com/2020/09/image.png?w=1024 1024w, https://symbolicsoft.files.wordpress.com/2020/09/image.png?w=150 150w, https://symbolicsoft.files.wordpress.com/2020/09/image.png?w=300 300w, https://symbolicsoft.files.wordpress.com/2020/09/image.png?w=768 768w, https://symbolicsoft.files.wordpress.com/2020/09/image.png 1115w"&gt;&lt;figcaption dir="auto"&gt;Verifpal’s paper was revised to go into further detail regarding the analysis methodology, formal semantics and the limits of Verifpal analysis. PrimitiveSpecs were introduced in order to standardize how primitives are defined and how their semantics operate within Verifpal analysis, i.e. via the following operations:
 • Decompose. Given a primitive’s output and a defined subset of its inputs, reveal one of its inputs. (Given ENC(k, m) and k, reveal m).
 • Recompose. Given a subset of a primitive’s outputs, reveal one of its inputs. (Given a, b, reveal x if a ,b,_ = SHAMIR_SPLIT(x)).
 • Rewrite. Given a matching defined pattern within a primitive’s inputs, rewrite the primitive expression itself into a logical subset of its inputs. (Given DEC(k, ENC(k, m)), rewrite the entire expression DEC(k, ENC(k, m)) to m).
