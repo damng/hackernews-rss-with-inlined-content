@@ -222,7 +222,8 @@ def process_entry(entry) -> FeedTuple:
             if "wsj.com/" in old_url:
                 cleaned_html = clean_through_fb(old_url)
             else:
-                cleaners = [clean, lambda x: clean(x, False), clean_through_fb, lambda x: clean_through_fb(x, False)]
+                #cleaners = [clean, lambda x: clean(x, False), clean_through_fb, lambda x: clean_through_fb(x, False)]
+                cleaners = [clean, lambda x: clean(x, False)]
                 cleaners_output = [""]*len(cleaners)
                 for idx_clean_f,clean_f in enumerate(cleaners):
                     logging.info(f"Attempt {idx_clean_f}/{len(cleaners)} on {old_url}")
