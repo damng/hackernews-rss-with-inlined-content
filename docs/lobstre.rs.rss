@@ -617,7 +617,151 @@ and should be more widely known.&lt;/p&gt;</description><pubDate>Sun, 11 Oct 202
         All right, let's keep pushing forward into year 3!
     &lt;/p&gt;&lt;p dir="ltr"&gt;
         &lt;i dir="ltr"&gt;Andreas Kling, 2020-10-10&lt;/i&gt;
-    &lt;/p&gt;</description><pubDate>Sat, 10 Oct 2020 22:26:26 -0500</pubDate></item><item><title>What certifications would you recommend for a programmer?</title><link>https://lobste.rs/s/z3uurw</link><description>&lt;p&gt;Where I live, certifications are the bread and butter of secondment agencies.  Since their customers typically have little knowledge of IT, they need proof that the human beings they provide are, in fact, programmers, so they push their employees through yearly (and expensive) courses to get their paperwork up-to-date.&lt;/p&gt;&lt;p&gt;As a result, I’ve always looked down on certifications.  I worked through the Java Certified Developer coursework early in my career, and decided it was a good source of information if you had the ambition to become a compiler, but offered little extra to someone with a degree in software engineering.&lt;/p&gt;&lt;p&gt;There are many strong opinions I developed in my twenties that are worthy of re-evaluation, and maybe this is one of them.&lt;/p&gt;</description><pubDate>Sun, 11 Oct 2020 14:34:03 -0500</pubDate></item><item><title>Compiling a Lisp to x86-64: Heap allocation</title><link>https://lobste.rs/s/xl9i9g</link><description>&lt;div&gt;&lt;i&gt;October 11, 2020&lt;/i&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;Welcome back to the “Compiling a Lisp” series. Last time we added support for
+    &lt;/p&gt;</description><pubDate>Sat, 10 Oct 2020 22:26:26 -0500</pubDate></item><item><title>What certifications would you recommend for a programmer?</title><link>https://lobste.rs/s/z3uurw</link><description>&lt;p&gt;Where I live, certifications are the bread and butter of secondment agencies.  Since their customers typically have little knowledge of IT, they need proof that the human beings they provide are, in fact, programmers, so they push their employees through yearly (and expensive) courses to get their paperwork up-to-date.&lt;/p&gt;&lt;p&gt;As a result, I’ve always looked down on certifications.  I worked through the Java Certified Developer coursework early in my career, and decided it was a good source of information if you had the ambition to become a compiler, but offered little extra to someone with a degree in software engineering.&lt;/p&gt;&lt;p&gt;There are many strong opinions I developed in my twenties that are worthy of re-evaluation, and maybe this is one of them.&lt;/p&gt;</description><pubDate>Sun, 11 Oct 2020 14:34:03 -0500</pubDate></item><item><title>How I Tried To Reduce Pylint Memory Usage</title><link>https://lobste.rs/s/jarqj8</link><description>&lt;p dir="ltr"&gt;Through work I have to deal with a pretty huge codebase, and run Pylint on it during our continuous integration process. It's always been a bit slow, but recently I also noticed that it was consuming a &lt;em dir="ltr"&gt;lot&lt;/em&gt; of memory, causing OOM failures if we tried to run it too much in parallel.&lt;/p&gt;&lt;p&gt;I decided to roll up my sleeves and figure out:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;What exactly was consuming so much memory?&lt;/LI&gt;&lt;LI&gt;Is there a way to avoid doing this?&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;This is a log of how I went about these two questions, as future reference for when I do other profiling work in Python.&lt;/p&gt;&lt;p dir="ltr"&gt;Looking at Pylint from the entrypoint(&lt;code dir="ltr"&gt;pylint/__main__.py&lt;/code&gt;), I end up digging downwards and finding the "quintessential" &lt;code dir="ltr"&gt;for&lt;/code&gt; loop that you would expect in a program that checks a bunch of files for errors:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;    def _check_files(self, get_ast, file_descrs):
+            # in pylint/lint/pylinter.py
+            with self._astroid_module_checker() as check_astroid_module:
+                for name, filepath, modname in file_descrs:
+                    self._check_file(get_ast, check_astroid_module, name, filepath, modname)
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;First I just threw in a &lt;code dir="ltr"&gt;print("HI")&lt;/code&gt; statement in there to confirm that this is indeed what's being run when I do &lt;code dir="ltr"&gt;pylint my_code&lt;/code&gt;, and that goes off without a hitch.&lt;/p&gt;&lt;p&gt;First is to try and figure out what's being held in memory, so I do a really basic "heap dump" with heapy to see if anything stands out&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;        from guppy import hpy
+        hp = hpy()
+        i = 0
+        for name, filepath, modname in file_descrs:
+            self._check_file(get_ast, check_astroid_module, name, filepath, modname)
+            i += 1
+            if i % 10 == 0:
+                print("HEAP")
+                print(hp.heap())
+            if i == 100:
+                raise ValueError("Done")
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;My heap profiles end up being almost entirely "frame types" (which I was kind of expecting, for some reason), but also holding ont a bunch of tracebacks. Enough of these kinds of objects that I told myself "surely this is more than is needed".&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;    Partition of a set of 2751394 objects. Total size = 436618350 bytes.
+    Index  Count   %     Size   % Cumulative  % Kind (class / dict of class)
+        0 429084  16 220007072  50 220007072  50 types.FrameType
+        1 535810  19 30005360   7 250012432  57 types.TracebackType
+        2 516282  19 29719488   7 279731920  64 tuple
+        3 101904   4 29004928   7 308736848  71 set
+        4 185568   7 21556360   5 330293208  76 dict (no owner)
+        5 206170   7 16304240   4 346597448  79 list
+        6 117531   4  9998322   2 356595770  82 str
+        7  38582   1  9661040   2 366256810  84 dict of astroid.node_classes.Name
+        8  76755   3  6754440   2 373011250  85 tokenize.TokenInfo
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;It's at this point that I discovered heapy's &lt;a href="https://zhuyifei1999.github.io/guppy3/pbscreen.jpg" dir="ltr"&gt;Profile Browser&lt;/a&gt;, which seemed like a bit of a nicer way to look at this data&lt;/p&gt;&lt;p&gt;I switched up the heap mechanism to dump to a file every 10 iterations, then graph the entire runtime behaviour&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;    for name, filepath, modname in file_descrs:
+        self._check_file(get_ast, check_astroid_module, name, filepath, modname)
+        i += 1
+        if i % 10 == 0:
+            hp.heap().stat.dump("/tmp/linting.stats")
+        if i == 100:
+            hp.pb("/tmp/linting.stats")
+            raise ValueError("Done")
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;I get the following result, confirming that frames and tracebacks are a big deal in this run of Pylint:&lt;/p&gt;&lt;img src="https://rtpg.co/files/pylint/browser-profile-1.png" width="455" height="307"&gt;&lt;p dir="ltr"&gt;My next step is to actually look at the frame objects. Because Python is reference coutned, things are held in memory because &lt;em dir="ltr"&gt;something&lt;/em&gt; is pointing at them, so I'm going to try and find out which one.&lt;/p&gt;&lt;p dir="ltr"&gt;The wonderful &lt;code dir="ltr"&gt;objgraph&lt;/code&gt; library takes advantage of the Python memory manager to let you look at all objects still in memory, as well as lookup references to an object.&lt;/p&gt;&lt;p dir="ltr"&gt;It's actually very amazing that you can do this. Just have an object reference and you can find everything &lt;em dir="ltr"&gt;pointing towards&lt;/em&gt; that reference (there's some asterisks around C extensions but close enough). This is just wonderful technology for debugging, and another thing that makes Python a joy to work with, thanks to how much of CPython's internals are exposed for these kinds of tools.&lt;/p&gt;&lt;p dir="ltr"&gt;First I struggled to find objects because &lt;code dir="ltr"&gt;objgraph.by_type('types.TracebackType')&lt;/code&gt; wasn't finding any objects, despite me having records of having half a million of them. Turns out the name to use was &lt;code dir="ltr"&gt;traceback&lt;/code&gt;. Didn't quite nail down why...&lt;/p&gt;&lt;p&gt;&lt;code&gt;random.choice(objgraph.by_type('traceback'))&lt;/code&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Gives me a "random traceback". &lt;code dir="ltr"&gt;objgraph.show_backrefs&lt;/code&gt; will draw a graph of objects referencing this traceback. &lt;/p&gt;&lt;p dir="ltr"&gt;So I put an &lt;code dir="ltr"&gt;import pdb; pdb.set_trace()&lt;/code&gt; into the for loop after 100 iterations instead of just raising an exception, and I started looking at random tracebacks &lt;/p&gt;&lt;PRE&gt;&lt;code&gt;def exclude(obj):
+    return 'Pdb' in str(type(obj))
+
+def f(depth=7):
+    objgraph.show_backrefs([random.choice(objgraph.by_type('traceback'))],
+                            max_depth=depth,
+                            filter=lambda elt: not exclude(elt))
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Originally I was just seeing a chain of tracebacks, so I went for a depth of 100 and....&lt;/p&gt;&lt;img src="https://rtpg.co/files/pylint/traceback-stack.png" width="455" height="569"&gt;&lt;p dir="ltr"&gt;&lt;a href="https://rtpg.co/files/pylint/traceback-stack.png" dir="ltr"&gt;
+    &lt;/a&gt;
+  So a bunch of tracebacks referencing other tracebacks. Cool. So many of them were like this.&lt;/p&gt;&lt;p dir="ltr"&gt;I ended up just trying a bunch and failing, so I went after a secondary target: the &lt;code dir="ltr"&gt;frame&lt;/code&gt; types. These also seemed suspicious to me, and whatI end up finding is something like the following:&lt;/p&gt;&lt;img src="https://rtpg.co/files/pylint/traceback-nest.png" width="455" height="266"&gt;&lt;p dir="ltr"&gt;So tracebacks are holding onto frames (hence some similar cardinality). It's all a big mess, but the frames were at least pointing to lines of code. And this made me realize something silly: &lt;em dir="ltr"&gt;I had never bothered to actually look at the data using up so much memory&lt;/em&gt;. I totally should have just looked at the traceback objects themselves.&lt;/p&gt;&lt;p dir="ltr"&gt;So for this I ended up doing this in the most convoluted way possible, which is look at the addresses in the &lt;code dir="ltr"&gt;objgraph&lt;/code&gt; image dump, seeing the memory addresses, searching the web for "how do I get a Python object from its address" and ending up finding the neat trick that I had noted:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;ipdb&amp;gt; import ctypes
+ipdb&amp;gt; ctypes.cast(0x7f187d22b880, ctypes.py_object)
+py_object(&amp;lt;traceback object at 0x7f187d22b880&amp;gt;)
+ipdb&amp;gt; ctypes.cast(0x7f187d22b880, ctypes.py_object).value
+&amp;lt;traceback object at 0x7f187d22b880&amp;gt;
+ipdb&amp;gt; my_tb = ctypes.cast(0x7f187d22b880, ctypes.py_object).value
+ipdb&amp;gt; traceback.print_tb(my_tb, limit=20)
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;You can just tell Python "hey look at this memory, it's definitely at least a python object" and it will work.&lt;/p&gt;&lt;p dir="ltr"&gt;Later I realized I had references to these objects through &lt;code dir="ltr"&gt;objgraph&lt;/code&gt; and could just use that.&lt;/p&gt;&lt;p&gt;It looks like Astroid is building up tracebacks through exception handling code a bit all over the place. I feel like most "cool tricks" are gotten to by forgetting about the easy way to do something, so I won't complain too much.&lt;/p&gt;&lt;p&gt;The traceback itself had a bunch of lines going through Astroid, the AST parser backing Pylint. Progress! Astroid does seem like a program that might hold onto a lot of stuff in memory as its parsing files.&lt;/p&gt;&lt;p dir="ltr"&gt;I look around and end up seeing the following line in &lt;code dir="ltr"&gt;astroid/manager.py&lt;/code&gt;&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;except Exception as ex:
+    raise exceptions.AstroidImportError(
+    "Loading {modname} failed with:\n{error}",
+    modname=modname,
+    path=found_spec.location,
+) from ex
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;"Aha!" Itell myself. This is what I'm lookign for! Some sort of exception chain that would generate super long tracebacks. Plus it's file parsing so there's reccursion, etc... &lt;code dir="ltr"&gt;raise thing from other_thing&lt;/code&gt; would chain them together!&lt;/p&gt;&lt;p dir="ltr"&gt;I remove this &lt;code dir="ltr"&gt;from ex&lt;/code&gt; and .... nothing. Memory usage is still basically the same, and the tracebacks are still here.&lt;/p&gt;&lt;p dir="ltr"&gt;I remember that exceptions hold their local bindings in the tracebacks, so the &lt;code dir="ltr"&gt;ex&lt;/code&gt; is still accessible. It can't be garbage colleceted just yet! &lt;/p&gt;&lt;p dir="ltr"&gt;I do a bunch of refactorings to try and remove the &lt;code dir="ltr"&gt;except&lt;/code&gt; block for the most part, at least to avoid the reference to &lt;code dir="ltr"&gt;ex&lt;/code&gt;. Again, nothing!&lt;/p&gt;&lt;p&gt;For the life of me I can't get these tracebacks to garbage collect, despite there being no references to them. At least I thought this was the remaining reference.&lt;/p&gt;&lt;p dir="ltr"&gt;Really though, this was all a red herring. I don't know if this actually had anything to do with my memory leak, because at one point I started noticing that &lt;strong dir="ltr"&gt;I had no evidence&lt;/strong&gt; backing up this entire exception chaining theory. Just a bunch of hunches, plus half a million tracebacks. &lt;/p&gt;&lt;p&gt;I started just kind of randomly looking at tracebacks looking for any extra clues. I tried going up the chain of references by hand but was getting nowhere. &lt;/p&gt;&lt;p&gt;Then I had the revelation: these tracebacks are all stacked on top of each other, but there will be a traceback that is above all these other ones. There is a traceback that doesn't just have another traceback pointing to it! &lt;/p&gt;&lt;p dir="ltr"&gt;the references were through the &lt;code dir="ltr"&gt;tb_next&lt;/code&gt; property, as a simple chain. So I decided to look for the tracebacks at the end of their respective chains:&lt;/p&gt;&lt;p&gt;&lt;code&gt;bottom_tbs = [tb for tb in objgraph.by_type('traceback') if tb.tb_next is None]&lt;/code&gt;&lt;/p&gt;&lt;p&gt;There's something magical about one-lining your way through 500,000 stack traces to find the one you actually care about.&lt;/p&gt;&lt;p&gt;This led me to what I was actually looking for: the reason why Python really wanted to keep these objects around in the first place.&lt;/p&gt;&lt;img src="https://rtpg.co/files/pylint/traceback-filecache.png" width="455" height="310"&gt;&lt;p dir="ltr"&gt;&lt;a href="https://rtpg.co/files/pylint/traceback-filecache.png" dir="ltr"&gt;
+&lt;/a&gt;
+We had a file cache! &lt;/p&gt;&lt;p&gt;Basically Astroid will cache the results of loading a module, so that if some part of the code asks for the same module/file again, it can just provide the previous result. It will also reproduce the errors as well, by holding onto thrown exceptions.&lt;/p&gt;&lt;p&gt;This is where I made a bit of a judgement call. Caching the "error-ness" makes sense, but for me it's not at all worth holding onto the number of tracebacks our code is generating. &lt;/p&gt;&lt;p dir="ltr"&gt;Instead I decided to throw away the exception, store a custom &lt;code dir="ltr"&gt;Error&lt;/code&gt; class, and then just re-building exceptions when they are asked for. The details can be found over at &lt;a href="https://github.com/PyCQA/astroid/pull/837" dir="ltr"&gt;this PR&lt;/a&gt;, though it's not super interesting.&lt;/p&gt;&lt;p&gt;The end result: we went from 500MB memory usage to 100MB for the codebase I was working against&lt;/p&gt;&lt;img src="https://rtpg.co/files/pylint/bp-post-fix.png" width="455" height="262"&gt;&lt;p dir="ltr"&gt;&lt;a href="https://rtpg.co/files/pylint/bp-post-fix.png" dir="ltr"&gt;
+&lt;/a&gt;
+80% improvement's not bad, if I do say so myself.&lt;/p&gt;&lt;p&gt;The PR itself, I'm not sure if it will actually get merged though. It's not purely a performance change, and I think it could make stack traces less useful in some scenarios. It's a pretty brutal change all things considered, even if the test suite still passes.&lt;/p&gt;&lt;p&gt;Overally, I came away with the following:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The memory visibility in Python is pretty amazing, and I should be using it more often when debugging.&lt;/LI&gt;&lt;LI&gt;Back up the theories with evidence, not just hunches.&lt;/LI&gt;&lt;LI&gt;Write down the "current objectives" so you don't completely lose the plot while debugging. This took me a couple hours in the end and I went down way too many rabbit holes that were not realated to my actual issue.&lt;/LI&gt;&lt;LI&gt;Saving your WIP snippets (or even better: committing to Git) is super useful. It might be tempting to just delete stuff, but you might need to look up how you got a result later on, especially for more performance-oriented work.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;One thing that made me smile though; while writing this retrospective, I realized I had already forgotten so much of how I got to certain conclusions, so ended up re-testing some of my snippets. I then ran my measurements on an unrelated codebase and found that &lt;strong dir="ltr"&gt;the weird memory usage only happened on one codebase&lt;/strong&gt;. I had spent a bunch of time debugging this issue, but it's extremely likely that it's just pathological behaviour that's hitting only a minority of users.&lt;/p&gt;&lt;p&gt;Even when you do all these measurements, it's always very hard to make blanket statements about performance.&lt;/p&gt;&lt;p&gt;I will be trying to take this experience to other projects as well. My theory is that there's a lot of low hanging fruit in performance-related questions for open-source Python projects, given that the community has relatively little focus on that space (beyond the "libraries that are just C extensions" class of projects).&lt;/p&gt;</description><pubDate>Sun, 11 Oct 2020 21:38:30 -0500</pubDate></item><item><title>Stratix V accelerator card from eBay</title><link>https://lobste.rs/s/1s0xzi</link><description>&lt;UL&gt;&lt;LI&gt;
+          on&amp;nbsp;Sun 03 May 2020
+        &lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;A couple of weeks ago &lt;a href="https://twitter.com/rombik_su" dir="ltr"&gt;@rombik_su&lt;/a&gt; in a &lt;a href="https://twitter.com/rombik_su/status/1250382904074608642" dir="ltr"&gt;Twitter
+thread&lt;/a&gt; pointed out a
+very cheap FPGA accelerator card on eBay. The board contains a proprietary
+Samtec board-to-board connector, most likely carrying power, PCI Express, and
+auxiliary signals (JTAG, IPMI to BMC, ...), two QSFP cages, DDR3 and a large
+FPGA, hidden under the heatsink.&lt;/p&gt;&lt;p&gt;Being passionate about everything FPGA-related, and with Coronavirus lockdown
+limiting the number of fun things to do, I decided to purchase the board. An
+evaluation kit of this kind can easily cost thousands, and 40 USD is a real
+bargain.&lt;/p&gt;&lt;h2&gt;Initial research&lt;/h2&gt;&lt;p&gt;While waiting for the board to arrive, I did some initial investigation. The
+description on eBay is quite cryptic. The title of the listing included all the
+text from the labels on the board, including the label "AIRFLOW" indicating
+the direction of the forced air through the board.&lt;/p&gt;&lt;p&gt;One of the most fruitful clues was the label "Microsoft" on the board. It was
+well-publicized a couple of years ago that Microsoft is using FPGAs to
+accelerate Bing searches, and this might be one of the boards used in the
+servers.&lt;/p&gt;&lt;p&gt;Remembering that Microsoft went with Altera (now Intel PSG) and that this was
+some years back, it is most likely that the card contains a Stratix V FPGA.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://www.microsoft.com/en-us/research/uploads/prod/2014/06/HC26.12.520-Recon-Fabric-Pulnam-Microsoft-Catapult.pdf" dir="ltr"&gt;first
+link&lt;/a&gt;
+on Google (or should I have used Bing? would the FPGAs be aware that I am
+looking for information about them?) for "microsoft catapult stratix v"
+presented some conceptually similar cards, but not exactly the same.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://www.microsoft.com/en-us/research/wp-content/uploads/2016/10/Cloud-Scale-Acceleration-Architecture.pdf" dir="ltr"&gt;second
+link&lt;/a&gt;,
+however, presented the exact card which I have purchased:&lt;/p&gt;&lt;img alt="FPGA card, from A. Caulfield et al: A Cloud-Scale Acceleration Architecture" src="https://j-marjanovic.io/images/2020_fpga_card/img-002.jpg" width="251" height="127"&gt;&lt;div&gt;&lt;small&gt;(from A. Caulfield et al: A Cloud-Scale Acceleration Architecture)&lt;/small&gt;&lt;/div&gt;&lt;p&gt;The paper also contains a block diagram highlighting the main components
+of the board:&lt;/p&gt;&lt;img alt="Block diagram, from A. Caulfield et al: A Cloud-Scale Acceleration Architecture" src="https://j-marjanovic.io/images/2020_fpga_card/block_diagram.png" width="251" height="163"&gt;&lt;div&gt;&lt;small&gt;(from A. Caulfield et al: A Cloud-Scale Acceleration Architecture)&lt;/small&gt;&lt;/div&gt;&lt;p&gt;The paper also mentions "widely-used OpenCompute server" which could give out
+some information about the pinout on the Samtec connector. Since there are
+numerous formats for mezzanine cards standardized by the OpenCompute project,
+and finding the matching one is not trivial, I decided to leave this task for
+later.&lt;/p&gt;&lt;p dir="ltr"&gt;Further digging in the search results, I was also able to find &lt;a href="https://mspoweruser.com/microsoft-talks-about-the-project-that-helped-them-build-the-worlds-first-ai-supercomputer/" dir="ltr"&gt;another photo&lt;/a&gt;
+of the board with the heatsink removed.&lt;/p&gt;&lt;p&gt;The marking on the FPGA are removed, but we already know that it is a Stratix V,
+and some things were expected from previous documents, e.g. 5 DDR3 chips for
+a combined of 9 chips for 72-bit DDR3 data width).&lt;/p&gt;&lt;p dir="ltr"&gt;What I found interesting in this picture is a Flash memory (Micron 25Q256) in
+the top right corner, which means that the image for the FPGA is most likely
+stored on the board and is not downloaded through the connector at the startup.
+It is also possible that &lt;a href="https://www.intel.com/content/www/us/en/programmable/support/support-resources/support-centers/devices/cfg-index/cfg-via-protocol.html" dir="ltr"&gt;Configuration via
+Protocol&lt;/a&gt;
+is used, and only the basic image is stored in the Flash.&lt;/p&gt;&lt;h1&gt;Board overview&lt;/h1&gt;&lt;p&gt;Then one day, the board finally arrives. The board matches the description
+in the previously-mentioned article.&lt;/p&gt;&lt;p&gt;A quick look at the board identifies the following components:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;160 pin Samtec SEARAY™ connector&lt;/LI&gt;&lt;LI&gt;USB (FT232H, used as a JTAG interface)&lt;/LI&gt;&lt;LI&gt;power entry (FDMS0310AS MOSFET, 0.01 Ohm resistor, unidentified IC with the markings "L536FCD")&lt;/LI&gt;&lt;LI&gt;power converters (Enpirion® EN2342QI DC-DC converter)&lt;/LI&gt;&lt;LI&gt;programmable oscillator (IDT8N4Q001)&lt;/LI&gt;&lt;LI&gt;Flash memory for FPGA (Micron N25Q256A)&lt;/LI&gt;&lt;LI&gt;I2C EEPROM (ST M24128-BW)&lt;/LI&gt;&lt;LI&gt;DDR3 memory (SK hynix H5TC4G83BFR)&lt;/LI&gt;&lt;/UL&gt;&lt;img alt="The board with annotated sections" src="https://j-marjanovic.io/images/2020_fpga_card/9560_annotated.jpg" width="335" height="204"&gt;&lt;h1&gt;USB/JTAG&lt;/h1&gt;&lt;p&gt;At this point, it was time to start experimenting with the board. The FT232H
+seems to be powered from the USB BUS voltage: pin 1 of J3 is connected to pin 40
+(VREGIN) of FT232H. This is why I decided to first start with the USB. With the
+datasheet for FT232H it was trivial to determine the pin assignments on the
+connector. I did not want to solder directly on the connector pins, as I would
+like to make a proper cable in the future.&lt;/p&gt;&lt;img alt="USB connection with signal annotations" src="https://j-marjanovic.io/images/2020_fpga_card/9570_annotated.jpg"&gt;&lt;p&gt;After plugging the cable in the computer, the FT232H is recognized as "USB
+Serial Converter":&lt;/p&gt;&lt;img alt="Driver information about the FT232H" src="https://j-marjanovic.io/images/2020_fpga_card/device_manager2.png"&gt;&lt;h1&gt;Connector, 1st look&lt;/h1&gt;&lt;p&gt;At this point I could start trying to reverse engineer the connector pinout. I
+managed to figure out the following connections:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Ground&lt;/LI&gt;&lt;LI&gt;Input power: there are a couple of pins connected to the Drain of the large
+    MOSFET. I also assume that the level is, as it is common for PCIe cards,
+    12V.&lt;/LI&gt;&lt;LI&gt;There are 16 pairs of AC-coupling capacitors near the connector. PCIe
+    standard mandates capacitors on the TX side, so I assume this is PCIE_TX.
+    Not knowing the exact lane numbering, I decided to enumerate them with
+    letters instead of numbers.&lt;/LI&gt;&lt;LI&gt;PCIe RX is TBD, but looking at unassigned pins a clear pattern is visible&lt;/LI&gt;&lt;LI&gt;Some of the pins are connected to the circuit above the connector - I have
+    annotated these pins, but right now I do not have a clear idea what is the
+    purpose. I annotated those pins as AUX.&lt;/LI&gt;&lt;/UL&gt;&lt;img alt="Samtec connector with partial pinout, 1" src="https://j-marjanovic.io/images/2020_fpga_card/pinout_1.png" width="419" height="91"&gt;&lt;h1&gt;Power&lt;/h1&gt;&lt;p&gt;I have connected the 12V on the Drain side of the Q12 (FDMS0310AS), which has
+also energized the PU12 and +12V pins on the Samtec connector. However, the
+power consumption was only 3 mA, and the MOSFET was left closed.&lt;/p&gt;&lt;p&gt;I could not find any information about PU12 (L536FCD). I assume it is some
+kind of a current-limit protection, measuring the current through the 0.01 Ohm
+shunt resistor and controlling the Gate pin of Q12.&lt;/p&gt;&lt;p&gt;To literally bypass this problem, I have decided to also connect 12 V on the
+other side of the Q12. This yielded some results; the power consumption raised
+to 695 mA, which is what one would expect from such board, and the LEDs turned
+on. &lt;/p&gt;&lt;img alt="Power consumption" src="https://j-marjanovic.io/images/2020_fpga_card/fr_9586_size1024.jpg"&gt;&lt;p&gt;On various points in the circuit I could also measure all the voltages one
+would expect to find in such a circuit:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;1.5V on the Enpirion (PU16) output&lt;/LI&gt;&lt;LI&gt;1.35 V on C406 (DDR3 voltage)&lt;/LI&gt;&lt;LI&gt;0.674 V on C1005 (DDR3 termination voltage)&lt;/LI&gt;&lt;LI&gt;2.5 V on C442 (periphery)&lt;/LI&gt;&lt;LI&gt;3.3 V on QSFP capacitors&lt;/LI&gt;&lt;LI&gt;0.9 V on C354 (FPGA core voltage)&lt;/LI&gt;&lt;/UL&gt;&lt;h1&gt;Memories&lt;/h1&gt;&lt;h2&gt;FPGA configuration memory&lt;/h2&gt;&lt;p&gt;The heatsink covers the large part of the top side of the board including the
+Flash memory for the FPGA configuration. One can, however, still reach the pins
+8 and 9 (DQ1 and DQ2, respectively) with an oscilloscope probe.&lt;/p&gt;&lt;p&gt;After the power is applied to the board, we can observe that the FPGA gets
+programmed in roughly a second. This is above the 100 ms/200 ms limit required
+by the PCIe standard, but in this custom form factor the value might be
+different.&lt;/p&gt;&lt;p&gt;DQ2 pin on N25Q256A:&lt;/p&gt;&lt;img alt="Data from DQ2 pin after power up" src="https://j-marjanovic.io/images/2020_fpga_card/mem_top_left_pin.png"&gt;&lt;p&gt;LEDs on the board are also driven by the FPGA and remain lit for a second until
+the FPGA is not programmed, another indication that the FPGA gets configured
+from the memory.&lt;/p&gt;&lt;h2&gt;EEPROM&lt;/h2&gt;&lt;p&gt;Another memory on the board is a small 128Kbit EEPROM, which probably stores MAC
+addresses, serial numbers, and other similar information.&lt;/p&gt;&lt;p&gt;Quite interestingly, SDA and SCL lines remain stuck low after some time.
+Maybe the EEPROM is not used at all, or maybe there is some other part
+of the circuit is keeping the EEPROM interface state machine in a reset.&lt;/p&gt;&lt;p&gt;SDA pin on M24128-BW, SCL is very similar:&lt;/p&gt;&lt;img alt="SDA pin on M24128-BW" src="https://j-marjanovic.io/images/2020_fpga_card/M24128_SDA.png"&gt;&lt;h1&gt;Connector, 2nd look&lt;/h1&gt;&lt;p&gt;With the board powered on, I could measure the voltage on the connector pins.
+As expected, on 16 differential pairs I can sense a bias voltage of the PCIe
+receivers, around 0.7 V.&lt;/p&gt;&lt;p&gt;Some of the AUX pins have a slight bias, but this is probably caused by
+pull-up resistors and other components. It would require more investigation
+to fully understand the purpose of these pins.&lt;/p&gt;&lt;img alt="Samtec connector with partial pinout, 2" src="https://j-marjanovic.io/images/2020_fpga_card/pinout_2.png"&gt;&lt;h1&gt;Components&lt;/h1&gt;&lt;h2&gt;QSFP&lt;/h2&gt;&lt;p&gt;Plugging in a QSFP cable only marginally increases the power consumption.
+It is clear that the high-speed circuit is disabled, most likely because
+of an internal register configuration and less likely because the cable
+is "not compatible", i.e. the board parses the EEPROM and it does not enable
+the high-speed circuit.&lt;/p&gt;&lt;p&gt;Consumption from the 12V input:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;without the QSFP module inserted: 696.7 mA&lt;/LI&gt;&lt;LI&gt;with the QSFP module inserted: 697.5 mA&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;IDT oscillator&lt;/h2&gt;&lt;p&gt;IDT oscillator is producing 645 MHz clock.&lt;/p&gt;&lt;h2&gt;DDR3&lt;/h2&gt;&lt;p&gt;I have probed what I presume are the DDR3 termination resistors (on the bottom
+side, on the other side of the 5th DDR3 component on the top) and observed
+no switching activity. It seems that the DDR3 controller is kept in reset.&lt;/p&gt;&lt;h1&gt;Outlook&lt;/h1&gt;&lt;p&gt;The first bring-up session was quite successful; I have managed to turn on the
+board without damaging it and figure out the basic pinout of the connector.&lt;/p&gt;&lt;p&gt;For the next step, I plan to investigate the OpenCompute website if there exists
+a document that would describe the pinout of the connector. Still left to be
+determined are the reference clock and an enable signal from the connector.&lt;/p&gt;&lt;p&gt;Eventually I plan to produce a small PCB that would allow plugging this board
+in a normal PCIe card slot.&lt;/p&gt;&lt;p&gt;All trademarks and registered trademarks are the property of their respective owners.&lt;/p&gt;</description><pubDate>Sun, 11 Oct 2020 14:53:11 -0500</pubDate></item><item><title>Compiling a Lisp to x86-64: Heap allocation</title><link>https://lobste.rs/s/xl9i9g</link><description>&lt;div&gt;&lt;i&gt;October 11, 2020&lt;/i&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;Welcome back to the “Compiling a Lisp” series. Last time we added support for
 &lt;code dir="ltr"&gt;if&lt;/code&gt; expressions. This time we’re going add support for basic heap allocation.&lt;/p&gt;&lt;p dir="ltr"&gt;Heap allocation comes in a couple of forms, but the one we care about right now
 is the &lt;code dir="ltr"&gt;cons&lt;/code&gt; primitive. Much like &lt;code dir="ltr"&gt;AST_new_pair&lt;/code&gt; in the compiler, &lt;code dir="ltr"&gt;cons&lt;/code&gt;
 should:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;allocate some space on the heap,&lt;/LI&gt;&lt;LI&gt;set the &lt;code dir="ltr"&gt;car&lt;/code&gt; and &lt;code dir="ltr"&gt;cdr&lt;/code&gt;, and&lt;/LI&gt;&lt;LI&gt;tag the pointer appropriately.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Once we have that pair, we’ll want to poke at its data. This means we should
@@ -829,90 +973,7 @@ I will not include it here.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span d
 &lt;span dir="ltr"&gt;}&lt;/span&gt;
 &lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Other objects&lt;/h3&gt;&lt;p&gt;I didn’t cover variable-length objects in this post because I wanted to focus
 on the basics of allocating and poking at allocated data structures. Next time,
-we’ll add symbols and strings.&lt;/p&gt;</description><pubDate>Sun, 11 Oct 2020 12:12:54 -0500</pubDate></item><item><title>Stratix V accelerator card from eBay</title><link>https://lobste.rs/s/1s0xzi</link><description>&lt;UL&gt;&lt;LI&gt;
-          on&amp;nbsp;Sun 03 May 2020
-        &lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;A couple of weeks ago &lt;a href="https://twitter.com/rombik_su" dir="ltr"&gt;@rombik_su&lt;/a&gt; in a &lt;a href="https://twitter.com/rombik_su/status/1250382904074608642" dir="ltr"&gt;Twitter
-thread&lt;/a&gt; pointed out a
-very cheap FPGA accelerator card on eBay. The board contains a proprietary
-Samtec board-to-board connector, most likely carrying power, PCI Express, and
-auxiliary signals (JTAG, IPMI to BMC, ...), two QSFP cages, DDR3 and a large
-FPGA, hidden under the heatsink.&lt;/p&gt;&lt;p&gt;Being passionate about everything FPGA-related, and with Coronavirus lockdown
-limiting the number of fun things to do, I decided to purchase the board. An
-evaluation kit of this kind can easily cost thousands, and 40 USD is a real
-bargain.&lt;/p&gt;&lt;h2&gt;Initial research&lt;/h2&gt;&lt;p&gt;While waiting for the board to arrive, I did some initial investigation. The
-description on eBay is quite cryptic. The title of the listing included all the
-text from the labels on the board, including the label "AIRFLOW" indicating
-the direction of the forced air through the board.&lt;/p&gt;&lt;p&gt;One of the most fruitful clues was the label "Microsoft" on the board. It was
-well-publicized a couple of years ago that Microsoft is using FPGAs to
-accelerate Bing searches, and this might be one of the boards used in the
-servers.&lt;/p&gt;&lt;p&gt;Remembering that Microsoft went with Altera (now Intel PSG) and that this was
-some years back, it is most likely that the card contains a Stratix V FPGA.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://www.microsoft.com/en-us/research/uploads/prod/2014/06/HC26.12.520-Recon-Fabric-Pulnam-Microsoft-Catapult.pdf" dir="ltr"&gt;first
-link&lt;/a&gt;
-on Google (or should I have used Bing? would the FPGAs be aware that I am
-looking for information about them?) for "microsoft catapult stratix v"
-presented some conceptually similar cards, but not exactly the same.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://www.microsoft.com/en-us/research/wp-content/uploads/2016/10/Cloud-Scale-Acceleration-Architecture.pdf" dir="ltr"&gt;second
-link&lt;/a&gt;,
-however, presented the exact card which I have purchased:&lt;/p&gt;&lt;img alt="FPGA card, from A. Caulfield et al: A Cloud-Scale Acceleration Architecture" src="https://j-marjanovic.io/images/2020_fpga_card/img-002.jpg" width="251" height="127"&gt;&lt;div&gt;&lt;small&gt;(from A. Caulfield et al: A Cloud-Scale Acceleration Architecture)&lt;/small&gt;&lt;/div&gt;&lt;p&gt;The paper also contains a block diagram highlighting the main components
-of the board:&lt;/p&gt;&lt;img alt="Block diagram, from A. Caulfield et al: A Cloud-Scale Acceleration Architecture" src="https://j-marjanovic.io/images/2020_fpga_card/block_diagram.png" width="251" height="163"&gt;&lt;div&gt;&lt;small&gt;(from A. Caulfield et al: A Cloud-Scale Acceleration Architecture)&lt;/small&gt;&lt;/div&gt;&lt;p&gt;The paper also mentions "widely-used OpenCompute server" which could give out
-some information about the pinout on the Samtec connector. Since there are
-numerous formats for mezzanine cards standardized by the OpenCompute project,
-and finding the matching one is not trivial, I decided to leave this task for
-later.&lt;/p&gt;&lt;p dir="ltr"&gt;Further digging in the search results, I was also able to find &lt;a href="https://mspoweruser.com/microsoft-talks-about-the-project-that-helped-them-build-the-worlds-first-ai-supercomputer/" dir="ltr"&gt;another photo&lt;/a&gt;
-of the board with the heatsink removed.&lt;/p&gt;&lt;p&gt;The marking on the FPGA are removed, but we already know that it is a Stratix V,
-and some things were expected from previous documents, e.g. 5 DDR3 chips for
-a combined of 9 chips for 72-bit DDR3 data width).&lt;/p&gt;&lt;p dir="ltr"&gt;What I found interesting in this picture is a Flash memory (Micron 25Q256) in
-the top right corner, which means that the image for the FPGA is most likely
-stored on the board and is not downloaded through the connector at the startup.
-It is also possible that &lt;a href="https://www.intel.com/content/www/us/en/programmable/support/support-resources/support-centers/devices/cfg-index/cfg-via-protocol.html" dir="ltr"&gt;Configuration via
-Protocol&lt;/a&gt;
-is used, and only the basic image is stored in the Flash.&lt;/p&gt;&lt;h1&gt;Board overview&lt;/h1&gt;&lt;p&gt;Then one day, the board finally arrives. The board matches the description
-in the previously-mentioned article.&lt;/p&gt;&lt;p&gt;A quick look at the board identifies the following components:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;160 pin Samtec SEARAY™ connector&lt;/LI&gt;&lt;LI&gt;USB (FT232H, used as a JTAG interface)&lt;/LI&gt;&lt;LI&gt;power entry (FDMS0310AS MOSFET, 0.01 Ohm resistor, unidentified IC with the markings "L536FCD")&lt;/LI&gt;&lt;LI&gt;power converters (Enpirion® EN2342QI DC-DC converter)&lt;/LI&gt;&lt;LI&gt;programmable oscillator (IDT8N4Q001)&lt;/LI&gt;&lt;LI&gt;Flash memory for FPGA (Micron N25Q256A)&lt;/LI&gt;&lt;LI&gt;I2C EEPROM (ST M24128-BW)&lt;/LI&gt;&lt;LI&gt;DDR3 memory (SK hynix H5TC4G83BFR)&lt;/LI&gt;&lt;/UL&gt;&lt;img alt="The board with annotated sections" src="https://j-marjanovic.io/images/2020_fpga_card/9560_annotated.jpg" width="335" height="204"&gt;&lt;h1&gt;USB/JTAG&lt;/h1&gt;&lt;p&gt;At this point, it was time to start experimenting with the board. The FT232H
-seems to be powered from the USB BUS voltage: pin 1 of J3 is connected to pin 40
-(VREGIN) of FT232H. This is why I decided to first start with the USB. With the
-datasheet for FT232H it was trivial to determine the pin assignments on the
-connector. I did not want to solder directly on the connector pins, as I would
-like to make a proper cable in the future.&lt;/p&gt;&lt;img alt="USB connection with signal annotations" src="https://j-marjanovic.io/images/2020_fpga_card/9570_annotated.jpg"&gt;&lt;p&gt;After plugging the cable in the computer, the FT232H is recognized as "USB
-Serial Converter":&lt;/p&gt;&lt;img alt="Driver information about the FT232H" src="https://j-marjanovic.io/images/2020_fpga_card/device_manager2.png"&gt;&lt;h1&gt;Connector, 1st look&lt;/h1&gt;&lt;p&gt;At this point I could start trying to reverse engineer the connector pinout. I
-managed to figure out the following connections:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Ground&lt;/LI&gt;&lt;LI&gt;Input power: there are a couple of pins connected to the Drain of the large
-    MOSFET. I also assume that the level is, as it is common for PCIe cards,
-    12V.&lt;/LI&gt;&lt;LI&gt;There are 16 pairs of AC-coupling capacitors near the connector. PCIe
-    standard mandates capacitors on the TX side, so I assume this is PCIE_TX.
-    Not knowing the exact lane numbering, I decided to enumerate them with
-    letters instead of numbers.&lt;/LI&gt;&lt;LI&gt;PCIe RX is TBD, but looking at unassigned pins a clear pattern is visible&lt;/LI&gt;&lt;LI&gt;Some of the pins are connected to the circuit above the connector - I have
-    annotated these pins, but right now I do not have a clear idea what is the
-    purpose. I annotated those pins as AUX.&lt;/LI&gt;&lt;/UL&gt;&lt;img alt="Samtec connector with partial pinout, 1" src="https://j-marjanovic.io/images/2020_fpga_card/pinout_1.png" width="419" height="91"&gt;&lt;h1&gt;Power&lt;/h1&gt;&lt;p&gt;I have connected the 12V on the Drain side of the Q12 (FDMS0310AS), which has
-also energized the PU12 and +12V pins on the Samtec connector. However, the
-power consumption was only 3 mA, and the MOSFET was left closed.&lt;/p&gt;&lt;p&gt;I could not find any information about PU12 (L536FCD). I assume it is some
-kind of a current-limit protection, measuring the current through the 0.01 Ohm
-shunt resistor and controlling the Gate pin of Q12.&lt;/p&gt;&lt;p&gt;To literally bypass this problem, I have decided to also connect 12 V on the
-other side of the Q12. This yielded some results; the power consumption raised
-to 695 mA, which is what one would expect from such board, and the LEDs turned
-on. &lt;/p&gt;&lt;img alt="Power consumption" src="https://j-marjanovic.io/images/2020_fpga_card/fr_9586_size1024.jpg"&gt;&lt;p&gt;On various points in the circuit I could also measure all the voltages one
-would expect to find in such a circuit:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;1.5V on the Enpirion (PU16) output&lt;/LI&gt;&lt;LI&gt;1.35 V on C406 (DDR3 voltage)&lt;/LI&gt;&lt;LI&gt;0.674 V on C1005 (DDR3 termination voltage)&lt;/LI&gt;&lt;LI&gt;2.5 V on C442 (periphery)&lt;/LI&gt;&lt;LI&gt;3.3 V on QSFP capacitors&lt;/LI&gt;&lt;LI&gt;0.9 V on C354 (FPGA core voltage)&lt;/LI&gt;&lt;/UL&gt;&lt;h1&gt;Memories&lt;/h1&gt;&lt;h2&gt;FPGA configuration memory&lt;/h2&gt;&lt;p&gt;The heatsink covers the large part of the top side of the board including the
-Flash memory for the FPGA configuration. One can, however, still reach the pins
-8 and 9 (DQ1 and DQ2, respectively) with an oscilloscope probe.&lt;/p&gt;&lt;p&gt;After the power is applied to the board, we can observe that the FPGA gets
-programmed in roughly a second. This is above the 100 ms/200 ms limit required
-by the PCIe standard, but in this custom form factor the value might be
-different.&lt;/p&gt;&lt;p&gt;DQ2 pin on N25Q256A:&lt;/p&gt;&lt;img alt="Data from DQ2 pin after power up" src="https://j-marjanovic.io/images/2020_fpga_card/mem_top_left_pin.png"&gt;&lt;p&gt;LEDs on the board are also driven by the FPGA and remain lit for a second until
-the FPGA is not programmed, another indication that the FPGA gets configured
-from the memory.&lt;/p&gt;&lt;h2&gt;EEPROM&lt;/h2&gt;&lt;p&gt;Another memory on the board is a small 128Kbit EEPROM, which probably stores MAC
-addresses, serial numbers, and other similar information.&lt;/p&gt;&lt;p&gt;Quite interestingly, SDA and SCL lines remain stuck low after some time.
-Maybe the EEPROM is not used at all, or maybe there is some other part
-of the circuit is keeping the EEPROM interface state machine in a reset.&lt;/p&gt;&lt;p&gt;SDA pin on M24128-BW, SCL is very similar:&lt;/p&gt;&lt;img alt="SDA pin on M24128-BW" src="https://j-marjanovic.io/images/2020_fpga_card/M24128_SDA.png"&gt;&lt;h1&gt;Connector, 2nd look&lt;/h1&gt;&lt;p&gt;With the board powered on, I could measure the voltage on the connector pins.
-As expected, on 16 differential pairs I can sense a bias voltage of the PCIe
-receivers, around 0.7 V.&lt;/p&gt;&lt;p&gt;Some of the AUX pins have a slight bias, but this is probably caused by
-pull-up resistors and other components. It would require more investigation
-to fully understand the purpose of these pins.&lt;/p&gt;&lt;img alt="Samtec connector with partial pinout, 2" src="https://j-marjanovic.io/images/2020_fpga_card/pinout_2.png"&gt;&lt;h1&gt;Components&lt;/h1&gt;&lt;h2&gt;QSFP&lt;/h2&gt;&lt;p&gt;Plugging in a QSFP cable only marginally increases the power consumption.
-It is clear that the high-speed circuit is disabled, most likely because
-of an internal register configuration and less likely because the cable
-is "not compatible", i.e. the board parses the EEPROM and it does not enable
-the high-speed circuit.&lt;/p&gt;&lt;p&gt;Consumption from the 12V input:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;without the QSFP module inserted: 696.7 mA&lt;/LI&gt;&lt;LI&gt;with the QSFP module inserted: 697.5 mA&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;IDT oscillator&lt;/h2&gt;&lt;p&gt;IDT oscillator is producing 645 MHz clock.&lt;/p&gt;&lt;h2&gt;DDR3&lt;/h2&gt;&lt;p&gt;I have probed what I presume are the DDR3 termination resistors (on the bottom
-side, on the other side of the 5th DDR3 component on the top) and observed
-no switching activity. It seems that the DDR3 controller is kept in reset.&lt;/p&gt;&lt;h1&gt;Outlook&lt;/h1&gt;&lt;p&gt;The first bring-up session was quite successful; I have managed to turn on the
-board without damaging it and figure out the basic pinout of the connector.&lt;/p&gt;&lt;p&gt;For the next step, I plan to investigate the OpenCompute website if there exists
-a document that would describe the pinout of the connector. Still left to be
-determined are the reference clock and an enable signal from the connector.&lt;/p&gt;&lt;p&gt;Eventually I plan to produce a small PCB that would allow plugging this board
-in a normal PCIe card slot.&lt;/p&gt;&lt;p&gt;All trademarks and registered trademarks are the property of their respective owners.&lt;/p&gt;</description><pubDate>Sun, 11 Oct 2020 14:53:11 -0500</pubDate></item><item><title>Making medieval manuscript transcription less painful with GNU Emacs</title><link>https://lobste.rs/s/defzbh</link><description>&lt;p dir="ltr"&gt;I don’t usually bother trying to introduce automations into my workflow if all I
+we’ll add symbols and strings.&lt;/p&gt;</description><pubDate>Sun, 11 Oct 2020 12:12:54 -0500</pubDate></item><item><title>Making medieval manuscript transcription less painful with GNU Emacs</title><link>https://lobste.rs/s/defzbh</link><description>&lt;p dir="ltr"&gt;I don’t usually bother trying to introduce automations into my workflow if all I
 stand to save is a little time. Even if a certain common activity is taking a
 too long and automation would help, I usually stop at the question: how many
 seconds/minutes per day could actually be saved by automating, especially once
@@ -1239,68 +1300,7 @@ a little less! – by molding the program to your exact needs.&lt;/p&gt;</descri
 (&lt;span dir="ltr"&gt;defrecord&lt;/span&gt;&lt;span dir="ltr"&gt; BusinessLogicAdaptor &lt;/span&gt;[blob-storage-adaptor]
   BusinessLogicPort
   (retrieve-double [this loc]
-    (&lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt; (retrieve-object blob-storage-adaptor loc))))&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;We are free to use different blob storage adaptors for different systems, for example production, staging, CI, or local development. The business logic adaptor is oblivious to the actual blob storage implementation injected.&lt;/p&gt;&lt;h2&gt;On Mocks &amp;amp; Stubs&lt;/h2&gt;&lt;p&gt;The careful reader might have noticed that the dependency injection of different adaptors looks a lot like mocking, and this is very much true. While mocking has been considered more and more problematic in recent years, the fact that we assert the same set of behaviours for our mocks as we assert for the “real components” leads us to much more fully featured and realistic mocks, compared to the ones which are written for specific tests and then rarely touched after.&lt;/p&gt;&lt;p&gt;If the difference in behaviour between different adaptors leads to problems which are not caught by the test suite, the problems is not mocking, but an incomplete behaviour specification for the adaptor in question.&lt;/p&gt;</description><pubDate>Mon, 12 Oct 2020 02:10:10 -0500</pubDate></item><item><title>How I Tried To Reduce Pylint Memory Usage</title><link>https://lobste.rs/s/jarqj8</link><description>&lt;p dir="ltr"&gt;Through work I have to deal with a pretty huge codebase, and run Pylint on it during our continuous integration process. It's always been a bit slow, but recently I also noticed that it was consuming a &lt;em dir="ltr"&gt;lot&lt;/em&gt; of memory, causing OOM failures if we tried to run it too much in parallel.&lt;/p&gt;&lt;p&gt;I decided to roll up my sleeves and figure out:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;What exactly was consuming so much memory?&lt;/LI&gt;&lt;LI&gt;Is there a way to avoid doing this?&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;This is a log of how I went about these two questions, as future reference for when I do other profiling work in Python.&lt;/p&gt;&lt;p dir="ltr"&gt;Looking at Pylint from the entrypoint(&lt;code dir="ltr"&gt;pylint/__main__.py&lt;/code&gt;), I end up digging downwards and finding the "quintessential" &lt;code dir="ltr"&gt;for&lt;/code&gt; loop that you would expect in a program that checks a bunch of files for errors:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;    def _check_files(self, get_ast, file_descrs):
-            # in pylint/lint/pylinter.py
-            with self._astroid_module_checker() as check_astroid_module:
-                for name, filepath, modname in file_descrs:
-                    self._check_file(get_ast, check_astroid_module, name, filepath, modname)
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;First I just threw in a &lt;code dir="ltr"&gt;print("HI")&lt;/code&gt; statement in there to confirm that this is indeed what's being run when I do &lt;code dir="ltr"&gt;pylint my_code&lt;/code&gt;, and that goes off without a hitch.&lt;/p&gt;&lt;p&gt;First is to try and figure out what's being held in memory, so I do a really basic "heap dump" with heapy to see if anything stands out&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;        from guppy import hpy
-        hp = hpy()
-        i = 0
-        for name, filepath, modname in file_descrs:
-            self._check_file(get_ast, check_astroid_module, name, filepath, modname)
-            i += 1
-            if i % 10 == 0:
-                print("HEAP")
-                print(hp.heap())
-            if i == 100:
-                raise ValueError("Done")
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;My heap profiles end up being almost entirely "frame types" (which I was kind of expecting, for some reason), but also holding ont a bunch of tracebacks. Enough of these kinds of objects that I told myself "surely this is more than is needed".&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;    Partition of a set of 2751394 objects. Total size = 436618350 bytes.
-    Index  Count   %     Size   % Cumulative  % Kind (class / dict of class)
-        0 429084  16 220007072  50 220007072  50 types.FrameType
-        1 535810  19 30005360   7 250012432  57 types.TracebackType
-        2 516282  19 29719488   7 279731920  64 tuple
-        3 101904   4 29004928   7 308736848  71 set
-        4 185568   7 21556360   5 330293208  76 dict (no owner)
-        5 206170   7 16304240   4 346597448  79 list
-        6 117531   4  9998322   2 356595770  82 str
-        7  38582   1  9661040   2 366256810  84 dict of astroid.node_classes.Name
-        8  76755   3  6754440   2 373011250  85 tokenize.TokenInfo
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;It's at this point that I discovered heapy's &lt;a href="https://zhuyifei1999.github.io/guppy3/pbscreen.jpg" dir="ltr"&gt;Profile Browser&lt;/a&gt;, which seemed like a bit of a nicer way to look at this data&lt;/p&gt;&lt;p&gt;I switched up the heap mechanism to dump to a file every 10 iterations, then graph the entire runtime behaviour&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;    for name, filepath, modname in file_descrs:
-        self._check_file(get_ast, check_astroid_module, name, filepath, modname)
-        i += 1
-        if i % 10 == 0:
-            hp.heap().stat.dump("/tmp/linting.stats")
-        if i == 100:
-            hp.pb("/tmp/linting.stats")
-            raise ValueError("Done")
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;I get the following result, confirming that frames and tracebacks are a big deal in this run of Pylint:&lt;/p&gt;&lt;img src="https://rtpg.co/files/pylint/browser-profile-1.png" width="455" height="307"&gt;&lt;p dir="ltr"&gt;My next step is to actually look at the frame objects. Because Python is reference coutned, things are held in memory because &lt;em dir="ltr"&gt;something&lt;/em&gt; is pointing at them, so I'm going to try and find out which one.&lt;/p&gt;&lt;p dir="ltr"&gt;The wonderful &lt;code dir="ltr"&gt;objgraph&lt;/code&gt; library takes advantage of the Python memory manager to let you look at all objects still in memory, as well as lookup references to an object.&lt;/p&gt;&lt;p dir="ltr"&gt;It's actually very amazing that you can do this. Just have an object reference and you can find everything &lt;em dir="ltr"&gt;pointing towards&lt;/em&gt; that reference (there's some asterisks around C extensions but close enough). This is just wonderful technology for debugging, and another thing that makes Python a joy to work with, thanks to how much of CPython's internals are exposed for these kinds of tools.&lt;/p&gt;&lt;p dir="ltr"&gt;First I struggled to find objects because &lt;code dir="ltr"&gt;objgraph.by_type('types.TracebackType')&lt;/code&gt; wasn't finding any objects, despite me having records of having half a million of them. Turns out the name to use was &lt;code dir="ltr"&gt;traceback&lt;/code&gt;. Didn't quite nail down why...&lt;/p&gt;&lt;p&gt;&lt;code&gt;random.choice(objgraph.by_type('traceback'))&lt;/code&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Gives me a "random traceback". &lt;code dir="ltr"&gt;objgraph.show_backrefs&lt;/code&gt; will draw a graph of objects referencing this traceback. &lt;/p&gt;&lt;p dir="ltr"&gt;So I put an &lt;code dir="ltr"&gt;import pdb; pdb.set_trace()&lt;/code&gt; into the for loop after 100 iterations instead of just raising an exception, and I started looking at random tracebacks &lt;/p&gt;&lt;PRE&gt;&lt;code&gt;def exclude(obj):
-    return 'Pdb' in str(type(obj))
-
-def f(depth=7):
-    objgraph.show_backrefs([random.choice(objgraph.by_type('traceback'))],
-                            max_depth=depth,
-                            filter=lambda elt: not exclude(elt))
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Originally I was just seeing a chain of tracebacks, so I went for a depth of 100 and....&lt;/p&gt;&lt;img src="https://rtpg.co/files/pylint/traceback-stack.png" width="455" height="569"&gt;&lt;p dir="ltr"&gt;&lt;a href="https://rtpg.co/files/pylint/traceback-stack.png" dir="ltr"&gt;
-    &lt;/a&gt;
-  So a bunch of tracebacks referencing other tracebacks. Cool. So many of them were like this.&lt;/p&gt;&lt;p dir="ltr"&gt;I ended up just trying a bunch and failing, so I went after a secondary target: the &lt;code dir="ltr"&gt;frame&lt;/code&gt; types. These also seemed suspicious to me, and whatI end up finding is something like the following:&lt;/p&gt;&lt;img src="https://rtpg.co/files/pylint/traceback-nest.png" width="455" height="266"&gt;&lt;p dir="ltr"&gt;So tracebacks are holding onto frames (hence some similar cardinality). It's all a big mess, but the frames were at least pointing to lines of code. And this made me realize something silly: &lt;em dir="ltr"&gt;I had never bothered to actually look at the data using up so much memory&lt;/em&gt;. I totally should have just looked at the traceback objects themselves.&lt;/p&gt;&lt;p dir="ltr"&gt;So for this I ended up doing this in the most convoluted way possible, which is look at the addresses in the &lt;code dir="ltr"&gt;objgraph&lt;/code&gt; image dump, seeing the memory addresses, searching the web for "how do I get a Python object from its address" and ending up finding the neat trick that I had noted:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;ipdb&amp;gt; import ctypes
-ipdb&amp;gt; ctypes.cast(0x7f187d22b880, ctypes.py_object)
-py_object(&amp;lt;traceback object at 0x7f187d22b880&amp;gt;)
-ipdb&amp;gt; ctypes.cast(0x7f187d22b880, ctypes.py_object).value
-&amp;lt;traceback object at 0x7f187d22b880&amp;gt;
-ipdb&amp;gt; my_tb = ctypes.cast(0x7f187d22b880, ctypes.py_object).value
-ipdb&amp;gt; traceback.print_tb(my_tb, limit=20)
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;You can just tell Python "hey look at this memory, it's definitely at least a python object" and it will work.&lt;/p&gt;&lt;p dir="ltr"&gt;Later I realized I had references to these objects through &lt;code dir="ltr"&gt;objgraph&lt;/code&gt; and could just use that.&lt;/p&gt;&lt;p&gt;It looks like Astroid is building up tracebacks through exception handling code a bit all over the place. I feel like most "cool tricks" are gotten to by forgetting about the easy way to do something, so I won't complain too much.&lt;/p&gt;&lt;p&gt;The traceback itself had a bunch of lines going through Astroid, the AST parser backing Pylint. Progress! Astroid does seem like a program that might hold onto a lot of stuff in memory as its parsing files.&lt;/p&gt;&lt;p dir="ltr"&gt;I look around and end up seeing the following line in &lt;code dir="ltr"&gt;astroid/manager.py&lt;/code&gt;&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;except Exception as ex:
-    raise exceptions.AstroidImportError(
-    "Loading {modname} failed with:\n{error}",
-    modname=modname,
-    path=found_spec.location,
-) from ex
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;"Aha!" Itell myself. This is what I'm lookign for! Some sort of exception chain that would generate super long tracebacks. Plus it's file parsing so there's reccursion, etc... &lt;code dir="ltr"&gt;raise thing from other_thing&lt;/code&gt; would chain them together!&lt;/p&gt;&lt;p dir="ltr"&gt;I remove this &lt;code dir="ltr"&gt;from ex&lt;/code&gt; and .... nothing. Memory usage is still basically the same, and the tracebacks are still here.&lt;/p&gt;&lt;p dir="ltr"&gt;I remember that exceptions hold their local bindings in the tracebacks, so the &lt;code dir="ltr"&gt;ex&lt;/code&gt; is still accessible. It can't be garbage colleceted just yet! &lt;/p&gt;&lt;p dir="ltr"&gt;I do a bunch of refactorings to try and remove the &lt;code dir="ltr"&gt;except&lt;/code&gt; block for the most part, at least to avoid the reference to &lt;code dir="ltr"&gt;ex&lt;/code&gt;. Again, nothing!&lt;/p&gt;&lt;p&gt;For the life of me I can't get these tracebacks to garbage collect, despite there being no references to them. At least I thought this was the remaining reference.&lt;/p&gt;&lt;p dir="ltr"&gt;Really though, this was all a red herring. I don't know if this actually had anything to do with my memory leak, because at one point I started noticing that &lt;strong dir="ltr"&gt;I had no evidence&lt;/strong&gt; backing up this entire exception chaining theory. Just a bunch of hunches, plus half a million tracebacks. &lt;/p&gt;&lt;p&gt;I started just kind of randomly looking at tracebacks looking for any extra clues. I tried going up the chain of references by hand but was getting nowhere. &lt;/p&gt;&lt;p&gt;Then I had the revelation: these tracebacks are all stacked on top of each other, but there will be a traceback that is above all these other ones. There is a traceback that doesn't just have another traceback pointing to it! &lt;/p&gt;&lt;p dir="ltr"&gt;the references were through the &lt;code dir="ltr"&gt;tb_next&lt;/code&gt; property, as a simple chain. So I decided to look for the tracebacks at the end of their respective chains:&lt;/p&gt;&lt;p&gt;&lt;code&gt;bottom_tbs = [tb for tb in objgraph.by_type('traceback') if tb.tb_next is None]&lt;/code&gt;&lt;/p&gt;&lt;p&gt;There's something magical about one-lining your way through 500,000 stack traces to find the one you actually care about.&lt;/p&gt;&lt;p&gt;This led me to what I was actually looking for: the reason why Python really wanted to keep these objects around in the first place.&lt;/p&gt;&lt;img src="https://rtpg.co/files/pylint/traceback-filecache.png" width="455" height="310"&gt;&lt;p dir="ltr"&gt;&lt;a href="https://rtpg.co/files/pylint/traceback-filecache.png" dir="ltr"&gt;
-&lt;/a&gt;
-We had a file cache! &lt;/p&gt;&lt;p&gt;Basically Astroid will cache the results of loading a module, so that if some part of the code asks for the same module/file again, it can just provide the previous result. It will also reproduce the errors as well, by holding onto thrown exceptions.&lt;/p&gt;&lt;p&gt;This is where I made a bit of a judgement call. Caching the "error-ness" makes sense, but for me it's not at all worth holding onto the number of tracebacks our code is generating. &lt;/p&gt;&lt;p dir="ltr"&gt;Instead I decided to throw away the exception, store a custom &lt;code dir="ltr"&gt;Error&lt;/code&gt; class, and then just re-building exceptions when they are asked for. The details can be found over at &lt;a href="https://github.com/PyCQA/astroid/pull/837" dir="ltr"&gt;this PR&lt;/a&gt;, though it's not super interesting.&lt;/p&gt;&lt;p&gt;The end result: we went from 500MB memory usage to 100MB for the codebase I was working against&lt;/p&gt;&lt;img src="https://rtpg.co/files/pylint/bp-post-fix.png" width="455" height="262"&gt;&lt;p dir="ltr"&gt;&lt;a href="https://rtpg.co/files/pylint/bp-post-fix.png" dir="ltr"&gt;
-&lt;/a&gt;
-80% improvement's not bad, if I do say so myself.&lt;/p&gt;&lt;p&gt;The PR itself, I'm not sure if it will actually get merged though. It's not purely a performance change, and I think it could make stack traces less useful in some scenarios. It's a pretty brutal change all things considered, even if the test suite still passes.&lt;/p&gt;&lt;p&gt;Overally, I came away with the following:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The memory visibility in Python is pretty amazing, and I should be using it more often when debugging.&lt;/LI&gt;&lt;LI&gt;Back up the theories with evidence, not just hunches.&lt;/LI&gt;&lt;LI&gt;Write down the "current objectives" so you don't completely lose the plot while debugging. This took me a couple hours in the end and I went down way too many rabbit holes that were not realated to my actual issue.&lt;/LI&gt;&lt;LI&gt;Saving your WIP snippets (or even better: committing to Git) is super useful. It might be tempting to just delete stuff, but you might need to look up how you got a result later on, especially for more performance-oriented work.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;One thing that made me smile though; while writing this retrospective, I realized I had already forgotten so much of how I got to certain conclusions, so ended up re-testing some of my snippets. I then ran my measurements on an unrelated codebase and found that &lt;strong dir="ltr"&gt;the weird memory usage only happened on one codebase&lt;/strong&gt;. I had spent a bunch of time debugging this issue, but it's extremely likely that it's just pathological behaviour that's hitting only a minority of users.&lt;/p&gt;&lt;p&gt;Even when you do all these measurements, it's always very hard to make blanket statements about performance.&lt;/p&gt;&lt;p&gt;I will be trying to take this experience to other projects as well. My theory is that there's a lot of low hanging fruit in performance-related questions for open-source Python projects, given that the community has relatively little focus on that space (beyond the "libraries that are just C extensions" class of projects).&lt;/p&gt;</description><pubDate>Sun, 11 Oct 2020 21:38:30 -0500</pubDate></item><item><title>Nilang.jl, a Reversible Julia DSL</title><link>https://lobste.rs/s/4qgos0</link><description>&lt;p&gt;NiLang.jl (逆lang), is a reversible domain-specific language (DSL) that allow a program to go back to the past.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Requires Julia version &amp;gt;= 1.3,&lt;/LI&gt;&lt;LI&gt;Now a function dataview is specified by &lt;code dir="ltr"&gt;x |&amp;gt; bijection&lt;/code&gt;, e.g. the preivous &lt;code dir="ltr"&gt;grad(x)&lt;/code&gt; now should be written as &lt;code dir="ltr"&gt;x |&amp;gt; grad&lt;/code&gt; in the reversible context.&lt;/LI&gt;&lt;LI&gt;Our paper uses version v0.6, which might be different from the master branch.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;NiLang features:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;any program written in NiLang is differentiable,&lt;/LI&gt;&lt;LI&gt;a reversible language with abstraction and arrays,&lt;/LI&gt;&lt;LI&gt;complex values&lt;/LI&gt;&lt;LI&gt;reversible logarithmic number system&lt;/LI&gt;&lt;/UL&gt;&lt;img src="https://camo.githubusercontent.com/f7b92a177c912c1cc007fc9b40f17ff3ee3bb414/68747470733a2f2f696d672e736869656c64732e696f2f62616467652f646f63732d737461626c652d626c75652e737667" alt="Stable" width="78" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/3e353c26ddfe819150acbc732248f4f2a37f5175/68747470733a2f2f696d672e736869656c64732e696f2f62616467652f646f63732d6465762d626c75652e737667" alt="Dev" width="64" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/6066c2491499e77780807c6d6afaf48d7632ba5e/68747470733a2f2f7472617669732d63692e636f6d2f476967676c654c69752f4e694c616e672e6a6c2e7376673f6272616e63683d6d6173746572" alt="Build Status" width="90" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/bc3a62e0ecce1fc801ba48ec40ff1fb7bcb4aa2f/68747470733a2f2f636f6465636f762e696f2f67682f476967676c654c69752f4e694c616e672e6a6c2f6272616e63682f6d61737465722f67726170682f62616467652e737667" alt="Codecov" width="112" height="20"&gt;&lt;p dir="ltr"&gt;Start from our &lt;a href="https://github.com/JuliaReverse/NiLangTutorial/" dir="ltr"&gt;Pluto notebook here&lt;/a&gt;.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;The strangeness of reversible computing is mainly due to
+    (&lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;2&lt;/span&gt; (retrieve-object blob-storage-adaptor loc))))&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;We are free to use different blob storage adaptors for different systems, for example production, staging, CI, or local development. The business logic adaptor is oblivious to the actual blob storage implementation injected.&lt;/p&gt;&lt;h2&gt;On Mocks &amp;amp; Stubs&lt;/h2&gt;&lt;p&gt;The careful reader might have noticed that the dependency injection of different adaptors looks a lot like mocking, and this is very much true. While mocking has been considered more and more problematic in recent years, the fact that we assert the same set of behaviours for our mocks as we assert for the “real components” leads us to much more fully featured and realistic mocks, compared to the ones which are written for specific tests and then rarely touched after.&lt;/p&gt;&lt;p&gt;If the difference in behaviour between different adaptors leads to problems which are not caught by the test suite, the problems is not mocking, but an incomplete behaviour specification for the adaptor in question.&lt;/p&gt;</description><pubDate>Mon, 12 Oct 2020 02:10:10 -0500</pubDate></item><item><title>Nilang.jl, a Reversible Julia DSL</title><link>https://lobste.rs/s/4qgos0</link><description>&lt;p&gt;NiLang.jl (逆lang), is a reversible domain-specific language (DSL) that allow a program to go back to the past.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Requires Julia version &amp;gt;= 1.3,&lt;/LI&gt;&lt;LI&gt;Now a function dataview is specified by &lt;code dir="ltr"&gt;x |&amp;gt; bijection&lt;/code&gt;, e.g. the preivous &lt;code dir="ltr"&gt;grad(x)&lt;/code&gt; now should be written as &lt;code dir="ltr"&gt;x |&amp;gt; grad&lt;/code&gt; in the reversible context.&lt;/LI&gt;&lt;LI&gt;Our paper uses version v0.6, which might be different from the master branch.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;NiLang features:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;any program written in NiLang is differentiable,&lt;/LI&gt;&lt;LI&gt;a reversible language with abstraction and arrays,&lt;/LI&gt;&lt;LI&gt;complex values&lt;/LI&gt;&lt;LI&gt;reversible logarithmic number system&lt;/LI&gt;&lt;/UL&gt;&lt;img src="https://camo.githubusercontent.com/f7b92a177c912c1cc007fc9b40f17ff3ee3bb414/68747470733a2f2f696d672e736869656c64732e696f2f62616467652f646f63732d737461626c652d626c75652e737667" alt="Stable" width="78" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/3e353c26ddfe819150acbc732248f4f2a37f5175/68747470733a2f2f696d672e736869656c64732e696f2f62616467652f646f63732d6465762d626c75652e737667" alt="Dev" width="64" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/6066c2491499e77780807c6d6afaf48d7632ba5e/68747470733a2f2f7472617669732d63692e636f6d2f476967676c654c69752f4e694c616e672e6a6c2e7376673f6272616e63683d6d6173746572" alt="Build Status" width="90" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/bc3a62e0ecce1fc801ba48ec40ff1fb7bcb4aa2f/68747470733a2f2f636f6465636f762e696f2f67682f476967676c654c69752f4e694c616e672e6a6c2f6272616e63682f6d61737465722f67726170682f62616467652e737667" alt="Codecov" width="112" height="20"&gt;&lt;p dir="ltr"&gt;Start from our &lt;a href="https://github.com/JuliaReverse/NiLangTutorial/" dir="ltr"&gt;Pluto notebook here&lt;/a&gt;.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;The strangeness of reversible computing is mainly due to
 our lack of experience with it.—Henry Baker, 1992&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h2&gt;To Start&lt;/h2&gt;&lt;PRE&gt;&lt;code&gt;pkg&amp;gt; add NiLang
 &lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;An example: Compute the norm of a vector&lt;/h2&gt;&lt;PRE&gt;julia&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;using&lt;/span&gt; NiLang
 
@@ -1425,155 +1425,7 @@ go get github.com/chriswalz/bit@latest&lt;span dir="ltr"&gt;;&lt;/span&gt;
 bit&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Note&lt;/em&gt;: On Windows only the interactive prompt completion works not classic tab completion&lt;/p&gt;&lt;p&gt;Verify installation with:&lt;/p&gt;&lt;p&gt;&lt;code&gt;bit&lt;/code&gt;&lt;/p&gt;&lt;p&gt;Dependencies: Git&lt;/p&gt;&lt;p&gt;Platform Support:&lt;/p&gt;&lt;h2&gt;Bit specific command Usage&lt;/h2&gt;&lt;p&gt;Create a new commit&lt;/p&gt;&lt;p&gt;&lt;code&gt;bit save [commit message]&lt;/code&gt;&lt;/p&gt;&lt;p&gt;Save your changes to the current branch [amends current commit when ahead of origin]&lt;/p&gt;&lt;p&gt;&lt;code&gt;bit save&lt;/code&gt;&lt;/p&gt;&lt;p&gt;Synchronize your changes to origin branch (Beta)&lt;/p&gt;&lt;p&gt;&lt;code&gt;bit sync&lt;/code&gt;&lt;/p&gt;&lt;p&gt;You have access to ALL git commands as well. 90% of the time the above commands will have you covered.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;bit commit -m "I can still use git commands"&lt;/code&gt;, &lt;code dir="ltr"&gt;bit pull -r origin master&lt;/code&gt;&lt;/p&gt;&lt;h2&gt;Example Workflow&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;bit switch example-branch&lt;/code&gt;
 Branch does not exist. Do you want to create it? Y/n&lt;/p&gt;&lt;p&gt;yes&lt;/p&gt;&lt;p&gt;Switched to a new branch 'example-branch'&lt;/p&gt;&lt;p&gt;[Makes some changes]&lt;/p&gt;&lt;p&gt;&lt;code&gt;bit save "add important feature"&lt;/code&gt;&lt;/p&gt;&lt;p&gt;[fix an error for important feature]&lt;/p&gt;&lt;p&gt;&lt;code&gt;bit save&lt;/code&gt;&lt;/p&gt;&lt;p&gt;[push changes to origin]&lt;/p&gt;&lt;p&gt;&lt;code&gt;bit sync&lt;/code&gt;&lt;/p&gt;&lt;p&gt;[two days later confirm your branch is in sync with origin]&lt;/p&gt;&lt;p&gt;&lt;code&gt;bit sync&lt;/code&gt;&lt;/p&gt;&lt;h2&gt;Features&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;Automatic fetching &amp;amp; fast forwarding to keep your branches up to date and prevent merge conflicts&lt;/LI&gt;&lt;LI&gt;Simplify your entire rebase workflow with a single command &lt;code dir="ltr"&gt;bit sync&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Automatic suggestions at your fingertips&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;bit&lt;/code&gt; is &lt;strong dir="ltr"&gt;fully compatible&lt;/strong&gt; with &lt;code dir="ltr"&gt;git&lt;/code&gt;. All features of git are available if need be.&lt;/LI&gt;&lt;/UL&gt;&lt;h6&gt;Common commands at your finger tips&lt;/h6&gt;&lt;img src="https://user-images.githubusercontent.com/6971318/95157964-6eb0b600-0768-11eb-8f8a-075e2987fde8.gif" width="419" alt="bit" height="122"&gt;&lt;h6&gt;Commit, bump a tag and push with a single command&lt;/h6&gt;&lt;img src="https://user-images.githubusercontent.com/6971318/95157973-753f2d80-0768-11eb-8ef6-31239c76d305.gif" width="419" alt="bit" height="122"&gt;&lt;h6&gt;Instant git statistics and config information&lt;/h6&gt;&lt;img src="https://user-images.githubusercontent.com/6971318/95158539-d7e4f900-0769-11eb-8530-9ffc4610a71a.gif" width="419" alt="bit" height="122"&gt;&lt;h2&gt;Principles&lt;/h2&gt;&lt;OL&gt;&lt;LI&gt;Think in the age of the cloud&lt;/LI&gt;&lt;LI&gt;Embed the spirit of modern day workflows&lt;/LI&gt;&lt;LI&gt;Favor simplicity over complexity&lt;/LI&gt;&lt;LI&gt;Bit should have happy defaults&lt;/LI&gt;&lt;LI&gt;Bit must be fully compatible with Git&lt;/LI&gt;&lt;/OL&gt;&lt;h2&gt;Inspiration&lt;/h2&gt;&lt;p dir="ltr"&gt;Thanks to &lt;a href="https://gitless.com/" rel="nofollow" dir="ltr"&gt;Gitless&lt;/a&gt;, &lt;a href="https://github.com/tj/git-extras" dir="ltr"&gt;git-extras&lt;/a&gt;, researchers in the field and of course the developers of &lt;code dir="ltr"&gt;git&lt;/code&gt; itself! Also, thanks to &lt;a href="https://github.com/c-bata/go-prompt" dir="ltr"&gt;go-prompt&lt;/a&gt; for the interactive prompt library&lt;/p&gt;&lt;h2&gt;Changelog&lt;/h2&gt;&lt;p&gt;v0.5&lt;/p&gt;&lt;UL&gt;&lt;LI&gt; &lt;code dir="ltr"&gt;bit switch&lt;/code&gt;, &lt;code dir="ltr"&gt;bit co&lt;/code&gt;, &lt;code dir="ltr"&gt;bit checkout&lt;/code&gt; will show prompt&lt;/LI&gt;&lt;LI&gt; fix bit tab completion (bitcomplete)&lt;/LI&gt;&lt;LI&gt; fix edge case where there is an invalid ref&lt;/LI&gt;&lt;LI&gt; various minor fixes&lt;/LI&gt;&lt;LI&gt; Deployment: automatic versioning&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;v0.4&lt;/p&gt;&lt;UL&gt;&lt;LI&gt; multiline support with Go Survey Library&lt;/LI&gt;&lt;LI&gt; color mitigation to have roughly similar colors across OSs&lt;/LI&gt;&lt;LI&gt; fix README go get installation instructions&lt;/LI&gt;&lt;LI&gt; QOL improvements for &lt;code dir="ltr"&gt;bit sync&lt;/code&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;How to uninstall&lt;/h2&gt;&lt;p&gt;&lt;em&gt;go binaries are self-contained so uninstalling simply requires deleting the binary(ies)&lt;/em&gt;&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;rm `which bit`
 rm `which bitcomplete` 
-&lt;/code&gt;&lt;/PRE&gt;</description><pubDate>Mon, 12 Oct 2020 02:03:31 -0500</pubDate></item><item><title>tobspr/GLSL-Color-Spaces - Utility functions to convert between various color spaces in GLSL</title><link>https://lobste.rs/s/lhu6oz</link><description>&lt;h2&gt;Supported conversions&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;d&lt;/strong&gt; = directly implemented&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;x&lt;/strong&gt; = Implemented using two or more direct implementions&lt;/p&gt;&lt;table dir="ltr"&gt;
-&lt;thead dir="ltr"&gt;
-&lt;tr dir="ltr"&gt;
-&lt;th dir="ltr"&gt;From / To&lt;/th&gt;
-&lt;th dir="ltr"&gt;RGB&lt;/th&gt;
-&lt;th dir="ltr"&gt;sRGB&lt;/th&gt;
-&lt;th dir="ltr"&gt;XYZ&lt;/th&gt;
-&lt;th dir="ltr"&gt;xyY&lt;/th&gt;
-&lt;th dir="ltr"&gt;HCV&lt;/th&gt;
-&lt;th dir="ltr"&gt;HUE&lt;/th&gt;
-&lt;th dir="ltr"&gt;HSV&lt;/th&gt;
-&lt;th dir="ltr"&gt;HSL&lt;/th&gt;
-&lt;th dir="ltr"&gt;HCY&lt;/th&gt;
-&lt;th dir="ltr"&gt;YCbCr&lt;/th&gt;
-&lt;/tr&gt;
-&lt;/thead&gt;
-&lt;tbody dir="ltr"&gt;
-&lt;tr dir="ltr"&gt;
-&lt;td dir="ltr"&gt;&lt;strong dir="ltr"&gt;RGB&lt;/strong&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-&lt;td dir="ltr"&gt;&lt;strong dir="ltr"&gt;sRGB&lt;/strong&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-&lt;td dir="ltr"&gt;&lt;strong dir="ltr"&gt;XYZ&lt;/strong&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-&lt;td dir="ltr"&gt;&lt;strong dir="ltr"&gt;xyY&lt;/strong&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-&lt;td dir="ltr"&gt;&lt;strong dir="ltr"&gt;HCV&lt;/strong&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-&lt;td dir="ltr"&gt;&lt;strong dir="ltr"&gt;HUE&lt;/strong&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-&lt;td dir="ltr"&gt;&lt;strong dir="ltr"&gt;HSV&lt;/strong&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-&lt;td dir="ltr"&gt;&lt;strong dir="ltr"&gt;HSL&lt;/strong&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-&lt;td dir="ltr"&gt;&lt;strong dir="ltr"&gt;HCY&lt;/strong&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-&lt;td dir="ltr"&gt;&lt;strong dir="ltr"&gt;YCbCr&lt;/strong&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;x&lt;/td&gt;
-&lt;td dir="ltr"&gt;d&lt;/td&gt;
-&lt;/tr&gt;
-&lt;/tbody&gt;
-&lt;/table&gt;</description><pubDate>Sun, 11 Oct 2020 21:04:00 -0500</pubDate></item><item><title>Fuzz Week 2020</title><link>https://www.youtube.com/playlist?list=PLSkhUfcCXvqHsOy2VUxuoAf5m_7c8RqvO</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/7o1ue5/fuzz_week_2020"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 11 Oct 2020 19:54:29 -0500</pubDate></item><item><title>Overloading by Return Type in C++</title><link>https://lobste.rs/s/shbphb</link><description>&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;// this is OK&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;</description><pubDate>Mon, 12 Oct 2020 02:03:31 -0500</pubDate></item><item><title>Overloading by Return Type in C++</title><link>https://lobste.rs/s/shbphb</link><description>&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;// this is OK&lt;/span&gt;
 &lt;span dir="ltr"&gt;std&lt;/span&gt;&lt;span dir="ltr"&gt;::&lt;/span&gt;&lt;span dir="ltr"&gt;string&lt;/span&gt; &lt;span dir="ltr"&gt;to_string&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
 &lt;span dir="ltr"&gt;std&lt;/span&gt;&lt;span dir="ltr"&gt;::&lt;/span&gt;&lt;span dir="ltr"&gt;string&lt;/span&gt; &lt;span dir="ltr"&gt;to_string&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;bool&lt;/span&gt; &lt;span dir="ltr"&gt;b&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
 
@@ -1812,7 +1664,155 @@ The basic version is simple:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span 
 &lt;span dir="ltr"&gt;to_string_t&lt;/span&gt; &lt;span dir="ltr"&gt;from_string&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;std&lt;/span&gt;&lt;span dir="ltr"&gt;::&lt;/span&gt;&lt;span dir="ltr"&gt;string_view&lt;/span&gt; &lt;span dir="ltr"&gt;s&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt; &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;to_string_t&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;s&lt;/span&gt;&lt;span dir="ltr"&gt;};&lt;/span&gt; &lt;span dir="ltr"&gt;}&lt;/span&gt;
 &lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;By default, this solution does not have the extensibility of normal by-argument-type overloading.
 However, we can restore it via a templated conversion operator that delegates to a templated class that can be specialized.
-In the process, we can also define a &lt;code dir="ltr"&gt;has_from_string&amp;lt;T&amp;gt;&lt;/code&gt; to help with diagnostics or SFINAE.&lt;/p&gt;&lt;p dir="ltr"&gt;(&lt;em dir="ltr"&gt;Title image from &lt;a href="https://pixabay.com/photos/india-merchant-dealer-ox-goods-4780853/" dir="ltr"&gt;pixabay&lt;/a&gt;&lt;/em&gt;)&lt;/p&gt;</description><pubDate>Sun, 11 Oct 2020 14:28:58 -0500</pubDate></item><item><title>Ciphey - Automatically decrypt encryptions without knowing the key or cipher, decode encodings</title><link>https://lobste.rs/s/nqeqy8</link><description>&lt;p align="center" dir="ltr"&gt;
+In the process, we can also define a &lt;code dir="ltr"&gt;has_from_string&amp;lt;T&amp;gt;&lt;/code&gt; to help with diagnostics or SFINAE.&lt;/p&gt;&lt;p dir="ltr"&gt;(&lt;em dir="ltr"&gt;Title image from &lt;a href="https://pixabay.com/photos/india-merchant-dealer-ox-goods-4780853/" dir="ltr"&gt;pixabay&lt;/a&gt;&lt;/em&gt;)&lt;/p&gt;</description><pubDate>Sun, 11 Oct 2020 14:28:58 -0500</pubDate></item><item><title>tobspr/GLSL-Color-Spaces - Utility functions to convert between various color spaces in GLSL</title><link>https://lobste.rs/s/lhu6oz</link><description>&lt;h2&gt;Supported conversions&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;d&lt;/strong&gt; = directly implemented&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;x&lt;/strong&gt; = Implemented using two or more direct implementions&lt;/p&gt;&lt;table dir="ltr"&gt;
+&lt;thead dir="ltr"&gt;
+&lt;tr dir="ltr"&gt;
+&lt;th dir="ltr"&gt;From / To&lt;/th&gt;
+&lt;th dir="ltr"&gt;RGB&lt;/th&gt;
+&lt;th dir="ltr"&gt;sRGB&lt;/th&gt;
+&lt;th dir="ltr"&gt;XYZ&lt;/th&gt;
+&lt;th dir="ltr"&gt;xyY&lt;/th&gt;
+&lt;th dir="ltr"&gt;HCV&lt;/th&gt;
+&lt;th dir="ltr"&gt;HUE&lt;/th&gt;
+&lt;th dir="ltr"&gt;HSV&lt;/th&gt;
+&lt;th dir="ltr"&gt;HSL&lt;/th&gt;
+&lt;th dir="ltr"&gt;HCY&lt;/th&gt;
+&lt;th dir="ltr"&gt;YCbCr&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody dir="ltr"&gt;
+&lt;tr dir="ltr"&gt;
+&lt;td dir="ltr"&gt;&lt;strong dir="ltr"&gt;RGB&lt;/strong&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+&lt;td dir="ltr"&gt;&lt;strong dir="ltr"&gt;sRGB&lt;/strong&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+&lt;td dir="ltr"&gt;&lt;strong dir="ltr"&gt;XYZ&lt;/strong&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+&lt;td dir="ltr"&gt;&lt;strong dir="ltr"&gt;xyY&lt;/strong&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+&lt;td dir="ltr"&gt;&lt;strong dir="ltr"&gt;HCV&lt;/strong&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+&lt;td dir="ltr"&gt;&lt;strong dir="ltr"&gt;HUE&lt;/strong&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+&lt;td dir="ltr"&gt;&lt;strong dir="ltr"&gt;HSV&lt;/strong&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+&lt;td dir="ltr"&gt;&lt;strong dir="ltr"&gt;HSL&lt;/strong&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+&lt;td dir="ltr"&gt;&lt;strong dir="ltr"&gt;HCY&lt;/strong&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+&lt;td dir="ltr"&gt;&lt;strong dir="ltr"&gt;YCbCr&lt;/strong&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;x&lt;/td&gt;
+&lt;td dir="ltr"&gt;d&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;</description><pubDate>Sun, 11 Oct 2020 21:04:00 -0500</pubDate></item><item><title>Fuzz Week 2020</title><link>https://www.youtube.com/playlist?list=PLSkhUfcCXvqHsOy2VUxuoAf5m_7c8RqvO</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/7o1ue5/fuzz_week_2020"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 11 Oct 2020 19:54:29 -0500</pubDate></item><item><title>Ciphey - Automatically decrypt encryptions without knowing the key or cipher, decode encodings</title><link>https://lobste.rs/s/nqeqy8</link><description>&lt;p align="center" dir="ltr"&gt;
 &lt;br dir="ltr"&gt;
 Fully automated decryption/decoding/cracking tool using natural language processing &amp;amp; artificial intelligence, along with some common sense.
 &lt;/p&gt;&lt;h2&gt;&lt;a href="https://github.com/Ciphey/Ciphey/wiki/Installation"&gt;Installation Guide&lt;/a&gt;&lt;/h2&gt;&lt;table dir="ltr"&gt;
