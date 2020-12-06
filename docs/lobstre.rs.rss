@@ -193,108 +193,115 @@ $output .= $xorsum;
     $user['username'],
     hex2bin($user['pw_dedupe'])
 );
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;Since K’ = H(K) when Length(K) &amp;gt; BlockSize(H), you can just take the pre-calculated hash of the user’s password and use that &lt;em dir="ltr"&gt;as the password&lt;/em&gt; (although not hex-encoded), and it will validate. (&lt;a href="https://3v4l.org/nqoRI" dir="ltr"&gt;Demo&lt;/a&gt;.)&lt;/p&gt;&lt;figure&gt;&lt;img src="https://soatok.files.wordpress.com/2020/04/soatok_stickerpack-facepaw.png?w=512" alt="Facepaw" srcset="https://soatok.files.wordpress.com/2020/04/soatok_stickerpack-facepaw.png 512w, https://soatok.files.wordpress.com/2020/04/soatok_stickerpack-facepaw.png?w=150 150w, https://soatok.files.wordpress.com/2020/04/soatok_stickerpack-facepaw.png?w=300 300w" width="445" height="445"&gt;&lt;figcaption dir="ltr"&gt;This is probably how you feel right now, if you didn’t already know about this.&lt;br dir="ltr"&gt;(Art by &lt;a href="https://twitter.com/lynxvsjackalope" dir="ltr"&gt;Khia&lt;/a&gt;.)&lt;/figcaption&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;Above, when HMAC defined K’, it included a variant in its definition. Adding variants to hash function is a dumb way to introduce the risk of collisions. (See also: &lt;a href="https://soatok.blog/2020/07/15/kerlissions-trivial-collisions-in-iotas-hash-function-kerl/" dir="ltr"&gt;Trivial Collisions in IOTA’s Kerl hash function&lt;/a&gt;.)&lt;/p&gt;&lt;p dir="ltr"&gt;Also, some PBKDF2 implementations that mishandle the pre-hashing of K, which &lt;a href="https://github.com/defuse/php-encryption/issues/230" dir="ltr"&gt;can lead to denial-of-service attacks&lt;/a&gt;. Fun stuff, right?&lt;/p&gt;&lt;h3&gt;Some Dumb Yet Effective Mitigations&lt;/h3&gt;&lt;p&gt;Here are a few ways the hypothetical developer could have narrowly avoided this security risk:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Use a different hash function for PBKDF2 and the deduplication check.&lt;UL&gt;&lt;LI&gt;e.g. PBKDF2-SHA256 and SHA512 would be impervious&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;Always pre-hashing the password before passing it to PBKDF2.&lt;UL&gt;&lt;LI&gt;Our exploit attempt will effectively be double-hashed, and will not succeed.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;Use HMAC instead of a bare hash for the deduplication. With a hard-coded, constant key.&lt;/LI&gt;&lt;LI&gt;Prefix the password with a distinct domain separation constant in each usage.&lt;/LI&gt;&lt;LI&gt;Truncate the hash function, treating it as a Bloom filter.&lt;/LI&gt;&lt;LI&gt;Some or all of the above.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Push back&lt;/strong&gt; on implementing this stupid feature to begin with.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Subtle problems often (&lt;a href="https://github.com/cr-marcstevens/sha1collisiondetection" dir="ltr"&gt;but not always&lt;/a&gt;) call for subtle solutions.&lt;/p&gt;&lt;h3&gt;Password Security Advice, Revisited&lt;/h3&gt;&lt;p dir="ltr"&gt;One dumb mitigation technique I didn’t include above is, “Using passwords shorter than the block size of the hash function.” The information security industry almost unanimously agrees that &lt;a href="https://crambler.com/password-security-why-secure-passwords-need-length-over-complexity/" dir="ltr"&gt;longer passwords are better than short ones&lt;/a&gt; (assuming both have the same distribution of possible characters at each position in the string, and are chosen randomly).&lt;/p&gt;&lt;p dir="ltr"&gt;But here, we have a clear-cut example where having a longer password actually &lt;em dir="ltr"&gt;decreased&lt;/em&gt; security by allowing a trivial authentication bypass. Passwords with a length less than or equal to the block size of the hash function would not be vulnerable to the attack.&lt;/p&gt;&lt;p&gt;For reference, if you ever wanted to implement this control (assuming ASCII characters, where 1 character = 1 byte):&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;64-character passwords would be the upper limit for MD5, SHA-1, SHA-224, and SHA-256.&lt;/LI&gt;&lt;LI&gt;128-character passwords would be the upper limit for SHA-384 and SHA-512.&lt;/LI&gt;&lt;LI&gt;(Since the above example used 256-character passwords, it always overflows.)&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;But really, one of the other mitigation techniques would be better. Limiting the input length is just a band-aid.&lt;/p&gt;&lt;h3&gt;Another Non-Obvious Footgun&lt;/h3&gt;&lt;p dir="ltr"&gt;Converse to the block size of the hash function, the &lt;em dir="ltr"&gt;output size&lt;/em&gt; of the hash function also affects the security of PBKDF2, because each output is calculated sequentially. If you request more bytes out of a PBKDF2 function than the hash function outputs, it will have to work at least twice as hard.&lt;/p&gt;&lt;p dir="ltr"&gt;This means that, while a legitimate user has to calculate the entire byte stream from PBKDF2, an attacker can just target the first N bytes (20 for SHA-1, 32 for SHA-256, 64 for SHA-512) of the raw hash output and attack &lt;em dir="ltr"&gt;that&lt;/em&gt; instead of doing all the work.&lt;/p&gt;&lt;h2&gt;Is Cryptography Hard?&lt;/h2&gt;&lt;p&gt;I’ve fielded a lot of questions in the past few weeks, and consequently overheard commentary from folks insisting that cryptography is a hard discipline and therefore only the smartest should study it. I disagree with that, but not for the reason that most will expect.&lt;/p&gt;&lt;p&gt;Many of the people reading this page will tell me, “This is such a dumb and obvious design flaw. Nobody would ship that code in production,” because they’re clever or informed enough to avoid disaster.&lt;/p&gt;&lt;p dir="ltr"&gt;Yet, we still regularly hear about &lt;a href="https://www.howmanydayssinceajwtalgnonevuln.com/" dir="ltr"&gt;JWT alg=none vulnerabilities&lt;/a&gt;. And &lt;a href="https://arxiv.org/abs/1510.08555" dir="ltr"&gt;Johnny still still can’t encrypt&lt;/a&gt;. So cryptography surely can’t be &lt;em dir="ltr"&gt;easy&lt;/em&gt;.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://soatok.files.wordpress.com/2020/07/crypto-is-hard.png?w=580" alt="" srcset="https://soatok.files.wordpress.com/2020/07/crypto-is-hard.png 580w, https://soatok.files.wordpress.com/2020/07/crypto-is-hard.png?w=150 150w, https://soatok.files.wordpress.com/2020/07/crypto-is-hard.png?w=300 300w" width="445" height="445"&gt;&lt;figcaption dir="ltr"&gt;Art by &lt;a href="https://twitter.com/rileyartstuff" dir="ltr"&gt;Riley&lt;/a&gt;.&lt;/figcaption&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;Real-world cryptographic work is cognitively demanding. It becomes increasingly mathematically intensive &lt;a href="https://soatok.blog/2020/06/10/how-to-learn-cryptography-as-a-programmer/" dir="ltr"&gt;the deeper you study&lt;/a&gt;, and nobody knows how to name things that non-cryptographers can understand. (Does anyone intuitively understand what a &lt;strong dir="ltr"&gt;public key&lt;/strong&gt; is outside of our field?)&lt;/p&gt;&lt;p dir="ltr"&gt;In my opinion, cryptography is certainly challenging and widely misunderstood. There are a lot of subtle ways for secure building blocks to be stitched together insecurely. And &lt;em dir="ltr"&gt;today&lt;/em&gt;, it’s certainly a hard subject for most people to learn.&lt;/p&gt;&lt;p dir="ltr"&gt;However, I don’t think its hardness is &lt;strong dir="ltr"&gt;&lt;em dir="ltr"&gt;unavoidable&lt;/em&gt;.&lt;/strong&gt;&lt;/p&gt;&lt;h3&gt;Descending the Mohs Scale&lt;/h3&gt;&lt;p&gt;There is a lot of gatekeeping in the information security community. (Maybe we should expect that to happen when people spend too many hours staring at firewall rules?)&lt;/p&gt;&lt;p&gt;“Don’t roll your own crypto” is something you hear a lot more often from software engineers and network security professionals than bona fide cryptographers.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://medium.com/@soatok/gatekeeping-in-online-communities-48dec7f97f6a" dir="ltr"&gt;Needless gatekeeping&lt;/a&gt; does the cryptographic community a severe disservice. I’m &lt;a href="https://www.cryptofails.com/post/75204435608/write-crypto-code-dont-publish-it" dir="ltr"&gt;not the first&lt;/a&gt; to suggest that, either. &lt;/p&gt;&lt;p dir="ltr"&gt;From what I’ve seen, far too many people feel discouraged from learning about cryptography, thinking they aren’t smart enough for it. It would seem &lt;em dir="ltr"&gt;&lt;a href="https://www.maa.org/external_archive/devlin/LockhartsLament.pdf" dir="ltr"&gt;A Mathematician’s Lament&lt;/a&gt;&lt;/em&gt; has an echo.&lt;/p&gt;&lt;p&gt;If it can be said that cryptography is hard today, then that has more to do with incomplete documentation and substandard education resources available for free online than some inherent mystical quality of our discipline that only the christened few can ever hope to master.&lt;/p&gt;&lt;p dir="ltr"&gt;Cryptographers and security engineers that work in cryptography need more developers to play in our sandbox. We need more usability experts to discuss improvements to our designs and protocols to make them harder to misuse. We also need science communication experts and a legal strategy to stop idiotic politicians from &lt;a href="https://soatok.blog/2020/11/14/going-bark-a-furrys-guide-to-end-to-end-encryption/" dir="ltr"&gt;trying to foolishly ban encryption&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;So if you’re reading my blog, wondering, “Will I ever be smart enough to understand this crap?” the answer is probably “Yes!” It might not be easy, but with any luck, it’ll be easier than it was for the forerunners in our field.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://soatok.files.wordpress.com/2020/04/soatok_stickerpack-hug.png?w=512" alt="Hug?" srcset="https://soatok.files.wordpress.com/2020/04/soatok_stickerpack-hug.png 512w, https://soatok.files.wordpress.com/2020/04/soatok_stickerpack-hug.png?w=150 150w, https://soatok.files.wordpress.com/2020/04/soatok_stickerpack-hug.png?w=300 300w" width="445" height="445"&gt;&lt;figcaption dir="ltr"&gt;If a random furry can grok these topics, what’s stopping you? This dhole believes in you.&lt;br dir="ltr"&gt;(Art by &lt;a href="https://twitter.com/lynxvsjackalope" dir="ltr"&gt;Khia&lt;/a&gt;.)&lt;/figcaption&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;I have one request, though: If you’re thinking of learning cryptography, &lt;a href="https://soatok.blog/2020/06/15/the-world-needs-more-furry-bloggers/" dir="ltr"&gt;please blog about your journey&lt;/a&gt; (even if you’re not a furry). You may end up filling in a pothole that would otherwise have tripped someone else up.&lt;/p&gt;&lt;h3&gt;Share this:&lt;/h3&gt;</description><pubDate>Sun, 06 Dec 2020 01:42:41 -0600</pubDate></item><item><title>TeX: A tale of two worlds (2017)</title><link>https://lobste.rs/s/q85aj7</link><description>&lt;p dir="ltr"&gt;Best viewed in &lt;del dir="ltr"&gt;Internet Explorer 6&lt;/del&gt;
-&lt;a href="https://assets.bitbashing.io/papers/tex-tale-of-two-worlds.pdf" dir="ltr"&gt;PDF&lt;/a&gt;
-because… well… read the damn thing.&lt;/p&gt;&lt;p dir="ltr"&gt;Most serious programmers have heard of Donald Knuth,
-the man who coined the term &lt;em dir="ltr"&gt;analysis of algorithms&lt;/em&gt; in 1968
-and pioneered many of the computer science fundamentals we use today.
-Knuth is perhaps most famous for his ongoing magnum opus,
-&lt;em dir="ltr"&gt;The Art of Computer Programming&lt;/em&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;When the first volume of TAOCP was released that same year,
-it was printed the way most books had been since the turn of the century:
-with &lt;em dir="ltr"&gt;hot metal&lt;/em&gt; type.
-Each individual letter was cast from molten lead,
-then arranged into its line.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://upload.wikimedia.org/wikipedia/commons/7/72/Matrixcase-bembo-16pts.jpg" alt="Monotype matrix case" height="400" width="465"&gt;&lt;figcaption dir="auto"&gt;A case of letter molds—or matrices—used by the Monotype caster, the most commonly-used machine for printing books in the days of hot metal type. Its main contemporary, the Linotype, molded entire lines at a time, and was often used for printing newspapers.&lt;/figcaption&gt;&lt;/figure&gt;&lt;p&gt;These lines were clamped together to form pages of the book,
-which were finally inked and pressed against paper.
-By March of 1977, Knuth was ready for a second run of TAOCP, Volume&amp;nbsp;2,
-but he was horrified when he received the proofs.
-Hot metal typesetting was an expensive, complicated, and time-consuming process,
-so publishers had replaced it with phototypesetting,
-which works by projecting characters onto film.
-The new technology, while much cheaper and faster,
-didn’t provide the same level of quality he had come to expect.&lt;/p&gt;&lt;p dir="ltr"&gt;The average author would have resigned themselves to the change and moved on,
-but Knuth took great pride in print quality,
-especially for the mathematics in his books.
-Around this time, he discovered an exciting new technology:
-digital typesetting.
-Instead of working with metal or film,
-letters and shapes were built from tiny dots,
-often packed together at over 1,000 per inch.
-Inspired by this burgeoning tech and frustrated with the current state of affairs,
-Knuth set off on one of the greatest yak shaves of all time.
-For years, he paused all work on his books to create his own
-digital typesetting system.
-When the dust settled in 1978, Knuth had the first version of
-&lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;
-.&lt;sup dir="ltr"&gt;&lt;a href="https://bitbashing.io/tex.html#fn:1" dir="ltr"&gt;1&lt;/a&gt;&lt;/sup&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;It’s hard to understand how much of a revolution &lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;
- was,
-especially looking back from a time where anybody with a copy
-of Word can be their own desktop publisher.
-Adobe’s PDF wouldn’t exist for another decade, so Knuth
-invented a device-independent format, DVI.
-Scalable fonts were uncommon at the time, so Knuth created a system,
-&lt;span dir="ltr"&gt;METAFONT&lt;/span&gt;
-, to rasterize his characters into dots on the
-page.&lt;sup dir="ltr"&gt;&lt;a href="https://bitbashing.io/tex.html#fn:2" dir="ltr"&gt;2&lt;/a&gt;&lt;/sup&gt;
-Perhaps most importantly, Knuth and his graduate students designed algorithms
-to automatically hyphenate and justify lines of text into
-beautifully-typeset paragraphs.&lt;/p&gt;&lt;p dir="ltr"&gt;Here is where the timelines diverge.
-In one, &lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;
- was just the beginning.
-Computer typography evolves rapidly as the decades go by,
-building on Knuth’s prior work and
-taking advantage of the million-fold increases we’ve seen in computing power.
-Browsers, e-readers, and word processors deliver beautiful type
-to every person who looks at a screen, with almost no effort from authors.&lt;/p&gt;&lt;p dir="ltr"&gt;In the darker timeline… none of this happens.
-&lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;
- is still some of the best we’ve got for computer typesetting.
-It’s seen some impressive improvements,&lt;sup dir="ltr"&gt;&lt;a href="https://bitbashing.io/tex.html#fn:3" dir="ltr"&gt;3&lt;/a&gt;&lt;/sup&gt;
-but its core hasn’t changed much in decades.
-To this day,
-it doesn’t lay out more than one page at a time because 1980s computers didn’t
-have enough RAM to do any better.&lt;sup dir="ltr"&gt;&lt;a href="https://bitbashing.io/tex.html#fn:4" dir="ltr"&gt;4&lt;/a&gt;&lt;/sup&gt;
-Almost no other software—except for a handful of professional layout
-programs like Adobe InDesign—leverages any of the advances
-&lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;
- made in line breaking and hyphenation.
-Layout in Word, browsers, and even e-readers is a sad joke.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://assets.bitbashing.io/images/exa.png" alt="Mobile browser layout example" height="400" width="264"&gt;&lt;figcaption dir="auto"&gt;State of the art text layout in today's browsers. Mind the gaps.&lt;/figcaption&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;I’m not sure what to make of this.
-Maybe most people, outside a small cadre of designers and
-enthusiasts, just don’t care about typography very much.
-After all, the human brain is incredibly good glossing over minor details and
-im&lt;span dir="ltr"&gt;p&lt;/span&gt;erfections when reading.
-But even the design world seems largely unaware or indifferent to Knuth’s work.
-Despite collaborations with famous type designers like Hermann Zapf,
-you’ll find no mention of him in renowned books and documentaries on
-the subject.&lt;sup dir="ltr"&gt;&lt;a href="https://bitbashing.io/tex.html#fn:5" dir="ltr"&gt;5&lt;/a&gt;&lt;/sup&gt;
-And parametric font families—just like the ones &lt;span dir="ltr"&gt;METAFONT&lt;/span&gt;
- offered in 1983—are
-heralded in 2017 as “a new era of type design”.&lt;sup dir="ltr"&gt;&lt;a href="https://bitbashing.io/tex.html#fn:6" dir="ltr"&gt;6&lt;/a&gt;&lt;/sup&gt;
-It’s bizarre.&lt;/p&gt;&lt;p dir="ltr"&gt;Good typography can make almost anything more enjoyable to read,
-and it feels like such a shame that better layout isn’t
-available to the masses
-when so much of the groundwork was laid almost forty years ago.
-In an age when the average American reads from a screen they keep in their pocket
-dozens of times a day,
-and where each one of those devices holds more processing power than you could
-fit in several rooms back when Donald Knuth
-wrote &lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;
-, surely we can—and &lt;em dir="ltr"&gt;should&lt;/em&gt;—do better.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;
-  is pronounced like the first syllable of ‘‘&lt;b dir="ltr"&gt;tech&lt;/b&gt;nician’’.&amp;nbsp;&lt;a href="https://bitbashing.io/tex.html#fnref:1" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;In some ways, &lt;span dir="ltr"&gt;METAFONT&lt;/span&gt; is more impressive than the PostScript system that
-  underpins modern TTF and OTF font files.
-  Instead of constructing characters from lines and curves,
-  &lt;span dir="ltr"&gt;METAFONT&lt;/span&gt; uses strokes of virtual pens.
-  By tweaking the parameters of these pens and strokes, one can build entire
-  font families from the same base designs.&amp;nbsp;&lt;a href="https://bitbashing.io/tex.html#fnref:2" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Lua&lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;,
-  X&lt;span dir="ltr"&gt;e&lt;/span&gt;&lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;,
-  and &lt;code dir="ltr"&gt;microtype&lt;/code&gt; are great examples.&amp;nbsp;&lt;a href="https://bitbashing.io/tex.html#fnref:3" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;No, seriously.
-  “The computer doesn’t have enough high-speed memory capacity to remember the
-  contents of several pages,
-  so &lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;
- simply chooses each page break as best it can,
-  by a process of ‘local’ rather than ‘global’ optimization.” — The
-  &lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;
-book, p.&amp;nbsp;110&amp;nbsp;&lt;a href="https://bitbashing.io/tex.html#fnref:4" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;e.g., &lt;em dir="ltr"&gt;Thinking With Type&lt;/em&gt;, &lt;em dir="ltr"&gt;The Elements of Typographic Style&lt;/em&gt;,
-  &lt;em dir="ltr"&gt;The Visual History of Type&lt;/em&gt;,
-  &lt;em dir="ltr"&gt;Graphic Means:&amp;nbsp;A History of Graphic Design Production&lt;/em&gt;…&amp;nbsp;&lt;a href="https://bitbashing.io/tex.html#fnref:5" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Sat, 05 Dec 2020 11:35:05 -0600</pubDate></item><item><title>The Bastard Operator From Hell Complete WWW Archive</title><link>https://lobste.rs/s/vthu1w</link><description>&lt;UL&gt;&lt;LI&gt; 
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;Since K’ = H(K) when Length(K) &amp;gt; BlockSize(H), you can just take the pre-calculated hash of the user’s password and use that &lt;em dir="ltr"&gt;as the password&lt;/em&gt; (although not hex-encoded), and it will validate. (&lt;a href="https://3v4l.org/nqoRI" dir="ltr"&gt;Demo&lt;/a&gt;.)&lt;/p&gt;&lt;figure&gt;&lt;img src="https://soatok.files.wordpress.com/2020/04/soatok_stickerpack-facepaw.png?w=512" alt="Facepaw" srcset="https://soatok.files.wordpress.com/2020/04/soatok_stickerpack-facepaw.png 512w, https://soatok.files.wordpress.com/2020/04/soatok_stickerpack-facepaw.png?w=150 150w, https://soatok.files.wordpress.com/2020/04/soatok_stickerpack-facepaw.png?w=300 300w" width="445" height="445"&gt;&lt;figcaption dir="ltr"&gt;This is probably how you feel right now, if you didn’t already know about this.&lt;br dir="ltr"&gt;(Art by &lt;a href="https://twitter.com/lynxvsjackalope" dir="ltr"&gt;Khia&lt;/a&gt;.)&lt;/figcaption&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;Above, when HMAC defined K’, it included a variant in its definition. Adding variants to hash function is a dumb way to introduce the risk of collisions. (See also: &lt;a href="https://soatok.blog/2020/07/15/kerlissions-trivial-collisions-in-iotas-hash-function-kerl/" dir="ltr"&gt;Trivial Collisions in IOTA’s Kerl hash function&lt;/a&gt;.)&lt;/p&gt;&lt;p dir="ltr"&gt;Also, some PBKDF2 implementations that mishandle the pre-hashing of K, which &lt;a href="https://github.com/defuse/php-encryption/issues/230" dir="ltr"&gt;can lead to denial-of-service attacks&lt;/a&gt;. Fun stuff, right?&lt;/p&gt;&lt;h3&gt;Some Dumb Yet Effective Mitigations&lt;/h3&gt;&lt;p&gt;Here are a few ways the hypothetical developer could have narrowly avoided this security risk:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Use a different hash function for PBKDF2 and the deduplication check.&lt;UL&gt;&lt;LI&gt;e.g. PBKDF2-SHA256 and SHA512 would be impervious&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;Always pre-hashing the password before passing it to PBKDF2.&lt;UL&gt;&lt;LI&gt;Our exploit attempt will effectively be double-hashed, and will not succeed.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;Use HMAC instead of a bare hash for the deduplication. With a hard-coded, constant key.&lt;/LI&gt;&lt;LI&gt;Prefix the password with a distinct domain separation constant in each usage.&lt;/LI&gt;&lt;LI&gt;Truncate the hash function, treating it as a Bloom filter.&lt;/LI&gt;&lt;LI&gt;Some or all of the above.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Push back&lt;/strong&gt; on implementing this stupid feature to begin with.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Subtle problems often (&lt;a href="https://github.com/cr-marcstevens/sha1collisiondetection" dir="ltr"&gt;but not always&lt;/a&gt;) call for subtle solutions.&lt;/p&gt;&lt;h3&gt;Password Security Advice, Revisited&lt;/h3&gt;&lt;p dir="ltr"&gt;One dumb mitigation technique I didn’t include above is, “Using passwords shorter than the block size of the hash function.” The information security industry almost unanimously agrees that &lt;a href="https://crambler.com/password-security-why-secure-passwords-need-length-over-complexity/" dir="ltr"&gt;longer passwords are better than short ones&lt;/a&gt; (assuming both have the same distribution of possible characters at each position in the string, and are chosen randomly).&lt;/p&gt;&lt;p dir="ltr"&gt;But here, we have a clear-cut example where having a longer password actually &lt;em dir="ltr"&gt;decreased&lt;/em&gt; security by allowing a trivial authentication bypass. Passwords with a length less than or equal to the block size of the hash function would not be vulnerable to the attack.&lt;/p&gt;&lt;p&gt;For reference, if you ever wanted to implement this control (assuming ASCII characters, where 1 character = 1 byte):&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;64-character passwords would be the upper limit for MD5, SHA-1, SHA-224, and SHA-256.&lt;/LI&gt;&lt;LI&gt;128-character passwords would be the upper limit for SHA-384 and SHA-512.&lt;/LI&gt;&lt;LI&gt;(Since the above example used 256-character passwords, it always overflows.)&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;But really, one of the other mitigation techniques would be better. Limiting the input length is just a band-aid.&lt;/p&gt;&lt;h3&gt;Another Non-Obvious Footgun&lt;/h3&gt;&lt;p dir="ltr"&gt;Converse to the block size of the hash function, the &lt;em dir="ltr"&gt;output size&lt;/em&gt; of the hash function also affects the security of PBKDF2, because each output is calculated sequentially. If you request more bytes out of a PBKDF2 function than the hash function outputs, it will have to work at least twice as hard.&lt;/p&gt;&lt;p dir="ltr"&gt;This means that, while a legitimate user has to calculate the entire byte stream from PBKDF2, an attacker can just target the first N bytes (20 for SHA-1, 32 for SHA-256, 64 for SHA-512) of the raw hash output and attack &lt;em dir="ltr"&gt;that&lt;/em&gt; instead of doing all the work.&lt;/p&gt;&lt;h2&gt;Is Cryptography Hard?&lt;/h2&gt;&lt;p&gt;I’ve fielded a lot of questions in the past few weeks, and consequently overheard commentary from folks insisting that cryptography is a hard discipline and therefore only the smartest should study it. I disagree with that, but not for the reason that most will expect.&lt;/p&gt;&lt;p&gt;Many of the people reading this page will tell me, “This is such a dumb and obvious design flaw. Nobody would ship that code in production,” because they’re clever or informed enough to avoid disaster.&lt;/p&gt;&lt;p dir="ltr"&gt;Yet, we still regularly hear about &lt;a href="https://www.howmanydayssinceajwtalgnonevuln.com/" dir="ltr"&gt;JWT alg=none vulnerabilities&lt;/a&gt;. And &lt;a href="https://arxiv.org/abs/1510.08555" dir="ltr"&gt;Johnny still still can’t encrypt&lt;/a&gt;. So cryptography surely can’t be &lt;em dir="ltr"&gt;easy&lt;/em&gt;.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://soatok.files.wordpress.com/2020/07/crypto-is-hard.png?w=580" alt="" srcset="https://soatok.files.wordpress.com/2020/07/crypto-is-hard.png 580w, https://soatok.files.wordpress.com/2020/07/crypto-is-hard.png?w=150 150w, https://soatok.files.wordpress.com/2020/07/crypto-is-hard.png?w=300 300w" width="445" height="445"&gt;&lt;figcaption dir="ltr"&gt;Art by &lt;a href="https://twitter.com/rileyartstuff" dir="ltr"&gt;Riley&lt;/a&gt;.&lt;/figcaption&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;Real-world cryptographic work is cognitively demanding. It becomes increasingly mathematically intensive &lt;a href="https://soatok.blog/2020/06/10/how-to-learn-cryptography-as-a-programmer/" dir="ltr"&gt;the deeper you study&lt;/a&gt;, and nobody knows how to name things that non-cryptographers can understand. (Does anyone intuitively understand what a &lt;strong dir="ltr"&gt;public key&lt;/strong&gt; is outside of our field?)&lt;/p&gt;&lt;p dir="ltr"&gt;In my opinion, cryptography is certainly challenging and widely misunderstood. There are a lot of subtle ways for secure building blocks to be stitched together insecurely. And &lt;em dir="ltr"&gt;today&lt;/em&gt;, it’s certainly a hard subject for most people to learn.&lt;/p&gt;&lt;p dir="ltr"&gt;However, I don’t think its hardness is &lt;strong dir="ltr"&gt;&lt;em dir="ltr"&gt;unavoidable&lt;/em&gt;.&lt;/strong&gt;&lt;/p&gt;&lt;h3&gt;Descending the Mohs Scale&lt;/h3&gt;&lt;p&gt;There is a lot of gatekeeping in the information security community. (Maybe we should expect that to happen when people spend too many hours staring at firewall rules?)&lt;/p&gt;&lt;p&gt;“Don’t roll your own crypto” is something you hear a lot more often from software engineers and network security professionals than bona fide cryptographers.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://medium.com/@soatok/gatekeeping-in-online-communities-48dec7f97f6a" dir="ltr"&gt;Needless gatekeeping&lt;/a&gt; does the cryptographic community a severe disservice. I’m &lt;a href="https://www.cryptofails.com/post/75204435608/write-crypto-code-dont-publish-it" dir="ltr"&gt;not the first&lt;/a&gt; to suggest that, either. &lt;/p&gt;&lt;p dir="ltr"&gt;From what I’ve seen, far too many people feel discouraged from learning about cryptography, thinking they aren’t smart enough for it. It would seem &lt;em dir="ltr"&gt;&lt;a href="https://www.maa.org/external_archive/devlin/LockhartsLament.pdf" dir="ltr"&gt;A Mathematician’s Lament&lt;/a&gt;&lt;/em&gt; has an echo.&lt;/p&gt;&lt;p&gt;If it can be said that cryptography is hard today, then that has more to do with incomplete documentation and substandard education resources available for free online than some inherent mystical quality of our discipline that only the christened few can ever hope to master.&lt;/p&gt;&lt;p dir="ltr"&gt;Cryptographers and security engineers that work in cryptography need more developers to play in our sandbox. We need more usability experts to discuss improvements to our designs and protocols to make them harder to misuse. We also need science communication experts and a legal strategy to stop idiotic politicians from &lt;a href="https://soatok.blog/2020/11/14/going-bark-a-furrys-guide-to-end-to-end-encryption/" dir="ltr"&gt;trying to foolishly ban encryption&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;So if you’re reading my blog, wondering, “Will I ever be smart enough to understand this crap?” the answer is probably “Yes!” It might not be easy, but with any luck, it’ll be easier than it was for the forerunners in our field.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://soatok.files.wordpress.com/2020/04/soatok_stickerpack-hug.png?w=512" alt="Hug?" srcset="https://soatok.files.wordpress.com/2020/04/soatok_stickerpack-hug.png 512w, https://soatok.files.wordpress.com/2020/04/soatok_stickerpack-hug.png?w=150 150w, https://soatok.files.wordpress.com/2020/04/soatok_stickerpack-hug.png?w=300 300w" width="445" height="445"&gt;&lt;figcaption dir="ltr"&gt;If a random furry can grok these topics, what’s stopping you? This dhole believes in you.&lt;br dir="ltr"&gt;(Art by &lt;a href="https://twitter.com/lynxvsjackalope" dir="ltr"&gt;Khia&lt;/a&gt;.)&lt;/figcaption&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;I have one request, though: If you’re thinking of learning cryptography, &lt;a href="https://soatok.blog/2020/06/15/the-world-needs-more-furry-bloggers/" dir="ltr"&gt;please blog about your journey&lt;/a&gt; (even if you’re not a furry). You may end up filling in a pothole that would otherwise have tripped someone else up.&lt;/p&gt;&lt;h3&gt;Share this:&lt;/h3&gt;</description><pubDate>Sun, 06 Dec 2020 01:42:41 -0600</pubDate></item><item><title>Between two Lisps</title><link>https://lobste.rs/s/4lmyxf</link><description>&lt;p dir="ltr"&gt;
+    &lt;time itemprop="datePublished" datetime="2020-10-05 14:03:41 +0000" dir="ltr"&gt;
+      Posted on October 5, 2020
+
+  &lt;/time&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Out of all Lisps I’ve the ones I’ve come to appreciate the most are &lt;a href="https://en.wikipedia.org/wiki/Scheme_(programming_language)" dir="ltr"&gt;Scheme&lt;/a&gt; and
+and &lt;a href="https://common-lisp.net/" dir="ltr"&gt;Common Lisp&lt;/a&gt;. These two languages are fundamentally very
+different: Scheme is a minimalist language built on the foundations of &lt;a href="https://en.wikipedia.org/wiki/Lambda_calculus" dir="ltr"&gt;lambda
+calculus&lt;/a&gt;, while Common Lisp is a multi-paradigm synthesis of many Lisps before
+it. Common Lisp is a large standard with many implementations, Scheme is a
+collection of an evolving but minimalistic standard many implementations. The
+core of Scheme is quite small compared to Common Lisp. The latest standard &lt;a href="http://www.r6rs.org/final/r6rs-lib.pdf" dir="ltr"&gt;R6RS&lt;/a&gt;
+is about 65 pages, while the ANSI Common Lisp standard from 1994 is about 1100
+pages. The &lt;a href="https://srfi.schemers.org/" dir="ltr"&gt;Scheme Requests for Implementation&lt;/a&gt; process aims to standardize
+additional features (like &lt;a href="https://srfi.schemers.org/srfi-64/srfi-64.html" dir="ltr"&gt;test suites&lt;/a&gt;) that implementations may implement.&lt;/p&gt;&lt;p dir="ltr"&gt;Common Lisp has some wonderful features, &lt;a href="http://www.gigamonkeys.com/book/beyond-exception-handling-conditions-and-restarts.html" dir="ltr"&gt;conditions and restarts&lt;/a&gt;, the &lt;a href="https://lispcookbook.github.io/cl-cookbook/clos.html" dir="ltr"&gt;Common
+Lisp Object System (CLOS)&lt;/a&gt;, &lt;a href="http://www.paulgraham.com/onlisp.html" dir="ltr"&gt;the macro system&lt;/a&gt;, among many other things. The &lt;a href="http://joaotavora.github.io/sly/" dir="ltr"&gt;SLY
+IDE for Emacs&lt;/a&gt; is &lt;em dir="ltr"&gt;amazing&lt;/em&gt;, and the &lt;a href="http://www.sbcl.org/" dir="ltr"&gt;Steel Bank Common Lisp&lt;/a&gt; compiler is really
+great. It has &lt;a href="https://www.quicklisp.org/index.html" dir="ltr"&gt;Quicklisp&lt;/a&gt; and &lt;a href="https://common-lisp.net/project/asdf/" dir="ltr"&gt;ASDF&lt;/a&gt; for package and build management,
+respectively. I find the developer experience of Common Lisp to be superior to
+almost anything imaginable, and this is not an empty statement: having used all
+sorts of IDEs and editors for over 25 years, I have seen &lt;em dir="ltr"&gt;many&lt;/em&gt;.&lt;/p&gt;&lt;h3&gt;Tastes differ&lt;/h3&gt;&lt;p dir="ltr"&gt;That said, Common Lisp is &lt;em dir="ltr"&gt;weird&lt;/em&gt;. What I find particularly jarring is that
+functions and variables live in different namespaces: if you put a function into
+a variable, you can’t just use it like a function, you have to &lt;code dir="ltr"&gt;funcall&lt;/code&gt; it.
+Having programmed in lots of languages of the ML family this is just, well, odd;
+but this is due to historical reasons and there are &lt;a href="http://www.nhplace.com/kent/Papers/Technical-Issues.html" dir="ltr"&gt;sound technical reasons for
+it&lt;/a&gt;. There are other
+oddities, some strange things like &lt;code dir="ltr"&gt;(cdr '())&lt;/code&gt; is not an error (in Scheme it
+is), &lt;code dir="ltr"&gt;()&lt;/code&gt; and &lt;code dir="ltr"&gt;nil&lt;/code&gt; are equal (in Scheme &lt;code dir="ltr"&gt;#f&lt;/code&gt; and &lt;code dir="ltr"&gt;()&lt;/code&gt; are separate things), and
+so on.&lt;/p&gt;&lt;p dir="ltr"&gt;This isn’t really a fault in Common Lisp: other languages have impacted my taste
+and preferences to bias me in the direction of Scheme, but that is not to say I
+cannot work with Common Lisp’s idiosyncracies. Actually, I don’t mind them, I
+just &lt;em dir="ltr"&gt;notice&lt;/em&gt; them.&lt;/p&gt;&lt;p dir="ltr"&gt;I like the naming styles of Scheme more, as well. It has &lt;code dir="ltr"&gt;string?&lt;/code&gt; vs &lt;code dir="ltr"&gt;string-p&lt;/code&gt;
+for predicate functions, &lt;code dir="ltr"&gt;set!&lt;/code&gt;  for state modifying functions, &lt;code dir="ltr"&gt;foo-&amp;gt;bar&lt;/code&gt; for
+conversions, these make code quite easier to read. Scheme has hygienic macros,
+Guile has the traditional &lt;code dir="ltr"&gt;defmacro&lt;/code&gt; as well.&lt;/p&gt;&lt;p dir="ltr"&gt;Many nice Scheme features are available in Common Lisp libraries. Pattern match
+is available in the &lt;a href="https://github.com/guicho271828/trivia" dir="ltr"&gt;trivia&lt;/a&gt; library. Named lets are easy to implement with a macro.&lt;/p&gt;&lt;p dir="ltr"&gt;Common Lisp aficionados are quick to point out things Scheme &lt;em dir="ltr"&gt;doesn’t&lt;/em&gt; have:
+keyword arguments, docstrings, rest arguments, but my Scheme implementation of
+choice Guile has these built into the language.&lt;/p&gt;&lt;h3&gt;Productivity matters&lt;/h3&gt;&lt;p dir="ltr"&gt;Guile is in a strange niche is that its primary &lt;em dir="ltr"&gt;raison d’être&lt;/em&gt; is to be an
+extension language for the GNU project. Like Emacs Lisp is for extending Emacs,
+Guile is the &lt;em dir="ltr"&gt;de facto&lt;/em&gt; language for GNU programs for extension and scripting.&lt;/p&gt;&lt;p dir="ltr"&gt;Guile doesn’t have Quicklisp and its package manager and build system is
+basically nonexistent for the first and &lt;a href="https://www.gnu.org/software/autoconf/" dir="ltr"&gt;Autoconf&lt;/a&gt; for the second. There is
+&lt;a href="https://lists.gnu.org/archive/html/guile-user/2017-03/msg00168.html" dir="ltr"&gt;sentiment&lt;/a&gt; in the Guile community to have &lt;a href="https://guix.gnu.org/" dir="ltr"&gt;Guix&lt;/a&gt; as the package manager for
+Guile. This might sound a bit onerous, since Guix is also a complete package
+management for many other things than Guile, but consider this: as Andy Wingo
+points out in his message that Guile libraries often come with C extensions,
+Guile packages need some sort of managed build system for building the C
+extensions. Since it doesn’t have one, to solve the problem of building a
+package manager you’d also have to build a build system that can manage C code
+and packages needed by the C code bits. To do this elegantly is a gargantuan
+task, for instance, &lt;a href="https://wiki.call-cc.org/man/5/Extensions#installing-eggs-that-use-libraries" dir="ltr"&gt;chicken-install just asks you to put compiler/linker flags
+on the command line before calling it&lt;/a&gt;, so it obviously is a hard problem.&lt;/p&gt;&lt;p dir="ltr"&gt;Now, Guix solves all that, and more, in a manner that is quite elegant and
+interesting. But it’s not as lightweight as something like Quicklisp or
+&lt;a href="https://wiki.call-cc.org/man/5/Extensions" dir="ltr"&gt;&lt;code dir="ltr"&gt;chicken-install&lt;/code&gt;&lt;/a&gt; from &lt;a href="http://call-cc.org/" dir="ltr"&gt;CHICKEN Scheme&lt;/a&gt;. What is more, Guix works only on GNU/Linux
+systems really, so macOS and Windows users won’t be able to do use your library
+if you plan on distributing it via Guix. Duh, it’s the GNU project, but
+portability is always nice.&lt;/p&gt;&lt;p dir="ltr"&gt;But in Common Lisp I can write &lt;code dir="ltr"&gt;(ql:quickload :alexandria)&lt;/code&gt; and voilà, it will
+automatically install the &lt;a href="http://quickdocs.org/alexandria/" dir="ltr"&gt;Alexandria&lt;/a&gt; library that I can use. Then again, in
+Common Lisp it’s somewhat rarer to have C extensions, so I don’t know how ASDF
+handles that.&lt;/p&gt;&lt;p dir="ltr"&gt;It is unfair to compare &lt;a href="http://joaotavora.github.io/sly/" dir="ltr"&gt;SLY&lt;/a&gt; to &lt;a href="https://www.nongnu.org/geiser/" dir="ltr"&gt;Geiser&lt;/a&gt;, the best Emacs Scheme integration
+package.  SLY is based on &lt;a href="https://common-lisp.net/project/slime/" dir="ltr"&gt;SLIME&lt;/a&gt; which has &lt;em dir="ltr"&gt;decades&lt;/em&gt; of man-years of work behind
+it. Geiser is able to support multiple Scheme implementations and it is quite
+impressive in this regard. But SLY obviously has much more (e.g. an interactive
+debugger). That said, Geiser has nice Guile support, and Guile is in general the
+most Common Lisp-y of all Schemes, in fact, it has&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;an imitation of CLOS in the form of &lt;a href="https://www.gnu.org/software/goops/" dir="ltr"&gt;GOOPS&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;docstrings and keyword, rest, and optional arguments for function
+definitions&lt;/LI&gt;&lt;LI&gt;an interactive REPL and a mutable top-level (unlike many Schemes)&lt;/LI&gt;&lt;LI&gt;a nice module system&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;and some nice things Common Lisp doesn’t have like first-class
+continuations. But then again I would use those rarely.&lt;/p&gt;&lt;h3&gt;When would I pick one over the other?&lt;/h3&gt;&lt;p dir="ltr"&gt;If I were to write an extensible C/C++/Rust program that I &lt;em dir="ltr"&gt;know&lt;/em&gt; will need to use
+a low-level language, I might do the low level bits using a low level language
+and then write the rest in Guile. Guile makes it very easy to spin up a REPL
+socket to do something like &lt;code dir="ltr"&gt;myprogram --repl=12345&lt;/code&gt; that you can connect to, and
+the interop between C and Guile is fantastic, it has to be, as it’s primarily an
+extension language.&lt;/p&gt;&lt;p&gt;On the other hand, if were to build a wholly standalone application, the choice is
+not as obvious. I could do the whole thing in either language. Common Lisp can
+build native executable, although their size will be large (who cares?) since
+the binary will include the whole Lisp implementation. Guile cannot compile to
+native code so you’ll have to write a script executable, but that doesn’t really
+matter.&lt;/p&gt;&lt;p&gt;Scenarios where I would pick Guile:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;when I’m making an extensible program that has to have some C/C++ bits but I
+want to make it scriptable by users&lt;/LI&gt;&lt;LI&gt;when I want to write a native binary but not write too much C/C++ code&lt;/LI&gt;&lt;LI&gt;I just want to write Scheme, because Scheme is a bit more elegant&lt;/LI&gt;&lt;LI&gt;the project has something to do with the &lt;a href="https://www.gnu.org/software/autoconf/" dir="ltr"&gt;GNU project&lt;/a&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;On the other hand, Common Lisp makes the most sense if I just want to enjoy a
+seriously rapid development experience, a large standard library and language,
+and I don’t mind having 50MB binaries (again, who cares?) if I were to write
+standalone programs. Guile can’t do that, but it’s easy to either write Guile
+scripts or a C program that essentially bootstraps a binary to load a Scheme
+runtime. This is how &lt;a href="http://lilypond.org/" dir="ltr"&gt;LilyPond&lt;/a&gt; is written, for example.&lt;/p&gt;&lt;p dir="ltr"&gt;So the answer to which one is decidedly &lt;strong dir="ltr"&gt;both&lt;/strong&gt;! Both languages are really fun to
+write. At the moment I don’t do Lisp at my day job so it’s all for fun
+anyway. If this were for professional purposes, I don’t know. Very often a
+strict requirement for professional work is to be able to be productive. In that
+regard I think Common Lisp has a significant edge, not only due to its superior
+development experience, but its history as a real production language. There are
+actual companies doing stuff in Common Lisp. I have not heard of any
+professional (in the industrial sense) uses of Guile, notwithstanding that many
+projects powered by Guile (Guix, etc.)  are &lt;em dir="ltr"&gt;extremely&lt;/em&gt; professional in the way
+they are written and maintained. But Common Lisp has &lt;em dir="ltr"&gt;more&lt;/em&gt; libraries and
+companies behind it.&lt;/p&gt;&lt;h3&gt;What about Clojure?&lt;/h3&gt;&lt;p dir="ltr"&gt;I’ve actually had the pleasure to use Clojure for personal fun, and a little bit
+of professional use. I wrote a couple of libraries (&lt;a href="https://github.com/ane/vigil" dir="ltr"&gt;vigil&lt;/a&gt; and &lt;a href="https://github.com/ane/task" dir="ltr"&gt;task&lt;/a&gt;) and my
+experience with has always been positive and its development experience is
+excellent. Clojure isn’t a true Lisp, or well, it is part of the &lt;em dir="ltr"&gt;Lisp family&lt;/em&gt;,
+but its extra syntax. Its ability to interface with the JVM makes it easy to
+leverage the thousands of JVM libraries out there.&lt;/p&gt;&lt;p dir="ltr"&gt;I’d gladly do it again, though I feel that Common Lisp with CLOS and its module
+system makes it somewhat easier to practice &lt;a href="https://en.wikipedia.org/wiki/Programming_in_the_large_and_programming_in_the_small" dir="ltr"&gt;&lt;em dir="ltr"&gt;programming in the large&lt;/em&gt;&lt;/a&gt;. Clojure
+explores interesting territories with &lt;a href="https://clojure.org/guides/spec" dir="ltr"&gt;spec&lt;/a&gt;, so it is interesting to see what
+direction the language will take in the future.&lt;/p&gt;&lt;h3&gt;Final words: Emacs Lisp&lt;/h3&gt;&lt;p dir="ltr"&gt;There’s also a parenthetical elephant in the room here: Emacs Lisp! An old
+descendant of &lt;a href="https://en.wikipedia.org/wiki/Maclisp" dir="ltr"&gt;MacLisp&lt;/a&gt;, it’s actually quite fun to write, and the fact that Emacs
+itself is the interpreter, you have superb introspectability for any Elisp
+code. Most of the Lisp I write these days is probably Emacs Lisp. It’s very
+close to Common Lisp, the &lt;a href="https://www.gnu.org/software/emacs/manual/html_mono/cl.html#Overview" dir="ltr"&gt;cl-lib&lt;/a&gt; adds a sufficient amount of convenience from
+Common Lisp to make Elisp writing quite enjoyable. &lt;a href="https://www.gnu.org/software/emacs/manual/html_mono/eieio.html#Top" dir="ltr"&gt;EIEIO&lt;/a&gt; adds a subset of CLOS
+that can be used seamlessly with cl-lib. The condition system is missing.&lt;/p&gt;&lt;p dir="ltr"&gt;I’ve also done a fair bit of &lt;a href="https://fennel-lang.org/" dir="ltr"&gt;Fennel&lt;/a&gt;, a Lisp that compiles to Lua. I used it to
+write a &lt;a href="https://github.com/ane/mudrally" dir="ltr"&gt;small game&lt;/a&gt; and it was fun to write since you could develop the game in a
+REPL.&lt;/p&gt;&lt;p dir="ltr"&gt;All in all, Lisp in all its variants is the most fun I’ve ever had while
+programming a computer. Guile and Common Lisp are definitely the most fun I’ve
+had programming in &lt;em dir="ltr"&gt;Lisp&lt;/em&gt;.&lt;/p&gt;</description><pubDate>Sat, 05 Dec 2020 21:16:14 -0600</pubDate></item><item><title>The Bastard Operator From Hell Complete WWW Archive</title><link>https://lobste.rs/s/vthu1w</link><description>&lt;UL&gt;&lt;LI&gt; 
     
     The BOFH is visited by the ghost of Christmas past ... 
     
@@ -487,115 +494,210 @@ book, p.&amp;nbsp;110&amp;nbsp;&lt;a href="https://bitbashing.io/tex.html#fnref:
     
     The Bastard's devised a handy new utility called the BSD ... 
     
-  &lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Sat, 05 Dec 2020 10:43:12 -0600</pubDate></item><item><title>Between two Lisps</title><link>https://lobste.rs/s/4lmyxf</link><description>&lt;p dir="ltr"&gt;
-    &lt;time itemprop="datePublished" datetime="2020-10-05 14:03:41 +0000" dir="ltr"&gt;
-      Posted on October 5, 2020
+  &lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Sat, 05 Dec 2020 10:43:12 -0600</pubDate></item><item><title>TeX: A tale of two worlds (2017)</title><link>https://lobste.rs/s/q85aj7</link><description>&lt;p dir="ltr"&gt;Best viewed in &lt;del dir="ltr"&gt;Internet Explorer 6&lt;/del&gt;
+&lt;a href="https://assets.bitbashing.io/papers/tex-tale-of-two-worlds.pdf" dir="ltr"&gt;PDF&lt;/a&gt;
+because… well… read the damn thing.&lt;/p&gt;&lt;p dir="ltr"&gt;Most serious programmers have heard of Donald Knuth,
+the man who coined the term &lt;em dir="ltr"&gt;analysis of algorithms&lt;/em&gt; in 1968
+and pioneered many of the computer science fundamentals we use today.
+Knuth is perhaps most famous for his ongoing magnum opus,
+&lt;em dir="ltr"&gt;The Art of Computer Programming&lt;/em&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;When the first volume of TAOCP was released that same year,
+it was printed the way most books had been since the turn of the century:
+with &lt;em dir="ltr"&gt;hot metal&lt;/em&gt; type.
+Each individual letter was cast from molten lead,
+then arranged into its line.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://upload.wikimedia.org/wikipedia/commons/7/72/Matrixcase-bembo-16pts.jpg" alt="Monotype matrix case" height="400" width="465"&gt;&lt;figcaption dir="auto"&gt;A case of letter molds—or matrices—used by the Monotype caster, the most commonly-used machine for printing books in the days of hot metal type. Its main contemporary, the Linotype, molded entire lines at a time, and was often used for printing newspapers.&lt;/figcaption&gt;&lt;/figure&gt;&lt;p&gt;These lines were clamped together to form pages of the book,
+which were finally inked and pressed against paper.
+By March of 1977, Knuth was ready for a second run of TAOCP, Volume&amp;nbsp;2,
+but he was horrified when he received the proofs.
+Hot metal typesetting was an expensive, complicated, and time-consuming process,
+so publishers had replaced it with phototypesetting,
+which works by projecting characters onto film.
+The new technology, while much cheaper and faster,
+didn’t provide the same level of quality he had come to expect.&lt;/p&gt;&lt;p dir="ltr"&gt;The average author would have resigned themselves to the change and moved on,
+but Knuth took great pride in print quality,
+especially for the mathematics in his books.
+Around this time, he discovered an exciting new technology:
+digital typesetting.
+Instead of working with metal or film,
+letters and shapes were built from tiny dots,
+often packed together at over 1,000 per inch.
+Inspired by this burgeoning tech and frustrated with the current state of affairs,
+Knuth set off on one of the greatest yak shaves of all time.
+For years, he paused all work on his books to create his own
+digital typesetting system.
+When the dust settled in 1978, Knuth had the first version of
+&lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;
+.&lt;sup dir="ltr"&gt;&lt;a href="https://bitbashing.io/tex.html#fn:1" dir="ltr"&gt;1&lt;/a&gt;&lt;/sup&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;It’s hard to understand how much of a revolution &lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;
+ was,
+especially looking back from a time where anybody with a copy
+of Word can be their own desktop publisher.
+Adobe’s PDF wouldn’t exist for another decade, so Knuth
+invented a device-independent format, DVI.
+Scalable fonts were uncommon at the time, so Knuth created a system,
+&lt;span dir="ltr"&gt;METAFONT&lt;/span&gt;
+, to rasterize his characters into dots on the
+page.&lt;sup dir="ltr"&gt;&lt;a href="https://bitbashing.io/tex.html#fn:2" dir="ltr"&gt;2&lt;/a&gt;&lt;/sup&gt;
+Perhaps most importantly, Knuth and his graduate students designed algorithms
+to automatically hyphenate and justify lines of text into
+beautifully-typeset paragraphs.&lt;/p&gt;&lt;p dir="ltr"&gt;Here is where the timelines diverge.
+In one, &lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;
+ was just the beginning.
+Computer typography evolves rapidly as the decades go by,
+building on Knuth’s prior work and
+taking advantage of the million-fold increases we’ve seen in computing power.
+Browsers, e-readers, and word processors deliver beautiful type
+to every person who looks at a screen, with almost no effort from authors.&lt;/p&gt;&lt;p dir="ltr"&gt;In the darker timeline… none of this happens.
+&lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;
+ is still some of the best we’ve got for computer typesetting.
+It’s seen some impressive improvements,&lt;sup dir="ltr"&gt;&lt;a href="https://bitbashing.io/tex.html#fn:3" dir="ltr"&gt;3&lt;/a&gt;&lt;/sup&gt;
+but its core hasn’t changed much in decades.
+To this day,
+it doesn’t lay out more than one page at a time because 1980s computers didn’t
+have enough RAM to do any better.&lt;sup dir="ltr"&gt;&lt;a href="https://bitbashing.io/tex.html#fn:4" dir="ltr"&gt;4&lt;/a&gt;&lt;/sup&gt;
+Almost no other software—except for a handful of professional layout
+programs like Adobe InDesign—leverages any of the advances
+&lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;
+ made in line breaking and hyphenation.
+Layout in Word, browsers, and even e-readers is a sad joke.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://assets.bitbashing.io/images/exa.png" alt="Mobile browser layout example" height="400" width="264"&gt;&lt;figcaption dir="auto"&gt;State of the art text layout in today's browsers. Mind the gaps.&lt;/figcaption&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;I’m not sure what to make of this.
+Maybe most people, outside a small cadre of designers and
+enthusiasts, just don’t care about typography very much.
+After all, the human brain is incredibly good glossing over minor details and
+im&lt;span dir="ltr"&gt;p&lt;/span&gt;erfections when reading.
+But even the design world seems largely unaware or indifferent to Knuth’s work.
+Despite collaborations with famous type designers like Hermann Zapf,
+you’ll find no mention of him in renowned books and documentaries on
+the subject.&lt;sup dir="ltr"&gt;&lt;a href="https://bitbashing.io/tex.html#fn:5" dir="ltr"&gt;5&lt;/a&gt;&lt;/sup&gt;
+And parametric font families—just like the ones &lt;span dir="ltr"&gt;METAFONT&lt;/span&gt;
+ offered in 1983—are
+heralded in 2017 as “a new era of type design”.&lt;sup dir="ltr"&gt;&lt;a href="https://bitbashing.io/tex.html#fn:6" dir="ltr"&gt;6&lt;/a&gt;&lt;/sup&gt;
+It’s bizarre.&lt;/p&gt;&lt;p dir="ltr"&gt;Good typography can make almost anything more enjoyable to read,
+and it feels like such a shame that better layout isn’t
+available to the masses
+when so much of the groundwork was laid almost forty years ago.
+In an age when the average American reads from a screen they keep in their pocket
+dozens of times a day,
+and where each one of those devices holds more processing power than you could
+fit in several rooms back when Donald Knuth
+wrote &lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;
+, surely we can—and &lt;em dir="ltr"&gt;should&lt;/em&gt;—do better.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;
+  is pronounced like the first syllable of ‘‘&lt;b dir="ltr"&gt;tech&lt;/b&gt;nician’’.&amp;nbsp;&lt;a href="https://bitbashing.io/tex.html#fnref:1" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;In some ways, &lt;span dir="ltr"&gt;METAFONT&lt;/span&gt; is more impressive than the PostScript system that
+  underpins modern TTF and OTF font files.
+  Instead of constructing characters from lines and curves,
+  &lt;span dir="ltr"&gt;METAFONT&lt;/span&gt; uses strokes of virtual pens.
+  By tweaking the parameters of these pens and strokes, one can build entire
+  font families from the same base designs.&amp;nbsp;&lt;a href="https://bitbashing.io/tex.html#fnref:2" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Lua&lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;,
+  X&lt;span dir="ltr"&gt;e&lt;/span&gt;&lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;,
+  and &lt;code dir="ltr"&gt;microtype&lt;/code&gt; are great examples.&amp;nbsp;&lt;a href="https://bitbashing.io/tex.html#fnref:3" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;No, seriously.
+  “The computer doesn’t have enough high-speed memory capacity to remember the
+  contents of several pages,
+  so &lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;
+ simply chooses each page break as best it can,
+  by a process of ‘local’ rather than ‘global’ optimization.” — The
+  &lt;span dir="ltr"&gt;T&lt;sub dir="ltr"&gt;e&lt;/sub&gt;X&lt;/span&gt;
+book, p.&amp;nbsp;110&amp;nbsp;&lt;a href="https://bitbashing.io/tex.html#fnref:4" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;e.g., &lt;em dir="ltr"&gt;Thinking With Type&lt;/em&gt;, &lt;em dir="ltr"&gt;The Elements of Typographic Style&lt;/em&gt;,
+  &lt;em dir="ltr"&gt;The Visual History of Type&lt;/em&gt;,
+  &lt;em dir="ltr"&gt;Graphic Means:&amp;nbsp;A History of Graphic Design Production&lt;/em&gt;…&amp;nbsp;&lt;a href="https://bitbashing.io/tex.html#fnref:5" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Sat, 05 Dec 2020 11:35:05 -0600</pubDate></item><item><title>Semantic Clojure Formatting</title><link>https://lobste.rs/s/sksaud</link><description>&lt;BLOCKQUOTE&gt;&lt;p&gt;Programs must be written for people to read, and only incidentally for machines to execute.&lt;/p&gt;&lt;p&gt;– Harold Abelson, Structure and Interpretation of Computer Programs&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;The above maxim has guided most of my career as a software engineer and has been one of
+the central &lt;a href="https://guide.clojure.style/#guiding-principles" dir="ltr"&gt;guiding principles&lt;/a&gt; of the &lt;a href="https://guide.clojure.style/" dir="ltr"&gt;community Clojure style guide&lt;/a&gt;,
+that I’ve been maintaining for the past (almost) 8 years.&lt;/p&gt;&lt;p dir="ltr"&gt;While the style guide was well received by the Clojure community in general, and universal agreement was reached on most points in it, one aspect
+remains controversial to this day - namely the style guide’s preference towards “semantic indentation” over “fixed indentation” for function/macro
+arguments.
+Today I wanted to address an article that suggested that fixed indentation is preferable, as it’s simpler and it’s easier to provide tooling support for it.
+That article was named &lt;a href="https://tonsky.me/blog/clojurefmt/" dir="ltr"&gt;Better Clojure Formatting&lt;/a&gt;, which admittedly is catchy and made me consider naming my
+response to it “The Best Clojure Formatting” or “Superb Clojure Formatting”, but I’ve opted for a more modest title in the end.&lt;/p&gt;&lt;p&gt;Before I go into my arguments let’s briefly contrast semantic and fixed indentation with a couple of examples.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;;;; Semantic indentation&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;;;&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;;; macros&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;when&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;something&lt;/span&gt;&lt;span dir="ltr"&gt;
+  &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;something-else&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;
 
-  &lt;/time&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Out of all Lisps I’ve the ones I’ve come to appreciate the most are &lt;a href="https://en.wikipedia.org/wiki/Scheme_(programming_language)" dir="ltr"&gt;Scheme&lt;/a&gt; and
-and &lt;a href="https://common-lisp.net/" dir="ltr"&gt;Common Lisp&lt;/a&gt;. These two languages are fundamentally very
-different: Scheme is a minimalist language built on the foundations of &lt;a href="https://en.wikipedia.org/wiki/Lambda_calculus" dir="ltr"&gt;lambda
-calculus&lt;/a&gt;, while Common Lisp is a multi-paradigm synthesis of many Lisps before
-it. Common Lisp is a large standard with many implementations, Scheme is a
-collection of an evolving but minimalistic standard many implementations. The
-core of Scheme is quite small compared to Common Lisp. The latest standard &lt;a href="http://www.r6rs.org/final/r6rs-lib.pdf" dir="ltr"&gt;R6RS&lt;/a&gt;
-is about 65 pages, while the ANSI Common Lisp standard from 1994 is about 1100
-pages. The &lt;a href="https://srfi.schemers.org/" dir="ltr"&gt;Scheme Requests for Implementation&lt;/a&gt; process aims to standardize
-additional features (like &lt;a href="https://srfi.schemers.org/srfi-64/srfi-64.html" dir="ltr"&gt;test suites&lt;/a&gt;) that implementations may implement.&lt;/p&gt;&lt;p dir="ltr"&gt;Common Lisp has some wonderful features, &lt;a href="http://www.gigamonkeys.com/book/beyond-exception-handling-conditions-and-restarts.html" dir="ltr"&gt;conditions and restarts&lt;/a&gt;, the &lt;a href="https://lispcookbook.github.io/cl-cookbook/clos.html" dir="ltr"&gt;Common
-Lisp Object System (CLOS)&lt;/a&gt;, &lt;a href="http://www.paulgraham.com/onlisp.html" dir="ltr"&gt;the macro system&lt;/a&gt;, among many other things. The &lt;a href="http://joaotavora.github.io/sly/" dir="ltr"&gt;SLY
-IDE for Emacs&lt;/a&gt; is &lt;em dir="ltr"&gt;amazing&lt;/em&gt;, and the &lt;a href="http://www.sbcl.org/" dir="ltr"&gt;Steel Bank Common Lisp&lt;/a&gt; compiler is really
-great. It has &lt;a href="https://www.quicklisp.org/index.html" dir="ltr"&gt;Quicklisp&lt;/a&gt; and &lt;a href="https://common-lisp.net/project/asdf/" dir="ltr"&gt;ASDF&lt;/a&gt; for package and build management,
-respectively. I find the developer experience of Common Lisp to be superior to
-almost anything imaginable, and this is not an empty statement: having used all
-sorts of IDEs and editors for over 25 years, I have seen &lt;em dir="ltr"&gt;many&lt;/em&gt;.&lt;/p&gt;&lt;h3&gt;Tastes differ&lt;/h3&gt;&lt;p dir="ltr"&gt;That said, Common Lisp is &lt;em dir="ltr"&gt;weird&lt;/em&gt;. What I find particularly jarring is that
-functions and variables live in different namespaces: if you put a function into
-a variable, you can’t just use it like a function, you have to &lt;code dir="ltr"&gt;funcall&lt;/code&gt; it.
-Having programmed in lots of languages of the ML family this is just, well, odd;
-but this is due to historical reasons and there are &lt;a href="http://www.nhplace.com/kent/Papers/Technical-Issues.html" dir="ltr"&gt;sound technical reasons for
-it&lt;/a&gt;. There are other
-oddities, some strange things like &lt;code dir="ltr"&gt;(cdr '())&lt;/code&gt; is not an error (in Scheme it
-is), &lt;code dir="ltr"&gt;()&lt;/code&gt; and &lt;code dir="ltr"&gt;nil&lt;/code&gt; are equal (in Scheme &lt;code dir="ltr"&gt;#f&lt;/code&gt; and &lt;code dir="ltr"&gt;()&lt;/code&gt; are separate things), and
-so on.&lt;/p&gt;&lt;p dir="ltr"&gt;This isn’t really a fault in Common Lisp: other languages have impacted my taste
-and preferences to bias me in the direction of Scheme, but that is not to say I
-cannot work with Common Lisp’s idiosyncracies. Actually, I don’t mind them, I
-just &lt;em dir="ltr"&gt;notice&lt;/em&gt; them.&lt;/p&gt;&lt;p dir="ltr"&gt;I like the naming styles of Scheme more, as well. It has &lt;code dir="ltr"&gt;string?&lt;/code&gt; vs &lt;code dir="ltr"&gt;string-p&lt;/code&gt;
-for predicate functions, &lt;code dir="ltr"&gt;set!&lt;/code&gt;  for state modifying functions, &lt;code dir="ltr"&gt;foo-&amp;gt;bar&lt;/code&gt; for
-conversions, these make code quite easier to read. Scheme has hygienic macros,
-Guile has the traditional &lt;code dir="ltr"&gt;defmacro&lt;/code&gt; as well.&lt;/p&gt;&lt;p dir="ltr"&gt;Many nice Scheme features are available in Common Lisp libraries. Pattern match
-is available in the &lt;a href="https://github.com/guicho271828/trivia" dir="ltr"&gt;trivia&lt;/a&gt; library. Named lets are easy to implement with a macro.&lt;/p&gt;&lt;p dir="ltr"&gt;Common Lisp aficionados are quick to point out things Scheme &lt;em dir="ltr"&gt;doesn’t&lt;/em&gt; have:
-keyword arguments, docstrings, rest arguments, but my Scheme implementation of
-choice Guile has these built into the language.&lt;/p&gt;&lt;h3&gt;Productivity matters&lt;/h3&gt;&lt;p dir="ltr"&gt;Guile is in a strange niche is that its primary &lt;em dir="ltr"&gt;raison d’être&lt;/em&gt; is to be an
-extension language for the GNU project. Like Emacs Lisp is for extending Emacs,
-Guile is the &lt;em dir="ltr"&gt;de facto&lt;/em&gt; language for GNU programs for extension and scripting.&lt;/p&gt;&lt;p dir="ltr"&gt;Guile doesn’t have Quicklisp and its package manager and build system is
-basically nonexistent for the first and &lt;a href="https://www.gnu.org/software/autoconf/" dir="ltr"&gt;Autoconf&lt;/a&gt; for the second. There is
-&lt;a href="https://lists.gnu.org/archive/html/guile-user/2017-03/msg00168.html" dir="ltr"&gt;sentiment&lt;/a&gt; in the Guile community to have &lt;a href="https://guix.gnu.org/" dir="ltr"&gt;Guix&lt;/a&gt; as the package manager for
-Guile. This might sound a bit onerous, since Guix is also a complete package
-management for many other things than Guile, but consider this: as Andy Wingo
-points out in his message that Guile libraries often come with C extensions,
-Guile packages need some sort of managed build system for building the C
-extensions. Since it doesn’t have one, to solve the problem of building a
-package manager you’d also have to build a build system that can manage C code
-and packages needed by the C code bits. To do this elegantly is a gargantuan
-task, for instance, &lt;a href="https://wiki.call-cc.org/man/5/Extensions#installing-eggs-that-use-libraries" dir="ltr"&gt;chicken-install just asks you to put compiler/linker flags
-on the command line before calling it&lt;/a&gt;, so it obviously is a hard problem.&lt;/p&gt;&lt;p dir="ltr"&gt;Now, Guix solves all that, and more, in a manner that is quite elegant and
-interesting. But it’s not as lightweight as something like Quicklisp or
-&lt;a href="https://wiki.call-cc.org/man/5/Extensions" dir="ltr"&gt;&lt;code dir="ltr"&gt;chicken-install&lt;/code&gt;&lt;/a&gt; from &lt;a href="http://call-cc.org/" dir="ltr"&gt;CHICKEN Scheme&lt;/a&gt;. What is more, Guix works only on GNU/Linux
-systems really, so macOS and Windows users won’t be able to do use your library
-if you plan on distributing it via Guix. Duh, it’s the GNU project, but
-portability is always nice.&lt;/p&gt;&lt;p dir="ltr"&gt;But in Common Lisp I can write &lt;code dir="ltr"&gt;(ql:quickload :alexandria)&lt;/code&gt; and voilà, it will
-automatically install the &lt;a href="http://quickdocs.org/alexandria/" dir="ltr"&gt;Alexandria&lt;/a&gt; library that I can use. Then again, in
-Common Lisp it’s somewhat rarer to have C extensions, so I don’t know how ASDF
-handles that.&lt;/p&gt;&lt;p dir="ltr"&gt;It is unfair to compare &lt;a href="http://joaotavora.github.io/sly/" dir="ltr"&gt;SLY&lt;/a&gt; to &lt;a href="https://www.nongnu.org/geiser/" dir="ltr"&gt;Geiser&lt;/a&gt;, the best Emacs Scheme integration
-package.  SLY is based on &lt;a href="https://common-lisp.net/project/slime/" dir="ltr"&gt;SLIME&lt;/a&gt; which has &lt;em dir="ltr"&gt;decades&lt;/em&gt; of man-years of work behind
-it. Geiser is able to support multiple Scheme implementations and it is quite
-impressive in this regard. But SLY obviously has much more (e.g. an interactive
-debugger). That said, Geiser has nice Guile support, and Guile is in general the
-most Common Lisp-y of all Schemes, in fact, it has&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;an imitation of CLOS in the form of &lt;a href="https://www.gnu.org/software/goops/" dir="ltr"&gt;GOOPS&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;docstrings and keyword, rest, and optional arguments for function
-definitions&lt;/LI&gt;&lt;LI&gt;an interactive REPL and a mutable top-level (unlike many Schemes)&lt;/LI&gt;&lt;LI&gt;a nice module system&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;and some nice things Common Lisp doesn’t have like first-class
-continuations. But then again I would use those rarely.&lt;/p&gt;&lt;h3&gt;When would I pick one over the other?&lt;/h3&gt;&lt;p dir="ltr"&gt;If I were to write an extensible C/C++/Rust program that I &lt;em dir="ltr"&gt;know&lt;/em&gt; will need to use
-a low-level language, I might do the low level bits using a low level language
-and then write the rest in Guile. Guile makes it very easy to spin up a REPL
-socket to do something like &lt;code dir="ltr"&gt;myprogram --repl=12345&lt;/code&gt; that you can connect to, and
-the interop between C and Guile is fantastic, it has to be, as it’s primarily an
-extension language.&lt;/p&gt;&lt;p&gt;On the other hand, if were to build a wholly standalone application, the choice is
-not as obvious. I could do the whole thing in either language. Common Lisp can
-build native executable, although their size will be large (who cares?) since
-the binary will include the whole Lisp implementation. Guile cannot compile to
-native code so you’ll have to write a script executable, but that doesn’t really
-matter.&lt;/p&gt;&lt;p&gt;Scenarios where I would pick Guile:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;when I’m making an extensible program that has to have some C/C++ bits but I
-want to make it scriptable by users&lt;/LI&gt;&lt;LI&gt;when I want to write a native binary but not write too much C/C++ code&lt;/LI&gt;&lt;LI&gt;I just want to write Scheme, because Scheme is a bit more elegant&lt;/LI&gt;&lt;LI&gt;the project has something to do with the &lt;a href="https://www.gnu.org/software/autoconf/" dir="ltr"&gt;GNU project&lt;/a&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;On the other hand, Common Lisp makes the most sense if I just want to enjoy a
-seriously rapid development experience, a large standard library and language,
-and I don’t mind having 50MB binaries (again, who cares?) if I were to write
-standalone programs. Guile can’t do that, but it’s easy to either write Guile
-scripts or a C program that essentially bootstraps a binary to load a Scheme
-runtime. This is how &lt;a href="http://lilypond.org/" dir="ltr"&gt;LilyPond&lt;/a&gt; is written, for example.&lt;/p&gt;&lt;p dir="ltr"&gt;So the answer to which one is decidedly &lt;strong dir="ltr"&gt;both&lt;/strong&gt;! Both languages are really fun to
-write. At the moment I don’t do Lisp at my day job so it’s all for fun
-anyway. If this were for professional purposes, I don’t know. Very often a
-strict requirement for professional work is to be able to be productive. In that
-regard I think Common Lisp has a significant edge, not only due to its superior
-development experience, but its history as a real production language. There are
-actual companies doing stuff in Common Lisp. I have not heard of any
-professional (in the industrial sense) uses of Guile, notwithstanding that many
-projects powered by Guile (Guix, etc.)  are &lt;em dir="ltr"&gt;extremely&lt;/em&gt; professional in the way
-they are written and maintained. But Common Lisp has &lt;em dir="ltr"&gt;more&lt;/em&gt; libraries and
-companies behind it.&lt;/p&gt;&lt;h3&gt;What about Clojure?&lt;/h3&gt;&lt;p dir="ltr"&gt;I’ve actually had the pleasure to use Clojure for personal fun, and a little bit
-of professional use. I wrote a couple of libraries (&lt;a href="https://github.com/ane/vigil" dir="ltr"&gt;vigil&lt;/a&gt; and &lt;a href="https://github.com/ane/task" dir="ltr"&gt;task&lt;/a&gt;) and my
-experience with has always been positive and its development experience is
-excellent. Clojure isn’t a true Lisp, or well, it is part of the &lt;em dir="ltr"&gt;Lisp family&lt;/em&gt;,
-but its extra syntax. Its ability to interface with the JVM makes it easy to
-leverage the thousands of JVM libraries out there.&lt;/p&gt;&lt;p dir="ltr"&gt;I’d gladly do it again, though I feel that Common Lisp with CLOS and its module
-system makes it somewhat easier to practice &lt;a href="https://en.wikipedia.org/wiki/Programming_in_the_large_and_programming_in_the_small" dir="ltr"&gt;&lt;em dir="ltr"&gt;programming in the large&lt;/em&gt;&lt;/a&gt;. Clojure
-explores interesting territories with &lt;a href="https://clojure.org/guides/spec" dir="ltr"&gt;spec&lt;/a&gt;, so it is interesting to see what
-direction the language will take in the future.&lt;/p&gt;&lt;h3&gt;Final words: Emacs Lisp&lt;/h3&gt;&lt;p dir="ltr"&gt;There’s also a parenthetical elephant in the room here: Emacs Lisp! An old
-descendant of &lt;a href="https://en.wikipedia.org/wiki/Maclisp" dir="ltr"&gt;MacLisp&lt;/a&gt;, it’s actually quite fun to write, and the fact that Emacs
-itself is the interpreter, you have superb introspectability for any Elisp
-code. Most of the Lisp I write these days is probably Emacs Lisp. It’s very
-close to Common Lisp, the &lt;a href="https://www.gnu.org/software/emacs/manual/html_mono/cl.html#Overview" dir="ltr"&gt;cl-lib&lt;/a&gt; adds a sufficient amount of convenience from
-Common Lisp to make Elisp writing quite enjoyable. &lt;a href="https://www.gnu.org/software/emacs/manual/html_mono/eieio.html#Top" dir="ltr"&gt;EIEIO&lt;/a&gt; adds a subset of CLOS
-that can be used seamlessly with cl-lib. The condition system is missing.&lt;/p&gt;&lt;p dir="ltr"&gt;I’ve also done a fair bit of &lt;a href="https://fennel-lang.org/" dir="ltr"&gt;Fennel&lt;/a&gt;, a Lisp that compiles to Lua. I used it to
-write a &lt;a href="https://github.com/ane/mudrally" dir="ltr"&gt;small game&lt;/a&gt; and it was fun to write since you could develop the game in a
-REPL.&lt;/p&gt;&lt;p dir="ltr"&gt;All in all, Lisp in all its variants is the most fun I’ve ever had while
-programming a computer. Guile and Common Lisp are definitely the most fun I’ve
-had programming in &lt;em dir="ltr"&gt;Lisp&lt;/em&gt;.&lt;/p&gt;</description><pubDate>Sat, 05 Dec 2020 21:16:14 -0600</pubDate></item><item><title>Modifying and running a binary by recompiling a reverse engineered disassembly</title><link>https://lobste.rs/s/qbevdj</link><description>&lt;p xmlns="http://www.w3.org/1999/xhtml"&gt;You're reverse engineering an executable and you want to modify it. Perhaps you
+&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;with-out-str&lt;/span&gt;&lt;span dir="ltr"&gt;
+  &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;println&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;"Hello, "&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;
+  &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;println&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;"world!"&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;
+
+&lt;/span&gt;&lt;span dir="ltr"&gt;;; function call spanning two lines&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;filter&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;even?&lt;/span&gt;&lt;span dir="ltr"&gt;
+       &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;range&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;
+
+&lt;/span&gt;&lt;span dir="ltr"&gt;;; function call spanning three lines&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;filter&lt;/span&gt;&lt;span dir="ltr"&gt;
+ &lt;/span&gt;&lt;span dir="ltr"&gt;even?&lt;/span&gt;&lt;span dir="ltr"&gt;
+ &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;range&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;
+
+
+&lt;/span&gt;&lt;span dir="ltr"&gt;;;; Fixed indentation&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;;;&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;;; macros&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;when&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;something&lt;/span&gt;&lt;span dir="ltr"&gt;
+  &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;something-else&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;
+
+&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;with-out-str&lt;/span&gt;&lt;span dir="ltr"&gt;
+  &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;println&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;"Hello, "&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;
+  &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;println&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;"world!"&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;
+
+&lt;/span&gt;&lt;span dir="ltr"&gt;;; function call spanning two lines&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;filter&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;even?&lt;/span&gt;&lt;span dir="ltr"&gt;
+  &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;range&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;
+
+&lt;/span&gt;&lt;span dir="ltr"&gt;;; function call spanning three lines&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;filter&lt;/span&gt;&lt;span dir="ltr"&gt;
+  &lt;/span&gt;&lt;span dir="ltr"&gt;even?&lt;/span&gt;&lt;span dir="ltr"&gt;
+  &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;range&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;I hope it’s obvious that the main difference is that “semantic indentation” differentiates between macros with body forms and regular function/macro invocations.
+That makes it easy to visually tell the apart. The “fixed indentation” approach, however, advocates ignoring those differences and indenting everything the same way.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;NOTE:&lt;/strong&gt; There are other aspects of “semantic indentation” as well, but I’ll stick only to the most prominent/infamous parts.&lt;/p&gt;&lt;p&gt;The main argument in favor of “fixed indentation” is tooling support - if you don’t need to format something differently, obviously creating code formatters becomes easier. There’s nothing for the formatter to parse/analyze, and there’s no need for configuration. Simplicity is generally a good thing, so this definitely sounds appealing.
+While, I’m all for consistency and good tooling support, I don’t think that’s that big of a deal in the case of Clojure, though. Consider the following:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;For many macros you can infer the right indentation just by looking for a &lt;code dir="ltr"&gt;body&lt;/code&gt; parameter&lt;/LI&gt;&lt;/UL&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;defmacro&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;when&lt;/span&gt;&lt;span dir="ltr"&gt;
+  &lt;/span&gt;&lt;span dir="ltr"&gt;"Evaluates test. If logical true, evaluates body in an implicit do."&lt;/span&gt;&lt;span dir="ltr"&gt;
+  &lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;:added&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;"1.0"&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;
+  &lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;test&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;body&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;
+  &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;list&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;'if&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;test&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;cons&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;'do&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;body&lt;/span&gt;&lt;span dir="ltr"&gt;)))&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Of course, there will also be counter-examples that need special handling, as they used some non-conventional names, but
+this simple heuristic will work quite well most of the time.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;It’s easy to specify the right indentation with &lt;a href="https://docs.cider.mx/cider/indent_spec.html" dir="ltr"&gt;metadata&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;All popular Clojure editors and formatters that exist today are supporting “semantic indentation” pretty well, so clearly it’s not a big obstacle for tooling.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;In general I’ve always found it dangerous that a lot of the reasoning
+around code style in recent years has been centered around how easy it is to enforce
+certain style automatically.&lt;sup role="doc-noteref" dir="ltr"&gt;&lt;a href="https://metaredux.com/posts/2020/12/06/semantic-clojure-formatting.html#fn:1" dir="ltr"&gt;1&lt;/a&gt;&lt;/sup&gt;  I’ve experienced this first-hand both as
+an editor of several code style guides, and as the author of a &lt;a href="https://docs.rubocop.org/" dir="ltr"&gt;fairly
+popular Ruby lint/formatter tool&lt;/a&gt;.  Yeah,
+lint tools and formatters are very important and they make our lives easier, but we should
+never forget we’re writing code for humans to read and (only occasionally) for machines to
+execute. It’s be really said if we lost sight of that just to pursue the ultimate degree
+of consistency.&lt;/p&gt;&lt;p&gt;And there’s also the meta topic of the code we write being some artistic expression of our inner self, but we should
+probably disregard this argument in any professional context. I’ll mention, though, that due to the simplicity
+of Clojure/Lisp we’re (un)fortunate to have way fewer stylistic decisions to make than developers working with
+languages like Ruby, Java or JavaScript.&lt;/p&gt;&lt;p&gt;Before, I wrap up I want to elaborate a bit on the reasoning behind the (infamous) semantic rules for function arguments alignment:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;;; function call spanning two lines&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;filter&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;even?&lt;/span&gt;&lt;span dir="ltr"&gt;
+       &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;range&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;
+
+&lt;/span&gt;&lt;span dir="ltr"&gt;;; function call spanning three lines&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;filter&lt;/span&gt;&lt;span dir="ltr"&gt;
+ &lt;/span&gt;&lt;span dir="ltr"&gt;even?&lt;/span&gt;&lt;span dir="ltr"&gt;
+ &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;range&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;While some people would argue that the rules are random or inconsistent, I believe that’s definitely not the case:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;In the first example, the formatting is similar to the one in every Algol-like language where the name of the function stands out and the arguments are grouped together. Of course, in most Algol-like languages people are still arguing whether to align or not align their function/method arguments. That being said, the case for aligned has always been the case for improved readability.&lt;/LI&gt;&lt;LI&gt;In the second example some people would question what they call “the 1-space indent”. That’s not really indentation at all, but rather standard alignment of list elements. Don’t forget the &lt;code dir="ltr"&gt;()&lt;/code&gt; are not some special invocation syntax, but plain old list literals, that are normally formatted like any other collection literal:&lt;/LI&gt;&lt;/UL&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;;; list literal&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;
+ &lt;/span&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;
+ &lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;
+
+&lt;/span&gt;&lt;span dir="ltr"&gt;;; vector literal&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;
+ &lt;/span&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;
+ &lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;
+
+&lt;/span&gt;&lt;span dir="ltr"&gt;;; set literal&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;#&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;
+  &lt;/span&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;
+  &lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;I don’t know about you, but I find the following fixed indentation a big weird:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;;;; Fixed Indentation&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;;;&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;;; list literals&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;
+  &lt;/span&gt;&lt;span dir="ltr"&gt;4&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;5&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;6&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;
+
+&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;
+  &lt;/span&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;
+  &lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;
+  &lt;/span&gt;&lt;span dir="ltr"&gt;4&lt;/span&gt;&lt;span dir="ltr"&gt;
+  &lt;/span&gt;&lt;span dir="ltr"&gt;5&lt;/span&gt;&lt;span dir="ltr"&gt;
+  &lt;/span&gt;&lt;span dir="ltr"&gt;6&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Admittedly, list literals are not very common in Clojure, that’s why it’s understandable
+that for many people lists are nothing but an invocation syntax.&lt;/p&gt;&lt;p dir="ltr"&gt;Anyways, I don’t really want to argue which style is better or worse. My one and only point is that
+I’ll always value readability over some questionable gains in the tooling department.
+I’ve also updated the Clojure style guide, as part of the &lt;a href="https://metaredux.com/posts/2020/12/03/advent-of-open-source.html" dir="ltr"&gt;Advent of Open Source&lt;/a&gt;, to feature
+a lot more rationale for the controversial formatting rules (start &lt;a href="https://guide.clojure.style/#one-space-indent%20and%20read%20on" dir="ltr"&gt;here&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;That’s all I have for you today. As usual, I’d love to hear your thoughts on the subject. Keep hacking!&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Damn you, &lt;code dir="ltr"&gt;gofmt&lt;/code&gt;!&amp;nbsp;&lt;a href="https://metaredux.com/posts/2020/12/06/semantic-clojure-formatting.html#fnref:1" role="doc-backlink" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Sun, 06 Dec 2020 05:24:10 -0600</pubDate></item><item><title>Modifying and running a binary by recompiling a reverse engineered disassembly</title><link>https://lobste.rs/s/qbevdj</link><description>&lt;p xmlns="http://www.w3.org/1999/xhtml"&gt;You're reverse engineering an executable and you want to modify it. Perhaps you
 want to add or tweak functionality of the executable, or perhaps you want to be
 able to modify parts of the program to get a better understanding of how it
 works. Either way, you want to start with a working binary and gradually
@@ -942,109 +1044,7 @@ first time, just like the original.&lt;/p&gt;&lt;h2 xmlns="http://www.w3.org/199
 2001 with MSVC6. I don't see why this technique wouldn't also be applicable to
 modern, relocatable, ASLR-enabled executables, but I haven't thought about any
 issues those might pose while writing this. YMMV.&lt;/p&gt;&lt;a xmlns="http://www.w3.org/1999/xhtml" href="."&gt;Home&lt;/a&gt;&lt;footer xmlns="http://www.w3.org/1999/xhtml" dir="ltr"&gt;Page last modified on 20201205 by &lt;a href="./contact" dir="ltr"&gt;Hugo Landau&lt;/a&gt;&lt;/footer&gt;</description><pubDate>Sat, 05 Dec 2020 17:36:55 -0600</pubDate></item><item><title>Pacman 6.0.0alpha1</title><link>https://lobste.rs/s/xd8qs3</link><description>&lt;p&gt;We have been slowly working towards the next pacman release. The major change for this release is the implementation of parallel downloads.  Check out this video:&lt;/p&gt;&lt;p dir="ltr"&gt;It is time for this feature to receive some wider testing. Grab the package using:&lt;br dir="ltr"&gt;
-&lt;/p&gt;&lt;p&gt;&lt;code&gt;pacman -U http://allanmcrae.com/packages/pacman-6.0.0alpha1-1-x86_64.pkg.tar.zst&lt;/code&gt;&lt;/p&gt;&lt;p&gt;This should be “safe” – there are quite a number of us using this code for our system management.  There may be issues with AUR helpers due to ABI changes… If you are concerned, keep a copy of the repo package around to reinstall if necessary.&lt;/p&gt;&lt;p dir="ltr"&gt;There are still a few &lt;a href="https://bugs.archlinux.org/task/67811" dir="ltr"&gt;issues&lt;/a&gt; with the downloader we will fix before release.  If one of your mirrors is broken, you will be spammed with error messages at the end of the downloads.  And &lt;tt dir="ltr"&gt;TotalDownload&lt;/tt&gt; does not work.  But otherwise, it is good to go!&lt;/p&gt;&lt;p dir="ltr"&gt;Report any bugs to the &lt;a href="https://bugs.archlinux.org/index.php?project=3" dir="ltr"&gt;bug tracker&lt;/a&gt;.&lt;/p&gt;</description><pubDate>Sat, 05 Dec 2020 22:23:14 -0600</pubDate></item><item><title>Semantic Clojure Formatting</title><link>https://lobste.rs/s/sksaud</link><description>&lt;BLOCKQUOTE&gt;&lt;p&gt;Programs must be written for people to read, and only incidentally for machines to execute.&lt;/p&gt;&lt;p&gt;– Harold Abelson, Structure and Interpretation of Computer Programs&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;The above maxim has guided most of my career as a software engineer and has been one of
-the central &lt;a href="https://guide.clojure.style/#guiding-principles" dir="ltr"&gt;guiding principles&lt;/a&gt; of the &lt;a href="https://guide.clojure.style/" dir="ltr"&gt;community Clojure style guide&lt;/a&gt;,
-that I’ve been maintaining for the past (almost) 8 years.&lt;/p&gt;&lt;p dir="ltr"&gt;While the style guide was well received by the Clojure community in general, and universal agreement was reached on most points in it, one aspect
-remains controversial to this day - namely the style guide’s preference towards “semantic indentation” over “fixed indentation” for function/macro
-arguments.
-Today I wanted to address an article that suggested that fixed indentation is preferable, as it’s simpler and it’s easier to provide tooling support for it.
-That article was named &lt;a href="https://tonsky.me/blog/clojurefmt/" dir="ltr"&gt;Better Clojure Formatting&lt;/a&gt;, which admittedly is catchy and made me consider naming my
-response to it “The Best Clojure Formatting” or “Superb Clojure Formatting”, but I’ve opted for a more modest title in the end.&lt;/p&gt;&lt;p&gt;Before I go into my arguments let’s briefly contrast semantic and fixed indentation with a couple of examples.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;;;; Semantic indentation&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;;;&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;;; macros&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;when&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;something&lt;/span&gt;&lt;span dir="ltr"&gt;
-  &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;something-else&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;with-out-str&lt;/span&gt;&lt;span dir="ltr"&gt;
-  &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;println&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;"Hello, "&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;
-  &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;println&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;"world!"&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;;; function call spanning two lines&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;filter&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;even?&lt;/span&gt;&lt;span dir="ltr"&gt;
-       &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;range&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;;; function call spanning three lines&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;filter&lt;/span&gt;&lt;span dir="ltr"&gt;
- &lt;/span&gt;&lt;span dir="ltr"&gt;even?&lt;/span&gt;&lt;span dir="ltr"&gt;
- &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;range&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;
-
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;;;; Fixed indentation&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;;;&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;;; macros&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;when&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;something&lt;/span&gt;&lt;span dir="ltr"&gt;
-  &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;something-else&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;with-out-str&lt;/span&gt;&lt;span dir="ltr"&gt;
-  &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;println&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;"Hello, "&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;
-  &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;println&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;"world!"&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;;; function call spanning two lines&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;filter&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;even?&lt;/span&gt;&lt;span dir="ltr"&gt;
-  &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;range&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;;; function call spanning three lines&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;filter&lt;/span&gt;&lt;span dir="ltr"&gt;
-  &lt;/span&gt;&lt;span dir="ltr"&gt;even?&lt;/span&gt;&lt;span dir="ltr"&gt;
-  &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;range&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;I hope it’s obvious that the main difference is that “semantic indentation” differentiates between macros with body forms and regular function/macro invocations.
-That makes it easy to visually tell the apart. The “fixed indentation” approach, however, advocates ignoring those differences and indenting everything the same way.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;NOTE:&lt;/strong&gt; There are other aspects of “semantic indentation” as well, but I’ll stick only to the most prominent/infamous parts.&lt;/p&gt;&lt;p&gt;The main argument in favor of “fixed indentation” is tooling support - if you don’t need to format something differently, obviously creating code formatters becomes easier. There’s nothing for the formatter to parse/analyze, and there’s no need for configuration. Simplicity is generally a good thing, so this definitely sounds appealing.
-While, I’m all for consistency and good tooling support, I don’t think that’s that big of a deal in the case of Clojure, though. Consider the following:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;For many macros you can infer the right indentation just by looking for a &lt;code dir="ltr"&gt;body&lt;/code&gt; parameter&lt;/LI&gt;&lt;/UL&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;defmacro&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;when&lt;/span&gt;&lt;span dir="ltr"&gt;
-  &lt;/span&gt;&lt;span dir="ltr"&gt;"Evaluates test. If logical true, evaluates body in an implicit do."&lt;/span&gt;&lt;span dir="ltr"&gt;
-  &lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;:added&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;"1.0"&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;
-  &lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;test&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;body&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;
-  &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;list&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;'if&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;test&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;cons&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;'do&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;body&lt;/span&gt;&lt;span dir="ltr"&gt;)))&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Of course, there will also be counter-examples that need special handling, as they used some non-conventional names, but
-this simple heuristic will work quite well most of the time.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;It’s easy to specify the right indentation with &lt;a href="https://docs.cider.mx/cider/indent_spec.html" dir="ltr"&gt;metadata&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;All popular Clojure editors and formatters that exist today are supporting “semantic indentation” pretty well, so clearly it’s not a big obstacle for tooling.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;In general I’ve always found it dangerous that a lot of the reasoning
-around code style in recent years has been centered around how easy it is to enforce
-certain style automatically.&lt;sup role="doc-noteref" dir="ltr"&gt;&lt;a href="https://metaredux.com/posts/2020/12/06/semantic-clojure-formatting.html#fn:1" dir="ltr"&gt;1&lt;/a&gt;&lt;/sup&gt;  I’ve experienced this first-hand both as
-an editor of several code style guides, and as the author of a &lt;a href="https://docs.rubocop.org/" dir="ltr"&gt;fairly
-popular Ruby lint/formatter tool&lt;/a&gt;.  Yeah,
-lint tools and formatters are very important and they make our lives easier, but we should
-never forget we’re writing code for humans to read and (only occasionally) for machines to
-execute. It’s be really said if we lost sight of that just to pursue the ultimate degree
-of consistency.&lt;/p&gt;&lt;p&gt;And there’s also the meta topic of the code we write being some artistic expression of our inner self, but we should
-probably disregard this argument in any professional context. I’ll mention, though, that due to the simplicity
-of Clojure/Lisp we’re (un)fortunate to have way fewer stylistic decisions to make than developers working with
-languages like Ruby, Java or JavaScript.&lt;/p&gt;&lt;p&gt;Before, I wrap up I want to elaborate a bit on the reasoning behind the (infamous) semantic rules for function arguments alignment:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;;; function call spanning two lines&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;filter&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;even?&lt;/span&gt;&lt;span dir="ltr"&gt;
-       &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;range&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;;; function call spanning three lines&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;filter&lt;/span&gt;&lt;span dir="ltr"&gt;
- &lt;/span&gt;&lt;span dir="ltr"&gt;even?&lt;/span&gt;&lt;span dir="ltr"&gt;
- &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;range&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;10&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;While some people would argue that the rules are random or inconsistent, I believe that’s definitely not the case:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;In the first example, the formatting is similar to the one in every Algol-like language where the name of the function stands out and the arguments are grouped together. Of course, in most Algol-like languages people are still arguing whether to align or not align their function/method arguments. That being said, the case for aligned has always been the case for improved readability.&lt;/LI&gt;&lt;LI&gt;In the second example some people would question what they call “the 1-space indent”. That’s not really indentation at all, but rather standard alignment of list elements. Don’t forget the &lt;code dir="ltr"&gt;()&lt;/code&gt; are not some special invocation syntax, but plain old list literals, that are normally formatted like any other collection literal:&lt;/LI&gt;&lt;/UL&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;;; list literal&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;
- &lt;/span&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;
- &lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;;; vector literal&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;
- &lt;/span&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;
- &lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;;; set literal&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;#&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;
-  &lt;/span&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;
-  &lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;I don’t know about you, but I find the following fixed indentation a big weird:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;;;; Fixed Indentation&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;;;&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;;; list literals&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;
-  &lt;/span&gt;&lt;span dir="ltr"&gt;4&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;5&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;6&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;
-  &lt;/span&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;
-  &lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;
-  &lt;/span&gt;&lt;span dir="ltr"&gt;4&lt;/span&gt;&lt;span dir="ltr"&gt;
-  &lt;/span&gt;&lt;span dir="ltr"&gt;5&lt;/span&gt;&lt;span dir="ltr"&gt;
-  &lt;/span&gt;&lt;span dir="ltr"&gt;6&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Admittedly, list literals are not very common in Clojure, that’s why it’s understandable
-that for many people lists are nothing but an invocation syntax.&lt;/p&gt;&lt;p dir="ltr"&gt;Anyways, I don’t really want to argue which style is better or worse. My one and only point is that
-I’ll always value readability over some questionable gains in the tooling department.
-I’ve also updated the Clojure style guide, as part of the &lt;a href="https://metaredux.com/posts/2020/12/03/advent-of-open-source.html" dir="ltr"&gt;Advent of Open Source&lt;/a&gt;, to feature
-a lot more rationale for the controversial formatting rules (start &lt;a href="https://guide.clojure.style/#one-space-indent%20and%20read%20on" dir="ltr"&gt;here&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;That’s all I have for you today. As usual, I’d love to hear your thoughts on the subject. Keep hacking!&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Damn you, &lt;code dir="ltr"&gt;gofmt&lt;/code&gt;!&amp;nbsp;&lt;a href="https://metaredux.com/posts/2020/12/06/semantic-clojure-formatting.html#fnref:1" role="doc-backlink" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Sun, 06 Dec 2020 05:24:10 -0600</pubDate></item><item><title>Code Diary: How and Why to Keep One</title><link>https://www.youtube.com/watch?v=tarmCEHfGa0</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/uhw7xt/code_diary_how_why_keep_one"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 06 Dec 2020 04:33:32 -0600</pubDate></item><item><title>Understanding Peer-to-Peer Git Forges with Radicle</title><link>https://lobste.rs/s/vbsn0d</link><description>&lt;p dir="ltr"&gt;Git is a distributed version control system and does not require a central server. Although repositories are usually published at a well-known location for convenient cloning and fetching of the latest changes, this is actually not necessary. Each clone can have the full commit history and evolve independently. Furthermore, code changes can be exchanged via email or other means. Finally, even the clone itself does not need to be made from a well-known domain that hosts a git repository (see &lt;tt dir="ltr"&gt;git-bundle(1)&lt;/tt&gt;).&lt;/p&gt;&lt;p dir="ltr"&gt;Given that git itself is already fully decentralized one would think there is no further work to do. I came across the &lt;a href="https://radicle.xyz/" dir="ltr"&gt;Radicle&lt;/a&gt; project and its somewhat psychedelic website. Besides having a website with a wild color scheme, the project aims to offer a social coding experiment or git forge functionality using a peer-to-peer network architecture. According to the &lt;a href="https://docs.radicle.xyz/docs/what-is-radicle" dir="ltr"&gt;documentation&lt;/a&gt; the motivation seems to be that git's built-in functionality works but is not user-friendly enough to make it accessible. In particular, it lacks social coding features.&lt;/p&gt;&lt;p dir="ltr"&gt;The goal is to add git forge features like project and developer discovery, issue trackers, wikis, etc. Additional, distinctly decentralized functionality, is also touched on involving Ethereum as a way to anchor project metadata, pay contributors, etc. Radicle is still in early development so these features are not yet implemented. Here is my take on the &lt;a href="https://radicle.xyz/" dir="ltr"&gt;How it Works&lt;/a&gt; documentation, which is a little confusing due to its early stage and some incomplete sentences or typos. I don't know whether my understanding actually corresponds to the Radicle implementation that exists today or its eventual vision, because I haven't studied the code or tried running the software. However, the ideas that the documentation has brought up are interesting and fruitful in their own right, so I wanted to share them and explain them in my own words in case you also find them worth exploring.&lt;/p&gt;&lt;h2&gt;The git data model&lt;/h2&gt;&lt;p dir="ltr"&gt;Let's quickly review the git data model because it is important for understanding peer-to-peer git forges. A git repository contains a &lt;tt dir="ltr"&gt;refs/&lt;/tt&gt; subdirectory that provides a namespace for local branch heads (&lt;tt dir="ltr"&gt;refs/heads/&lt;/tt&gt;), local and remotely fetched tags (&lt;tt dir="ltr"&gt;refs/tags/&lt;/tt&gt;), and remotely fetched branches (&lt;tt dir="ltr"&gt;refs/remotes/&amp;lt;remote&amp;gt;/&lt;/tt&gt;). Actually this namespace layout is just a convention for everyday git usage and it's possible to use the &lt;tt dir="ltr"&gt;refs/&lt;/tt&gt; namespace differently as we will see. The git client fetches refs from a remote according to a &lt;i dir="ltr"&gt;refspec&lt;/i&gt; rule that maps remote refs to local refs. This gives the client the power to fetch only certain refs from the server. The client can also put them in a different location in its local &lt;tt dir="ltr"&gt;refs/&lt;/tt&gt; directory than the server. For details, see the &lt;tt dir="ltr"&gt;git-fetch(1)&lt;/tt&gt; man page.&lt;/p&gt;&lt;p dir="ltr"&gt;Refs files contain the commit hash of an &lt;i dir="ltr"&gt;object&lt;/i&gt; stored in the repository's object database. An object can be a commit, tree (directory), tag, or a blob (file). Branch refs point to the latest commit object. A commit object refers to a tree object that may refer to further tree objects for sub-directories and finally the blob objects that make up the files being stored. Note that a git repository supports &lt;i dir="ltr"&gt;disjoint&lt;/i&gt; branches that share no history. Perhaps the most well-known example of disjoint branches are the GitHub Pages and GitLab Pages features where these git forges publish static websites from the HTML/CSS/JavaScript/image files on a specific branch in the repository. That branch shares no version history with other branches and the directories/files typically have no similarity to the repository's main branch.&lt;/p&gt;&lt;p dir="ltr"&gt;Now we have covered enough git specifics to talk about peer-to-peer git forges. If you want to learn more about how git objects are actually stored, check out my article on the &lt;a href="http://blog.vmsplice.net/2016/05/git-internals-of-how-objects-are-stored.html" dir="ltr"&gt;repository layout and pack files&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;Identity and authority&lt;/h2&gt;&lt;p&gt;Normally a git repository has one or more owners who are allowed to push refs. No one else has permission to modify the refs namespace. What if we tried to share a single refs namespace with the whole world and everyone could push? There would be chaos due to naming conflicts and malicious users would delete or change other users' refs. So it seems like an unworkable idea unless there is some way to enforce structure on the global refs namespace.&lt;/p&gt;&lt;p&gt;Peer-to-peer systems have solutions to these problems. First, a unique identity can be created by picking a random number with a sufficient number of bits so that the chance of collision is improbable. That unique identity can be used as a prefix in the global ref namespace to avoid accidental collisions. Second, there needs to be a way to prevent unauthorized users from modifying the part of the global namespace that is owned by other users.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://en.wikipedia.org/wiki/Public-key_cryptography" dir="ltr"&gt;Public-key cryptography&lt;/a&gt; provides the primitive for achieving both these things. A public key or its hash can serve as the unique identifier that provides identity and prevents accidental collisions. Ownership can be enforced by verifying that changes to the global namespace are signed with the private key corresponding to the unique identity.&lt;/p&gt;&lt;p&gt;For example, we fetch the following refs from a peer:&lt;/p&gt;&lt;PRE&gt;&amp;lt;identity&amp;gt;/
+&lt;/p&gt;&lt;p&gt;&lt;code&gt;pacman -U http://allanmcrae.com/packages/pacman-6.0.0alpha1-1-x86_64.pkg.tar.zst&lt;/code&gt;&lt;/p&gt;&lt;p&gt;This should be “safe” – there are quite a number of us using this code for our system management.  There may be issues with AUR helpers due to ABI changes… If you are concerned, keep a copy of the repo package around to reinstall if necessary.&lt;/p&gt;&lt;p dir="ltr"&gt;There are still a few &lt;a href="https://bugs.archlinux.org/task/67811" dir="ltr"&gt;issues&lt;/a&gt; with the downloader we will fix before release.  If one of your mirrors is broken, you will be spammed with error messages at the end of the downloads.  And &lt;tt dir="ltr"&gt;TotalDownload&lt;/tt&gt; does not work.  But otherwise, it is good to go!&lt;/p&gt;&lt;p dir="ltr"&gt;Report any bugs to the &lt;a href="https://bugs.archlinux.org/index.php?project=3" dir="ltr"&gt;bug tracker&lt;/a&gt;.&lt;/p&gt;</description><pubDate>Sat, 05 Dec 2020 22:23:14 -0600</pubDate></item><item><title>Understanding Peer-to-Peer Git Forges with Radicle</title><link>https://lobste.rs/s/vbsn0d</link><description>&lt;p dir="ltr"&gt;Git is a distributed version control system and does not require a central server. Although repositories are usually published at a well-known location for convenient cloning and fetching of the latest changes, this is actually not necessary. Each clone can have the full commit history and evolve independently. Furthermore, code changes can be exchanged via email or other means. Finally, even the clone itself does not need to be made from a well-known domain that hosts a git repository (see &lt;tt dir="ltr"&gt;git-bundle(1)&lt;/tt&gt;).&lt;/p&gt;&lt;p dir="ltr"&gt;Given that git itself is already fully decentralized one would think there is no further work to do. I came across the &lt;a href="https://radicle.xyz/" dir="ltr"&gt;Radicle&lt;/a&gt; project and its somewhat psychedelic website. Besides having a website with a wild color scheme, the project aims to offer a social coding experiment or git forge functionality using a peer-to-peer network architecture. According to the &lt;a href="https://docs.radicle.xyz/docs/what-is-radicle" dir="ltr"&gt;documentation&lt;/a&gt; the motivation seems to be that git's built-in functionality works but is not user-friendly enough to make it accessible. In particular, it lacks social coding features.&lt;/p&gt;&lt;p dir="ltr"&gt;The goal is to add git forge features like project and developer discovery, issue trackers, wikis, etc. Additional, distinctly decentralized functionality, is also touched on involving Ethereum as a way to anchor project metadata, pay contributors, etc. Radicle is still in early development so these features are not yet implemented. Here is my take on the &lt;a href="https://radicle.xyz/" dir="ltr"&gt;How it Works&lt;/a&gt; documentation, which is a little confusing due to its early stage and some incomplete sentences or typos. I don't know whether my understanding actually corresponds to the Radicle implementation that exists today or its eventual vision, because I haven't studied the code or tried running the software. However, the ideas that the documentation has brought up are interesting and fruitful in their own right, so I wanted to share them and explain them in my own words in case you also find them worth exploring.&lt;/p&gt;&lt;h2&gt;The git data model&lt;/h2&gt;&lt;p dir="ltr"&gt;Let's quickly review the git data model because it is important for understanding peer-to-peer git forges. A git repository contains a &lt;tt dir="ltr"&gt;refs/&lt;/tt&gt; subdirectory that provides a namespace for local branch heads (&lt;tt dir="ltr"&gt;refs/heads/&lt;/tt&gt;), local and remotely fetched tags (&lt;tt dir="ltr"&gt;refs/tags/&lt;/tt&gt;), and remotely fetched branches (&lt;tt dir="ltr"&gt;refs/remotes/&amp;lt;remote&amp;gt;/&lt;/tt&gt;). Actually this namespace layout is just a convention for everyday git usage and it's possible to use the &lt;tt dir="ltr"&gt;refs/&lt;/tt&gt; namespace differently as we will see. The git client fetches refs from a remote according to a &lt;i dir="ltr"&gt;refspec&lt;/i&gt; rule that maps remote refs to local refs. This gives the client the power to fetch only certain refs from the server. The client can also put them in a different location in its local &lt;tt dir="ltr"&gt;refs/&lt;/tt&gt; directory than the server. For details, see the &lt;tt dir="ltr"&gt;git-fetch(1)&lt;/tt&gt; man page.&lt;/p&gt;&lt;p dir="ltr"&gt;Refs files contain the commit hash of an &lt;i dir="ltr"&gt;object&lt;/i&gt; stored in the repository's object database. An object can be a commit, tree (directory), tag, or a blob (file). Branch refs point to the latest commit object. A commit object refers to a tree object that may refer to further tree objects for sub-directories and finally the blob objects that make up the files being stored. Note that a git repository supports &lt;i dir="ltr"&gt;disjoint&lt;/i&gt; branches that share no history. Perhaps the most well-known example of disjoint branches are the GitHub Pages and GitLab Pages features where these git forges publish static websites from the HTML/CSS/JavaScript/image files on a specific branch in the repository. That branch shares no version history with other branches and the directories/files typically have no similarity to the repository's main branch.&lt;/p&gt;&lt;p dir="ltr"&gt;Now we have covered enough git specifics to talk about peer-to-peer git forges. If you want to learn more about how git objects are actually stored, check out my article on the &lt;a href="http://blog.vmsplice.net/2016/05/git-internals-of-how-objects-are-stored.html" dir="ltr"&gt;repository layout and pack files&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;Identity and authority&lt;/h2&gt;&lt;p&gt;Normally a git repository has one or more owners who are allowed to push refs. No one else has permission to modify the refs namespace. What if we tried to share a single refs namespace with the whole world and everyone could push? There would be chaos due to naming conflicts and malicious users would delete or change other users' refs. So it seems like an unworkable idea unless there is some way to enforce structure on the global refs namespace.&lt;/p&gt;&lt;p&gt;Peer-to-peer systems have solutions to these problems. First, a unique identity can be created by picking a random number with a sufficient number of bits so that the chance of collision is improbable. That unique identity can be used as a prefix in the global ref namespace to avoid accidental collisions. Second, there needs to be a way to prevent unauthorized users from modifying the part of the global namespace that is owned by other users.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://en.wikipedia.org/wiki/Public-key_cryptography" dir="ltr"&gt;Public-key cryptography&lt;/a&gt; provides the primitive for achieving both these things. A public key or its hash can serve as the unique identifier that provides identity and prevents accidental collisions. Ownership can be enforced by verifying that changes to the global namespace are signed with the private key corresponding to the unique identity.&lt;/p&gt;&lt;p&gt;For example, we fetch the following refs from a peer:&lt;/p&gt;&lt;PRE&gt;&amp;lt;identity&amp;gt;/
   heads/
     main
   metadata/
@@ -1278,7 +1278,204 @@ are a useful thing to have.
 Something like &lt;a href="https://www.reddit.com/r/cpp/comments/68ljh4/there_is_no_interface_keyword_in_c_herbsutter/" dir="ltr"&gt;Herb Sutter’s metaclasses&lt;/a&gt;, for example.
 However, I definitely don’t want the primitive text replacement of &lt;code dir="ltr"&gt;#define&lt;/code&gt;.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;If you've liked this blog post, consider &lt;a href="https://paypal.me/foonathan" dir="ltr"&gt;donating&lt;/a&gt; or otherwise &lt;a href="https://jonathanmueller.dev/support-me/" dir="ltr"&gt;supporting me&lt;/a&gt;.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;This blog post was written for my old blog design and ported over. If there are any issues, please &lt;a href="https://jonathanmueller.dev/" dir="ltr"&gt;let me know&lt;/a&gt;.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;figure&gt;&lt;img src="https://gravatar.com/avatar/9cbeac7efd2dd7b3f2235df7e45d11fc?s=80" width="16" height="16"&gt;&lt;/figure&gt;&lt;h2&gt;Jonathan&lt;/h2&gt;&lt;div&gt;
 C++ enthusiast. I write libraries.
- &lt;/div&gt;&lt;h2&gt;Share this post&lt;/h2&gt;</description><pubDate>Sun, 06 Dec 2020 06:50:31 -0600</pubDate></item><item><title>std::visit is everything wrong with modern C++ (2017)</title><link>https://lobste.rs/s/fs2pet</link><description>&lt;h2&gt;Sum Types and You&lt;/h2&gt;&lt;p dir="ltr"&gt;Let’s talk about a simple, yet powerful concept in programming: &lt;em dir="ltr"&gt;sum types&lt;/em&gt;.&lt;sup dir="ltr"&gt;&lt;a href="https://bitbashing.io/std-visit.html#fn:1" dir="ltr"&gt;1&lt;/a&gt;&lt;/sup&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;A sum type, also called a &lt;em dir="ltr"&gt;discriminated union&lt;/em&gt;,
+ &lt;/div&gt;&lt;h2&gt;Share this post&lt;/h2&gt;</description><pubDate>Sun, 06 Dec 2020 06:50:31 -0600</pubDate></item><item><title>Code Diary: How and Why to Keep One</title><link>https://www.youtube.com/watch?v=tarmCEHfGa0</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/uhw7xt/code_diary_how_why_keep_one"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 06 Dec 2020 04:33:32 -0600</pubDate></item><item><title>R adds native pipe and lambda syntax</title><link>https://lobste.rs/s/6fvf24</link><description>&lt;h1&gt;Daily News about R-devel/NEWS&lt;/h1&gt;&lt;p&gt;This blog is updated daily. &lt;/p&gt;&lt;h3&gt;&lt;a name="n2020-12-04"&gt;Fri, 04 Dec 2020&lt;/a&gt;&lt;/h3&gt;&lt;h4&gt;CHANGES IN R-devel NEW FEATURES &lt;/h4&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;
+R now provides a simple native pipe syntax ‘|&amp;gt;’ as well as a shorthand
+notation for creating functions, e.g. ‘\(x) x + 1’ is parsed as
+‘function(x) x + 1’. The pipe implementation as a syntax transformation
+was motivated by suggestions from Jim Hester and Lionel Henry. These
+features are experimental and may change prior to release.
+&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Sat, 05 Dec 2020 12:45:11 -0600</pubDate></item><item><title>Exotic Programming Ideas</title><link>https://lobste.rs/s/b1fjtw</link><description>&lt;p dir="ltr"&gt;Continuing on in our series on exotic programming ideas, we’re going to explore the topic of logic programming and a particular form known as &lt;em dir="ltr"&gt;datalog&lt;/em&gt;.&lt;/p&gt;&lt;p&gt;Datalog is a very simple formalism, it consists of only two things:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;A database of facts&lt;/LI&gt;&lt;LI&gt;A set of rules for deriving new facts from existing facts&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;Datalog is executed by a query processor that given these two inputs, finds all instance of facts implied by both the databased and rules. For our examples we’re going to be coding our examples in the Souffle language. The namesake of the language is an acronym for the &lt;em dir="ltr"&gt;Systematic, Ontological, Undiscovered Fact Finding Logic Engine&lt;/em&gt;. It can be installed simply on many Linux systems with the command:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;$ &lt;span dir="ltr"&gt;apt-get&lt;/span&gt; install souffle&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Souffle is a minimalist datalog system designed for complex queries over large data sets, such as those encountered in the context of doing static program analysis over large codebases. Souffle is implemented in C++ and can compile datalog programs into standalone executables via compilation to C. It is one of the simpler and most efficient implementations of these systems to date, and notably it has a simple type system on top of the logic engine.&lt;/p&gt;&lt;p dir="ltr"&gt;Datalog encodes a decidable fragment of logic for which satisfaction is directly computable over a finite universe of terms. These terms consist of three classes of expressions. A &lt;em dir="ltr"&gt;fact&lt;/em&gt; represented syntactically by a expression suffixed by a period.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;fact&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;A &lt;em dir="ltr"&gt;rule&lt;/em&gt; represented by a head and body term with a &lt;em dir="ltr"&gt;turnstile&lt;/em&gt; (&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;⊢&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;) symbol between.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;head &lt;span dir="ltr"&gt;:-&lt;/span&gt; body&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;And &lt;em dir="ltr"&gt;query&lt;/em&gt; terms which query the truth value of fact within the database.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;?-&lt;/span&gt; body&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;An example of these terms would be “classical” categorical syllogism about the Greek philosopher Socrates. Socrates is a man, all men are mortal, therefore we can deduce that Socrates is mortal.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;// All men are mortal / valar morghulis&lt;/span&gt;
+&lt;span dir="ltr"&gt;mortal&lt;/span&gt;(X) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;human&lt;/span&gt;(X).
+
+&lt;span dir="ltr"&gt;// Socrates is a man.&lt;/span&gt;
+&lt;span dir="ltr"&gt;human&lt;/span&gt;(&lt;span dir="ltr"&gt;"Socrates"&lt;/span&gt;).
+
+&lt;span dir="ltr"&gt;// Is Socrates mortal?&lt;/span&gt;
+&lt;span dir="ltr"&gt;?-&lt;/span&gt; &lt;span dir="ltr"&gt;mortal&lt;/span&gt;(&lt;span dir="ltr"&gt;"Socrates"&lt;/span&gt;).&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Execution of a Souffle program is in effect a set of transformations from input facts to deduced output facts by a prescription of rules.&lt;/p&gt;&lt;img src="https://www.stephendiehl.com/images/souffle.png" width="555" height="106"&gt;&lt;p dir="ltr"&gt;Souffle can read input facts from a variety of sources including stdin, CSV files, and SQLite databases. he default input source is a tab-separated file for a relation where each row in the file represents a fact in the relation. This is specified with a IO &lt;em dir="ltr"&gt;input declaration&lt;/em&gt; of the form.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt;	(n&lt;span dir="ltr"&gt;:&lt;/span&gt; symbol)
+.&lt;span dir="ltr"&gt;input&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This would read from a file &lt;code dir="ltr"&gt;A.facts&lt;/code&gt; of tab separated values for a symbolic value &lt;code dir="ltr"&gt;n&lt;/code&gt;. However we can modify our input by passing explicit IO parameters to it instead.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;input&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt;(IO&lt;span dir="ltr"&gt;=&lt;/span&gt;file&lt;span dir="ltr"&gt;,&lt;/span&gt; filename&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"fact_database.csv"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;  delimiter&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;","&lt;/span&gt;)
+.&lt;span dir="ltr"&gt;input&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt;(IO&lt;span dir="ltr"&gt;=&lt;/span&gt;stdin&lt;span dir="ltr"&gt;,&lt;/span&gt; delimiter&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;","&lt;/span&gt;)
+.&lt;span dir="ltr"&gt;input&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt;(IO&lt;span dir="ltr"&gt;=&lt;/span&gt;sqlite&lt;span dir="ltr"&gt;,&lt;/span&gt; dbname&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"fact_database.db"&lt;/span&gt;)&lt;/code&gt;&lt;/PRE&gt;&lt;h4&gt;Simple Example&lt;/h4&gt;&lt;p dir="ltr"&gt;A simple end to end example would be the program that associates a set of symbolic inputs with a set of numerical ones by a simple one-to-one mapping. We could write the simple &lt;code dir="ltr"&gt;A&lt;/code&gt; to &lt;code dir="ltr"&gt;B&lt;/code&gt; transformation as the following rules.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;/* Input from A.facts */&lt;/span&gt;
+.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt;	(n&lt;span dir="ltr"&gt;:&lt;/span&gt; symbol)
+.&lt;span dir="ltr"&gt;input&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;/* Output to B.csv */&lt;/span&gt;
+.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;B&lt;/span&gt;	(n&lt;span dir="ltr"&gt;:&lt;/span&gt; number)
+&lt;span dir="ltr"&gt;B&lt;/span&gt;(&lt;span dir="ltr"&gt;0&lt;/span&gt;) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt;(&lt;span dir="ltr"&gt;"Hello"&lt;/span&gt;).
+&lt;span dir="ltr"&gt;B&lt;/span&gt;(&lt;span dir="ltr"&gt;1&lt;/span&gt;) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt;(&lt;span dir="ltr"&gt;"World"&lt;/span&gt;).
+.&lt;span dir="ltr"&gt;output&lt;/span&gt; &lt;span dir="ltr"&gt;B&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This reads from the input facts in &lt;code dir="ltr"&gt;A.facts&lt;/code&gt; and outputs &lt;code dir="ltr"&gt;B.csv&lt;/code&gt; which not surprisingly looks like the following when we invoke Souffle with the following command.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;$ &lt;span dir="ltr"&gt;souffle&lt;/span&gt; hello.dl&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The output matches &lt;code dir="ltr"&gt;A&lt;/code&gt; to &lt;code dir="ltr"&gt;B&lt;/code&gt; according to the rules in &lt;code dir="ltr"&gt;hello.dl&lt;/code&gt;.&lt;/p&gt;&lt;table dir="ltr"&gt;
+&lt;thead dir="ltr"&gt;
+&lt;tr class="header" dir="ltr"&gt;
+&lt;th align="left" dir="ltr"&gt;A&lt;/th&gt;
+&lt;th align="left" dir="ltr"&gt;B&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody dir="ltr"&gt;
+&lt;tr class="odd" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;Hello&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;0&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr class="even" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;World&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;1&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;&lt;h4&gt;Relations&lt;/h4&gt;&lt;p&gt;Logic inside of datalog is specified by relations, which are ordered tuples of typed variables that relate quantities. For example if we had a set of named entities (represented as symbols) we can assign a relation that maps a property to each of them as facts.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;Human&lt;/span&gt;(x &lt;span dir="ltr"&gt;:&lt;/span&gt; symbol)
+.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;Klingon&lt;/span&gt;(x &lt;span dir="ltr"&gt;:&lt;/span&gt; symbol)
+.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;Android&lt;/span&gt;(x &lt;span dir="ltr"&gt;:&lt;/span&gt; symbol)
+
+&lt;span dir="ltr"&gt;Human&lt;/span&gt;(&lt;span dir="ltr"&gt;"Picard"&lt;/span&gt;).
+&lt;span dir="ltr"&gt;Human&lt;/span&gt;(&lt;span dir="ltr"&gt;"Riker"&lt;/span&gt;).
+&lt;span dir="ltr"&gt;Klingon&lt;/span&gt;(&lt;span dir="ltr"&gt;"Worf"&lt;/span&gt;).
+&lt;span dir="ltr"&gt;Android&lt;/span&gt;(&lt;span dir="ltr"&gt;"Data"&lt;/span&gt;).&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Each variable is given a specific type indicated by &lt;code dir="ltr"&gt;var : type&lt;/code&gt; where type is one of the following builtins.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;symbol&lt;/code&gt; - Symbolic quantities represented as strings.&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;number&lt;/code&gt; - Signed integers&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;unsigned&lt;/code&gt; - Unsigned integers&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;float&lt;/code&gt; - Floating point values&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;Relations can take multiple arguments that assign properties to a collection of symbols according to rules over that relation.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;Rank&lt;/span&gt;(x&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol&lt;span dir="ltr"&gt;,&lt;/span&gt; y&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol)
+.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;Peers&lt;/span&gt;(x&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol&lt;span dir="ltr"&gt;,&lt;/span&gt; y&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol)
+
+&lt;span dir="ltr"&gt;Rank&lt;/span&gt;(&lt;span dir="ltr"&gt;"Captain"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;"Picard"&lt;/span&gt;).
+&lt;span dir="ltr"&gt;Rank&lt;/span&gt;(&lt;span dir="ltr"&gt;"Officer"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;"Riker"&lt;/span&gt;).
+&lt;span dir="ltr"&gt;Rank&lt;/span&gt;(&lt;span dir="ltr"&gt;"Officer"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;"Worf"&lt;/span&gt;).
+&lt;span dir="ltr"&gt;Rank&lt;/span&gt;(&lt;span dir="ltr"&gt;"Officer"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;"Data"&lt;/span&gt;).&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Rules over these relations are defined by &lt;em dir="ltr"&gt;clauses&lt;/em&gt;. The following can be read as a pair (x,y) is in A relation, if it is in B relation.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;A&lt;/span&gt;(x&lt;span dir="ltr"&gt;,&lt;/span&gt;y) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;B&lt;/span&gt;(x&lt;span dir="ltr"&gt;,&lt;/span&gt;y).&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Clauses in Souffle are known in logic as &lt;em dir="ltr"&gt;Horn clauses&lt;/em&gt;. They are comprised of subterms joined together with a conjunction (&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;∧&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;) (logical AND in programming) that implies a statement &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;u&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;. Can read the following statement in math as&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;if a and b and … and z all hold, then also u holds&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;&lt;span&gt;&lt;span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;u&lt;/span&gt;&lt;span dir="ltr"&gt;←&lt;/span&gt;&lt;span dir="ltr"&gt;a&lt;/span&gt;&lt;span dir="ltr"&gt;∧&lt;/span&gt;&lt;span dir="ltr"&gt;b&lt;/span&gt;&lt;span dir="ltr"&gt;∧&lt;/span&gt;&lt;span dir="ltr"&gt;…&lt;/span&gt;&lt;span dir="ltr"&gt;∧&lt;/span&gt;&lt;span dir="ltr"&gt;z&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;The above is known as the &lt;em dir="ltr"&gt;implicative form&lt;/em&gt;. Logically this is equivalent to the statement written in terms of disjunction (&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;∨&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;) (logical OR in programming) and negation (&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;¬&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;) (logical NOT in programming).&lt;/p&gt;&lt;p&gt;&lt;span&gt;&lt;span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;¬&lt;/span&gt;&lt;span dir="ltr"&gt;a&lt;/span&gt;&lt;span dir="ltr"&gt;∨&lt;/span&gt;&lt;span dir="ltr"&gt;b&lt;/span&gt;&lt;span dir="ltr"&gt;¬&lt;/span&gt;&lt;span dir="ltr"&gt;b&lt;/span&gt;&lt;span dir="ltr"&gt;∨&lt;/span&gt;&lt;span dir="ltr"&gt;…&lt;/span&gt;&lt;span dir="ltr"&gt;∨&lt;/span&gt;&lt;span dir="ltr"&gt;z&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p&gt;In Datalog notation we write this Horn clause in the following syntax.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;u &lt;span dir="ltr"&gt;:-&lt;/span&gt; a&lt;span dir="ltr"&gt;,&lt;/span&gt; c&lt;span dir="ltr"&gt;,&lt;/span&gt; ...&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;z&lt;/span&gt;.&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;In clauses, free variables that occur inside of the conjoined expressions are implicitly universally quantified, i.e.&amp;nbsp;they are required to hold forall (denoted &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;∀&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;) substitutions of the variable in a domain.&lt;/p&gt;&lt;p&gt;So the datalog expression above&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;A&lt;/span&gt;(x&lt;span dir="ltr"&gt;,&lt;/span&gt;y) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;B&lt;/span&gt;(x&lt;span dir="ltr"&gt;,&lt;/span&gt;y).&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Is equivalent to the Horn clause.&lt;/p&gt;&lt;p&gt;&lt;span&gt;&lt;span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;∀&lt;/span&gt;&lt;span dir="ltr"&gt;x&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;∀&lt;/span&gt;&lt;span dir="ltr"&gt;y&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;¬&lt;/span&gt;&lt;span dir="ltr"&gt;B&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;x&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;y&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;∨&lt;/span&gt;&lt;span dir="ltr"&gt;A&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;x&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;y&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;So for example we know that Klingons and Humans both eat food, but obviously androids do not. We write the following rules over a variable term &lt;code dir="ltr"&gt;X&lt;/code&gt; of type symbol.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;Eats&lt;/span&gt;(x&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol)
+
+&lt;span dir="ltr"&gt;Eats&lt;/span&gt;(X) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;Human&lt;/span&gt;(X).
+&lt;span dir="ltr"&gt;Eats&lt;/span&gt;(X) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;Klingon&lt;/span&gt;(X).
+.&lt;span dir="ltr"&gt;output&lt;/span&gt; &lt;span dir="ltr"&gt;Eats&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Which produces the following output from the given set of input facts about the symbols in scope given the constraint on their species.&lt;/p&gt;&lt;th align="left"&gt;Eats&lt;/th&gt;&lt;td align="left"&gt;Riker&lt;/td&gt;&lt;td align="left"&gt;Picard&lt;/td&gt;&lt;td align="left"&gt;Worf&lt;/td&gt;&lt;p&gt;Terms can also be negated, for instance if we wanted to enumerate all officers that eat could write the following rule which excludes androids.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;InvitedToDinner&lt;/span&gt;(X) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;Rank&lt;/span&gt;(&lt;span dir="ltr"&gt;"Officer"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; X)&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;Android&lt;/span&gt;(X).&lt;/code&gt;&lt;/PRE&gt;&lt;th align="left"&gt;InvitedToDinner&lt;/th&gt;&lt;td align="left"&gt;Riker&lt;/td&gt;&lt;td align="left"&gt;Worf&lt;/td&gt;&lt;p dir="ltr"&gt;A more complex rule can consist of multiple terms separated by command, all of which have to evaluate true. For example two officers are peers if they have same rank and are not the same person. We use an intermediate variable &lt;code dir="ltr"&gt;Z&lt;/code&gt; to test the equality of rank in this relation.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;Peers&lt;/span&gt;(x&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol&lt;span dir="ltr"&gt;,&lt;/span&gt; y&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol)
+&lt;span dir="ltr"&gt;Peers&lt;/span&gt;(X&lt;span dir="ltr"&gt;,&lt;/span&gt; Y) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;Rank&lt;/span&gt;(Z&lt;span dir="ltr"&gt;,&lt;/span&gt; X)&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;Rank&lt;/span&gt;(Z&lt;span dir="ltr"&gt;,&lt;/span&gt; Y)&lt;span dir="ltr"&gt;,&lt;/span&gt;  X &lt;span dir="ltr"&gt;!=&lt;/span&gt; &lt;span dir="ltr"&gt;Y&lt;/span&gt;.&lt;/code&gt;&lt;/PRE&gt;&lt;table dir="ltr"&gt;
+&lt;thead dir="ltr"&gt;
+&lt;tr class="header" dir="ltr"&gt;
+&lt;th align="left" dir="ltr"&gt;Peers&lt;/th&gt;
+&lt;th align="left" dir="ltr"&gt;&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody dir="ltr"&gt;
+&lt;tr class="odd" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;Riker&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;Worf&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr class="even" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;Riker&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;Data&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr class="odd" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;Worf&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;Riker&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr class="even" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;Worf&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;Data&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr class="odd" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;Data&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;Riker&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr class="even" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;Data&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;Worf&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;&lt;p&gt;Rules can also be recursive. For example we we wanted to write a query which found all first degree friend relations of a given set of facts we could write the following recursive definition.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;Friend&lt;/span&gt;(x&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol&lt;span dir="ltr"&gt;,&lt;/span&gt; y&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol)
+.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;FriendOfFriend&lt;/span&gt;(x&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol&lt;span dir="ltr"&gt;,&lt;/span&gt; y&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol)
+
+&lt;span dir="ltr"&gt;FriendOfFriend&lt;/span&gt;(X&lt;span dir="ltr"&gt;,&lt;/span&gt; Y) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;Friend&lt;/span&gt;(X&lt;span dir="ltr"&gt;,&lt;/span&gt; Z)&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;FriendOfFriend&lt;/span&gt;(Z&lt;span dir="ltr"&gt;,&lt;/span&gt; Y).&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;An important class of relations are that of &lt;em dir="ltr"&gt;equivalence relations&lt;/em&gt;. These are relations between two terms that satisfy an additional set of constraints: &lt;em dir="ltr"&gt;reflexivity&lt;/em&gt;, &lt;em dir="ltr"&gt;symmetry&lt;/em&gt;, and &lt;em dir="ltr"&gt;transitivity&lt;/em&gt;. Relations of this form behave similar to how the equality symbol is treated in algebra.&lt;/p&gt;&lt;p&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;a&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;a&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;a&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;c&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;b&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;c&lt;/span&gt;&lt;span dir="ltr"&gt;⇒&lt;/span&gt;&lt;span dir="ltr"&gt;a&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;c&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;// every element of R1 is equivalent to every element of R2&lt;/span&gt;
+.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;equivalence&lt;/span&gt;(x&lt;span dir="ltr"&gt;:&lt;/span&gt;number&lt;span dir="ltr"&gt;,&lt;/span&gt; y&lt;span dir="ltr"&gt;:&lt;/span&gt;number)
+&lt;span dir="ltr"&gt;equivalence&lt;/span&gt;(a&lt;span dir="ltr"&gt;,&lt;/span&gt; b) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;R&lt;/span&gt;(a)&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;R&lt;/span&gt;(b).
+
+&lt;span dir="ltr"&gt;// reflexivity&lt;/span&gt;
+&lt;span dir="ltr"&gt;equivalence&lt;/span&gt;(a&lt;span dir="ltr"&gt;,&lt;/span&gt; a) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;equivalence&lt;/span&gt;(a&lt;span dir="ltr"&gt;,&lt;/span&gt; _).
+
+&lt;span dir="ltr"&gt;// symmetry&lt;/span&gt;
+&lt;span dir="ltr"&gt;equivalence&lt;/span&gt;(a&lt;span dir="ltr"&gt;,&lt;/span&gt; b) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;equivalence&lt;/span&gt;(b&lt;span dir="ltr"&gt;,&lt;/span&gt; a).
+
+ &lt;span dir="ltr"&gt;// transitivity&lt;/span&gt;
+&lt;span dir="ltr"&gt;equivalence&lt;/span&gt;(a&lt;span dir="ltr"&gt;,&lt;/span&gt; c) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;equivalence&lt;/span&gt;(a&lt;span dir="ltr"&gt;,&lt;/span&gt; b)&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;equivalence&lt;/span&gt;(b&lt;span dir="ltr"&gt;,&lt;/span&gt; c).&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;In the implementation of the relation, the data and intermediary deductions are stored in a common B-tree data structure. However this can be modified by passing an explicit argument to force the use of a disjoint-set or trie data structure for specific uses cases.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt;(x &lt;span dir="ltr"&gt;:&lt;/span&gt; number&lt;span dir="ltr"&gt;,&lt;/span&gt; y &lt;span dir="ltr"&gt;:&lt;/span&gt; number) eqrel &lt;span dir="ltr"&gt;// Disjoint-set&lt;/span&gt;
+.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;B&lt;/span&gt;(x &lt;span dir="ltr"&gt;:&lt;/span&gt; number&lt;span dir="ltr"&gt;,&lt;/span&gt; y &lt;span dir="ltr"&gt;:&lt;/span&gt; symbol) btree &lt;span dir="ltr"&gt;// B-tree&lt;/span&gt;
+.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;C&lt;/span&gt;(x &lt;span dir="ltr"&gt;:&lt;/span&gt; number&lt;span dir="ltr"&gt;,&lt;/span&gt; y &lt;span dir="ltr"&gt;:&lt;/span&gt; symbol) brie  &lt;span dir="ltr"&gt;// Dense trie&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;When working with integral types (&lt;code dir="ltr"&gt;number&lt;/code&gt;, &lt;code dir="ltr"&gt;unsigned&lt;/code&gt; and &lt;code dir="ltr"&gt;float&lt;/code&gt;) arithmetic expressions behave as expected and can be pattern matched on. For example we can write the Fibonacci function as a relation in terms of itself.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;fib&lt;/span&gt;(&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;).
+&lt;span dir="ltr"&gt;fib&lt;/span&gt;(&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;1&lt;/span&gt;).
+&lt;span dir="ltr"&gt;fib&lt;/span&gt;(n&lt;span dir="ltr"&gt;+1&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; x&lt;span dir="ltr"&gt;+&lt;/span&gt;y) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;fib&lt;/span&gt;(n&lt;span dir="ltr"&gt;,&lt;/span&gt; x)&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;fib&lt;/span&gt;(n&lt;span dir="ltr"&gt;-1&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; y)&lt;span dir="ltr"&gt;,&lt;/span&gt; n &lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt; &lt;span dir="ltr"&gt;15&lt;/span&gt;.&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This generates the following output facts.&lt;/p&gt;&lt;table dir="ltr"&gt;
+&lt;thead dir="ltr"&gt;
+&lt;tr class="header" dir="ltr"&gt;
+&lt;th align="left" dir="ltr"&gt;fib&lt;/th&gt;
+&lt;th align="left" dir="ltr"&gt;&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody dir="ltr"&gt;
+&lt;tr class="odd" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;0&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;0&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr class="even" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;1&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;1&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr class="odd" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;2&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;1&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr class="even" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;3&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;2&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr class="odd" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;4&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;3&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr class="even" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;5&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;5&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr class="odd" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;6&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;8&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr class="even" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;7&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;13&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr class="odd" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;8&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;21&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr class="even" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;9&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;34&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr class="odd" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;10&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;55&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr class="even" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;11&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;89&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr class="odd" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;12&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;14&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr class="even" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;13&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;233&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr class="odd" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;14&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;377&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr class="even" dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;15&lt;/td&gt;
+&lt;td align="left" dir="ltr"&gt;610&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;&lt;h4&gt;Type System&lt;/h4&gt;&lt;p dir="ltr"&gt;Souffle has a limited type system that can be used to track the types of variables quantified in clause expressions. For example one cannot have a variable which simultaneously holds a symbol and unsigned integer. We can however define custom &lt;em dir="ltr"&gt;type synonyms&lt;/em&gt; on top of the ground types of the languages that will let us semantically distinguish different user-defined types of symbols and numeric quantities. For example:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;Person&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;:&lt;/span&gt; symbol
+.&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;Food&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;:&lt;/span&gt; symbol
+
+.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;Eats&lt;/span&gt;(x &lt;span dir="ltr"&gt;:&lt;/span&gt; Person&lt;span dir="ltr"&gt;,&lt;/span&gt; y &lt;span dir="ltr"&gt;:&lt;/span&gt; Food)
+.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;Dinner&lt;/span&gt;(x &lt;span dir="ltr"&gt;:&lt;/span&gt; Person&lt;span dir="ltr"&gt;,&lt;/span&gt; y &lt;span dir="ltr"&gt;:&lt;/span&gt; Food)
+
+&lt;span dir="ltr"&gt;Dinner&lt;/span&gt;(x&lt;span dir="ltr"&gt;,&lt;/span&gt; y) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;Eats&lt;/span&gt;(x&lt;span dir="ltr"&gt;,&lt;/span&gt; y). &lt;span dir="ltr"&gt;// Well-typed&lt;/span&gt;
+&lt;span dir="ltr"&gt;Dinner&lt;/span&gt;(x&lt;span dir="ltr"&gt;,&lt;/span&gt; y) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;Eats&lt;/span&gt;(y&lt;span dir="ltr"&gt;,&lt;/span&gt; x). &lt;span dir="ltr"&gt;// Not well-typed, Person != Food&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Unions of type synonyms are also permitted so long as the underlying types of the synonyms are equivalent.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;:&lt;/span&gt; number
+.&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;B&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;:&lt;/span&gt; number
+.&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;C&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; A &lt;span dir="ltr"&gt;|&lt;/span&gt; B    &lt;span dir="ltr"&gt;// Either in A or B&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The language also has the ability to define both &lt;em dir="ltr"&gt;sum&lt;/em&gt; and &lt;em dir="ltr"&gt;product&lt;/em&gt; types which let us both options and records as terms in our clauses.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;Sum&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; A &lt;span dir="ltr"&gt;{&lt;/span&gt; &lt;span dir="ltr"&gt;x&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt; number &lt;span dir="ltr"&gt;}&lt;/span&gt; &lt;span dir="ltr"&gt;|&lt;/span&gt; B &lt;span dir="ltr"&gt;{&lt;/span&gt; &lt;span dir="ltr"&gt;x&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt; symbol &lt;span dir="ltr"&gt;}&lt;/span&gt;
+.&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;Prod&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; C &lt;span dir="ltr"&gt;{&lt;/span&gt; &lt;span dir="ltr"&gt;x&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt; number&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;y &lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt; symbol &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;For example we could build a linked list (or cons list) out of a product type which has both a head element and a tail element.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;// Linked list&lt;/span&gt;
+.&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;List&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; [ head &lt;span dir="ltr"&gt;:&lt;/span&gt; number&lt;span dir="ltr"&gt;,&lt;/span&gt; tail &lt;span dir="ltr"&gt;:&lt;/span&gt; List ]
+.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;MyList&lt;/span&gt;(x &lt;span dir="ltr"&gt;:&lt;/span&gt; List)
+
+&lt;span dir="ltr"&gt;MyList&lt;/span&gt;( [&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; [&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; nil]] ).&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Logic programming is a very natural way of expressing abstract program semantics and with tools like Souffle we have excellent logic engine that can be embedded in other static analysis applications to collect facts about code and deduce implications about code composition and usage. This a powerful technique and future static analysis tools are going to yield whole new ways of reasoning about and synthesising code in the future.&lt;/p&gt;</description><pubDate>Sat, 05 Dec 2020 06:39:55 -0600</pubDate></item><item><title>std::visit is everything wrong with modern C++ (2017)</title><link>https://lobste.rs/s/fs2pet</link><description>&lt;h2&gt;Sum Types and You&lt;/h2&gt;&lt;p dir="ltr"&gt;Let’s talk about a simple, yet powerful concept in programming: &lt;em dir="ltr"&gt;sum types&lt;/em&gt;.&lt;sup dir="ltr"&gt;&lt;a href="https://bitbashing.io/std-visit.html#fn:1" dir="ltr"&gt;1&lt;/a&gt;&lt;/sup&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;A sum type, also called a &lt;em dir="ltr"&gt;discriminated union&lt;/em&gt;,
 can hold one (and only one) of several types of things.
 For example, consider some settings in an
 &lt;a href="https://en.wikipedia.org/wiki/INI_file" dir="ltr"&gt;INI&lt;/a&gt;-like configuration file.
@@ -1495,204 +1692,7 @@ you should be programming in.”&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt
   (Consider that the set of possible states of a struct containing types A
   and B is the &lt;em dir="ltr"&gt;product&lt;/em&gt; of their possible states, A&amp;nbsp;×&amp;nbsp;B.)&amp;nbsp;&lt;a href="https://bitbashing.io/std-visit.html#fnref:1" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;See language proposal
   &lt;a href="http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2016/p0095r1.html" dir="ltr"&gt;P0095R1&lt;/a&gt;
-  for the current work on pattern matching in C++.&amp;nbsp;&lt;a href="https://bitbashing.io/std-visit.html#fnref:2" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Sat, 05 Dec 2020 09:13:17 -0600</pubDate></item><item><title>R adds native pipe and lambda syntax</title><link>https://lobste.rs/s/6fvf24</link><description>&lt;h1&gt;Daily News about R-devel/NEWS&lt;/h1&gt;&lt;p&gt;This blog is updated daily. &lt;/p&gt;&lt;h3&gt;&lt;a name="n2020-12-04"&gt;Fri, 04 Dec 2020&lt;/a&gt;&lt;/h3&gt;&lt;h4&gt;CHANGES IN R-devel NEW FEATURES &lt;/h4&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;
-R now provides a simple native pipe syntax ‘|&amp;gt;’ as well as a shorthand
-notation for creating functions, e.g. ‘\(x) x + 1’ is parsed as
-‘function(x) x + 1’. The pipe implementation as a syntax transformation
-was motivated by suggestions from Jim Hester and Lionel Henry. These
-features are experimental and may change prior to release.
-&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Sat, 05 Dec 2020 12:45:11 -0600</pubDate></item><item><title>Exotic Programming Ideas</title><link>https://lobste.rs/s/b1fjtw</link><description>&lt;p dir="ltr"&gt;Continuing on in our series on exotic programming ideas, we’re going to explore the topic of logic programming and a particular form known as &lt;em dir="ltr"&gt;datalog&lt;/em&gt;.&lt;/p&gt;&lt;p&gt;Datalog is a very simple formalism, it consists of only two things:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;A database of facts&lt;/LI&gt;&lt;LI&gt;A set of rules for deriving new facts from existing facts&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;Datalog is executed by a query processor that given these two inputs, finds all instance of facts implied by both the databased and rules. For our examples we’re going to be coding our examples in the Souffle language. The namesake of the language is an acronym for the &lt;em dir="ltr"&gt;Systematic, Ontological, Undiscovered Fact Finding Logic Engine&lt;/em&gt;. It can be installed simply on many Linux systems with the command:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;$ &lt;span dir="ltr"&gt;apt-get&lt;/span&gt; install souffle&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Souffle is a minimalist datalog system designed for complex queries over large data sets, such as those encountered in the context of doing static program analysis over large codebases. Souffle is implemented in C++ and can compile datalog programs into standalone executables via compilation to C. It is one of the simpler and most efficient implementations of these systems to date, and notably it has a simple type system on top of the logic engine.&lt;/p&gt;&lt;p dir="ltr"&gt;Datalog encodes a decidable fragment of logic for which satisfaction is directly computable over a finite universe of terms. These terms consist of three classes of expressions. A &lt;em dir="ltr"&gt;fact&lt;/em&gt; represented syntactically by a expression suffixed by a period.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;fact&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;A &lt;em dir="ltr"&gt;rule&lt;/em&gt; represented by a head and body term with a &lt;em dir="ltr"&gt;turnstile&lt;/em&gt; (&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;⊢&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;) symbol between.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;head &lt;span dir="ltr"&gt;:-&lt;/span&gt; body&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;And &lt;em dir="ltr"&gt;query&lt;/em&gt; terms which query the truth value of fact within the database.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;?-&lt;/span&gt; body&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;An example of these terms would be “classical” categorical syllogism about the Greek philosopher Socrates. Socrates is a man, all men are mortal, therefore we can deduce that Socrates is mortal.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;// All men are mortal / valar morghulis&lt;/span&gt;
-&lt;span dir="ltr"&gt;mortal&lt;/span&gt;(X) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;human&lt;/span&gt;(X).
-
-&lt;span dir="ltr"&gt;// Socrates is a man.&lt;/span&gt;
-&lt;span dir="ltr"&gt;human&lt;/span&gt;(&lt;span dir="ltr"&gt;"Socrates"&lt;/span&gt;).
-
-&lt;span dir="ltr"&gt;// Is Socrates mortal?&lt;/span&gt;
-&lt;span dir="ltr"&gt;?-&lt;/span&gt; &lt;span dir="ltr"&gt;mortal&lt;/span&gt;(&lt;span dir="ltr"&gt;"Socrates"&lt;/span&gt;).&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Execution of a Souffle program is in effect a set of transformations from input facts to deduced output facts by a prescription of rules.&lt;/p&gt;&lt;img src="https://www.stephendiehl.com/images/souffle.png" width="555" height="106"&gt;&lt;p dir="ltr"&gt;Souffle can read input facts from a variety of sources including stdin, CSV files, and SQLite databases. he default input source is a tab-separated file for a relation where each row in the file represents a fact in the relation. This is specified with a IO &lt;em dir="ltr"&gt;input declaration&lt;/em&gt; of the form.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt;	(n&lt;span dir="ltr"&gt;:&lt;/span&gt; symbol)
-.&lt;span dir="ltr"&gt;input&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This would read from a file &lt;code dir="ltr"&gt;A.facts&lt;/code&gt; of tab separated values for a symbolic value &lt;code dir="ltr"&gt;n&lt;/code&gt;. However we can modify our input by passing explicit IO parameters to it instead.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;input&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt;(IO&lt;span dir="ltr"&gt;=&lt;/span&gt;file&lt;span dir="ltr"&gt;,&lt;/span&gt; filename&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"fact_database.csv"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;  delimiter&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;","&lt;/span&gt;)
-.&lt;span dir="ltr"&gt;input&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt;(IO&lt;span dir="ltr"&gt;=&lt;/span&gt;stdin&lt;span dir="ltr"&gt;,&lt;/span&gt; delimiter&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;","&lt;/span&gt;)
-.&lt;span dir="ltr"&gt;input&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt;(IO&lt;span dir="ltr"&gt;=&lt;/span&gt;sqlite&lt;span dir="ltr"&gt;,&lt;/span&gt; dbname&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"fact_database.db"&lt;/span&gt;)&lt;/code&gt;&lt;/PRE&gt;&lt;h4&gt;Simple Example&lt;/h4&gt;&lt;p dir="ltr"&gt;A simple end to end example would be the program that associates a set of symbolic inputs with a set of numerical ones by a simple one-to-one mapping. We could write the simple &lt;code dir="ltr"&gt;A&lt;/code&gt; to &lt;code dir="ltr"&gt;B&lt;/code&gt; transformation as the following rules.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;/* Input from A.facts */&lt;/span&gt;
-.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt;	(n&lt;span dir="ltr"&gt;:&lt;/span&gt; symbol)
-.&lt;span dir="ltr"&gt;input&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;/* Output to B.csv */&lt;/span&gt;
-.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;B&lt;/span&gt;	(n&lt;span dir="ltr"&gt;:&lt;/span&gt; number)
-&lt;span dir="ltr"&gt;B&lt;/span&gt;(&lt;span dir="ltr"&gt;0&lt;/span&gt;) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt;(&lt;span dir="ltr"&gt;"Hello"&lt;/span&gt;).
-&lt;span dir="ltr"&gt;B&lt;/span&gt;(&lt;span dir="ltr"&gt;1&lt;/span&gt;) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt;(&lt;span dir="ltr"&gt;"World"&lt;/span&gt;).
-.&lt;span dir="ltr"&gt;output&lt;/span&gt; &lt;span dir="ltr"&gt;B&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This reads from the input facts in &lt;code dir="ltr"&gt;A.facts&lt;/code&gt; and outputs &lt;code dir="ltr"&gt;B.csv&lt;/code&gt; which not surprisingly looks like the following when we invoke Souffle with the following command.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;$ &lt;span dir="ltr"&gt;souffle&lt;/span&gt; hello.dl&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The output matches &lt;code dir="ltr"&gt;A&lt;/code&gt; to &lt;code dir="ltr"&gt;B&lt;/code&gt; according to the rules in &lt;code dir="ltr"&gt;hello.dl&lt;/code&gt;.&lt;/p&gt;&lt;table dir="ltr"&gt;
-&lt;thead dir="ltr"&gt;
-&lt;tr class="header" dir="ltr"&gt;
-&lt;th align="left" dir="ltr"&gt;A&lt;/th&gt;
-&lt;th align="left" dir="ltr"&gt;B&lt;/th&gt;
-&lt;/tr&gt;
-&lt;/thead&gt;
-&lt;tbody dir="ltr"&gt;
-&lt;tr class="odd" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;Hello&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;0&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr class="even" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;World&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;1&lt;/td&gt;
-&lt;/tr&gt;
-&lt;/tbody&gt;
-&lt;/table&gt;&lt;h4&gt;Relations&lt;/h4&gt;&lt;p&gt;Logic inside of datalog is specified by relations, which are ordered tuples of typed variables that relate quantities. For example if we had a set of named entities (represented as symbols) we can assign a relation that maps a property to each of them as facts.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;Human&lt;/span&gt;(x &lt;span dir="ltr"&gt;:&lt;/span&gt; symbol)
-.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;Klingon&lt;/span&gt;(x &lt;span dir="ltr"&gt;:&lt;/span&gt; symbol)
-.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;Android&lt;/span&gt;(x &lt;span dir="ltr"&gt;:&lt;/span&gt; symbol)
-
-&lt;span dir="ltr"&gt;Human&lt;/span&gt;(&lt;span dir="ltr"&gt;"Picard"&lt;/span&gt;).
-&lt;span dir="ltr"&gt;Human&lt;/span&gt;(&lt;span dir="ltr"&gt;"Riker"&lt;/span&gt;).
-&lt;span dir="ltr"&gt;Klingon&lt;/span&gt;(&lt;span dir="ltr"&gt;"Worf"&lt;/span&gt;).
-&lt;span dir="ltr"&gt;Android&lt;/span&gt;(&lt;span dir="ltr"&gt;"Data"&lt;/span&gt;).&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Each variable is given a specific type indicated by &lt;code dir="ltr"&gt;var : type&lt;/code&gt; where type is one of the following builtins.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;symbol&lt;/code&gt; - Symbolic quantities represented as strings.&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;number&lt;/code&gt; - Signed integers&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;unsigned&lt;/code&gt; - Unsigned integers&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;float&lt;/code&gt; - Floating point values&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;Relations can take multiple arguments that assign properties to a collection of symbols according to rules over that relation.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;Rank&lt;/span&gt;(x&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol&lt;span dir="ltr"&gt;,&lt;/span&gt; y&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol)
-.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;Peers&lt;/span&gt;(x&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol&lt;span dir="ltr"&gt;,&lt;/span&gt; y&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol)
-
-&lt;span dir="ltr"&gt;Rank&lt;/span&gt;(&lt;span dir="ltr"&gt;"Captain"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;"Picard"&lt;/span&gt;).
-&lt;span dir="ltr"&gt;Rank&lt;/span&gt;(&lt;span dir="ltr"&gt;"Officer"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;"Riker"&lt;/span&gt;).
-&lt;span dir="ltr"&gt;Rank&lt;/span&gt;(&lt;span dir="ltr"&gt;"Officer"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;"Worf"&lt;/span&gt;).
-&lt;span dir="ltr"&gt;Rank&lt;/span&gt;(&lt;span dir="ltr"&gt;"Officer"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;"Data"&lt;/span&gt;).&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Rules over these relations are defined by &lt;em dir="ltr"&gt;clauses&lt;/em&gt;. The following can be read as a pair (x,y) is in A relation, if it is in B relation.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;A&lt;/span&gt;(x&lt;span dir="ltr"&gt;,&lt;/span&gt;y) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;B&lt;/span&gt;(x&lt;span dir="ltr"&gt;,&lt;/span&gt;y).&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Clauses in Souffle are known in logic as &lt;em dir="ltr"&gt;Horn clauses&lt;/em&gt;. They are comprised of subterms joined together with a conjunction (&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;∧&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;) (logical AND in programming) that implies a statement &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;u&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;. Can read the following statement in math as&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;if a and b and … and z all hold, then also u holds&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;&lt;span&gt;&lt;span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;u&lt;/span&gt;&lt;span dir="ltr"&gt;←&lt;/span&gt;&lt;span dir="ltr"&gt;a&lt;/span&gt;&lt;span dir="ltr"&gt;∧&lt;/span&gt;&lt;span dir="ltr"&gt;b&lt;/span&gt;&lt;span dir="ltr"&gt;∧&lt;/span&gt;&lt;span dir="ltr"&gt;…&lt;/span&gt;&lt;span dir="ltr"&gt;∧&lt;/span&gt;&lt;span dir="ltr"&gt;z&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;The above is known as the &lt;em dir="ltr"&gt;implicative form&lt;/em&gt;. Logically this is equivalent to the statement written in terms of disjunction (&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;∨&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;) (logical OR in programming) and negation (&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;¬&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;) (logical NOT in programming).&lt;/p&gt;&lt;p&gt;&lt;span&gt;&lt;span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;¬&lt;/span&gt;&lt;span dir="ltr"&gt;a&lt;/span&gt;&lt;span dir="ltr"&gt;∨&lt;/span&gt;&lt;span dir="ltr"&gt;b&lt;/span&gt;&lt;span dir="ltr"&gt;¬&lt;/span&gt;&lt;span dir="ltr"&gt;b&lt;/span&gt;&lt;span dir="ltr"&gt;∨&lt;/span&gt;&lt;span dir="ltr"&gt;…&lt;/span&gt;&lt;span dir="ltr"&gt;∨&lt;/span&gt;&lt;span dir="ltr"&gt;z&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p&gt;In Datalog notation we write this Horn clause in the following syntax.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;u &lt;span dir="ltr"&gt;:-&lt;/span&gt; a&lt;span dir="ltr"&gt;,&lt;/span&gt; c&lt;span dir="ltr"&gt;,&lt;/span&gt; ...&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;z&lt;/span&gt;.&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;In clauses, free variables that occur inside of the conjoined expressions are implicitly universally quantified, i.e.&amp;nbsp;they are required to hold forall (denoted &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;∀&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;) substitutions of the variable in a domain.&lt;/p&gt;&lt;p&gt;So the datalog expression above&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;A&lt;/span&gt;(x&lt;span dir="ltr"&gt;,&lt;/span&gt;y) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;B&lt;/span&gt;(x&lt;span dir="ltr"&gt;,&lt;/span&gt;y).&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Is equivalent to the Horn clause.&lt;/p&gt;&lt;p&gt;&lt;span&gt;&lt;span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;∀&lt;/span&gt;&lt;span dir="ltr"&gt;x&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;∀&lt;/span&gt;&lt;span dir="ltr"&gt;y&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;¬&lt;/span&gt;&lt;span dir="ltr"&gt;B&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;x&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;y&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;∨&lt;/span&gt;&lt;span dir="ltr"&gt;A&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;x&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;y&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;So for example we know that Klingons and Humans both eat food, but obviously androids do not. We write the following rules over a variable term &lt;code dir="ltr"&gt;X&lt;/code&gt; of type symbol.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;Eats&lt;/span&gt;(x&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol)
-
-&lt;span dir="ltr"&gt;Eats&lt;/span&gt;(X) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;Human&lt;/span&gt;(X).
-&lt;span dir="ltr"&gt;Eats&lt;/span&gt;(X) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;Klingon&lt;/span&gt;(X).
-.&lt;span dir="ltr"&gt;output&lt;/span&gt; &lt;span dir="ltr"&gt;Eats&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Which produces the following output from the given set of input facts about the symbols in scope given the constraint on their species.&lt;/p&gt;&lt;th align="left"&gt;Eats&lt;/th&gt;&lt;td align="left"&gt;Riker&lt;/td&gt;&lt;td align="left"&gt;Picard&lt;/td&gt;&lt;td align="left"&gt;Worf&lt;/td&gt;&lt;p&gt;Terms can also be negated, for instance if we wanted to enumerate all officers that eat could write the following rule which excludes androids.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;InvitedToDinner&lt;/span&gt;(X) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;Rank&lt;/span&gt;(&lt;span dir="ltr"&gt;"Officer"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; X)&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;!&lt;/span&gt;&lt;span dir="ltr"&gt;Android&lt;/span&gt;(X).&lt;/code&gt;&lt;/PRE&gt;&lt;th align="left"&gt;InvitedToDinner&lt;/th&gt;&lt;td align="left"&gt;Riker&lt;/td&gt;&lt;td align="left"&gt;Worf&lt;/td&gt;&lt;p dir="ltr"&gt;A more complex rule can consist of multiple terms separated by command, all of which have to evaluate true. For example two officers are peers if they have same rank and are not the same person. We use an intermediate variable &lt;code dir="ltr"&gt;Z&lt;/code&gt; to test the equality of rank in this relation.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;Peers&lt;/span&gt;(x&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol&lt;span dir="ltr"&gt;,&lt;/span&gt; y&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol)
-&lt;span dir="ltr"&gt;Peers&lt;/span&gt;(X&lt;span dir="ltr"&gt;,&lt;/span&gt; Y) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;Rank&lt;/span&gt;(Z&lt;span dir="ltr"&gt;,&lt;/span&gt; X)&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;Rank&lt;/span&gt;(Z&lt;span dir="ltr"&gt;,&lt;/span&gt; Y)&lt;span dir="ltr"&gt;,&lt;/span&gt;  X &lt;span dir="ltr"&gt;!=&lt;/span&gt; &lt;span dir="ltr"&gt;Y&lt;/span&gt;.&lt;/code&gt;&lt;/PRE&gt;&lt;table dir="ltr"&gt;
-&lt;thead dir="ltr"&gt;
-&lt;tr class="header" dir="ltr"&gt;
-&lt;th align="left" dir="ltr"&gt;Peers&lt;/th&gt;
-&lt;th align="left" dir="ltr"&gt;&lt;/th&gt;
-&lt;/tr&gt;
-&lt;/thead&gt;
-&lt;tbody dir="ltr"&gt;
-&lt;tr class="odd" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;Riker&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;Worf&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr class="even" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;Riker&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;Data&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr class="odd" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;Worf&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;Riker&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr class="even" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;Worf&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;Data&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr class="odd" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;Data&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;Riker&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr class="even" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;Data&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;Worf&lt;/td&gt;
-&lt;/tr&gt;
-&lt;/tbody&gt;
-&lt;/table&gt;&lt;p&gt;Rules can also be recursive. For example we we wanted to write a query which found all first degree friend relations of a given set of facts we could write the following recursive definition.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;Friend&lt;/span&gt;(x&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol&lt;span dir="ltr"&gt;,&lt;/span&gt; y&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol)
-.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;FriendOfFriend&lt;/span&gt;(x&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol&lt;span dir="ltr"&gt;,&lt;/span&gt; y&lt;span dir="ltr"&gt;:&lt;/span&gt;symbol)
-
-&lt;span dir="ltr"&gt;FriendOfFriend&lt;/span&gt;(X&lt;span dir="ltr"&gt;,&lt;/span&gt; Y) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;Friend&lt;/span&gt;(X&lt;span dir="ltr"&gt;,&lt;/span&gt; Z)&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;FriendOfFriend&lt;/span&gt;(Z&lt;span dir="ltr"&gt;,&lt;/span&gt; Y).&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;An important class of relations are that of &lt;em dir="ltr"&gt;equivalence relations&lt;/em&gt;. These are relations between two terms that satisfy an additional set of constraints: &lt;em dir="ltr"&gt;reflexivity&lt;/em&gt;, &lt;em dir="ltr"&gt;symmetry&lt;/em&gt;, and &lt;em dir="ltr"&gt;transitivity&lt;/em&gt;. Relations of this form behave similar to how the equality symbol is treated in algebra.&lt;/p&gt;&lt;p&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;a&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;a&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;a&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;c&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;b&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;c&lt;/span&gt;&lt;span dir="ltr"&gt;⇒&lt;/span&gt;&lt;span dir="ltr"&gt;a&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;c&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;// every element of R1 is equivalent to every element of R2&lt;/span&gt;
-.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;equivalence&lt;/span&gt;(x&lt;span dir="ltr"&gt;:&lt;/span&gt;number&lt;span dir="ltr"&gt;,&lt;/span&gt; y&lt;span dir="ltr"&gt;:&lt;/span&gt;number)
-&lt;span dir="ltr"&gt;equivalence&lt;/span&gt;(a&lt;span dir="ltr"&gt;,&lt;/span&gt; b) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;R&lt;/span&gt;(a)&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;R&lt;/span&gt;(b).
-
-&lt;span dir="ltr"&gt;// reflexivity&lt;/span&gt;
-&lt;span dir="ltr"&gt;equivalence&lt;/span&gt;(a&lt;span dir="ltr"&gt;,&lt;/span&gt; a) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;equivalence&lt;/span&gt;(a&lt;span dir="ltr"&gt;,&lt;/span&gt; _).
-
-&lt;span dir="ltr"&gt;// symmetry&lt;/span&gt;
-&lt;span dir="ltr"&gt;equivalence&lt;/span&gt;(a&lt;span dir="ltr"&gt;,&lt;/span&gt; b) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;equivalence&lt;/span&gt;(b&lt;span dir="ltr"&gt;,&lt;/span&gt; a).
-
- &lt;span dir="ltr"&gt;// transitivity&lt;/span&gt;
-&lt;span dir="ltr"&gt;equivalence&lt;/span&gt;(a&lt;span dir="ltr"&gt;,&lt;/span&gt; c) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;equivalence&lt;/span&gt;(a&lt;span dir="ltr"&gt;,&lt;/span&gt; b)&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;equivalence&lt;/span&gt;(b&lt;span dir="ltr"&gt;,&lt;/span&gt; c).&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;In the implementation of the relation, the data and intermediary deductions are stored in a common B-tree data structure. However this can be modified by passing an explicit argument to force the use of a disjoint-set or trie data structure for specific uses cases.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt;(x &lt;span dir="ltr"&gt;:&lt;/span&gt; number&lt;span dir="ltr"&gt;,&lt;/span&gt; y &lt;span dir="ltr"&gt;:&lt;/span&gt; number) eqrel &lt;span dir="ltr"&gt;// Disjoint-set&lt;/span&gt;
-.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;B&lt;/span&gt;(x &lt;span dir="ltr"&gt;:&lt;/span&gt; number&lt;span dir="ltr"&gt;,&lt;/span&gt; y &lt;span dir="ltr"&gt;:&lt;/span&gt; symbol) btree &lt;span dir="ltr"&gt;// B-tree&lt;/span&gt;
-.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;C&lt;/span&gt;(x &lt;span dir="ltr"&gt;:&lt;/span&gt; number&lt;span dir="ltr"&gt;,&lt;/span&gt; y &lt;span dir="ltr"&gt;:&lt;/span&gt; symbol) brie  &lt;span dir="ltr"&gt;// Dense trie&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;When working with integral types (&lt;code dir="ltr"&gt;number&lt;/code&gt;, &lt;code dir="ltr"&gt;unsigned&lt;/code&gt; and &lt;code dir="ltr"&gt;float&lt;/code&gt;) arithmetic expressions behave as expected and can be pattern matched on. For example we can write the Fibonacci function as a relation in terms of itself.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;fib&lt;/span&gt;(&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;).
-&lt;span dir="ltr"&gt;fib&lt;/span&gt;(&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;1&lt;/span&gt;).
-&lt;span dir="ltr"&gt;fib&lt;/span&gt;(n&lt;span dir="ltr"&gt;+1&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; x&lt;span dir="ltr"&gt;+&lt;/span&gt;y) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;fib&lt;/span&gt;(n&lt;span dir="ltr"&gt;,&lt;/span&gt; x)&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;fib&lt;/span&gt;(n&lt;span dir="ltr"&gt;-1&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; y)&lt;span dir="ltr"&gt;,&lt;/span&gt; n &lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt; &lt;span dir="ltr"&gt;15&lt;/span&gt;.&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This generates the following output facts.&lt;/p&gt;&lt;table dir="ltr"&gt;
-&lt;thead dir="ltr"&gt;
-&lt;tr class="header" dir="ltr"&gt;
-&lt;th align="left" dir="ltr"&gt;fib&lt;/th&gt;
-&lt;th align="left" dir="ltr"&gt;&lt;/th&gt;
-&lt;/tr&gt;
-&lt;/thead&gt;
-&lt;tbody dir="ltr"&gt;
-&lt;tr class="odd" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;0&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;0&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr class="even" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;1&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;1&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr class="odd" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;2&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;1&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr class="even" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;3&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;2&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr class="odd" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;4&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;3&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr class="even" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;5&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;5&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr class="odd" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;6&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;8&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr class="even" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;7&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;13&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr class="odd" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;8&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;21&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr class="even" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;9&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;34&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr class="odd" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;10&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;55&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr class="even" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;11&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;89&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr class="odd" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;12&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;14&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr class="even" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;13&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;233&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr class="odd" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;14&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;377&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr class="even" dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;15&lt;/td&gt;
-&lt;td align="left" dir="ltr"&gt;610&lt;/td&gt;
-&lt;/tr&gt;
-&lt;/tbody&gt;
-&lt;/table&gt;&lt;h4&gt;Type System&lt;/h4&gt;&lt;p dir="ltr"&gt;Souffle has a limited type system that can be used to track the types of variables quantified in clause expressions. For example one cannot have a variable which simultaneously holds a symbol and unsigned integer. We can however define custom &lt;em dir="ltr"&gt;type synonyms&lt;/em&gt; on top of the ground types of the languages that will let us semantically distinguish different user-defined types of symbols and numeric quantities. For example:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;Person&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;:&lt;/span&gt; symbol
-.&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;Food&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;:&lt;/span&gt; symbol
-
-.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;Eats&lt;/span&gt;(x &lt;span dir="ltr"&gt;:&lt;/span&gt; Person&lt;span dir="ltr"&gt;,&lt;/span&gt; y &lt;span dir="ltr"&gt;:&lt;/span&gt; Food)
-.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;Dinner&lt;/span&gt;(x &lt;span dir="ltr"&gt;:&lt;/span&gt; Person&lt;span dir="ltr"&gt;,&lt;/span&gt; y &lt;span dir="ltr"&gt;:&lt;/span&gt; Food)
-
-&lt;span dir="ltr"&gt;Dinner&lt;/span&gt;(x&lt;span dir="ltr"&gt;,&lt;/span&gt; y) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;Eats&lt;/span&gt;(x&lt;span dir="ltr"&gt;,&lt;/span&gt; y). &lt;span dir="ltr"&gt;// Well-typed&lt;/span&gt;
-&lt;span dir="ltr"&gt;Dinner&lt;/span&gt;(x&lt;span dir="ltr"&gt;,&lt;/span&gt; y) &lt;span dir="ltr"&gt;:-&lt;/span&gt; &lt;span dir="ltr"&gt;Eats&lt;/span&gt;(y&lt;span dir="ltr"&gt;,&lt;/span&gt; x). &lt;span dir="ltr"&gt;// Not well-typed, Person != Food&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Unions of type synonyms are also permitted so long as the underlying types of the synonyms are equivalent.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;A&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;:&lt;/span&gt; number
-.&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;B&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;:&lt;/span&gt; number
-.&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;C&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; A &lt;span dir="ltr"&gt;|&lt;/span&gt; B    &lt;span dir="ltr"&gt;// Either in A or B&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The language also has the ability to define both &lt;em dir="ltr"&gt;sum&lt;/em&gt; and &lt;em dir="ltr"&gt;product&lt;/em&gt; types which let us both options and records as terms in our clauses.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;.&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;Sum&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; A &lt;span dir="ltr"&gt;{&lt;/span&gt; &lt;span dir="ltr"&gt;x&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt; number &lt;span dir="ltr"&gt;}&lt;/span&gt; &lt;span dir="ltr"&gt;|&lt;/span&gt; B &lt;span dir="ltr"&gt;{&lt;/span&gt; &lt;span dir="ltr"&gt;x&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt; symbol &lt;span dir="ltr"&gt;}&lt;/span&gt;
-.&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;Prod&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; C &lt;span dir="ltr"&gt;{&lt;/span&gt; &lt;span dir="ltr"&gt;x&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt; number&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;y &lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt; symbol &lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;For example we could build a linked list (or cons list) out of a product type which has both a head element and a tail element.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;// Linked list&lt;/span&gt;
-.&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;List&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; [ head &lt;span dir="ltr"&gt;:&lt;/span&gt; number&lt;span dir="ltr"&gt;,&lt;/span&gt; tail &lt;span dir="ltr"&gt;:&lt;/span&gt; List ]
-.&lt;span dir="ltr"&gt;decl&lt;/span&gt; &lt;span dir="ltr"&gt;MyList&lt;/span&gt;(x &lt;span dir="ltr"&gt;:&lt;/span&gt; List)
-
-&lt;span dir="ltr"&gt;MyList&lt;/span&gt;( [&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; [&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; nil]] ).&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Logic programming is a very natural way of expressing abstract program semantics and with tools like Souffle we have excellent logic engine that can be embedded in other static analysis applications to collect facts about code and deduce implications about code composition and usage. This a powerful technique and future static analysis tools are going to yield whole new ways of reasoning about and synthesising code in the future.&lt;/p&gt;</description><pubDate>Sat, 05 Dec 2020 06:39:55 -0600</pubDate></item><item><title>The future of 32-bit Linux</title><link>https://lobste.rs/s/p82wtw</link><description>&lt;h1&gt;The future of 32-bit Linux&lt;/h1&gt;&lt;h2&gt;[LWN subscriber-only content]&lt;/h2&gt;&lt;h3&gt;Welcome to LWN.net&lt;/h3&gt;&lt;p&gt;
+  for the current work on pattern matching in C++.&amp;nbsp;&lt;a href="https://bitbashing.io/std-visit.html#fnref:2" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Sat, 05 Dec 2020 09:13:17 -0600</pubDate></item><item><title>Dyalog Modern Programming Language (2015)</title><link>https://www.youtube.com/watch?v=PlM9BXfu7UY</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/elijdt/dyalog_modern_programming_language_2015"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sat, 05 Dec 2020 20:23:07 -0600</pubDate></item><item><title>The future of 32-bit Linux</title><link>https://lobste.rs/s/p82wtw</link><description>&lt;h1&gt;The future of 32-bit Linux&lt;/h1&gt;&lt;h2&gt;[LWN subscriber-only content]&lt;/h2&gt;&lt;h3&gt;Welcome to LWN.net&lt;/h3&gt;&lt;p&gt;
 The following subscription-only content has been made available to you 
 by an LWN subscriber.  Thousands of subscribers depend on LWN for the 
 best news from the Linux and free software communities.  If you enjoy this 
@@ -3077,7 +3077,7 @@ for whatever reason you need to use separate ports for nodes, then &lt;a href="h
 is an option to replace EPMD and track the node to port mapping. But if you are
 running with containers in an environment like Kubernetes you can now keep EPMD
 from running in each container by simply upgrading Erlang and Rebar3, and
-setting the &lt;code dir="ltr"&gt;ERL_DIST_PORT&lt;/code&gt; environment variable.&lt;/p&gt;&lt;img src="https://blog.erlware.org/img/avatar.jpeg" alt="Author" width="60" height="60"&gt;</description><pubDate>Sat, 05 Dec 2020 13:31:01 -0600</pubDate></item><item><title>Dyalog Modern Programming Language (2015)</title><link>https://www.youtube.com/watch?v=PlM9BXfu7UY</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/elijdt/dyalog_modern_programming_language_2015"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sat, 05 Dec 2020 20:23:07 -0600</pubDate></item><item><title>Announcing LAMBDA: Turn Excel formulas into custom functions</title><link>https://lobste.rs/s/pb2bzi</link><description>&lt;div aria-label="Posted on" dir="ltr"&gt;
+setting the &lt;code dir="ltr"&gt;ERL_DIST_PORT&lt;/code&gt; environment variable.&lt;/p&gt;&lt;img src="https://blog.erlware.org/img/avatar.jpeg" alt="Author" width="60" height="60"&gt;</description><pubDate>Sat, 05 Dec 2020 13:31:01 -0600</pubDate></item><item><title>Announcing LAMBDA: Turn Excel formulas into custom functions</title><link>https://lobste.rs/s/pb2bzi</link><description>&lt;div aria-label="Posted on" dir="ltr"&gt;
 			&lt;span dir="ltr"&gt;
     
 
