@@ -371,94 +371,7 @@ ts.09ccd856-c12e-4228-acf6-a19af826be77.cache.token.https://whiteboard.microsoft
 &lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Potentially sensitive cookies available from JavaScript:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;sessionId
 TSAUTHCOOKIE
 SSOAUTHCOOKIE 
-&lt;/code&gt;&lt;/PRE&gt;</description><pubDate>Mon, 07 Dec 2020 12:45:28 -0600</pubDate></item><item><title>A decade of IRC usage, visualized</title><link>https://twitter.com/leahneukirchen/status/1335669406588923905</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/hboeju/decade_irc_usage_visualized"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 06 Dec 2020 14:46:02 -0600</pubDate></item><item><title>Why does CreateWindowEx take the extended style parameter as its first parameter instead of its last?</title><link>https://lobste.rs/s/w9ttfz</link><description>&lt;img src="https://devblogs.microsoft.com/oldnewthing/wp-content/uploads/sites/38/2019/02/RaymondChen_5in-150x150.jpg" width="58" height="58" alt="Raymond Chen"&gt;&lt;p&gt;Raymond&lt;/p&gt;&lt;p&gt;December 7th, 2020&lt;/p&gt;&lt;p dir="ltr"&gt;Windows 3.0 expanded the &lt;code dir="ltr"&gt;Create­Window&lt;/code&gt; function by adding a new extended style parameter, resulting in the &lt;code dir="ltr"&gt;Create­Window­Ex&lt;/code&gt; function. You would expect that the new parameter would go at the end of the parameter list, but that’s not where it ended up. Instead, it became a bonus &lt;i dir="ltr"&gt;first&lt;/i&gt; parameter.&lt;/p&gt;&lt;PRE&gt;CreateWindow(
-
-   lpszClass,
-   lpszName,
-   dwStyle,
-   x,
-   y,
-   cx,
-   cy,
-   hwndParent,
-   hMenu,
-   hInstance,
-   lpCreateParams
-);
-&lt;/PRE&gt;&lt;PRE&gt;CreateWindowEx(
-   dwExStyle,
-   lpszClass,
-   lpszName,
-   dwStyle,
-   x,
-   y,
-   cx,
-   cy,
-   hwndParent,
-   hMenu,
-   hInstance,
-   lpCreateParams
-);
-&lt;/PRE&gt;&lt;p&gt;Why did the extra parameter go at the start rather than at the end?&lt;/p&gt;&lt;p dir="ltr"&gt;If you’re familiar with the &lt;code dir="ltr"&gt;__stdcall&lt;/code&gt; calling convention, you would know that the parameters are pushed onto the stack from right to left. Adding a new parameter to the front would therefore permit the old function to forward to the new function by inserting an extra parameter on the stack:&lt;/p&gt;&lt;PRE&gt;CreateWindow:
-    pop     eax             ; pop return address
-    push    0               ; dwExStyle
-    push    eax             ; restore return address
-    jmp     CreateWindowEx  ; continue as if CreateWindowEx
-&lt;/PRE&gt;&lt;p&gt;However, this theory doesn’t hold up because Windows 3.0 used the 16-bit Pascal calling convention, which pushes parameters from left to right.&lt;/p&gt;&lt;p&gt;But you’re close. The calling convention does play a role.&lt;/p&gt;&lt;p dir="ltr"&gt;The other half of the puzzle is the in the &lt;code dir="ltr"&gt;lParam&lt;/code&gt; of the &lt;code dir="ltr"&gt;WM_NCCREATE&lt;/code&gt; and &lt;code dir="ltr"&gt;WM_CREATE&lt;/code&gt; messages. That parameter is a pointer to a &lt;code dir="ltr"&gt;CREATESTRUCT&lt;/code&gt; structure, which originally looked like this:&lt;/p&gt;&lt;PRE&gt;struct tagCREATESTRUCT {
-  LPVOID    lpCreateParams;
-  HINSTANCE hInstance;
-  HMENU     hMenu;
-  HWND      hwndParent;
-  int       cy;
-  int       cx;
-  int       y;
-  int       x;
-  LONG      style;
-  LPCSTR    lpszName;
-  LPCSTR    lpszClass;
-} CREATESTRUCT;
-&lt;/PRE&gt;&lt;p&gt;Look familiar?&lt;/p&gt;&lt;p dir="ltr"&gt;It’s the parameter list of the &lt;code dir="ltr"&gt;Create­Window&lt;/code&gt; function, but &lt;i dir="ltr"&gt;backward&lt;/i&gt;.&lt;/p&gt;&lt;p&gt;Why is it backward?&lt;/p&gt;&lt;p&gt;Since the Pascal calling convention pushes parameters from left to right, it means that the first parameter has the highest address, and the last parameter has the lowest address. If you take all the parameters and treat them as a structure, they end up in reverse order.&lt;/p&gt;&lt;p&gt;And that’s the missing link.&lt;/p&gt;&lt;p dir="ltr"&gt;Back in the days of 16-bit Windows, the &lt;code dir="ltr"&gt;CREATESTRUCT&lt;/code&gt; that was passed to the &lt;code dir="ltr"&gt;WM_NCCREATE&lt;/code&gt; and &lt;code dir="ltr"&gt;WM_CREATE&lt;/code&gt; messages was just a pointer to the “structure” on the stack formed by all of the parameters.&lt;/p&gt;&lt;p dir="ltr"&gt;For backward compatibility, the new &lt;code dir="ltr"&gt;dwExStyle&lt;/code&gt; structure member needs to go to the end, so that old code which understood the old structure would have all the old data at the old offsets.&lt;/p&gt;&lt;PRE&gt;struct tagCREATESTRUCT {
-  LPVOID    lpCreateParams;
-  HINSTANCE hInstance;
-  HMENU     hMenu;
-  HWND      hwndParent;
-  int       cy;
-  int       cx;
-  int       y;
-  int       x;
-  LONG      style;
-  LPCSTR    lpszName;
-  LPCSTR    lpszClass;
-  DWORD     dwExStyle; // Now with extended style support!
-} CREATESTRUCT;
-&lt;/PRE&gt;&lt;p&gt;Backward compatibility dictates that the new structure member goes at the end, which means that the corresponding new parameter must go at the beginning.&lt;/p&gt;&lt;p&gt;It’s another example of the lengths that 16-bit Windows went in order to run in a very memory-constrained system.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;Bonus chatter&lt;/b&gt;: This means that converting a classic &lt;code dir="ltr"&gt;Create­Window&lt;/code&gt; to the new &lt;code dir="ltr"&gt;Create­Window­Ex&lt;/code&gt; is not a simply matter of inserting a new parameter under the return address. The return address plus all of the existing parameters need to be popped off, the new parameter inserted, and then all the parameters and return address pushed back on. Alternatively, the code could simply have pushed another frame onto the stack:&lt;/p&gt;&lt;PRE&gt;HWND CreateWindow(
-   LPCSTR lpszClass,
-   LPCSTR lpszName,
-   DWORD dwStyle,
-   int x,
-   int y,
-   int cx,
-   int cy,
-   HWND hwndParent,
-   HMENU hMenu,
-   HINSTANCE hInstance,
-   LPVOID lpCreateParams)
-{
-  return CreateWindowEx(
-   0,
-   lpszClass,
-   lpszName,
-   dwStyle,
-   x,
-   y,
-   cx,
-   cy,
-   hwndParent,
-   hMenu,
-   hInstance,
-   lpCreateParams);
-}
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;The code chose to do the “pop, insert, push” because the C wrapper function to push a new frame was 59 bytes long, whereas the pop/insert/push mechanism, written in hand-tuned assembly, was faster and consumed &lt;a href="https://devblogs.microsoft.com/oldnewthing/20190827-00/?p=102809" dir="ltr"&gt; only 32 bytes&lt;/a&gt;.&lt;/p&gt;&lt;img src="https://devblogs.microsoft.com/oldnewthing/wp-content/uploads/sites/38/2019/02/RaymondChen_5in-150x150.jpg" width="60" height="60" alt="Raymond Chen"&gt;</description><pubDate>Mon, 07 Dec 2020 21:26:18 -0600</pubDate></item><item><title>Monads and GATs in nightly Rust</title><link>https://lobste.rs/s/baxe8l</link><description>&lt;h3&gt;By Michael Snoyman, December  7, 2020&lt;/h3&gt;&lt;p dir="ltr"&gt;This blog post was entirely inspired by reading the &lt;a href="https://www.reddit.com/r/rust/comments/k4vzvp/gats_on_nightly/" dir="ltr"&gt;GATs on Nightly!&lt;/a&gt; Reddit post by /u/C5H5N5O. I just decided to take things a little bit too far, and thought a blog post on it would be fun. I want to be clear from the start: I'm introducing some advanced concepts in this post that rely on unstable features in Rust. I'm not advocating their usage &lt;em dir="ltr"&gt;at all&lt;/em&gt;. I'm just exploring what may and may not be possible with GATs.&lt;/p&gt;&lt;p&gt;Rust shares many similarities with Haskell at the type system level. Both have types, generic types, associated types, and traits/type classes (which are basically equivalent). However, Haskell has one important additional feature that is lacking in Rust: Higher Kinded Types (HKTs). This isn't an accidental limitation in Rust, or some gap that should be filled in. It's an intentional design decision, at least as far as I know. But as a result, some things until now can't really be implemented in Rust.&lt;/p&gt;&lt;p dir="ltr"&gt;Take, for instance, a &lt;code dir="ltr"&gt;Functor&lt;/code&gt; in Haskell. For all of its scary sounding name, almost all developers today are familiar with the concept of a &lt;code dir="ltr"&gt;Functor&lt;/code&gt;. A &lt;code dir="ltr"&gt;Functor&lt;/code&gt; provides a general purpose interface for "map a function over this structure." Many different structures in Rust can provide such mapping functionality, including &lt;code dir="ltr"&gt;Option&lt;/code&gt;, &lt;code dir="ltr"&gt;Result&lt;/code&gt;, &lt;code dir="ltr"&gt;Iterator&lt;/code&gt;, and &lt;code dir="ltr"&gt;Future&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;However, it hasn't been possible to write a general purpose &lt;code dir="ltr"&gt;Functor&lt;/code&gt; trait that can be implemented by multiple types. Instead, individual types can implement them as methods on that type. For example, we can write our own custom &lt;code dir="ltr"&gt;MyOption&lt;/code&gt; and &lt;code dir="ltr"&gt;MyResult&lt;/code&gt; enums and provide &lt;code dir="ltr"&gt;map&lt;/code&gt; methods:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#[&lt;/span&gt;&lt;span dir="ltr"&gt;derive&lt;/span&gt;&lt;span dir="ltr"&gt;(Debug, PartialEq)]
+&lt;/code&gt;&lt;/PRE&gt;</description><pubDate>Mon, 07 Dec 2020 12:45:28 -0600</pubDate></item><item><title>A decade of IRC usage, visualized</title><link>https://twitter.com/leahneukirchen/status/1335669406588923905</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/hboeju/decade_irc_usage_visualized"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sun, 06 Dec 2020 14:46:02 -0600</pubDate></item><item><title>Monads and GATs in nightly Rust</title><link>https://lobste.rs/s/baxe8l</link><description>&lt;h3&gt;By Michael Snoyman, December  7, 2020&lt;/h3&gt;&lt;p dir="ltr"&gt;This blog post was entirely inspired by reading the &lt;a href="https://www.reddit.com/r/rust/comments/k4vzvp/gats_on_nightly/" dir="ltr"&gt;GATs on Nightly!&lt;/a&gt; Reddit post by /u/C5H5N5O. I just decided to take things a little bit too far, and thought a blog post on it would be fun. I want to be clear from the start: I'm introducing some advanced concepts in this post that rely on unstable features in Rust. I'm not advocating their usage &lt;em dir="ltr"&gt;at all&lt;/em&gt;. I'm just exploring what may and may not be possible with GATs.&lt;/p&gt;&lt;p&gt;Rust shares many similarities with Haskell at the type system level. Both have types, generic types, associated types, and traits/type classes (which are basically equivalent). However, Haskell has one important additional feature that is lacking in Rust: Higher Kinded Types (HKTs). This isn't an accidental limitation in Rust, or some gap that should be filled in. It's an intentional design decision, at least as far as I know. But as a result, some things until now can't really be implemented in Rust.&lt;/p&gt;&lt;p dir="ltr"&gt;Take, for instance, a &lt;code dir="ltr"&gt;Functor&lt;/code&gt; in Haskell. For all of its scary sounding name, almost all developers today are familiar with the concept of a &lt;code dir="ltr"&gt;Functor&lt;/code&gt;. A &lt;code dir="ltr"&gt;Functor&lt;/code&gt; provides a general purpose interface for "map a function over this structure." Many different structures in Rust can provide such mapping functionality, including &lt;code dir="ltr"&gt;Option&lt;/code&gt;, &lt;code dir="ltr"&gt;Result&lt;/code&gt;, &lt;code dir="ltr"&gt;Iterator&lt;/code&gt;, and &lt;code dir="ltr"&gt;Future&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;However, it hasn't been possible to write a general purpose &lt;code dir="ltr"&gt;Functor&lt;/code&gt; trait that can be implemented by multiple types. Instead, individual types can implement them as methods on that type. For example, we can write our own custom &lt;code dir="ltr"&gt;MyOption&lt;/code&gt; and &lt;code dir="ltr"&gt;MyResult&lt;/code&gt; enums and provide &lt;code dir="ltr"&gt;map&lt;/code&gt; methods:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#[&lt;/span&gt;&lt;span dir="ltr"&gt;derive&lt;/span&gt;&lt;span dir="ltr"&gt;(Debug, PartialEq)]
 &lt;/span&gt;&lt;span dir="ltr"&gt;enum &lt;/span&gt;&lt;span dir="ltr"&gt;MyOption&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;A&amp;gt; {
     &lt;/span&gt;&lt;span dir="ltr"&gt;Some&lt;/span&gt;&lt;span dir="ltr"&gt;(A),
     &lt;/span&gt;&lt;span dir="ltr"&gt;None&lt;/span&gt;&lt;span dir="ltr"&gt;,
@@ -837,7 +750,94 @@ help: consider further restricting this bound
   &lt;a href="https://www.reddit.com/submit?url=https%3A//www.fpcomplete.com/blog/monads-gats-nightly-rust/" title="Share on Reddit" dir="ltr"&gt;
     
   &lt;/a&gt;
-&lt;/p&gt;&lt;img alt="Fp Complete White logo" src="https://www.fpcomplete.com/images/FPC_Logo_Straight_coral-white.png" width="182" height="46"&gt;</description><pubDate>Mon, 07 Dec 2020 19:05:12 -0600</pubDate></item><item><title>Underlay - The world’s distributed knowledge graph</title><link>https://lobste.rs/s/toc0px</link><description>&lt;p&gt;The Underlay's purpose is to make knowledge accessible, connectable, and inspectable in service of the public good. Like the web, it is an emergent system and concept. It is built on a set of open source protocols and tools for structuring, storing, and aggregating distributed graph data.&lt;/p&gt;&lt;h2&gt;How it Works&lt;/h2&gt;&lt;p dir="ltr"&gt;The Underlay is premised on the idea that a knowledge graph can be constructed from a series of distributed transactions called &lt;b dir="ltr"&gt;assertions&lt;/b&gt;. Multiple assertions are combined through a process called &lt;b dir="ltr"&gt;reduction&lt;/b&gt; and can be curated into useful groupings using &lt;b dir="ltr"&gt;collections&lt;/b&gt;.&lt;/p&gt;&lt;img src="https://www.underlay.org/assertions.svg" alt="Assertions" width="100" height="100"&gt;&lt;div&gt;Assertions&lt;/div&gt;&lt;div&gt;The fundamental unit of data in the Underlay. Immutable statements that can specify their provenance and be cryptographically signed to allow for trust- and context-based filtering.&lt;/div&gt;</description><pubDate>Mon, 07 Dec 2020 13:15:18 -0600</pubDate></item><item><title>An Initial Report on a LISP Programmer's Apprentice (1976)</title><link>http://www.lord-enki.net/AITR-354.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/cdrilf/initial_report_on_lisp_programmer_s"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Mon, 07 Dec 2020 17:22:56 -0600</pubDate></item><item><title>I've packaged up Gnash as a snap, for modern linux</title><link>https://lobste.rs/s/dykm2t</link><description>&lt;p dir="ltr"&gt;&lt;a href="https://raymii.org/s/blog/Ubuntu_Snap_auto_updates_broke_my_development_setup.html" dir="ltr"&gt;I hate snaps just as much as the next guy&lt;/a&gt; but last week I did something
+&lt;/p&gt;&lt;img alt="Fp Complete White logo" src="https://www.fpcomplete.com/images/FPC_Logo_Straight_coral-white.png" width="182" height="46"&gt;</description><pubDate>Mon, 07 Dec 2020 19:05:12 -0600</pubDate></item><item><title>Why does CreateWindowEx take the extended style parameter as its first parameter instead of its last?</title><link>https://lobste.rs/s/w9ttfz</link><description>&lt;img src="https://devblogs.microsoft.com/oldnewthing/wp-content/uploads/sites/38/2019/02/RaymondChen_5in-150x150.jpg" width="58" height="58" alt="Raymond Chen"&gt;&lt;p&gt;Raymond&lt;/p&gt;&lt;p&gt;December 7th, 2020&lt;/p&gt;&lt;p dir="ltr"&gt;Windows 3.0 expanded the &lt;code dir="ltr"&gt;Create­Window&lt;/code&gt; function by adding a new extended style parameter, resulting in the &lt;code dir="ltr"&gt;Create­Window­Ex&lt;/code&gt; function. You would expect that the new parameter would go at the end of the parameter list, but that’s not where it ended up. Instead, it became a bonus &lt;i dir="ltr"&gt;first&lt;/i&gt; parameter.&lt;/p&gt;&lt;PRE&gt;CreateWindow(
+
+   lpszClass,
+   lpszName,
+   dwStyle,
+   x,
+   y,
+   cx,
+   cy,
+   hwndParent,
+   hMenu,
+   hInstance,
+   lpCreateParams
+);
+&lt;/PRE&gt;&lt;PRE&gt;CreateWindowEx(
+   dwExStyle,
+   lpszClass,
+   lpszName,
+   dwStyle,
+   x,
+   y,
+   cx,
+   cy,
+   hwndParent,
+   hMenu,
+   hInstance,
+   lpCreateParams
+);
+&lt;/PRE&gt;&lt;p&gt;Why did the extra parameter go at the start rather than at the end?&lt;/p&gt;&lt;p dir="ltr"&gt;If you’re familiar with the &lt;code dir="ltr"&gt;__stdcall&lt;/code&gt; calling convention, you would know that the parameters are pushed onto the stack from right to left. Adding a new parameter to the front would therefore permit the old function to forward to the new function by inserting an extra parameter on the stack:&lt;/p&gt;&lt;PRE&gt;CreateWindow:
+    pop     eax             ; pop return address
+    push    0               ; dwExStyle
+    push    eax             ; restore return address
+    jmp     CreateWindowEx  ; continue as if CreateWindowEx
+&lt;/PRE&gt;&lt;p&gt;However, this theory doesn’t hold up because Windows 3.0 used the 16-bit Pascal calling convention, which pushes parameters from left to right.&lt;/p&gt;&lt;p&gt;But you’re close. The calling convention does play a role.&lt;/p&gt;&lt;p dir="ltr"&gt;The other half of the puzzle is the in the &lt;code dir="ltr"&gt;lParam&lt;/code&gt; of the &lt;code dir="ltr"&gt;WM_NCCREATE&lt;/code&gt; and &lt;code dir="ltr"&gt;WM_CREATE&lt;/code&gt; messages. That parameter is a pointer to a &lt;code dir="ltr"&gt;CREATESTRUCT&lt;/code&gt; structure, which originally looked like this:&lt;/p&gt;&lt;PRE&gt;struct tagCREATESTRUCT {
+  LPVOID    lpCreateParams;
+  HINSTANCE hInstance;
+  HMENU     hMenu;
+  HWND      hwndParent;
+  int       cy;
+  int       cx;
+  int       y;
+  int       x;
+  LONG      style;
+  LPCSTR    lpszName;
+  LPCSTR    lpszClass;
+} CREATESTRUCT;
+&lt;/PRE&gt;&lt;p&gt;Look familiar?&lt;/p&gt;&lt;p dir="ltr"&gt;It’s the parameter list of the &lt;code dir="ltr"&gt;Create­Window&lt;/code&gt; function, but &lt;i dir="ltr"&gt;backward&lt;/i&gt;.&lt;/p&gt;&lt;p&gt;Why is it backward?&lt;/p&gt;&lt;p&gt;Since the Pascal calling convention pushes parameters from left to right, it means that the first parameter has the highest address, and the last parameter has the lowest address. If you take all the parameters and treat them as a structure, they end up in reverse order.&lt;/p&gt;&lt;p&gt;And that’s the missing link.&lt;/p&gt;&lt;p dir="ltr"&gt;Back in the days of 16-bit Windows, the &lt;code dir="ltr"&gt;CREATESTRUCT&lt;/code&gt; that was passed to the &lt;code dir="ltr"&gt;WM_NCCREATE&lt;/code&gt; and &lt;code dir="ltr"&gt;WM_CREATE&lt;/code&gt; messages was just a pointer to the “structure” on the stack formed by all of the parameters.&lt;/p&gt;&lt;p dir="ltr"&gt;For backward compatibility, the new &lt;code dir="ltr"&gt;dwExStyle&lt;/code&gt; structure member needs to go to the end, so that old code which understood the old structure would have all the old data at the old offsets.&lt;/p&gt;&lt;PRE&gt;struct tagCREATESTRUCT {
+  LPVOID    lpCreateParams;
+  HINSTANCE hInstance;
+  HMENU     hMenu;
+  HWND      hwndParent;
+  int       cy;
+  int       cx;
+  int       y;
+  int       x;
+  LONG      style;
+  LPCSTR    lpszName;
+  LPCSTR    lpszClass;
+  DWORD     dwExStyle; // Now with extended style support!
+} CREATESTRUCT;
+&lt;/PRE&gt;&lt;p&gt;Backward compatibility dictates that the new structure member goes at the end, which means that the corresponding new parameter must go at the beginning.&lt;/p&gt;&lt;p&gt;It’s another example of the lengths that 16-bit Windows went in order to run in a very memory-constrained system.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;Bonus chatter&lt;/b&gt;: This means that converting a classic &lt;code dir="ltr"&gt;Create­Window&lt;/code&gt; to the new &lt;code dir="ltr"&gt;Create­Window­Ex&lt;/code&gt; is not a simply matter of inserting a new parameter under the return address. The return address plus all of the existing parameters need to be popped off, the new parameter inserted, and then all the parameters and return address pushed back on. Alternatively, the code could simply have pushed another frame onto the stack:&lt;/p&gt;&lt;PRE&gt;HWND CreateWindow(
+   LPCSTR lpszClass,
+   LPCSTR lpszName,
+   DWORD dwStyle,
+   int x,
+   int y,
+   int cx,
+   int cy,
+   HWND hwndParent,
+   HMENU hMenu,
+   HINSTANCE hInstance,
+   LPVOID lpCreateParams)
+{
+  return CreateWindowEx(
+   0,
+   lpszClass,
+   lpszName,
+   dwStyle,
+   x,
+   y,
+   cx,
+   cy,
+   hwndParent,
+   hMenu,
+   hInstance,
+   lpCreateParams);
+}
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;The code chose to do the “pop, insert, push” because the C wrapper function to push a new frame was 59 bytes long, whereas the pop/insert/push mechanism, written in hand-tuned assembly, was faster and consumed &lt;a href="https://devblogs.microsoft.com/oldnewthing/20190827-00/?p=102809" dir="ltr"&gt; only 32 bytes&lt;/a&gt;.&lt;/p&gt;&lt;img src="https://devblogs.microsoft.com/oldnewthing/wp-content/uploads/sites/38/2019/02/RaymondChen_5in-150x150.jpg" width="60" height="60" alt="Raymond Chen"&gt;</description><pubDate>Mon, 07 Dec 2020 21:26:18 -0600</pubDate></item><item><title>An Initial Report on a LISP Programmer's Apprentice (1976)</title><link>http://www.lord-enki.net/AITR-354.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/cdrilf/initial_report_on_lisp_programmer_s"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Mon, 07 Dec 2020 17:22:56 -0600</pubDate></item><item><title>Underlay - The world’s distributed knowledge graph</title><link>https://lobste.rs/s/toc0px</link><description>&lt;p&gt;The Underlay's purpose is to make knowledge accessible, connectable, and inspectable in service of the public good. Like the web, it is an emergent system and concept. It is built on a set of open source protocols and tools for structuring, storing, and aggregating distributed graph data.&lt;/p&gt;&lt;h2&gt;How it Works&lt;/h2&gt;&lt;p dir="ltr"&gt;The Underlay is premised on the idea that a knowledge graph can be constructed from a series of distributed transactions called &lt;b dir="ltr"&gt;assertions&lt;/b&gt;. Multiple assertions are combined through a process called &lt;b dir="ltr"&gt;reduction&lt;/b&gt; and can be curated into useful groupings using &lt;b dir="ltr"&gt;collections&lt;/b&gt;.&lt;/p&gt;&lt;img src="https://www.underlay.org/assertions.svg" alt="Assertions" width="100" height="100"&gt;&lt;div&gt;Assertions&lt;/div&gt;&lt;div&gt;The fundamental unit of data in the Underlay. Immutable statements that can specify their provenance and be cryptographically signed to allow for trust- and context-based filtering.&lt;/div&gt;</description><pubDate>Mon, 07 Dec 2020 13:15:18 -0600</pubDate></item><item><title>I've packaged up Gnash as a snap, for modern linux</title><link>https://lobste.rs/s/dykm2t</link><description>&lt;p dir="ltr"&gt;&lt;a href="https://raymii.org/s/blog/Ubuntu_Snap_auto_updates_broke_my_development_setup.html" dir="ltr"&gt;I hate snaps just as much as the next guy&lt;/a&gt; but last week I did something
 unexpected. I &lt;a href="https://snapcraft.io/gnash-raymii" dir="ltr"&gt;packaged up Gnash as a snap&lt;/a&gt;.  Gnash is a GNU flash media 
 player, not updated since 2011, and  thus removed from the Ubuntu 20.04
 repositories. The snap packaging is based on work by &lt;a href="http://web.archive.org/web/20201207100511/https://philroche.net/2020/10/08/using-snaps-to-package-old-software/" dir="ltr"&gt;phil roche&lt;/a&gt;, he wrote
