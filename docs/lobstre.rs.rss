@@ -83,7 +83,135 @@ That chipset has a fan which does not play along with the fan-less-ness of the m
 	The BSTB3-PC is definitely on the edge of the DB4 thermal frontier but it works reliably. I have been using it to browse the web, write this article, VC, program, and &lt;strike dir="ltr"&gt;play&lt;/strike&gt; lose at Starcraft 2 without issues so far.&lt;br dir="ltr"&gt;
 &lt;/p&gt;&lt;picture&gt;&lt;source srcset="https://fabiensanglard.net/tb3/result.webp" type="image/webp"&gt;&lt;img src="https://fabiensanglard.net/tb3/result.jpg" width="461" height="263"&gt;&lt;/picture&gt;&lt;p&gt;&lt;span&gt;&lt;i&gt;&lt;small&gt;The Beautiful Thunderbolt-3 Silent PC&lt;/small&gt;&lt;/i&gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;
 Ironically, as I finished putting it together, Apple announced a fanless M1 Macbook Air which would have performed just as well, if not better. Nonetheless, I am proud of the result. It is a damn good looking silent computer. And this one is "Designed in Sunnyvale" baby!&lt;br dir="ltr"&gt;
-&lt;/p&gt;&lt;div&gt;&lt;b&gt;References&lt;/b&gt;&lt;/div&gt;</description><pubDate>Wed, 23 Dec 2020 06:32:49 -0600</pubDate></item><item><title>Why can’t you buy a good webcam?</title><link>https://lobste.rs/s/hmwpil</link><description>&lt;div&gt;
+&lt;/p&gt;&lt;div&gt;&lt;b&gt;References&lt;/b&gt;&lt;/div&gt;</description><pubDate>Wed, 23 Dec 2020 06:32:49 -0600</pubDate></item><item><title>Deploying Gitea on NixOS (Git self-hosting)</title><link>https://lobste.rs/s/d6i0pj</link><description>&lt;h1&gt;Deploying Gitea on NixOS&lt;/h1&gt;&lt;div dir="ltr"&gt;
+                    
+                        Posted by &lt;a href="https://mcwhirter.com.au/craige/blog/2019/Deploying_Gitea_on_NixOS/craige/" dir="ltr"&gt;Craige McWhirter&lt;/a&gt; on &lt;time datetime="2019-09-10T08:27:36Z" pubdate="pubdate" dir="ltr"&gt;Tue Sep 10 08:27:36 2019&lt;/time&gt; &lt;br dir="ltr"&gt;
+                        &lt;i dir="ltr"&gt;Last edited &lt;time datetime="2019-09-10T03:12:28Z" dir="ltr"&gt;Tue Sep 10 03:12:28 2019&lt;/time&gt; &lt;/i&gt;
+                        
+                &lt;/div&gt;&lt;img src="https://mcwhirter.com.au/files/NixOS_Gitea_Gears.png" title="NixOS Gitea
+ Gears by Craige McWhirter" alt="NixOS Gitea by Craige McWhirter" width="397" height="424"&gt;&lt;p dir="ltr"&gt;I've been using GitLab for years but recently opted to switch to
+&lt;a href="https://gitea.io/" dir="ltr"&gt;Gitea&lt;/a&gt;, primarily because of timing and I was looking for
+something more lightweight, not because of any particular problems with GitLab.&lt;/p&gt;&lt;p dir="ltr"&gt;To deploy Gitea via &lt;a href="https://nixos.org/nixops/" dir="ltr"&gt;NixOps&lt;/a&gt; I chose to craft a Nix
+file
+(&lt;a href="https://source.mcwhirter.io/craige/nixos-examples/src/branch/master/version-management/gitea_for_NixOps.nix" dir="ltr"&gt;example&lt;/a&gt;)
+that would be included in a host definition. The linked and below definition
+provides a deployment of Gitea, using Postgres, Nginx, &lt;a href="https://letsencrypt.org/docs/client-options/" dir="ltr"&gt;ACME
+certificates&lt;/a&gt; and ReStructured
+Text rendering with syntax highlighting.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;    { config, pkgs, lib, ... }:
+
+    {
+
+      services.gitea = {
+        enable = true;                               # Enable Gitea
+        appName = "MyDomain: Gitea Service";         # Give the site a name
+        database = {
+          type = "postgres";                         # Database type
+          passwordFile = "/run/keys/gitea-dbpass";   # Where to find the password
+        };
+        domain = "source.mydomain.tld";              # Domain name
+        rootUrl = "https://source.mydomaain.tld/";   # Root web URL
+        httpPort = 3001;                             # Provided unique port
+        extraConfig = let
+          docutils =
+            pkgs.python37.withPackages (ps: with ps; [
+              docutils                               # Provides rendering of ReStructured Text files
+              pygments                               # Provides syntax highlighting
+          ]);
+        in ''
+          [mailer]
+          ENABLED = true
+          FROM = "gitea@mydomain.tld"
+          [service]
+          REGISTER_EMAIL_CONFIRM = true
+          [markup.restructuredtext]
+          ENABLED = true
+          FILE_EXTENSIONS = .rst
+          RENDER_COMMAND = ${docutils}/bin/rst2html.py
+          IS_INPUT_FILE = false
+        '';
+      };
+
+      services.postgresql = {
+        enable = true;                # Ensure postgresql is enabled
+        authentication = ''
+          local gitea all ident map=gitea-users
+        '';
+        identMap =                    # Map the gitea user to postgresql
+          ''
+            gitea-users gitea gitea
+          '';
+      };
+
+      services.nginx = {
+        enable = true;                                          # Enable Nginx
+        recommendedGzipSettings = true;
+        recommendedOptimisation = true;
+        recommendedProxySettings = true;
+        recommendedTlsSettings = true;
+        virtualHosts."source.MyDomain.tld" = {                  # Gitea hostname
+          enableACME = true;                                    # Use ACME certs
+          forceSSL = true;                                      # Force SSL
+          locations."/".proxyPass = "http://localhost:3001/";   # Proxy Gitea
+        };
+      };
+
+      security.acme.certs = {
+          "source.mydomain".email = "anEmail@mydomain.tld";
+      };
+
+    }
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This line from the above file should stand out:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;              passwordFile = "/run/keys/gitea-dbpass";   # Where to find the password
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Where does that file come from? It's pulled from a &lt;code dir="ltr"&gt;secrets.nix&lt;/code&gt; file
+(&lt;a href="https://source.mcwhirter.io/craige/nixos-examples/src/branch/master/secrets.nix" dir="ltr"&gt;example&lt;/a&gt;)
+that for this example, could look like this:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;    { config, pkgs, ... }:
+
+    {
+      deployment.keys = {
+        # An example set of keys to be used for the Gitea service's DB authentication
+        gitea-dbpass = {
+          text        = "uNgiakei+x&amp;gt;i7shuiwaeth3z";   # Password, generated using pwgen -yB 24
+          user        = "gitea";                      # User to own the key file
+          group       = "wheel";                      # Group to own the key file
+          permissions = "0640";                       # Key file permissions
+        };
+      };
+    }
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The file's path &lt;code dir="ltr"&gt;/run/keys/gitea-dbpass&lt;/code&gt; is determined by the elements. So
+&lt;code dir="ltr"&gt;deployment.keys&lt;/code&gt; determines the initial path of &lt;code dir="ltr"&gt;/run/keys&lt;/code&gt; and the next
+element &lt;code dir="ltr"&gt;gitea-dbpass&lt;/code&gt; is a descriptive name provided by the stanza's author to
+describe the key's use and also provide the final file name.&lt;/p&gt;&lt;p dir="ltr"&gt;Now that we have described the Gitea service in
+&lt;a href="https://source.mcwhirter.io/craige/nixos-examples/src/branch/master/version-management/gitea_for_NixOps.nix" dir="ltr"&gt;gitea_for_NixOps.nix&lt;/a&gt;
+and the required credentials in
+&lt;a href="https://source.mcwhirter.io/craige/nixos-examples/src/branch/master/secrets.nix" dir="ltr"&gt;secrets.nix&lt;/a&gt;
+we need to pull it all together for deployment. We achieve that in this case
+by importing both these files into our existing host definition:&lt;/p&gt;&lt;p&gt;myhost.nix:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;    {
+      myhost =
+        { config, pkgs, lib, ... }:
+
+        {
+
+          imports =
+            [
+              ./secrets.nix                               # Import our secrets
+              ./version-management/gitea_got_NixOps.nix   # Import Gitea
+            ];
+
+          deployment.targetHost = "192.168.132.123";   # Target's IP address
+
+          networking.hostName = "myhost";              # Target's hostname.
+        };
+    }
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;To deploy Gitea to your NixOps managed host, you merely run the deploy command
+for your already configured host and deployment, which would look like this:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;    $ nixops deploy -d MyDeployment --include myhost
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;You should now have a running Gitea server and be able to create an initial
+admin user.&lt;/p&gt;&lt;p dir="ltr"&gt;In my &lt;a href="https://source.mcwhirter.io/craige/nixos-examples" dir="ltr"&gt;nixos-examples&lt;/a&gt; repo
+I have a
+&lt;a href="https://source.mcwhirter.io/craige/nixos-examples/src/branch/master/version-management" dir="ltr"&gt;version-management&lt;/a&gt;
+directory with some example files and a README with information and
+instructions. You can use two of the files to generate a Gitea VM to take a
+quick poke around. There is also an example of how you can deploy Gitea in
+production using NixOps, as per this post.&lt;/p&gt;&lt;p dir="ltr"&gt;If you wish to dig a little deeper, I have my production deployment over at
+&lt;a href="https://source.mcwhirter.io/craige/mio-ops" dir="ltr"&gt;mio-ops&lt;/a&gt;.&lt;/p&gt;</description><pubDate>Wed, 23 Dec 2020 09:55:22 -0600</pubDate></item><item><title>Why can’t you buy a good webcam?</title><link>https://lobste.rs/s/hmwpil</link><description>&lt;div&gt;
           13 min read
           
         &lt;/div&gt;&lt;p&gt;Some people are not satisfied with a webcam from their notebook or an old webcam
@@ -238,135 +366,7 @@ comparatively cheap cameras, so we don't need to spend $3000+ to set it all up.&
     You can follow the HTML-over-the-wire approach as merely inspiration for your own tooling, or you can use these Hotwire designed frameworks created by the team at &lt;a href="https://basecamp.com/" rel="noopener" dir="ltr"&gt;Basecamp&lt;/a&gt; to power &lt;a href="https://hey.com/" rel="noopener" dir="ltr"&gt;HEY&lt;/a&gt;. They work together, complementing each other to give you a complete solution across all platforms:
   &lt;/p&gt;&lt;p dir="ltr"&gt;
     Brought to you by:&lt;br dir="ltr"&gt;
-    &lt;/p&gt;&lt;img width="104" height="23" src="https://hotwire.dev/assets/logos/basecamp.svg" alt="Basecamp"&gt;&lt;img width="50" height="23" src="https://hotwire.dev/assets/logos/hey.svg" alt="HEY"&gt;&lt;p dir="ltr"&gt;© 2020 &lt;a href="https://basecamp.com/" rel="noopener" dir="ltr"&gt;Basecamp&lt;/a&gt;&lt;/p&gt;</description><pubDate>Tue, 22 Dec 2020 10:39:34 -0600</pubDate></item><item><title>Deploying Gitea on NixOS (Git self-hosting)</title><link>https://lobste.rs/s/d6i0pj</link><description>&lt;h1&gt;Deploying Gitea on NixOS&lt;/h1&gt;&lt;div dir="ltr"&gt;
-                    
-                        Posted by &lt;a href="https://mcwhirter.com.au/craige/blog/2019/Deploying_Gitea_on_NixOS/craige/" dir="ltr"&gt;Craige McWhirter&lt;/a&gt; on &lt;time datetime="2019-09-10T08:27:36Z" pubdate="pubdate" dir="ltr"&gt;Tue Sep 10 08:27:36 2019&lt;/time&gt; &lt;br dir="ltr"&gt;
-                        &lt;i dir="ltr"&gt;Last edited &lt;time datetime="2019-09-10T03:12:28Z" dir="ltr"&gt;Tue Sep 10 03:12:28 2019&lt;/time&gt; &lt;/i&gt;
-                        
-                &lt;/div&gt;&lt;img src="https://mcwhirter.com.au/files/NixOS_Gitea_Gears.png" title="NixOS Gitea
- Gears by Craige McWhirter" alt="NixOS Gitea by Craige McWhirter" width="397" height="424"&gt;&lt;p dir="ltr"&gt;I've been using GitLab for years but recently opted to switch to
-&lt;a href="https://gitea.io/" dir="ltr"&gt;Gitea&lt;/a&gt;, primarily because of timing and I was looking for
-something more lightweight, not because of any particular problems with GitLab.&lt;/p&gt;&lt;p dir="ltr"&gt;To deploy Gitea via &lt;a href="https://nixos.org/nixops/" dir="ltr"&gt;NixOps&lt;/a&gt; I chose to craft a Nix
-file
-(&lt;a href="https://source.mcwhirter.io/craige/nixos-examples/src/branch/master/version-management/gitea_for_NixOps.nix" dir="ltr"&gt;example&lt;/a&gt;)
-that would be included in a host definition. The linked and below definition
-provides a deployment of Gitea, using Postgres, Nginx, &lt;a href="https://letsencrypt.org/docs/client-options/" dir="ltr"&gt;ACME
-certificates&lt;/a&gt; and ReStructured
-Text rendering with syntax highlighting.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;    { config, pkgs, lib, ... }:
-
-    {
-
-      services.gitea = {
-        enable = true;                               # Enable Gitea
-        appName = "MyDomain: Gitea Service";         # Give the site a name
-        database = {
-          type = "postgres";                         # Database type
-          passwordFile = "/run/keys/gitea-dbpass";   # Where to find the password
-        };
-        domain = "source.mydomain.tld";              # Domain name
-        rootUrl = "https://source.mydomaain.tld/";   # Root web URL
-        httpPort = 3001;                             # Provided unique port
-        extraConfig = let
-          docutils =
-            pkgs.python37.withPackages (ps: with ps; [
-              docutils                               # Provides rendering of ReStructured Text files
-              pygments                               # Provides syntax highlighting
-          ]);
-        in ''
-          [mailer]
-          ENABLED = true
-          FROM = "gitea@mydomain.tld"
-          [service]
-          REGISTER_EMAIL_CONFIRM = true
-          [markup.restructuredtext]
-          ENABLED = true
-          FILE_EXTENSIONS = .rst
-          RENDER_COMMAND = ${docutils}/bin/rst2html.py
-          IS_INPUT_FILE = false
-        '';
-      };
-
-      services.postgresql = {
-        enable = true;                # Ensure postgresql is enabled
-        authentication = ''
-          local gitea all ident map=gitea-users
-        '';
-        identMap =                    # Map the gitea user to postgresql
-          ''
-            gitea-users gitea gitea
-          '';
-      };
-
-      services.nginx = {
-        enable = true;                                          # Enable Nginx
-        recommendedGzipSettings = true;
-        recommendedOptimisation = true;
-        recommendedProxySettings = true;
-        recommendedTlsSettings = true;
-        virtualHosts."source.MyDomain.tld" = {                  # Gitea hostname
-          enableACME = true;                                    # Use ACME certs
-          forceSSL = true;                                      # Force SSL
-          locations."/".proxyPass = "http://localhost:3001/";   # Proxy Gitea
-        };
-      };
-
-      security.acme.certs = {
-          "source.mydomain".email = "anEmail@mydomain.tld";
-      };
-
-    }
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This line from the above file should stand out:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;              passwordFile = "/run/keys/gitea-dbpass";   # Where to find the password
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Where does that file come from? It's pulled from a &lt;code dir="ltr"&gt;secrets.nix&lt;/code&gt; file
-(&lt;a href="https://source.mcwhirter.io/craige/nixos-examples/src/branch/master/secrets.nix" dir="ltr"&gt;example&lt;/a&gt;)
-that for this example, could look like this:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;    { config, pkgs, ... }:
-
-    {
-      deployment.keys = {
-        # An example set of keys to be used for the Gitea service's DB authentication
-        gitea-dbpass = {
-          text        = "uNgiakei+x&amp;gt;i7shuiwaeth3z";   # Password, generated using pwgen -yB 24
-          user        = "gitea";                      # User to own the key file
-          group       = "wheel";                      # Group to own the key file
-          permissions = "0640";                       # Key file permissions
-        };
-      };
-    }
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The file's path &lt;code dir="ltr"&gt;/run/keys/gitea-dbpass&lt;/code&gt; is determined by the elements. So
-&lt;code dir="ltr"&gt;deployment.keys&lt;/code&gt; determines the initial path of &lt;code dir="ltr"&gt;/run/keys&lt;/code&gt; and the next
-element &lt;code dir="ltr"&gt;gitea-dbpass&lt;/code&gt; is a descriptive name provided by the stanza's author to
-describe the key's use and also provide the final file name.&lt;/p&gt;&lt;p dir="ltr"&gt;Now that we have described the Gitea service in
-&lt;a href="https://source.mcwhirter.io/craige/nixos-examples/src/branch/master/version-management/gitea_for_NixOps.nix" dir="ltr"&gt;gitea_for_NixOps.nix&lt;/a&gt;
-and the required credentials in
-&lt;a href="https://source.mcwhirter.io/craige/nixos-examples/src/branch/master/secrets.nix" dir="ltr"&gt;secrets.nix&lt;/a&gt;
-we need to pull it all together for deployment. We achieve that in this case
-by importing both these files into our existing host definition:&lt;/p&gt;&lt;p&gt;myhost.nix:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;    {
-      myhost =
-        { config, pkgs, lib, ... }:
-
-        {
-
-          imports =
-            [
-              ./secrets.nix                               # Import our secrets
-              ./version-management/gitea_got_NixOps.nix   # Import Gitea
-            ];
-
-          deployment.targetHost = "192.168.132.123";   # Target's IP address
-
-          networking.hostName = "myhost";              # Target's hostname.
-        };
-    }
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;To deploy Gitea to your NixOps managed host, you merely run the deploy command
-for your already configured host and deployment, which would look like this:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;    $ nixops deploy -d MyDeployment --include myhost
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;You should now have a running Gitea server and be able to create an initial
-admin user.&lt;/p&gt;&lt;p dir="ltr"&gt;In my &lt;a href="https://source.mcwhirter.io/craige/nixos-examples" dir="ltr"&gt;nixos-examples&lt;/a&gt; repo
-I have a
-&lt;a href="https://source.mcwhirter.io/craige/nixos-examples/src/branch/master/version-management" dir="ltr"&gt;version-management&lt;/a&gt;
-directory with some example files and a README with information and
-instructions. You can use two of the files to generate a Gitea VM to take a
-quick poke around. There is also an example of how you can deploy Gitea in
-production using NixOps, as per this post.&lt;/p&gt;&lt;p dir="ltr"&gt;If you wish to dig a little deeper, I have my production deployment over at
-&lt;a href="https://source.mcwhirter.io/craige/mio-ops" dir="ltr"&gt;mio-ops&lt;/a&gt;.&lt;/p&gt;</description><pubDate>Wed, 23 Dec 2020 09:55:22 -0600</pubDate></item><item><title>SixtyFPS: a fresh new toolkit for graphical user interfaces</title><link>https://lobste.rs/s/igl7ma</link><description>&lt;img src="https://sixtyfps.io/resources/logo.drawio.svg" alt="SixtyFPS Logo" width="70" height="48"&gt;&lt;h5&gt;Fluid&lt;/h5&gt;&lt;img src="https://sixtyfps.io/images/tablet.jpg" alt="Tablet Use" width="320" height="213"&gt;&lt;p&gt;Enjoy super smooth, touch-friendly user interfaces&lt;/p&gt;&lt;h5&gt;Design Friendly&lt;/h5&gt;&lt;img src="https://sixtyfps.io/images/ui-sketch.jpg" alt="User Interface Sketch" width="320" height="213"&gt;&lt;p&gt;Edit markup language with device independent units&lt;/p&gt;&lt;h5&gt;Desktop&lt;/h5&gt;&lt;img src="https://sixtyfps.io/images/laptop.jpg" alt="Laptop" width="320" height="212"&gt;&lt;p&gt;Develop cross-platform desktop applications&lt;/p&gt;&lt;h2&gt;Mission&lt;/h2&gt;&lt;p&gt;SixtyFPS is a toolkit to efficiently develop fluid graphical user interfaces for any display:
+    &lt;/p&gt;&lt;img width="104" height="23" src="https://hotwire.dev/assets/logos/basecamp.svg" alt="Basecamp"&gt;&lt;img width="50" height="23" src="https://hotwire.dev/assets/logos/hey.svg" alt="HEY"&gt;&lt;p dir="ltr"&gt;© 2020 &lt;a href="https://basecamp.com/" rel="noopener" dir="ltr"&gt;Basecamp&lt;/a&gt;&lt;/p&gt;</description><pubDate>Tue, 22 Dec 2020 10:39:34 -0600</pubDate></item><item><title>SixtyFPS: a fresh new toolkit for graphical user interfaces</title><link>https://lobste.rs/s/igl7ma</link><description>&lt;img src="https://sixtyfps.io/resources/logo.drawio.svg" alt="SixtyFPS Logo" width="70" height="48"&gt;&lt;h5&gt;Fluid&lt;/h5&gt;&lt;img src="https://sixtyfps.io/images/tablet.jpg" alt="Tablet Use" width="320" height="213"&gt;&lt;p&gt;Enjoy super smooth, touch-friendly user interfaces&lt;/p&gt;&lt;h5&gt;Design Friendly&lt;/h5&gt;&lt;img src="https://sixtyfps.io/images/ui-sketch.jpg" alt="User Interface Sketch" width="320" height="213"&gt;&lt;p&gt;Edit markup language with device independent units&lt;/p&gt;&lt;h5&gt;Desktop&lt;/h5&gt;&lt;img src="https://sixtyfps.io/images/laptop.jpg" alt="Laptop" width="320" height="212"&gt;&lt;p&gt;Develop cross-platform desktop applications&lt;/p&gt;&lt;h2&gt;Mission&lt;/h2&gt;&lt;p&gt;SixtyFPS is a toolkit to efficiently develop fluid graphical user interfaces for any display:
                     embedded devices and desktop applications. We support multiple programming languages, such as Rust,
                     C++, and JavaScript.&lt;/p&gt;&lt;p&gt;Our design goals are:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;
                         &lt;span dir="ltr"&gt;Lightweight&lt;/span&gt;
@@ -992,7 +992,126 @@ proto kv-affix((&lt;span dir="ltr"&gt;Str&lt;/span&gt;, &lt;span dir="ltr"&gt;In
 			&lt;span dir="ltr"&gt;
 				&lt;time datetime="2020-12-21T20:26:47-08:00" dir="ltr"&gt;December 21, 2020&lt;/time&gt;			&lt;/span&gt;
 
-			&lt;span dir="ltr"&gt;3 Minutes&lt;/span&gt;		&lt;/div&gt;&lt;p dir="ltr"&gt;With apologies to &lt;a href="https://www.eecg.utoronto.ca/~jzhu/csc326/readings/iverson.pdf" dir="ltr"&gt;Ken Iverson&lt;/a&gt;.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Architects draw detailed plans before a brick is laid or a nail is hammered. Programmers and software engineers don’t. Can this be why houses seldom collapse and programs often crash?&lt;/p&gt;&lt;p&gt;Blueprints help architects ensure that what they are planning to build will work. “Working” means more than not collapsing; it means serving the required purpose. Architects and their clients use blueprints to understand what they are going to build before they start building it.&lt;/p&gt;&lt;p&gt;But few programmers write even a rough sketch of what their programs will do before they start coding.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;“My instinct is to go right to the board. I’m very graphic oriented. I can’t talk more than ten minutes without I [sic] start drawing pictures when we’re talking about the things I do. Even if I’m talking sports, I invariably start diagramming what’s going on. I feel comfortable with it or find it very effective.”&lt;/p&gt;&lt;p dir="ltr"&gt;This designer, like the newly promoted engineer at Selco who fought to get her drafting board back, is pointing out his dependence on the visual process, of drawing both to communicate and to think out the initial design. He also states that &lt;strong dir="ltr"&gt;the visual and manual thought process of drawing precedes the formulation of the written specifications for the project&lt;/strong&gt;. Like the Selco designers and those at other sites, he emphasized the importance of drawing processes to work out ideas. [emphasis added]&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;The quote above by Kathryn Henderson illustrates how mechanical engineers use the act of drawing to help them work on the design problem. By generating sketches and drawings, they develop a better understanding of the problem they trying to solve. They use drawing as a tool to help them think, to work through the problem.&lt;/p&gt;&lt;p&gt;As software engineers, we don’t work in a visual medium in the way that mechanical engineers do. And yet, we also use tools to help us think through the problem. It just so happens that the tool we use is code. I can’t speak for other developers, but I certainly use the process of writing code to develop a deeper understanding of the problem I’m trying to solve. As I solve parts of the problem with code, my mental model of the problem space and solution space develops throughout the process.&lt;/p&gt;&lt;p&gt;I think we use coding this way (I certainly do), because it feels to me like the fastest way to evolve this knowledge. If I had some sort of equivalent mechanism for sketching that was faster than coding for developing my understanding, I’d use it. But I know of no mechanism that’s actually faster than coding that will let me develop my understanding of the solution I’m working on. It just so happens that the quickest solution, code, is the same medium as the artifact that will ultimately end up in production. A mechanical engineer can never ship their sketches, but we can ship our code.&lt;/p&gt;&lt;p&gt;And this is a point that I think Leslie Lamport misses. I’m personally familiar with a number of different techniques for modeling in software, including TLA+, Alloy, statecharts, and decision tables. I’ve used them all, they are excellent tools for reasoning about the complexity of the system. But none of these tools really fulfill the role that sketching does for mechanical engineers (although Alloy’s fast feedback for incremental model building is a nice step in this direction).&lt;/p&gt;&lt;p dir="ltr"&gt;TLA+ in particular is a wonderful tool. I’ve used it for things like &lt;a href="https://github.com/lorin/tla-linearizability" dir="ltr"&gt;understanding the linearizability paper&lt;/a&gt;, &lt;a href="https://github.com/lorin/epidemic-register" dir="ltr"&gt;beating the CAP theorem&lt;/a&gt;, &lt;a href="https://surfingcomplexity.blog/2017/10/16/the-tortoise-and-the-hare-in-tla/" dir="ltr"&gt;finding cycles in linked lists&lt;/a&gt;,  &lt;a href="https://surfingcomplexity.blog/2014/06/04/crossing-the-river-with-tla/" dir="ltr"&gt;solving the river crossing problem&lt;/a&gt;, and &lt;a href="https://github.com/hwayne/lets-prove-leftpad/tree/master/tlaps" dir="ltr"&gt;proving leftpad&lt;/a&gt;. But if you’re looking for an analogy in mechanical engineering, TLA+ is much closer to finite element analysis than it is to sketches.&lt;/p&gt;&lt;p dir="ltr"&gt;Developers jump to coding not because they are sloppy, but because they have found it to be the most effective tool for &lt;em dir="ltr"&gt;sketching&lt;/em&gt;, for thinking about the problem and getting quick feedback as they construct their solution. And constructing a representation to develop a better understanding using the best tools they have available for the job to get quick feedback is what engineers do.&lt;/p&gt;&lt;h3&gt;Share this:&lt;/h3&gt;</description><pubDate>Tue, 22 Dec 2020 11:48:48 -0600</pubDate></item><item><title>Compressing AWS S3 logs after getting HackerNewsed</title><link>https://lobste.rs/s/i827kb</link><description>&lt;div&gt;2020/12/20 :: #parquet #aws #s3 #plotly #dash #fsharp&lt;/div&gt;&lt;h2&gt;Abstract&lt;/h2&gt;&lt;p&gt;One of my previous articles about Firecracker and RPI got posted on HN, and I just realized that many months ago, I enabled logging on the S3 bucket hosting this content. I quickly wanted to peek into the stats, and when I discovered that Athena could not process compressed S3 logs.&lt;/p&gt;&lt;p&gt;I was already working on a larger AWS codebase in F#, so I decided to write a tool that can download the raw logs from S3 and merge all the small files, convert it to Parquet and upload those back.&lt;/p&gt;&lt;p&gt;C# has excellent AWS libraries, and after a bit of wrapping, those are suitable for F# dvelopment.&lt;/p&gt;&lt;h2&gt;Processing log files&lt;/h2&gt;&lt;p&gt;First, I just created types so I can handle error on the caller side:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="Fsharp" dir="ltr"&gt;&lt;span dir="ltr"&gt;// S3ReadError can be used for other read oprations not just for Get
+			&lt;span dir="ltr"&gt;3 Minutes&lt;/span&gt;		&lt;/div&gt;&lt;p dir="ltr"&gt;With apologies to &lt;a href="https://www.eecg.utoronto.ca/~jzhu/csc326/readings/iverson.pdf" dir="ltr"&gt;Ken Iverson&lt;/a&gt;.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Architects draw detailed plans before a brick is laid or a nail is hammered. Programmers and software engineers don’t. Can this be why houses seldom collapse and programs often crash?&lt;/p&gt;&lt;p&gt;Blueprints help architects ensure that what they are planning to build will work. “Working” means more than not collapsing; it means serving the required purpose. Architects and their clients use blueprints to understand what they are going to build before they start building it.&lt;/p&gt;&lt;p&gt;But few programmers write even a rough sketch of what their programs will do before they start coding.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;“My instinct is to go right to the board. I’m very graphic oriented. I can’t talk more than ten minutes without I [sic] start drawing pictures when we’re talking about the things I do. Even if I’m talking sports, I invariably start diagramming what’s going on. I feel comfortable with it or find it very effective.”&lt;/p&gt;&lt;p dir="ltr"&gt;This designer, like the newly promoted engineer at Selco who fought to get her drafting board back, is pointing out his dependence on the visual process, of drawing both to communicate and to think out the initial design. He also states that &lt;strong dir="ltr"&gt;the visual and manual thought process of drawing precedes the formulation of the written specifications for the project&lt;/strong&gt;. Like the Selco designers and those at other sites, he emphasized the importance of drawing processes to work out ideas. [emphasis added]&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;The quote above by Kathryn Henderson illustrates how mechanical engineers use the act of drawing to help them work on the design problem. By generating sketches and drawings, they develop a better understanding of the problem they trying to solve. They use drawing as a tool to help them think, to work through the problem.&lt;/p&gt;&lt;p&gt;As software engineers, we don’t work in a visual medium in the way that mechanical engineers do. And yet, we also use tools to help us think through the problem. It just so happens that the tool we use is code. I can’t speak for other developers, but I certainly use the process of writing code to develop a deeper understanding of the problem I’m trying to solve. As I solve parts of the problem with code, my mental model of the problem space and solution space develops throughout the process.&lt;/p&gt;&lt;p&gt;I think we use coding this way (I certainly do), because it feels to me like the fastest way to evolve this knowledge. If I had some sort of equivalent mechanism for sketching that was faster than coding for developing my understanding, I’d use it. But I know of no mechanism that’s actually faster than coding that will let me develop my understanding of the solution I’m working on. It just so happens that the quickest solution, code, is the same medium as the artifact that will ultimately end up in production. A mechanical engineer can never ship their sketches, but we can ship our code.&lt;/p&gt;&lt;p&gt;And this is a point that I think Leslie Lamport misses. I’m personally familiar with a number of different techniques for modeling in software, including TLA+, Alloy, statecharts, and decision tables. I’ve used them all, they are excellent tools for reasoning about the complexity of the system. But none of these tools really fulfill the role that sketching does for mechanical engineers (although Alloy’s fast feedback for incremental model building is a nice step in this direction).&lt;/p&gt;&lt;p dir="ltr"&gt;TLA+ in particular is a wonderful tool. I’ve used it for things like &lt;a href="https://github.com/lorin/tla-linearizability" dir="ltr"&gt;understanding the linearizability paper&lt;/a&gt;, &lt;a href="https://github.com/lorin/epidemic-register" dir="ltr"&gt;beating the CAP theorem&lt;/a&gt;, &lt;a href="https://surfingcomplexity.blog/2017/10/16/the-tortoise-and-the-hare-in-tla/" dir="ltr"&gt;finding cycles in linked lists&lt;/a&gt;,  &lt;a href="https://surfingcomplexity.blog/2014/06/04/crossing-the-river-with-tla/" dir="ltr"&gt;solving the river crossing problem&lt;/a&gt;, and &lt;a href="https://github.com/hwayne/lets-prove-leftpad/tree/master/tlaps" dir="ltr"&gt;proving leftpad&lt;/a&gt;. But if you’re looking for an analogy in mechanical engineering, TLA+ is much closer to finite element analysis than it is to sketches.&lt;/p&gt;&lt;p dir="ltr"&gt;Developers jump to coding not because they are sloppy, but because they have found it to be the most effective tool for &lt;em dir="ltr"&gt;sketching&lt;/em&gt;, for thinking about the problem and getting quick feedback as they construct their solution. And constructing a representation to develop a better understanding using the best tools they have available for the job to get quick feedback is what engineers do.&lt;/p&gt;&lt;h3&gt;Share this:&lt;/h3&gt;</description><pubDate>Tue, 22 Dec 2020 11:48:48 -0600</pubDate></item><item><title>Sequenced Packets Over Ordinary TCP</title><link>https://lobste.rs/s/yadzkj</link><description>&lt;p&gt;This is a rough idea for an admittedly not hugely useful technical 
+hack related to low-level network protocol gubbins. If you don't want to 
+know about this, look away now.&lt;/p&gt;&lt;p dir="ltr"&gt;I will assume you know what &lt;a href="http://www.rfc-editor.org/rfc/rfc793.txt" dir="ltr"&gt;TCP&lt;/a&gt; is (oh - i'll
+warn you now that i say 'packet' instead of 'segment' throughout this
+document; i'm like that). I will assume you know what the &lt;a href="http://www.opengroup.org/onlinepubs/007908799/xns/syssocket.h.html" dir="ltr"&gt;POSIX
+socket API&lt;/a&gt; almost universally used to access it is. What you may or
+may not know about are the two things i'm going to talk about today: the
+sequenced packet (aka SOCK_SEQPACKET) socket type from the socket API
+and the urgent pointer from the TCP specification.&lt;/p&gt;&lt;p dir="ltr"&gt;The socket API supports sockets of several types; 'type' does not
+refer to the protocol behind the socket, but rather to the semantics
+associated with the socket. The best-known socket types are stream
+(SOCK_STREAM) and datagram (SOCK_DGRAM); the former supplies a pair of
+full-duplex, reliable, ordered, structureless byte streams connected to
+a single remote socket, while the latter supplies an aperture through
+which unreliable, unordered, smallish bundles of bytes can be sent to
+multiple remote sockets. There are, however, other socket types; the 
+most interesting is the sequenced-packet socket (SOCK_SEQPACKET). The &lt;a href="http://www.opengroup.org/onlinepubs/009695399/functions/xsh_chap02_10.html" dir="ltr"&gt;actual 
+text&lt;/a&gt; of the socket API specification says of sequenced packet 
+sockets:&lt;/p&gt;&lt;BLOCKQUOTE&gt;The SOCK_SEQPACKET socket type is similar to the SOCK_STREAM
+type, and is also connection-oriented. The only difference between these
+types is that record boundaries are maintained using the SOCK_SEQPACKET
+type. A record can be sent using one or more output operations and
+received using one or more input operations, but a single operation
+never transfers parts of more than one record. Record boundaries are
+visible to the receiver via the MSG_EOR flag in the received message
+flags returned by the recvmsg() function. It is protocol-specific
+whether a maximum record size is imposed.&lt;/BLOCKQUOTE&gt;&lt;p&gt;So basically, it's either a sequence of packets which are delivered
+reliably and in order, or a reliable, ordered stream with record
+boundaries in it, depending on how you look at it. Either way, it's
+clearly halfway between stream (ie TCP) and datagram (ie UDP) sockets.
+The stuff about MSG_EOR is how you mark the ends of messages; messages
+are read and written like stream data, but with a couple of nuances: to
+mark the end of a message when sending, set the MSG_EOR flag in the last
+send(), and to detect the end of a message when receiving, use recvmsg()
+and look for the MSG_EOR flag in the msghdr.msg_flags field.&lt;/p&gt;&lt;p dir="ltr"&gt;(Incidentally, that line saying "a record can be sent using one or
+more output operations and received using one or more input operations"
+is a bit weird; the specs for recv() and recvmsg() say "for
+message-based sockets such as SOCK_DGRAM and SOCK_SEQPACKET, the entire
+message must be read in a single operation.". There's a &lt;a href="http://www.opengroup.org/austin/mailarchives/austin-review-l/msg00839.html" dir="ltr"&gt;post
+on an Open Group mailing list&lt;/a&gt; on the semantics of the MSG_WAITALL
+flag in the context of sequenced packet sockets which indicates that
+messages on a sequenced packet socket can indeed be delivered through
+multiple recv() calls, which does make more sense; you can then use
+MSG_WAITALL to force delivery in a single read, although it doesn't work
+if the message is bigger than your buffer)&lt;/p&gt;&lt;p&gt;Moreover, sequenced packet sockets are probably the most
+programmer-friendly kind: they have strong reliability and ordering
+guarantees (like TCP but unlike UDP), and they provide record
+demarcation at the protocol level (like UDP but unlike TCP); they should
+therefore be a key tool for network programmers. However, as far as i
+can tell, there is no internet transport-layer protocol in common use
+which has sequenced packet semantics; SOCK_SEQPACKET is therefore not a
+generally available socket type! Where it does turn up is when you're
+running connections straight over ATM or IR or other suitable link
+layers, and nobody cares about that.&lt;/p&gt;&lt;p&gt;But all is not lost! I have come up with a way to supply sequenced
+packet semantics using entirely normal TCP, by exploiting a little-used
+but historically ancient feature of that protocol which, i think, was
+designed expressely for that purpose: the urgent pointer.&lt;/p&gt;&lt;p dir="ltr"&gt;The TCP spec is pretty brief, so have a read through and see what it
+says about the the urgent pointer. Basically, it's a facility by which
+one end of a TCP connection can indicate to the other that there's
+urgent data somewhere in the stream. From the client (ie
+application-layer protocol) point of view, it looks like there's a
+button next to the output stream of each socket, with a red light next
+to the input stream of the other, both labelled 'URGENT!!!'; one end
+writes some data that it thinks is urgent, then hits the button: the
+light at the other end then goes on immediately, and goes off once the
+client has read all the data that the sender had written before hitting
+the button. The TCP modules handle this by dint of two components of
+their packets: the 'urgent pointer field significant' (aka URG) control
+bit, and the urgent pointer (UP). The URG bit is set in all packets sent
+after the button is pressed, up to and including the one containing the
+last byte of urgent data; the presence of a set URG bit in a packet
+therefore indicates to the receiving TCP module that it should switch on
+the urgency light. The UP points to the last byte of the urgent data
+(RFC 793 is confused about this - see &lt;a href="http://www.rfc-editor.org/rfc/rfc1122.txt" dir="ltr"&gt;RFC 1122&lt;/a&gt;, section
+4.2.2.4, for the correction); the receiving module can turn off the
+urgency light once the client has read that byte.&lt;/p&gt;&lt;p dir="ltr"&gt;For completeness, i should point out that the UP field in the TCP
+header is actually only 16 bits long; it expresses the UP as an offset
+from the sequence number of the packet. RFC 793 is cagey about what
+happens when the UP is more than 65535 greater than the current sequence
+number, but &lt;a href="http://www.rfc-editor.org/rfc/rfc2147.txt" a="" dir="ltr"&gt;RFC
+2147&lt;/a&gt; says, inter alia:&lt;/p&gt;&lt;BLOCKQUOTE&gt;When a TCP packet is to be sent with an Urgent Pointer
+(i.e., the URG bit set), first calculate the offset from the Sequence
+Number to the Urgent Pointer. If the offset is less than 65535, fill in
+the Urgent field and continue with the normal TCP processing. If the
+offset is greater than 65535, and the offset is greater than or equal to
+the length of the TCP data [which it will be, unless you're dealing with
+super-jumbograms], fill in the Urgent Pointer with 65535 and continue
+with the normal TCP processing.&lt;/BLOCKQUOTE&gt;&lt;p&gt;Anyway, i propose abusing the urgent mechanism to mark the ends of
+messages: the urgent pointer simply points to the end of the current
+message. Rather than connecting this to buttons and lights, the
+seqpacket-aware TCP module does the right thing with MSG_EOR: MSG_EOR
+being set in send() causes the UP to be set, and hitting the UP when
+doing recvmsg() causes it to set MSG_EOR. Simple!&lt;/p&gt;&lt;p&gt;There is one little problem, which is that you can't pack multiple
+messages into a single TCP packet, since you wouldn't be able to have
+the UP pointing at the ends of all of them. This is a shame, but not
+that big a deal; the whole sequenced packet thing is about reasonably
+big packets. If a burning need for multiple messages per packets was
+felt, w e could specify a negotiable TCP option to hold additional
+message-end pointers.&lt;/p&gt;&lt;p&gt;There is some degree of interaction between the mechanism i describe
+and TCP's push function. The push function was specified in part so that
+applications can indicate to the TCP module when they'd got to the end
+of a block of data, so that it does not waste time waiting for more;
+with explicit message boundaries, it can work this out itself. TCP
+modules should send less-than-MTU packets when and only when a message
+end is signalled; the rest of the time, they should wait for enough data
+from the client to fill a complete packet, without any timeout. As well
+as rendering the push function obsolete, explicit message boundaries
+also make Nagle's algorithm unnecessary. The push function can, however,
+be repurposed: explicit pushes can be applied to indicate that a message
+should be delivered as quickly as possible (the push should be signalled
+in the same send that delivers the end-of-message indication). The TCP
+modules should then do everything they can to deliver the message
+quickly, and should indicate to the user that the message was pushed. 
+Both these interactions with the user can be mediated by a MSG_PUSH flag
+in the send() or recvmsg() flags (and perhaps a MSG_PUSH_PENDING flag in
+recvmsg(), to indicate that a message somewhere ahead is being pushed).
+The push would be communicated in the TCP packets by the setting of the
+PSH flag, as now. We might even enable out-of-order delivery of the
+pushed message, but that would be very weird. In essence, we're swapping
+the semantics of the push and urgent functions!&lt;/p&gt;</description><pubDate>Wed, 23 Dec 2020 09:22:58 -0600</pubDate></item><item><title>Compressing AWS S3 logs after getting HackerNewsed</title><link>https://lobste.rs/s/i827kb</link><description>&lt;div&gt;2020/12/20 :: #parquet #aws #s3 #plotly #dash #fsharp&lt;/div&gt;&lt;h2&gt;Abstract&lt;/h2&gt;&lt;p&gt;One of my previous articles about Firecracker and RPI got posted on HN, and I just realized that many months ago, I enabled logging on the S3 bucket hosting this content. I quickly wanted to peek into the stats, and when I discovered that Athena could not process compressed S3 logs.&lt;/p&gt;&lt;p&gt;I was already working on a larger AWS codebase in F#, so I decided to write a tool that can download the raw logs from S3 and merge all the small files, convert it to Parquet and upload those back.&lt;/p&gt;&lt;p&gt;C# has excellent AWS libraries, and after a bit of wrapping, those are suitable for F# dvelopment.&lt;/p&gt;&lt;h2&gt;Processing log files&lt;/h2&gt;&lt;p&gt;First, I just created types so I can handle error on the caller side:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="Fsharp" dir="ltr"&gt;&lt;span dir="ltr"&gt;// S3ReadError can be used for other read oprations not just for Get
 &lt;/span&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;S3ReadError&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt;
   &lt;span dir="ltr"&gt;|&lt;/span&gt; &lt;span dir="ltr"&gt;NotFound&lt;/span&gt; &lt;span dir="ltr"&gt;of&lt;/span&gt; &lt;span dir="ltr"&gt;key&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;string&lt;/span&gt;
   &lt;span dir="ltr"&gt;|&lt;/span&gt; &lt;span dir="ltr"&gt;S3ReadPermissionDenied&lt;/span&gt; &lt;span dir="ltr"&gt;of&lt;/span&gt; &lt;span dir="ltr"&gt;keyOrPrefix&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt; &lt;span dir="ltr"&gt;string&lt;/span&gt;
@@ -1818,127 +1937,7 @@ Weird.&lt;/p&gt;&lt;p&gt;You have my permission to link freely to any entry here
 	symbol, design element, et cetera mentioned in these pages is a
 	protected and/or trademarked entity, the sole property of its
 	owner(s), and acknowledgement of this status is implied.&lt;/p&gt;&lt;p dir="ltr"&gt;Copyright © 1999-2020 by &lt;a href="mailto:sean@conman.org" dir="ltr"&gt;Sean Conner.&lt;/a&gt; All Rights
-	Reserved.&lt;/p&gt;</description><pubDate>Wed, 23 Dec 2020 01:01:47 -0600</pubDate></item><item><title>How &amp; Why To Use Airgapped Backups</title><link>https://lobste.rs/s/nxtalg</link><description>&lt;p&gt;A good backup strategy needs to consider various threats to the integrity of data.  For instance:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Building catches fire&lt;/LI&gt;&lt;LI&gt;Accidental deletion&lt;/LI&gt;&lt;LI&gt;Equipment failure&lt;/LI&gt;&lt;LI&gt;Security incident / malware / compromise&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;It’s that last one that is of particular interest today.  A lot of backup strategies are such that if a user (or administrator) has their local account or network compromised, their backups could very well be destroyed as well.  For instance, do you ssh from the account being backed up to the system holding the backups?  Or rsync using a keypair stored on it?  Or access S3 buckets, etc?  It is trivially easy in many of these schemes to totally ruin cloud-based backups, or even some other schemes.  rsync can be run with –delete (and often is, to prune remotes), S3 buckets can be deleted, etc.  And even if you try to lock down an over-network backup to be append-only, still there are vectors for attack (ssh credentials, OpenSSL bugs, etc).  In this post, I try to explore how we can protect against them and still retain some modern conveniences.&lt;/p&gt;&lt;p&gt;A backup scheme also needs to make a balance between:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Cost&lt;/LI&gt;&lt;LI&gt;Security&lt;/LI&gt;&lt;LI&gt;Accessibility&lt;/LI&gt;&lt;LI&gt;Efficiency (of time, bandwidth, storage, etc)&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;&lt;b&gt;My story so far…&lt;/b&gt;&lt;/p&gt;&lt;p&gt;About 20 years ago, I had an Exabyte tape drive, with the amazing capacity of 7GB per tape!  Eventually as disk prices fell, I had external disks plugged in to a server, and would periodically rotate them offsite.  I’ve also had various combinations of partial or complete offsite copies over the Internet as well.  I have around 6TB of data to back up (after compression), a figure that is growing somewhat rapidly as I digitize some old family recordings and videos.&lt;/p&gt;&lt;p dir="ltr"&gt;Since I &lt;a href="https://changelog.complete.org/archives/9353-roundup-of-remote-encrypted-deduplicated-backups-in-linux" dir="ltr"&gt;last wrote about backups 5 years ago&lt;/a&gt;, my scheme has been largely unchanged; at present I use ZFS for local and to-disk backups and borg for the copies over the Internet.&lt;/p&gt;&lt;p&gt;Let’s take a look at some options that could make this better.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Tape&lt;/b&gt;&lt;/p&gt;&lt;p&gt;The original airgapped backup.  You back up to a tape, then you take the (fairly cheap) tape out of the drive and put in another one.  In cost per GB, tape is probably the cheapest medium out there.  But of course it has its drawbacks.&lt;/p&gt;&lt;p&gt;Let’s start with cost.  To get a drive that can handle capacities of what I’d be needing, at least LTO-6 (2.5TB per tape) would be needed, if not LTO-7 (6TB).  New, these drives cost several thousand dollars, plus they need LVD SCSI or Fibre Channel cards.  You’re not going to be hanging one off a Raspberry Pi; these things need a real server with enterprise-style connectivity.  If you’re particularly lucky, you might find an LTO-6 drive for as low as $500 on eBay.  Then there are tapes.  A 10-pack of LTO-6 tapes runs more than $200, and provides a total capacity of 25TB – sufficient for these needs (note that, of course, you need to have at least double the actual space of the data, to account for multiple full backups in a set).  A 5-pack of LTO-7 tapes is a little more expensive, while providing more storage.&lt;/p&gt;&lt;p&gt;So all-in, this is going to be — in the best possible scenario — nearly $1000, and possibly a lot more.  For a large company with many TB of storage, the initial costs can be defrayed due to the cheaper media, but for a home user, not so much.&lt;/p&gt;&lt;p&gt;Consider that 8TB hard drives can be found for $150 – $200.  A pair of them (for redundancy) would run $300-400, and then you have all the other benefits of disk (quicker access, etc.)  Plus they can be driven by something as cheap as a Raspberry Pi.&lt;/p&gt;&lt;p&gt;Fancier tape setups involve auto-changers, but then you’re not really airgapped, are you?  (If you leave all your tapes in the changer, they can generally be selected and overwritten, barring things like hardware WORM).&lt;/p&gt;&lt;p&gt;As useful as tape is, for this project, it would simply be way more expensive than disk-based options.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Fundamentals of disk-based airgapping&lt;/b&gt;&lt;/p&gt;&lt;p&gt;The fundamental thing we need to address with disk-based airgapping is that the machines being backed up have no real-time contact with the backup storage system.  This rules out most solutions out there, that want to sync by comparing local state with remote state.  If one is willing to throw storage efficiency out the window — maybe practical for very small data sets — one could just send a full backup daily.  But in reality, what is more likely needed is a way to store a local proxy for the remote state.  Then a “runner” device (a USB stick, disk, etc) could be plugged into the network, filled with queued data, then plugged into the backup system to have the data dequeued and processed.&lt;/p&gt;&lt;p&gt;Some may be tempted to short-circuit this and just plug external disks into a backup system.  I’ve done that for a long time.  This is, however, a risk, because it makes those disks vulnerable to whatever may be attacking the local system (anything from lightning to ransomware).&lt;/p&gt;&lt;p&gt;&lt;b&gt;ZFS&lt;/b&gt;&lt;/p&gt;&lt;p&gt;ZFS is, it should be no surprise, particularly well suited for this.  zfs send/receive can send an incremental stream that represents a delta between two checkpoints (snapshots or bookmarks) on a filesystem.  It can do this very efficiently, much more so than walking an entire filesystem tree.&lt;/p&gt;&lt;p&gt;Additionally, with the recent addition of ZFS crypto to ZFS on Linux, the replication stream can optionally reflect the encrypted data.  Yes, as long as you don’t need to mount them, you can mostly work with ZFS datasets on an encrypted basis, and can directly tell zfs send to just send the encrypted data instead of the decrypted data.&lt;/p&gt;&lt;p&gt;The downside of ZFS is the resource requirements at the destination, which in terms of RAM are higher than most of the older Raspberry Pi-style devices.  Still, one could perhaps just save off zfs send streams and restore them later if need be, but that implies a periodic resend of a full stream, an inefficient operation.  dedpulicating software such as borg could be used on those streams (though with less effectiveness if they’re encrypted).&lt;/p&gt;&lt;p&gt;&lt;b&gt;Tar&lt;/b&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Perhaps surprisingly, tar in &lt;a href="https://www.gnu.org/software/tar/manual/html_node/Incremental-Dumps.html" dir="ltr"&gt;listed incremental&lt;/a&gt; mode can solve this problem for non-ZFS users.  It will keep a local cache of the state of the filesystem as of the time of the last run of tar, and can generate new tarballs that reflect the changes since the previous run (even deletions).  This can achieve a similar result to the ZFS send/receive, though in a much less elegant way.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Bacula / Bareos&lt;/b&gt;&lt;/p&gt;&lt;p&gt;Bacula (and its fork Bareos) both have support for a FIFO destination.  Theoretically this could be used to queue of data for transfer to the airgapped machine.  This support is very poorly documented in both and is rumored to have bitrotted, however.&lt;/p&gt;&lt;p&gt;&lt;b&gt;rdiff and xdelta&lt;/b&gt;&lt;/p&gt;&lt;p&gt;rdiff and xdelta can be used as sort of a non-real-time rsync, at least on a per-file basis.  Theoretically, one could generate a full backup (with tar, ZFS send, or whatever), take an rdiff signature, and send over the file while keeping the signature.  On the next run, another full backup is piped into rdiff, and on the basis of the signature file of the old and the new data, it produces a binary patch that can be queued for the backup target to update its stored copy of the file.&lt;/p&gt;&lt;p&gt;This leaves history preservation as an exercise to be undertaken on the backup target.  It may not necessarily be easy and may not be efficient.&lt;/p&gt;&lt;p&gt;&lt;b&gt;rsync batches&lt;/b&gt;&lt;/p&gt;&lt;p&gt;rsync can be used to compute a delta between two directory trees and express this as a single-file batch that can be processed by a remote rsync.  Unfortunately this implies the sender must always keep an old tree around (barring a solution such as ZFS snapshots) in order to compute the delta, and of course it still implies the need for history processing on the remote.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Getting the Data There&lt;/b&gt;&lt;/p&gt;&lt;p&gt;OK, so you’ve got an airgapped system, some sort of “runner” device for your sneakernet (USB stick, hard drive, etc).  Now what?&lt;/p&gt;&lt;p dir="ltr"&gt;Obviously you could just copy data on the runner and move it back off at the backup target.  But a tool like &lt;a href="http://www.nncpgo.org/" dir="ltr"&gt;NNCP&lt;/a&gt; (sort of a modernized UUCP) offer a lot of help in automating the process, returning error reports, etc.  NNCP can be used online over TCP, over reliable serial links, over ssh, with offline onion routing via intermediaries or directly, etc.&lt;/p&gt;&lt;p&gt;Imagine having an airgapped machine at a different location you go to frequently (workplace, friend, etc).  Before leaving, you put a USB stick in your pocket.  When you get there, you pop it in.  It’s despooled and processed while you want, and return emails or whatever are queued up to be sent when you get back home.  Not bad, eh?&lt;/p&gt;&lt;p&gt;&lt;b&gt;Future installment…&lt;/b&gt;&lt;/p&gt;&lt;p&gt;I’m going to try some of these approaches and report back on my experiences in the next few weeks.&lt;/p&gt;</description><pubDate>Wed, 23 Dec 2020 02:43:39 -0600</pubDate></item><item><title>Unicomp New Model M Keyboard</title><link>https://lobste.rs/s/1k5o1w</link><description>&lt;div&gt;Share on:
-&lt;/div&gt;&lt;figure&gt;&lt;img src="https://www.softinio.com/img/unicomp_new_model_m.png" width="437" height="328"&gt;&lt;/figure&gt;&lt;p&gt;Unicomp new Model M keyboard is the latest version of the classic and fabulous IBM Model M keyboard that came out earlier this year. This blog post is my unboxing and review of this timeless keyboard.&lt;/p&gt;&lt;p dir="ltr"&gt;My favorite keyboard of all time was the &lt;a href="https://en.wikipedia.org/wiki/Model_M_keyboard" rel="noopener" dir="ltr"&gt;IBM Model M keyboard&lt;/a&gt;. Through out the 1980s and the 1990s I would exclusively use this keyboard. In fact as I type this blog post I can confirm I still have 3 of them in my garage back in London, England.&lt;/p&gt;&lt;p&gt;Ever since I moved to the USA, both at work and at home I have been using various keyboards by Apple. Though I have nothing bad to say about the Apple keyboards, after all they are cosmetically pleasing, of high build quality and work really well with all things Apple, I started really missing my IBM Model M. This is when I found out Unicomp have released a new Model M and I decided to buy one.&lt;/p&gt;&lt;h2&gt;Who are Unicomp?&lt;/h2&gt;&lt;p dir="ltr"&gt;When IBM decided to stop manufacturing keyboards, a company called Lexmark bought their equipment and all rights to their keyboards and continued making them. In turn Lexmark stopped manufacturing keyboards too and at that point some ex-IBM and ex-Lexmark staff got together, purchased all the manufacturing equipment and rights to continue manufacturing the keyboards (but of course without the IBM and Lexmark branding) and setup a new company called &lt;code dir="ltr"&gt;Unicomp&lt;/code&gt;. &lt;a href="https://www.pckeyboard.com/" rel="noopener" dir="ltr"&gt;Unicomp&lt;/a&gt; has since continued producing these keyboards for like the last 25 years.&lt;/p&gt;&lt;h2&gt;Unboxing&lt;/h2&gt;&lt;p&gt;This is how it was delivered:&lt;/p&gt;&lt;figure&gt;&lt;img src="https://www.softinio.com/img/unicomp_model_m_box.png" alt="Unicomp New Model M box" width="437" height="328"&gt;&lt;/figure&gt;&lt;p&gt;Unicomp New Model M box&lt;/p&gt;&lt;p&gt;When the package arrived I could feel the keyboard moving inside the box, but when I opened the box I saw how well it was packed:&lt;/p&gt;&lt;figure&gt;&lt;img src="https://www.softinio.com/img/unicomp_model_m_open_box.png" alt="Unicomp New Model M opened box" width="437" height="328"&gt;&lt;/figure&gt;&lt;p&gt;Unicomp New Model M opened box&lt;/p&gt;&lt;p&gt;I took it out of its box and removed all packaging material it was wrapped in:&lt;/p&gt;&lt;figure&gt;&lt;img src="https://www.softinio.com/img/unicomp_model_m_out_of_box.png" alt="Unicomp New Model M Keyboard" width="437" height="328"&gt;&lt;/figure&gt;&lt;h2&gt;Review&lt;/h2&gt;&lt;p&gt;As I looked at the keyboard, before taking it out of the box, I could immediately tell it was a Model M and its evolution. Super excited and impatient I took it out of the box. My first observation was that it comes with a USB (standard not USB-C) cable that is not removable. It felt lighter in weight than the original IBM Model M I had. Next I looked at its build quality and was overall impressed. The original IBM Model M does feel more robust but I could not fault this new Model M. All this was to be expected though, as I didn’t have my expectation set to receiving a keyboard that is made by 100% the same materials as the original Model M I had.&lt;/p&gt;&lt;p&gt;Having one of the newer macbooks with only USB-C ports, I set my new keyboard on my desk and plugged it in via a USB adapter and off I went looking for excuses to type so I can use my new keyboard.&lt;/p&gt;&lt;p&gt;I am thoroughly enjoying using this keyboard. Its typing feel and size are on par with the original Model M I had. I had forgotten how much more comfortable it is to type on Model M than an Apple keyboard. Comparing now, I can see that my hands are too big for the Apple keyboards so I would try to type in a cramped space to fit my hands in, as opposed to this Model M which is perfect for my hand size. This alone has resulted in me being able type faster, be more comfortable and make virtually no typing mistakes. As always I find the higher actuation point feel and the audible feedback the sound provided by the buckling springs with each keystroke incredibly pleasing. Comparing the sound of the buckling springs with the original IBM Model M, I would say the new Unicomp Model M is slightly quieter.&lt;/p&gt;&lt;h3&gt;How well does it work with macOS&lt;/h3&gt;&lt;p&gt;When I went to place my order on Unicomp website they only had a windows version of the new Model M listed. Whilst that will work fine with macOS, it does have some features missing compared to a keyboard that has dedicated support for macOS, such as volume control, music play/stop/previous track /next track keys. Good news is I called Unicomp and spoke to Troy about this and he was kind enought to tell me I can place an order and request a custom configuration at a small fee to have the extra macOS features added. I did that and my keyboard has all the extra macOS keys functioning as expected. It even has the window key replaced with the macOS command key.&lt;/p&gt;&lt;img src="https://www.softinio.com/img/unicomp_model_m_mac_keys.png" alt="Unicomp New Model M with macOS layout" width="437" height="328"&gt;&lt;h3&gt;Unicomp quality of service&lt;/h3&gt;&lt;p&gt;When you first visit Unicomp website, you get the sense that you just visited a website from 20 years ago with not the best user experience browsing or ordering. When you research Unicomp on the internet you won’t find much activity on social media or any form of marketing.&lt;/p&gt;&lt;p&gt;Please do not be put off by this and don’t judge them because of their dated look. The quality of service I received is one of the best I have ever received. When I called to find out more about the New Model M not only was the help I received exemplarity, but once I placed my order, even though it had the custom configuration of macOS support added was shipped within 24 hours of placing the order and the item received is fantastic in every possible way.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p dir="ltr"&gt;I am back again reunited with my old friend a Model M. I am enjoying using it so much after a gap of not having one that I am looking for excuses to use it more and more. So expect more &lt;a href="https://www.softinio.com/" rel="noopener" dir="ltr"&gt;blogs&lt;/a&gt; and &lt;a href="https://softinio.substack.com/" rel="noopener" dir="ltr"&gt;newsletters&lt;/a&gt; from me going forward, as this keyboard is a joy to use.&lt;/p&gt;</description><pubDate>Mon, 21 Dec 2020 18:40:43 -0600</pubDate></item><item><title>Sequenced Packets Over Ordinary TCP</title><link>https://lobste.rs/s/yadzkj</link><description>&lt;p&gt;This is a rough idea for an admittedly not hugely useful technical 
-hack related to low-level network protocol gubbins. If you don't want to 
-know about this, look away now.&lt;/p&gt;&lt;p dir="ltr"&gt;I will assume you know what &lt;a href="http://www.rfc-editor.org/rfc/rfc793.txt" dir="ltr"&gt;TCP&lt;/a&gt; is (oh - i'll
-warn you now that i say 'packet' instead of 'segment' throughout this
-document; i'm like that). I will assume you know what the &lt;a href="http://www.opengroup.org/onlinepubs/007908799/xns/syssocket.h.html" dir="ltr"&gt;POSIX
-socket API&lt;/a&gt; almost universally used to access it is. What you may or
-may not know about are the two things i'm going to talk about today: the
-sequenced packet (aka SOCK_SEQPACKET) socket type from the socket API
-and the urgent pointer from the TCP specification.&lt;/p&gt;&lt;p dir="ltr"&gt;The socket API supports sockets of several types; 'type' does not
-refer to the protocol behind the socket, but rather to the semantics
-associated with the socket. The best-known socket types are stream
-(SOCK_STREAM) and datagram (SOCK_DGRAM); the former supplies a pair of
-full-duplex, reliable, ordered, structureless byte streams connected to
-a single remote socket, while the latter supplies an aperture through
-which unreliable, unordered, smallish bundles of bytes can be sent to
-multiple remote sockets. There are, however, other socket types; the 
-most interesting is the sequenced-packet socket (SOCK_SEQPACKET). The &lt;a href="http://www.opengroup.org/onlinepubs/009695399/functions/xsh_chap02_10.html" dir="ltr"&gt;actual 
-text&lt;/a&gt; of the socket API specification says of sequenced packet 
-sockets:&lt;/p&gt;&lt;BLOCKQUOTE&gt;The SOCK_SEQPACKET socket type is similar to the SOCK_STREAM
-type, and is also connection-oriented. The only difference between these
-types is that record boundaries are maintained using the SOCK_SEQPACKET
-type. A record can be sent using one or more output operations and
-received using one or more input operations, but a single operation
-never transfers parts of more than one record. Record boundaries are
-visible to the receiver via the MSG_EOR flag in the received message
-flags returned by the recvmsg() function. It is protocol-specific
-whether a maximum record size is imposed.&lt;/BLOCKQUOTE&gt;&lt;p&gt;So basically, it's either a sequence of packets which are delivered
-reliably and in order, or a reliable, ordered stream with record
-boundaries in it, depending on how you look at it. Either way, it's
-clearly halfway between stream (ie TCP) and datagram (ie UDP) sockets.
-The stuff about MSG_EOR is how you mark the ends of messages; messages
-are read and written like stream data, but with a couple of nuances: to
-mark the end of a message when sending, set the MSG_EOR flag in the last
-send(), and to detect the end of a message when receiving, use recvmsg()
-and look for the MSG_EOR flag in the msghdr.msg_flags field.&lt;/p&gt;&lt;p dir="ltr"&gt;(Incidentally, that line saying "a record can be sent using one or
-more output operations and received using one or more input operations"
-is a bit weird; the specs for recv() and recvmsg() say "for
-message-based sockets such as SOCK_DGRAM and SOCK_SEQPACKET, the entire
-message must be read in a single operation.". There's a &lt;a href="http://www.opengroup.org/austin/mailarchives/austin-review-l/msg00839.html" dir="ltr"&gt;post
-on an Open Group mailing list&lt;/a&gt; on the semantics of the MSG_WAITALL
-flag in the context of sequenced packet sockets which indicates that
-messages on a sequenced packet socket can indeed be delivered through
-multiple recv() calls, which does make more sense; you can then use
-MSG_WAITALL to force delivery in a single read, although it doesn't work
-if the message is bigger than your buffer)&lt;/p&gt;&lt;p&gt;Moreover, sequenced packet sockets are probably the most
-programmer-friendly kind: they have strong reliability and ordering
-guarantees (like TCP but unlike UDP), and they provide record
-demarcation at the protocol level (like UDP but unlike TCP); they should
-therefore be a key tool for network programmers. However, as far as i
-can tell, there is no internet transport-layer protocol in common use
-which has sequenced packet semantics; SOCK_SEQPACKET is therefore not a
-generally available socket type! Where it does turn up is when you're
-running connections straight over ATM or IR or other suitable link
-layers, and nobody cares about that.&lt;/p&gt;&lt;p&gt;But all is not lost! I have come up with a way to supply sequenced
-packet semantics using entirely normal TCP, by exploiting a little-used
-but historically ancient feature of that protocol which, i think, was
-designed expressely for that purpose: the urgent pointer.&lt;/p&gt;&lt;p dir="ltr"&gt;The TCP spec is pretty brief, so have a read through and see what it
-says about the the urgent pointer. Basically, it's a facility by which
-one end of a TCP connection can indicate to the other that there's
-urgent data somewhere in the stream. From the client (ie
-application-layer protocol) point of view, it looks like there's a
-button next to the output stream of each socket, with a red light next
-to the input stream of the other, both labelled 'URGENT!!!'; one end
-writes some data that it thinks is urgent, then hits the button: the
-light at the other end then goes on immediately, and goes off once the
-client has read all the data that the sender had written before hitting
-the button. The TCP modules handle this by dint of two components of
-their packets: the 'urgent pointer field significant' (aka URG) control
-bit, and the urgent pointer (UP). The URG bit is set in all packets sent
-after the button is pressed, up to and including the one containing the
-last byte of urgent data; the presence of a set URG bit in a packet
-therefore indicates to the receiving TCP module that it should switch on
-the urgency light. The UP points to the last byte of the urgent data
-(RFC 793 is confused about this - see &lt;a href="http://www.rfc-editor.org/rfc/rfc1122.txt" dir="ltr"&gt;RFC 1122&lt;/a&gt;, section
-4.2.2.4, for the correction); the receiving module can turn off the
-urgency light once the client has read that byte.&lt;/p&gt;&lt;p dir="ltr"&gt;For completeness, i should point out that the UP field in the TCP
-header is actually only 16 bits long; it expresses the UP as an offset
-from the sequence number of the packet. RFC 793 is cagey about what
-happens when the UP is more than 65535 greater than the current sequence
-number, but &lt;a href="http://www.rfc-editor.org/rfc/rfc2147.txt" a="" dir="ltr"&gt;RFC
-2147&lt;/a&gt; says, inter alia:&lt;/p&gt;&lt;BLOCKQUOTE&gt;When a TCP packet is to be sent with an Urgent Pointer
-(i.e., the URG bit set), first calculate the offset from the Sequence
-Number to the Urgent Pointer. If the offset is less than 65535, fill in
-the Urgent field and continue with the normal TCP processing. If the
-offset is greater than 65535, and the offset is greater than or equal to
-the length of the TCP data [which it will be, unless you're dealing with
-super-jumbograms], fill in the Urgent Pointer with 65535 and continue
-with the normal TCP processing.&lt;/BLOCKQUOTE&gt;&lt;p&gt;Anyway, i propose abusing the urgent mechanism to mark the ends of
-messages: the urgent pointer simply points to the end of the current
-message. Rather than connecting this to buttons and lights, the
-seqpacket-aware TCP module does the right thing with MSG_EOR: MSG_EOR
-being set in send() causes the UP to be set, and hitting the UP when
-doing recvmsg() causes it to set MSG_EOR. Simple!&lt;/p&gt;&lt;p&gt;There is one little problem, which is that you can't pack multiple
-messages into a single TCP packet, since you wouldn't be able to have
-the UP pointing at the ends of all of them. This is a shame, but not
-that big a deal; the whole sequenced packet thing is about reasonably
-big packets. If a burning need for multiple messages per packets was
-felt, w e could specify a negotiable TCP option to hold additional
-message-end pointers.&lt;/p&gt;&lt;p&gt;There is some degree of interaction between the mechanism i describe
-and TCP's push function. The push function was specified in part so that
-applications can indicate to the TCP module when they'd got to the end
-of a block of data, so that it does not waste time waiting for more;
-with explicit message boundaries, it can work this out itself. TCP
-modules should send less-than-MTU packets when and only when a message
-end is signalled; the rest of the time, they should wait for enough data
-from the client to fill a complete packet, without any timeout. As well
-as rendering the push function obsolete, explicit message boundaries
-also make Nagle's algorithm unnecessary. The push function can, however,
-be repurposed: explicit pushes can be applied to indicate that a message
-should be delivered as quickly as possible (the push should be signalled
-in the same send that delivers the end-of-message indication). The TCP
-modules should then do everything they can to deliver the message
-quickly, and should indicate to the user that the message was pushed. 
-Both these interactions with the user can be mediated by a MSG_PUSH flag
-in the send() or recvmsg() flags (and perhaps a MSG_PUSH_PENDING flag in
-recvmsg(), to indicate that a message somewhere ahead is being pushed).
-The push would be communicated in the TCP packets by the setting of the
-PSH flag, as now. We might even enable out-of-order delivery of the
-pushed message, but that would be very weird. In essence, we're swapping
-the semantics of the push and urgent functions!&lt;/p&gt;</description><pubDate>Wed, 23 Dec 2020 09:22:58 -0600</pubDate></item><item><title>Haiku activity report - November and December 2020</title><link>https://lobste.rs/s/niiutf</link><description>&lt;div dir="ltr"&gt;Blog post by &lt;a href="https://www.haiku-os.org/blog/pulkomandy/" dir="ltr"&gt;pulkomandy&lt;/a&gt; on Tue, 2020-12-22 10:53&lt;/div&gt;&lt;p&gt;Welcome to the November-December activity report!&lt;/p&gt;&lt;p&gt;This report covers hrev54716-hrev54805 (about 5 weeks of work).&lt;/p&gt;&lt;h3&gt;Code cleanup&lt;/h3&gt;&lt;p&gt;mt fixed various warnings, use-after-free, memory leaks, and dead code problems detected by the clang static analyzer.&lt;/p&gt;&lt;p&gt;X512 reworked app_server memory management to use owning pointers and avoid some
+	Reserved.&lt;/p&gt;</description><pubDate>Wed, 23 Dec 2020 01:01:47 -0600</pubDate></item><item><title>How &amp; Why To Use Airgapped Backups</title><link>https://lobste.rs/s/nxtalg</link><description>&lt;p&gt;A good backup strategy needs to consider various threats to the integrity of data.  For instance:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Building catches fire&lt;/LI&gt;&lt;LI&gt;Accidental deletion&lt;/LI&gt;&lt;LI&gt;Equipment failure&lt;/LI&gt;&lt;LI&gt;Security incident / malware / compromise&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;It’s that last one that is of particular interest today.  A lot of backup strategies are such that if a user (or administrator) has their local account or network compromised, their backups could very well be destroyed as well.  For instance, do you ssh from the account being backed up to the system holding the backups?  Or rsync using a keypair stored on it?  Or access S3 buckets, etc?  It is trivially easy in many of these schemes to totally ruin cloud-based backups, or even some other schemes.  rsync can be run with –delete (and often is, to prune remotes), S3 buckets can be deleted, etc.  And even if you try to lock down an over-network backup to be append-only, still there are vectors for attack (ssh credentials, OpenSSL bugs, etc).  In this post, I try to explore how we can protect against them and still retain some modern conveniences.&lt;/p&gt;&lt;p&gt;A backup scheme also needs to make a balance between:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Cost&lt;/LI&gt;&lt;LI&gt;Security&lt;/LI&gt;&lt;LI&gt;Accessibility&lt;/LI&gt;&lt;LI&gt;Efficiency (of time, bandwidth, storage, etc)&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;&lt;b&gt;My story so far…&lt;/b&gt;&lt;/p&gt;&lt;p&gt;About 20 years ago, I had an Exabyte tape drive, with the amazing capacity of 7GB per tape!  Eventually as disk prices fell, I had external disks plugged in to a server, and would periodically rotate them offsite.  I’ve also had various combinations of partial or complete offsite copies over the Internet as well.  I have around 6TB of data to back up (after compression), a figure that is growing somewhat rapidly as I digitize some old family recordings and videos.&lt;/p&gt;&lt;p dir="ltr"&gt;Since I &lt;a href="https://changelog.complete.org/archives/9353-roundup-of-remote-encrypted-deduplicated-backups-in-linux" dir="ltr"&gt;last wrote about backups 5 years ago&lt;/a&gt;, my scheme has been largely unchanged; at present I use ZFS for local and to-disk backups and borg for the copies over the Internet.&lt;/p&gt;&lt;p&gt;Let’s take a look at some options that could make this better.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Tape&lt;/b&gt;&lt;/p&gt;&lt;p&gt;The original airgapped backup.  You back up to a tape, then you take the (fairly cheap) tape out of the drive and put in another one.  In cost per GB, tape is probably the cheapest medium out there.  But of course it has its drawbacks.&lt;/p&gt;&lt;p&gt;Let’s start with cost.  To get a drive that can handle capacities of what I’d be needing, at least LTO-6 (2.5TB per tape) would be needed, if not LTO-7 (6TB).  New, these drives cost several thousand dollars, plus they need LVD SCSI or Fibre Channel cards.  You’re not going to be hanging one off a Raspberry Pi; these things need a real server with enterprise-style connectivity.  If you’re particularly lucky, you might find an LTO-6 drive for as low as $500 on eBay.  Then there are tapes.  A 10-pack of LTO-6 tapes runs more than $200, and provides a total capacity of 25TB – sufficient for these needs (note that, of course, you need to have at least double the actual space of the data, to account for multiple full backups in a set).  A 5-pack of LTO-7 tapes is a little more expensive, while providing more storage.&lt;/p&gt;&lt;p&gt;So all-in, this is going to be — in the best possible scenario — nearly $1000, and possibly a lot more.  For a large company with many TB of storage, the initial costs can be defrayed due to the cheaper media, but for a home user, not so much.&lt;/p&gt;&lt;p&gt;Consider that 8TB hard drives can be found for $150 – $200.  A pair of them (for redundancy) would run $300-400, and then you have all the other benefits of disk (quicker access, etc.)  Plus they can be driven by something as cheap as a Raspberry Pi.&lt;/p&gt;&lt;p&gt;Fancier tape setups involve auto-changers, but then you’re not really airgapped, are you?  (If you leave all your tapes in the changer, they can generally be selected and overwritten, barring things like hardware WORM).&lt;/p&gt;&lt;p&gt;As useful as tape is, for this project, it would simply be way more expensive than disk-based options.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Fundamentals of disk-based airgapping&lt;/b&gt;&lt;/p&gt;&lt;p&gt;The fundamental thing we need to address with disk-based airgapping is that the machines being backed up have no real-time contact with the backup storage system.  This rules out most solutions out there, that want to sync by comparing local state with remote state.  If one is willing to throw storage efficiency out the window — maybe practical for very small data sets — one could just send a full backup daily.  But in reality, what is more likely needed is a way to store a local proxy for the remote state.  Then a “runner” device (a USB stick, disk, etc) could be plugged into the network, filled with queued data, then plugged into the backup system to have the data dequeued and processed.&lt;/p&gt;&lt;p&gt;Some may be tempted to short-circuit this and just plug external disks into a backup system.  I’ve done that for a long time.  This is, however, a risk, because it makes those disks vulnerable to whatever may be attacking the local system (anything from lightning to ransomware).&lt;/p&gt;&lt;p&gt;&lt;b&gt;ZFS&lt;/b&gt;&lt;/p&gt;&lt;p&gt;ZFS is, it should be no surprise, particularly well suited for this.  zfs send/receive can send an incremental stream that represents a delta between two checkpoints (snapshots or bookmarks) on a filesystem.  It can do this very efficiently, much more so than walking an entire filesystem tree.&lt;/p&gt;&lt;p&gt;Additionally, with the recent addition of ZFS crypto to ZFS on Linux, the replication stream can optionally reflect the encrypted data.  Yes, as long as you don’t need to mount them, you can mostly work with ZFS datasets on an encrypted basis, and can directly tell zfs send to just send the encrypted data instead of the decrypted data.&lt;/p&gt;&lt;p&gt;The downside of ZFS is the resource requirements at the destination, which in terms of RAM are higher than most of the older Raspberry Pi-style devices.  Still, one could perhaps just save off zfs send streams and restore them later if need be, but that implies a periodic resend of a full stream, an inefficient operation.  dedpulicating software such as borg could be used on those streams (though with less effectiveness if they’re encrypted).&lt;/p&gt;&lt;p&gt;&lt;b&gt;Tar&lt;/b&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Perhaps surprisingly, tar in &lt;a href="https://www.gnu.org/software/tar/manual/html_node/Incremental-Dumps.html" dir="ltr"&gt;listed incremental&lt;/a&gt; mode can solve this problem for non-ZFS users.  It will keep a local cache of the state of the filesystem as of the time of the last run of tar, and can generate new tarballs that reflect the changes since the previous run (even deletions).  This can achieve a similar result to the ZFS send/receive, though in a much less elegant way.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Bacula / Bareos&lt;/b&gt;&lt;/p&gt;&lt;p&gt;Bacula (and its fork Bareos) both have support for a FIFO destination.  Theoretically this could be used to queue of data for transfer to the airgapped machine.  This support is very poorly documented in both and is rumored to have bitrotted, however.&lt;/p&gt;&lt;p&gt;&lt;b&gt;rdiff and xdelta&lt;/b&gt;&lt;/p&gt;&lt;p&gt;rdiff and xdelta can be used as sort of a non-real-time rsync, at least on a per-file basis.  Theoretically, one could generate a full backup (with tar, ZFS send, or whatever), take an rdiff signature, and send over the file while keeping the signature.  On the next run, another full backup is piped into rdiff, and on the basis of the signature file of the old and the new data, it produces a binary patch that can be queued for the backup target to update its stored copy of the file.&lt;/p&gt;&lt;p&gt;This leaves history preservation as an exercise to be undertaken on the backup target.  It may not necessarily be easy and may not be efficient.&lt;/p&gt;&lt;p&gt;&lt;b&gt;rsync batches&lt;/b&gt;&lt;/p&gt;&lt;p&gt;rsync can be used to compute a delta between two directory trees and express this as a single-file batch that can be processed by a remote rsync.  Unfortunately this implies the sender must always keep an old tree around (barring a solution such as ZFS snapshots) in order to compute the delta, and of course it still implies the need for history processing on the remote.&lt;/p&gt;&lt;p&gt;&lt;b&gt;Getting the Data There&lt;/b&gt;&lt;/p&gt;&lt;p&gt;OK, so you’ve got an airgapped system, some sort of “runner” device for your sneakernet (USB stick, hard drive, etc).  Now what?&lt;/p&gt;&lt;p dir="ltr"&gt;Obviously you could just copy data on the runner and move it back off at the backup target.  But a tool like &lt;a href="http://www.nncpgo.org/" dir="ltr"&gt;NNCP&lt;/a&gt; (sort of a modernized UUCP) offer a lot of help in automating the process, returning error reports, etc.  NNCP can be used online over TCP, over reliable serial links, over ssh, with offline onion routing via intermediaries or directly, etc.&lt;/p&gt;&lt;p&gt;Imagine having an airgapped machine at a different location you go to frequently (workplace, friend, etc).  Before leaving, you put a USB stick in your pocket.  When you get there, you pop it in.  It’s despooled and processed while you want, and return emails or whatever are queued up to be sent when you get back home.  Not bad, eh?&lt;/p&gt;&lt;p&gt;&lt;b&gt;Future installment…&lt;/b&gt;&lt;/p&gt;&lt;p&gt;I’m going to try some of these approaches and report back on my experiences in the next few weeks.&lt;/p&gt;</description><pubDate>Wed, 23 Dec 2020 02:43:39 -0600</pubDate></item><item><title>Haiku activity report - November and December 2020</title><link>https://lobste.rs/s/niiutf</link><description>&lt;div dir="ltr"&gt;Blog post by &lt;a href="https://www.haiku-os.org/blog/pulkomandy/" dir="ltr"&gt;pulkomandy&lt;/a&gt; on Tue, 2020-12-22 10:53&lt;/div&gt;&lt;p&gt;Welcome to the November-December activity report!&lt;/p&gt;&lt;p&gt;This report covers hrev54716-hrev54805 (about 5 weeks of work).&lt;/p&gt;&lt;h3&gt;Code cleanup&lt;/h3&gt;&lt;p&gt;mt fixed various warnings, use-after-free, memory leaks, and dead code problems detected by the clang static analyzer.&lt;/p&gt;&lt;p&gt;X512 reworked app_server memory management to use owning pointers and avoid some
 memory leaks and use-after-free cases. This led to a rework of the classes used for that
 purpose, in particular AutoDeleter and its variants, to be more efficient and more flexible.&lt;/p&gt;&lt;p&gt;kallisit5 fixed a crash in the icon-o-matic save panel.&lt;/p&gt;&lt;p&gt;PulkoMandy fixed an ABI problem that resulted in crashes for the 64bit version of Wonderbrush.
 Wonderbrush is now available in HaikuDepot for 64bit systems.&lt;/p&gt;&lt;h3&gt;System APIs&lt;/h3&gt;&lt;p&gt;waddlesplash added support for B_CURRENT_TEAM and other constants to create_area_etc,
@@ -1985,4 +1984,5 @@ some sliders in media preferences had an incorrect range. The game kit code for 
 and volume ramping was also not working very well, and the unsigned 8bit sound format
 was broken.&lt;/p&gt;&lt;p&gt;Jaidyn Ann changed the behavior of MediaPlayer playlist to not automatically sort
 the playlist when adding files by drag and drop. The old behavior of sorting the files
-is preserved if you use shift + drag.&lt;/p&gt;&lt;h3&gt;Drivers&lt;/h3&gt;&lt;p&gt;Lt-Henry fixes the ACPI thermal driver, which can now be used to read the motherboard and CPU temperatures.&lt;/p&gt;&lt;p&gt;kallisti5 fixed the GLInfo application which reports information about OpenGL support.&lt;/p&gt;&lt;h4&gt;Blog-O-Sphere&lt;/h4&gt;</description><pubDate>Tue, 22 Dec 2020 07:10:30 -0600</pubDate></item></channel></rss>
+is preserved if you use shift + drag.&lt;/p&gt;&lt;h3&gt;Drivers&lt;/h3&gt;&lt;p&gt;Lt-Henry fixes the ACPI thermal driver, which can now be used to read the motherboard and CPU temperatures.&lt;/p&gt;&lt;p&gt;kallisti5 fixed the GLInfo application which reports information about OpenGL support.&lt;/p&gt;&lt;h4&gt;Blog-O-Sphere&lt;/h4&gt;</description><pubDate>Tue, 22 Dec 2020 07:10:30 -0600</pubDate></item><item><title>Unicomp New Model M Keyboard</title><link>https://lobste.rs/s/1k5o1w</link><description>&lt;div&gt;Share on:
+&lt;/div&gt;&lt;figure&gt;&lt;img src="https://www.softinio.com/img/unicomp_new_model_m.png" width="437" height="328"&gt;&lt;/figure&gt;&lt;p&gt;Unicomp new Model M keyboard is the latest version of the classic and fabulous IBM Model M keyboard that came out earlier this year. This blog post is my unboxing and review of this timeless keyboard.&lt;/p&gt;&lt;p dir="ltr"&gt;My favorite keyboard of all time was the &lt;a href="https://en.wikipedia.org/wiki/Model_M_keyboard" rel="noopener" dir="ltr"&gt;IBM Model M keyboard&lt;/a&gt;. Through out the 1980s and the 1990s I would exclusively use this keyboard. In fact as I type this blog post I can confirm I still have 3 of them in my garage back in London, England.&lt;/p&gt;&lt;p&gt;Ever since I moved to the USA, both at work and at home I have been using various keyboards by Apple. Though I have nothing bad to say about the Apple keyboards, after all they are cosmetically pleasing, of high build quality and work really well with all things Apple, I started really missing my IBM Model M. This is when I found out Unicomp have released a new Model M and I decided to buy one.&lt;/p&gt;&lt;h2&gt;Who are Unicomp?&lt;/h2&gt;&lt;p dir="ltr"&gt;When IBM decided to stop manufacturing keyboards, a company called Lexmark bought their equipment and all rights to their keyboards and continued making them. In turn Lexmark stopped manufacturing keyboards too and at that point some ex-IBM and ex-Lexmark staff got together, purchased all the manufacturing equipment and rights to continue manufacturing the keyboards (but of course without the IBM and Lexmark branding) and setup a new company called &lt;code dir="ltr"&gt;Unicomp&lt;/code&gt;. &lt;a href="https://www.pckeyboard.com/" rel="noopener" dir="ltr"&gt;Unicomp&lt;/a&gt; has since continued producing these keyboards for like the last 25 years.&lt;/p&gt;&lt;h2&gt;Unboxing&lt;/h2&gt;&lt;p&gt;This is how it was delivered:&lt;/p&gt;&lt;figure&gt;&lt;img src="https://www.softinio.com/img/unicomp_model_m_box.png" alt="Unicomp New Model M box" width="437" height="328"&gt;&lt;/figure&gt;&lt;p&gt;Unicomp New Model M box&lt;/p&gt;&lt;p&gt;When the package arrived I could feel the keyboard moving inside the box, but when I opened the box I saw how well it was packed:&lt;/p&gt;&lt;figure&gt;&lt;img src="https://www.softinio.com/img/unicomp_model_m_open_box.png" alt="Unicomp New Model M opened box" width="437" height="328"&gt;&lt;/figure&gt;&lt;p&gt;Unicomp New Model M opened box&lt;/p&gt;&lt;p&gt;I took it out of its box and removed all packaging material it was wrapped in:&lt;/p&gt;&lt;figure&gt;&lt;img src="https://www.softinio.com/img/unicomp_model_m_out_of_box.png" alt="Unicomp New Model M Keyboard" width="437" height="328"&gt;&lt;/figure&gt;&lt;h2&gt;Review&lt;/h2&gt;&lt;p&gt;As I looked at the keyboard, before taking it out of the box, I could immediately tell it was a Model M and its evolution. Super excited and impatient I took it out of the box. My first observation was that it comes with a USB (standard not USB-C) cable that is not removable. It felt lighter in weight than the original IBM Model M I had. Next I looked at its build quality and was overall impressed. The original IBM Model M does feel more robust but I could not fault this new Model M. All this was to be expected though, as I didn’t have my expectation set to receiving a keyboard that is made by 100% the same materials as the original Model M I had.&lt;/p&gt;&lt;p&gt;Having one of the newer macbooks with only USB-C ports, I set my new keyboard on my desk and plugged it in via a USB adapter and off I went looking for excuses to type so I can use my new keyboard.&lt;/p&gt;&lt;p&gt;I am thoroughly enjoying using this keyboard. Its typing feel and size are on par with the original Model M I had. I had forgotten how much more comfortable it is to type on Model M than an Apple keyboard. Comparing now, I can see that my hands are too big for the Apple keyboards so I would try to type in a cramped space to fit my hands in, as opposed to this Model M which is perfect for my hand size. This alone has resulted in me being able type faster, be more comfortable and make virtually no typing mistakes. As always I find the higher actuation point feel and the audible feedback the sound provided by the buckling springs with each keystroke incredibly pleasing. Comparing the sound of the buckling springs with the original IBM Model M, I would say the new Unicomp Model M is slightly quieter.&lt;/p&gt;&lt;h3&gt;How well does it work with macOS&lt;/h3&gt;&lt;p&gt;When I went to place my order on Unicomp website they only had a windows version of the new Model M listed. Whilst that will work fine with macOS, it does have some features missing compared to a keyboard that has dedicated support for macOS, such as volume control, music play/stop/previous track /next track keys. Good news is I called Unicomp and spoke to Troy about this and he was kind enought to tell me I can place an order and request a custom configuration at a small fee to have the extra macOS features added. I did that and my keyboard has all the extra macOS keys functioning as expected. It even has the window key replaced with the macOS command key.&lt;/p&gt;&lt;img src="https://www.softinio.com/img/unicomp_model_m_mac_keys.png" alt="Unicomp New Model M with macOS layout" width="437" height="328"&gt;&lt;h3&gt;Unicomp quality of service&lt;/h3&gt;&lt;p&gt;When you first visit Unicomp website, you get the sense that you just visited a website from 20 years ago with not the best user experience browsing or ordering. When you research Unicomp on the internet you won’t find much activity on social media or any form of marketing.&lt;/p&gt;&lt;p&gt;Please do not be put off by this and don’t judge them because of their dated look. The quality of service I received is one of the best I have ever received. When I called to find out more about the New Model M not only was the help I received exemplarity, but once I placed my order, even though it had the custom configuration of macOS support added was shipped within 24 hours of placing the order and the item received is fantastic in every possible way.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p dir="ltr"&gt;I am back again reunited with my old friend a Model M. I am enjoying using it so much after a gap of not having one that I am looking for excuses to use it more and more. So expect more &lt;a href="https://www.softinio.com/" rel="noopener" dir="ltr"&gt;blogs&lt;/a&gt; and &lt;a href="https://softinio.substack.com/" rel="noopener" dir="ltr"&gt;newsletters&lt;/a&gt; from me going forward, as this keyboard is a joy to use.&lt;/p&gt;</description><pubDate>Mon, 21 Dec 2020 18:40:43 -0600</pubDate></item></channel></rss>
