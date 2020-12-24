@@ -140,7 +140,200 @@ That chipset has a fan which does not play along with the fan-less-ness of the m
 	The BSTB3-PC is definitely on the edge of the DB4 thermal frontier but it works reliably. I have been using it to browse the web, write this article, VC, program, and &lt;strike dir="ltr"&gt;play&lt;/strike&gt; lose at Starcraft 2 without issues so far.&lt;br dir="ltr"&gt;
 &lt;/p&gt;&lt;picture&gt;&lt;source srcset="https://fabiensanglard.net/tb3/result.webp" type="image/webp"&gt;&lt;img src="https://fabiensanglard.net/tb3/result.jpg" width="461" height="263"&gt;&lt;/picture&gt;&lt;p&gt;&lt;span&gt;&lt;i&gt;&lt;small&gt;The Beautiful Thunderbolt-3 Silent PC&lt;/small&gt;&lt;/i&gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;
 Ironically, as I finished putting it together, Apple announced a fanless M1 Macbook Air which would have performed just as well, if not better. Nonetheless, I am proud of the result. It is a damn good looking silent computer. And this one is "Designed in Sunnyvale" baby!&lt;br dir="ltr"&gt;
-&lt;/p&gt;&lt;div&gt;&lt;b&gt;References&lt;/b&gt;&lt;/div&gt;</description><pubDate>Wed, 23 Dec 2020 06:32:49 -0600</pubDate></item><item><title>Jepsen: Scylla 4.2-rc3</title><link>https://lobste.rs/s/lloot0</link><description>&lt;h1 data-number="1" dir="ltr"&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt; Background&lt;/h1&gt;&lt;p dir="ltr"&gt;Scylla is a distributed wide-column&lt;a href="https://jepsen.io/analyses/scylla-4.2-rc3#fn1" role="doc-noteref" dir="ltr"&gt;&lt;sup dir="ltr"&gt;1&lt;/sup&gt;&lt;/a&gt; database which originated as a C++ port of Cassandra, aiming for improved performance. It supports both Cassandra- and &lt;a href="https://aws.amazon.com/dynamodb/" dir="ltr"&gt;DynamoDB&lt;/a&gt;-compatible APIs, and is intended for high-throughput, low-latency workloads, including analytics, messaging, and other time-series data.&lt;/p&gt;&lt;p dir="ltr"&gt;Scylla organizes data into &lt;em dir="ltr"&gt;keyspaces&lt;/em&gt;, which contain &lt;em dir="ltr"&gt;tables&lt;/em&gt;, which contain &lt;em dir="ltr"&gt;rows&lt;/em&gt;. Rows are uniquely identified by a primary key. Each row is physically a sorted series of &lt;span dir="ltr"&gt;(&lt;em dir="ltr"&gt;k&lt;/em&gt;&lt;em dir="ltr"&gt;e&lt;/em&gt;&lt;em dir="ltr"&gt;y&lt;/em&gt;, &lt;em dir="ltr"&gt;v&lt;/em&gt;&lt;em dir="ltr"&gt;a&lt;/em&gt;&lt;em dir="ltr"&gt;l&lt;/em&gt;&lt;em dir="ltr"&gt;u&lt;/em&gt;&lt;em dir="ltr"&gt;e&lt;/em&gt;, &lt;em dir="ltr"&gt;t&lt;/em&gt;&lt;em dir="ltr"&gt;i&lt;/em&gt;&lt;em dir="ltr"&gt;m&lt;/em&gt;&lt;em dir="ltr"&gt;e&lt;/em&gt;&lt;em dir="ltr"&gt;s&lt;/em&gt;&lt;em dir="ltr"&gt;t&lt;/em&gt;&lt;em dir="ltr"&gt;a&lt;/em&gt;&lt;em dir="ltr"&gt;m&lt;/em&gt;&lt;em dir="ltr"&gt;p&lt;/em&gt;)&lt;/span&gt; triples called &lt;em dir="ltr"&gt;cells&lt;/em&gt;, but conceptually, a Scylla row is a map of column names to values. Those values may be &lt;a href="https://docs.scylladb.com/getting-started/types/#native-types" dir="ltr"&gt;primitives&lt;/a&gt; (e.g.&amp;nbsp;strings, integers, booleans, dates), &lt;a href="https://docs.scylladb.com/getting-started/types/#counters" dir="ltr"&gt;counters&lt;/a&gt;, or collections, such as &lt;a href="https://docs.scylladb.com/getting-started/types/#collections" dir="ltr"&gt;maps, lists, or sets&lt;/a&gt;. Collections are internally stored using multiple cells. Rows are grouped into &lt;em dir="ltr"&gt;partitions&lt;/em&gt; by a &lt;em dir="ltr"&gt;partition key&lt;/em&gt;, and those partitions are assigned via a &lt;a href="https://docs.scylladb.com/architecture/ringarchitecture/" dir="ltr"&gt;Dynamo-style hash ring&lt;/a&gt; to a subset of nodes in the cluster. Each partition is replicated across multiple nodes for redundancy.&lt;/p&gt;&lt;p dir="ltr"&gt;Like Cassandra, Scylla generally allows clients to write to any node at any time—even when nodes are crashed or partitioned away. Whether a write is durable depends on whether it reaches a node which can store that row; whether a write is acknowledged to the client depends on whether enough nodes respond to satisfy the client’s requested consistency level. Writes are isolated, &lt;a href="https://docs.scylladb.com/getting-started/dml/" dir="ltr"&gt;Scylla claimed&lt;/a&gt;, so long as they take place within a single partition:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;In an UPDATE statement, all updates within the same partition key are applied atomically and in isolation.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;When there are multiple writes to a single cell, Scylla resolves them using &lt;a href="https://aphyr.com/posts/294-jepsen-cassandra" dir="ltr"&gt;last-write-wins&lt;/a&gt; (LWW): values with newer timestamps replace those with older ones. In the event of a timestamp collision, the lexicographically higher value wins.&lt;/p&gt;&lt;p dir="ltr"&gt;Last-write-wins implies the potential for lost updates: if a client reads some value &lt;span dir="ltr"&gt;&lt;em dir="ltr"&gt;v&lt;/em&gt;&lt;sub dir="ltr"&gt;1&lt;/sub&gt;&lt;/span&gt;, then writes back &lt;span dir="ltr"&gt;&lt;em dir="ltr"&gt;v&lt;/em&gt;&lt;sub dir="ltr"&gt;2&lt;/sub&gt;&lt;/span&gt;, it is possible that a concurrent update could also observe &lt;span dir="ltr"&gt;&lt;em dir="ltr"&gt;v&lt;/em&gt;&lt;sub dir="ltr"&gt;1&lt;/sub&gt;&lt;/span&gt; and write &lt;span dir="ltr"&gt;&lt;em dir="ltr"&gt;v&lt;/em&gt;&lt;sub dir="ltr"&gt;3&lt;/sub&gt;&lt;/span&gt;, &lt;em dir="ltr"&gt;overwriting&lt;/em&gt; &lt;span dir="ltr"&gt;&lt;em dir="ltr"&gt;v&lt;/em&gt;&lt;sub dir="ltr"&gt;2&lt;/sub&gt;&lt;/span&gt;. The update of &lt;span dir="ltr"&gt;&lt;em dir="ltr"&gt;v&lt;/em&gt;&lt;sub dir="ltr"&gt;2&lt;/sub&gt;&lt;/span&gt; is effectively lost. To avoid this problem, Scylla users can structure their updates as &lt;em dir="ltr"&gt;unique inserts&lt;/em&gt;, taking advantage of Scylla’s wide rows to store each change as a distinct column in the row. Clients can then merge those columns together on read to recover an effective value.&lt;/p&gt;&lt;p dir="ltr"&gt;This approach requires that operations &lt;em dir="ltr"&gt;commute&lt;/em&gt;: writes should be able to take effect in either order. For &lt;em dir="ltr"&gt;non-commutative&lt;/em&gt; operations, Scylla (like Cassandra), offers &lt;a href="https://jepsen.io/consistency/models/linearizable" dir="ltr"&gt;linearizable&lt;/a&gt; updates via &lt;a href="https://docs.scylladb.com/using-scylla/lwt/" dir="ltr"&gt;&lt;em dir="ltr"&gt;lightweight transactions&lt;/em&gt;&lt;/a&gt; (LWTs). LWTs allow a single Cassandra operation to proceed only if a predicate holds. They do not offer arbitrary sessions or sequences of multiple operations in a single transaction. While this prevents transactions from mixing reads and writes, a single transactional &lt;a href="https://docs.scylladb.com/getting-started/dml/#select-statement" dir="ltr"&gt;select&lt;/a&gt; can read multiple rows, and a single &lt;a href="https://docs.scylladb.com/getting-started/dml/#batch-statement" dir="ltr"&gt;batch&lt;/a&gt; can insert, update, or delete multiple rows. Both of these constructs are limited to a single partition, which means that an all-LWT history over a single partition should be &lt;a href="https://jepsen.io/consistency/models/strict-serializable" dir="ltr"&gt;strict serializable&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Both Scylla and Cassandra use a Paxos-based consensus algorithm for these transactions, but where Cassandra requires &lt;a href="https://docs.datastax.com/en/cassandra-oss/3.0/cassandra/dml/dmlLtwtTransactions.html" dir="ltr"&gt;four round trips&lt;/a&gt; per transaction, Scylla requires &lt;a href="https://www.scylladb.com/2020/07/15/getting-the-most-out-of-lightweight-transactions-in-scylla/" dir="ltr"&gt;only three&lt;/a&gt;. Other consensus algorithms, such as Raft, can achieve consensus in one round trip, which is why Scylla is laying the groundwork for a Raft-based LWT implementation.&lt;/p&gt;&lt;h1 data-number="2" dir="ltr"&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt; Test Design&lt;/h1&gt;&lt;p dir="ltr"&gt;Scylla had an &lt;a href="https://github.com/scylladb/jepsen/tree/0e1544d33af6bb164415a3912831b78e56809971" dir="ltr"&gt;existing Jepsen test suite&lt;/a&gt; adapted from Cassandra’s Jepsen tests. We reviewed and &lt;a href="https://github.com/jepsen-io/scylla/tree/0fbf866f24e9d98553c4021a64d3f448147585a1" dir="ltr"&gt;significantly expanded&lt;/a&gt; this test suite for Scylla 4.2-rc3 through 4.2.rc5, including the creation of new, more aggressive workloads and more sophisticated nemeses for fault injection. Our new tests ran on clusters of five Debian Buster nodes, deployed in LXC, Docker, and EC2.&lt;/p&gt;&lt;p dir="ltr"&gt;We made several &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/resources/scylla.yaml#L502-L508" dir="ltr"&gt;tuning changes&lt;/a&gt; to Scylla’s default configuration to speed up testing. By default, Scylla takes over a minute to detect a node failure, and 300 seconds to recover from a process crash, due to a temporary deadlock involved in gossip on boot. We lowered &lt;code dir="ltr"&gt;phi_convict_threshold&lt;/code&gt;, &lt;code dir="ltr"&gt;ring_delay_ms&lt;/code&gt;, &lt;code dir="ltr"&gt;shadow_round_ms&lt;/code&gt;, and adjusted other settings to reduce startup and recovery times.&lt;/p&gt;&lt;p dir="ltr"&gt;During these tests, we injected a &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/nemesis.clj#L393-L409" dir="ltr"&gt;variety of faults&lt;/a&gt;, including network partitions, process kills, process pauses, clock skew, and membership changes, including adding, repairing, decommissioning, and forcibly removing nodes. In addition, we measured behavior both with and without custom timestamp generators which introduced synthetic clock skew and increased the probability of timestamp collisions.&lt;/p&gt;&lt;h2 data-number="2.1" dir="ltr"&gt;&lt;span dir="ltr"&gt;2.1&lt;/span&gt; Workloads&lt;/h2&gt;&lt;p dir="ltr"&gt;Scylla’s original test suite included workloads for CQL (Cassandra Query Language) &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/collections/map.clj" dir="ltr"&gt;maps&lt;/a&gt; and &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/collections/set.clj" dir="ltr"&gt;sets&lt;/a&gt;, both of which insert several elements with consistency &lt;code dir="ltr"&gt;ONE&lt;/code&gt; into a single collection, and attempt to read them back with a final read at consistency &lt;code dir="ltr"&gt;ALL&lt;/code&gt;. The &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/batch.clj" dir="ltr"&gt;batch&lt;/a&gt; workload inserts pairs of rows together, and attempts to read back both rows. A &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/counter.clj" dir="ltr"&gt;counter&lt;/a&gt; workload creates a single CQL counter and attempts to increment it repeatedly. Reads verify that the counter value remains within expected ranges. A &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/mv.clj" dir="ltr"&gt;dedicated materialized-view workload&lt;/a&gt; updates map values and queries a materialized view to see if those changes are reflected.&lt;/p&gt;&lt;p&gt;While we briefly evaluated these workloads, the present work focused on Scylla’s lightweight transaction safety. To verify LWT safety, we used three workloads.&lt;/p&gt;&lt;p dir="ltr"&gt;The first, &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/cas_register.clj#L22-L85" dir="ltr"&gt;cas-register&lt;/a&gt;, uses LWT to perform reads, writes, and compare-and-set operations over several rows. It uses &lt;a href="https://github.com/jepsen-io/knossos" dir="ltr"&gt;Knossos&lt;/a&gt; to verify that the history of operations over each individual row is &lt;a href="https://jepsen.io/consistency/models/linearizable" dir="ltr"&gt;linearizable&lt;/a&gt;. Knossos is exponential with respect to concurrency, and concurrency (thanks to indeterminate responses) rises rapidly in Jepsen testing. This limits the length of histories to a few hundred operations per row.&lt;/p&gt;&lt;p dir="ltr"&gt;To complement the Knossos checker, we designed &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/list_append.clj" dir="ltr"&gt;list-append&lt;/a&gt; and &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/wr_register.clj" dir="ltr"&gt;wr-register&lt;/a&gt; workloads, both of which use &lt;a href="https://github.com/jepsen-io/elle" dir="ltr"&gt;Elle&lt;/a&gt; to search for violations of strict serializability. Elle uses knowledge of the history and data structures involved to infer constraints on the order of versions of each individual key, and the order of transactions over those keys. Cycles in these constraint graphs correspond to isolation anomalies. The list-append test performs transactions which append unique integers to CQL lists, and reads those lists by primary key, whereas the wr-register test writes unique integers to individual rows, rather than CQL collections.&lt;/p&gt;&lt;p dir="ltr"&gt;Both workloads perform LWT transactions composed of a single &lt;code dir="ltr"&gt;SELECT&lt;/code&gt; or &lt;code dir="ltr"&gt;BATCH&lt;/code&gt; update. Scylla prohibits mixing reads and writes in a single query, as well as queries which read multiple rows with CQL collections, and LWT queries that cross partition boundaries. Even with these restrictions we are able to verify single key linearizability, as well as limited multi-key &lt;a href="https://jepsen.io/consistency/models/strict-serializable" dir="ltr"&gt;strict serializability&lt;/a&gt; within a single partition.&lt;/p&gt;&lt;p dir="ltr"&gt;We also designed a variety of special-purpose workloads to investigate anomalous behavior. &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/batch_return.clj" dir="ltr"&gt;Batch-return&lt;/a&gt; examines the rows returned in response to LWT batches. This test verifies that returned rows correspond to requested updates in each batch. &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/write_isolation.clj" dir="ltr"&gt;Write-isolation&lt;/a&gt; performs non-LWT writes to multiple cells, and performs concurrent reads, looking for cases where only some values came from the same write: evidence of read skew.&lt;/p&gt;&lt;h1 data-number="3" dir="ltr"&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt; Results&lt;/h1&gt;&lt;p&gt;Our testing focused on lightweight transaction safety, but along the way we uncovered some additional behaviors in non-LWT operations. We’ll start by discussing some minor issues around timestamps, batch returns, and non-LWT isolation, then cover stale reads and split-brain in lightweight transactions.&lt;/p&gt;&lt;h2 data-number="3.1" dir="ltr"&gt;&lt;span dir="ltr"&gt;3.1&lt;/span&gt; Destructive INSERTs&lt;/h2&gt;&lt;p dir="ltr"&gt;We uncovered an unusual behavior with Scylla’s existing tests for CQL sets and maps: when we tested with imperfect timestamps, they appeared to &lt;a href="https://github.com/scylladb/scylla/issues/7082" dir="ltr"&gt;lose acknowledged inserts&lt;/a&gt;. Higher degrees of clock skew resulted in more writes lost, but even skews as small as one second resulted in lost updates. This behavior was particularly surprising because distinct set and map inserts should commute. In other words, adding &lt;code dir="ltr"&gt;a&lt;/code&gt; then &lt;code dir="ltr"&gt;b&lt;/code&gt; to a set ought to be the same as adding &lt;code dir="ltr"&gt;b&lt;/code&gt; then &lt;code dir="ltr"&gt;a&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;This behavior turned out &lt;em dir="ltr"&gt;not&lt;/em&gt; to be a bug; it is, in fact, documented behavior. To understand why, we have to look at the transactions performed during the set (or map) workload. They begin by creating a table with a set (map) column, and inserting a single row:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;CREATE TABLE sets (
+&lt;/p&gt;&lt;div&gt;&lt;b&gt;References&lt;/b&gt;&lt;/div&gt;</description><pubDate>Wed, 23 Dec 2020 06:32:49 -0600</pubDate></item><item><title>10 KB Club</title><link>https://lobste.rs/s/hxmtsx</link><description>&lt;p dir="ltr"&gt;
+The &lt;em dir="ltr"&gt;10 KB Club&lt;/em&gt; is a curated collection of &lt;em dir="ltr"&gt;interesting&lt;/em&gt;
+websites whose home pages do not exceed 10 KB compressed size. Whether a
+website is interesting enough to be a member of this club is decided
+based on the criteria specified in the &lt;a href="https://10kbclub.com/#club-rules" dir="ltr"&gt;Club
+Rules&lt;/a&gt; section.
+&lt;/p&gt;&lt;h2&gt;Club Members&lt;/h2&gt;&lt;p dir="ltr"&gt;
+The following websites are members of the 10 KB Club. The data in the
+table below was fetched on Thu, 24 Dec 2020 03:12:28 GMT. This data is
+refreshed at least once a day. To suggest a new website to be added to
+here, see the &lt;a href="https://10kbclub.com/#new-membership" dir="ltr"&gt;New Membership&lt;/a&gt; section.
+&lt;/p&gt;&lt;table dir="ltr"&gt;
+  &lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
+    &lt;th class="rank" dir="ltr"&gt;#
+    &lt;/th&gt;&lt;th class="url" dir="ltr"&gt;Website
+    &lt;/th&gt;&lt;th class="total" dir="ltr"&gt;Total Size
+    &lt;/th&gt;&lt;th class="content" dir="ltr"&gt;Content Size
+    &lt;/th&gt;&lt;th class="ratio" dir="ltr"&gt;Content Ratio
+  &lt;/th&gt;&lt;/tr&gt;
+  &lt;tr dir="ltr"&gt;
+    &lt;td class="rank" dir="ltr"&gt;1.&lt;/td&gt;
+    &lt;td class="url" dir="ltr"&gt;&lt;a href="http://neverssl.com/" dir="ltr"&gt;neverssl.com&lt;/a&gt;&lt;/td&gt;
+    &lt;td class="total" title="1716 bytes" dir="ltr"&gt;1.7&amp;nbsp;KB&lt;/td&gt;
+    &lt;td class="content" title="1716 bytes" dir="ltr"&gt;1.7&amp;nbsp;KB&lt;/td&gt;
+    &lt;td class="ratio" dir="ltr"&gt;100%&lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr dir="ltr"&gt;
+    &lt;td class="rank" dir="ltr"&gt;2.&lt;/td&gt;
+    &lt;td class="url" dir="ltr"&gt;&lt;a href="https://sjmulder.nl/" dir="ltr"&gt;sjmulder.nl&lt;/a&gt;&lt;/td&gt;
+    &lt;td class="total" title="2391 bytes" dir="ltr"&gt;2.3&amp;nbsp;KB&lt;/td&gt;
+    &lt;td class="content" title="2391 bytes" dir="ltr"&gt;2.3&amp;nbsp;KB&lt;/td&gt;
+    &lt;td class="ratio" dir="ltr"&gt;100%&lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr dir="ltr"&gt;
+    &lt;td class="rank" dir="ltr"&gt;3.&lt;/td&gt;
+    &lt;td class="url" dir="ltr"&gt;&lt;a href="https://augustl.com/" dir="ltr"&gt;augustl.com&lt;/a&gt;&lt;/td&gt;
+    &lt;td class="total" title="3056 bytes" dir="ltr"&gt;3.0&amp;nbsp;KB&lt;/td&gt;
+    &lt;td class="content" title="1285 bytes" dir="ltr"&gt;1.3&amp;nbsp;KB&lt;/td&gt;
+    &lt;td class="ratio" dir="ltr"&gt;42%&lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr dir="ltr"&gt;
+    &lt;td class="rank" dir="ltr"&gt;4.&lt;/td&gt;
+    &lt;td class="url" dir="ltr"&gt;&lt;a href="https://plumebio.com/" dir="ltr"&gt;plumebio.com&lt;/a&gt;&lt;/td&gt;
+    &lt;td class="total" title="3592 bytes" dir="ltr"&gt;3.5&amp;nbsp;KB&lt;/td&gt;
+    &lt;td class="content" title="1994 bytes" dir="ltr"&gt;1.9&amp;nbsp;KB&lt;/td&gt;
+    &lt;td class="ratio" dir="ltr"&gt;56%&lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr dir="ltr"&gt;
+    &lt;td class="rank" dir="ltr"&gt;5.&lt;/td&gt;
+    &lt;td class="url" dir="ltr"&gt;&lt;a href="https://sdf.org/" dir="ltr"&gt;sdf.org&lt;/a&gt;&lt;/td&gt;
+    &lt;td class="total" title="4721 bytes" dir="ltr"&gt;4.6&amp;nbsp;KB&lt;/td&gt;
+    &lt;td class="content" title="4721 bytes" dir="ltr"&gt;4.6&amp;nbsp;KB&lt;/td&gt;
+    &lt;td class="ratio" dir="ltr"&gt;100%&lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr dir="ltr"&gt;
+    &lt;td class="rank" dir="ltr"&gt;6.&lt;/td&gt;
+    &lt;td class="url" dir="ltr"&gt;&lt;a href="https://susam.in/" dir="ltr"&gt;susam.in&lt;/a&gt;&lt;/td&gt;
+    &lt;td class="total" title="5773 bytes" dir="ltr"&gt;5.6&amp;nbsp;KB&lt;/td&gt;
+    &lt;td class="content" title="2312 bytes" dir="ltr"&gt;2.3&amp;nbsp;KB&lt;/td&gt;
+    &lt;td class="ratio" dir="ltr"&gt;40%&lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr dir="ltr"&gt;
+    &lt;td class="rank" dir="ltr"&gt;7.&lt;/td&gt;
+    &lt;td class="url" dir="ltr"&gt;&lt;a href="https://john-doe.neocities.org/" dir="ltr"&gt;john-doe.neocities.org&lt;/a&gt;&lt;/td&gt;
+    &lt;td class="total" title="7448 bytes" dir="ltr"&gt;7.3&amp;nbsp;KB&lt;/td&gt;
+    &lt;td class="content" title="4696 bytes" dir="ltr"&gt;4.6&amp;nbsp;KB&lt;/td&gt;
+    &lt;td class="ratio" dir="ltr"&gt;63%&lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr dir="ltr"&gt;
+    &lt;td class="rank" dir="ltr"&gt;8.&lt;/td&gt;
+    &lt;td class="url" dir="ltr"&gt;&lt;a href="https://kerkour.fr/" dir="ltr"&gt;kerkour.fr&lt;/a&gt;&lt;/td&gt;
+    &lt;td class="total" title="7465 bytes" dir="ltr"&gt;7.3&amp;nbsp;KB&lt;/td&gt;
+    &lt;td class="content" title="5638 bytes" dir="ltr"&gt;5.5&amp;nbsp;KB&lt;/td&gt;
+    &lt;td class="ratio" dir="ltr"&gt;76%&lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr dir="ltr"&gt;
+    &lt;td class="rank" dir="ltr"&gt;9.&lt;/td&gt;
+    &lt;td class="url" dir="ltr"&gt;&lt;a href="https://1mb.club/" dir="ltr"&gt;1mb.club&lt;/a&gt;&lt;/td&gt;
+    &lt;td class="total" title="7787 bytes" dir="ltr"&gt;7.6&amp;nbsp;KB&lt;/td&gt;
+    &lt;td class="content" title="7098 bytes" dir="ltr"&gt;6.9&amp;nbsp;KB&lt;/td&gt;
+    &lt;td class="ratio" dir="ltr"&gt;91%&lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr dir="ltr"&gt;
+    &lt;td class="rank" dir="ltr"&gt;10.&lt;/td&gt;
+    &lt;td class="url" dir="ltr"&gt;&lt;a href="http://cat-v.org/" dir="ltr"&gt;cat-v.org&lt;/a&gt;&lt;/td&gt;
+    &lt;td class="total" title="10119 bytes" dir="ltr"&gt;9.9&amp;nbsp;KB&lt;/td&gt;
+    &lt;td class="content" title="6647 bytes" dir="ltr"&gt;6.5&amp;nbsp;KB&lt;/td&gt;
+    &lt;td class="ratio" dir="ltr"&gt;66%&lt;/td&gt;
+  &lt;/tr&gt;
+&lt;/tbody&gt;&lt;/table&gt;&lt;p dir="ltr"&gt;
+Do not take the content size and content ratio columns too seriously.
+The content size is calculated using &lt;a href="https://github.com/susam/10kbclub/blob/master/refresh.js" dir="ltr"&gt;refresh.js&lt;/a&gt;
+in the source code of the repository. It is not always accurate. For
+example, it considers internal CSS to be content but external CSS to be
+not content. Therefore, home pages that use CSS within an HTML page have
+an unfair advantage to get a higher content ratio than it should. &lt;a href="https://250kb.club/" dir="ltr"&gt;250 KB Club&lt;/a&gt; too suffers from the same
+issue.
+&lt;/p&gt;&lt;h2&gt;Club Rules&lt;/h2&gt;&lt;p&gt;
+Each website that is a member of the 10 KB Club is identified by a URL
+to its home page. The URL must satisfy the following rules:
+&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p&gt;
+      If the URL is opened in a web browser with no ad blockers or
+      script blockers enabled, the compressed data that the web browser
+      has to fetch to load the complete web page must not exceed 10240
+      bytes. To check this on Firefox or Chrome, open a new
+      private/incognito window, then right click on the blank page and
+      select "Inspect", then go to the "Network" tab, and finally enter
+      the URL in the address bar and press enter. The transferred size
+      appears in the status bar at the bottom of the network tab.
+    &lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;
+      The URL must point to a home page of the website. This is usually
+      the root directory of the domain, i.e., of the form &lt;a href="https://www.example.com/" dir="ltr"&gt;https://www.example.com&lt;/a&gt; but it need not
+      always be so. An URL of the form &lt;a href="https://www.example.com/alice/" dir="ltr"&gt;https://www.example.com/alice/&lt;/a&gt;
+      is also okay as long as it is a home page of some website that
+      exists under that directory, i.e., a top-level user page within a
+      domain is considered as a website home page.
+    &lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
+      The URL must point to a page that contains useful content (e.g.,
+      an article, a manifesto page, etc.) or a list of links to such
+      content (e.g., blog listing, catalog of websites, etc.), or
+      provides useful functionality (e.g., a web-based game, an online
+      currency convertor, etc.).
+    &lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
+      The URL must not point merely to a page with metadata about a
+      person or an organization (e.g., welcome page, about page, contact
+      information page, etc. without any other content are not okay).
+    &lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;
+      Some content under the URL of the website must have received at
+      least 100 points on &lt;a href="https://news.ycombinator.com/" dir="ltr"&gt;Hacker
+      News&lt;/a&gt; on at least one occasion. Use the following URL to check
+      submissions for a website on Hacker News and the votes each
+      submission has received: &lt;a href="https://news.ycombinator.com/from?site=example.com" dir="ltr"&gt;https://news.ycombinator.com/from?site=example.com&lt;/a&gt;
+      (replace "example.com" with the domain of the website).
+    &lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;
+Note that the steps provided for Firefox and Chrome in the 1st point do
+not constitute a definitive decision criteria for membership. The final
+decision on whether the compressed transfer size is done by &lt;a href="https://github.com/susam/10kbclub/blob/master/refresh.js" dir="ltr"&gt;refresh.js&lt;/a&gt;
+in the source code of this website. It does not always exactly match
+what Firefox or Chrome shows. For example, this script does not count
+the &lt;a href="https://en.wikipedia.org/wiki/Favicon" dir="ltr"&gt;favicon&lt;/a&gt; transfer
+size, so the transfer size that this script determines is usually a
+little less than what Firefox or Chrome shows.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+If you think that there is a very useful website that does not satisfy
+the 4th point but is still noteworthy enough to be a part of this list,
+please go ahead and propose it for addition by following the &lt;a href="https://10kbclub.com/#new-membership" dir="ltr"&gt;next section&lt;/a&gt;. We will decide whether to add
+such websites on a case by case basis.
+&lt;/p&gt;&lt;h2&gt;New Membership&lt;/h2&gt;&lt;p dir="ltr"&gt;
+To add a new member website to this club, first ensure that it satisfies
+the rules laid out in the &lt;a href="https://10kbclub.com/#club-rules" dir="ltr"&gt;Club Rules&lt;/a&gt; section.
+If it satisfies the club rules, then &lt;a href="https://github.com/susam/10kbclub/issues/new" dir="ltr"&gt;create a new issue
+on GitHub&lt;/a&gt; and provide the URL of the website.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+The 10 KB Club was created by &lt;a href="https://github.com/susam" dir="ltr"&gt;Susam
+Pal&lt;/a&gt;. The source code of this website is available on &lt;a href="https://github.com/susam/10kbclub" dir="ltr"&gt;GitHub&lt;/a&gt;.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+This website is inspired by Bradley Taunt's &lt;a href="https://1mb.club/" dir="ltr"&gt;1 MB Club&lt;/a&gt; and Norman Köhring's &lt;a href="https://250kb.club/" dir="ltr"&gt;250 KB Club&lt;/a&gt;.
+&lt;/p&gt;&lt;p&gt;
+Made with ♥ for a performant web.
+&lt;/p&gt;</description><pubDate>Wed, 23 Dec 2020 21:16:56 -0600</pubDate></item><item><title>Three Great Videos About Regex Derivatives</title><link>https://lobste.rs/s/srrkdq</link><description>&lt;h2&gt;Context&lt;/h2&gt;&lt;p dir="ltr"&gt;For context, see the two July 2020 posts  tagged #&lt;a href="http://www.oilshell.org/blog/tags.html?tag=eggex#eggex" dir="ltr"&gt;eggex&lt;/a&gt;,
+particularly &lt;a href="http://www.oilshell.org/blog/2020/07/ideas-questions.html#regular-expression-derivatives-papers-and-code" dir="ltr"&gt;this part of the second post, on derivatives&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;Summary: A 2009 paper revived this regex matching technique.  There have been
+many implementations since, though no popular ones.&lt;/p&gt;&lt;h3&gt;How Does This Relate to Shell?&lt;/h3&gt;&lt;UL&gt;&lt;LI&gt;As mentioned in those posts, a &lt;strong dir="ltr"&gt;glob&lt;/strong&gt; like &lt;code dir="ltr"&gt;[a-c]*.py&lt;/code&gt; is essentially a
+limited form of regex.
+&lt;UL&gt;&lt;LI&gt;I noted in &lt;a href="https://news.ycombinator.com/item?id=25491467" dir="ltr"&gt;this Hacker News comment&lt;/a&gt; that the obscure
+"extended glob" feature of bash gives globs the power of regular
+expressions, by adding repetition and alternation.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;It would be nice if &lt;a href="http://www.oilshell.org/cross-ref.html?tag=eggex#eggex" dir="ltr"&gt;egg expressions&lt;/a&gt; could be &lt;strong dir="ltr"&gt;compiled&lt;/strong&gt; to a
+full DFA in C, as we do in &lt;a href="http://www.oilshell.org/blog/tags.html?tag=lexing#lexing" dir="ltr"&gt;Oil's lexer&lt;/a&gt; via &lt;a href="http://www.oilshell.org/cross-ref.html?tag=re2c#re2c" dir="ltr"&gt;re2c&lt;/a&gt;.
+&lt;UL&gt;&lt;LI&gt;This seems doable, and the author of an &lt;a href="https://github.com/jack-pappas/facio/tree/master/Reggie" dir="ltr"&gt;F# compiler
+toolkit&lt;/a&gt; relays
+valuable experience at the bottom of the thread.  I'd like to do the same
+thing without the .NET runtime, depending only on code in Oil.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;It would be nice if &lt;a href="http://www.oilshell.org/cross-ref.html?tag=eggex#eggex" dir="ltr"&gt;egg expressions&lt;/a&gt; weren't limited to the
+features of the pattern matching engine in &lt;a href="http://www.oilshell.org/cross-ref.html?tag=libc#libc" dir="ltr"&gt;libc&lt;/a&gt;.  Non-greedy
+capturing like &lt;code dir="ltr"&gt;foo.*?bar&lt;/code&gt; would be nice, although capturing and matching are
+two different problems.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;EasyTheory Videos&lt;/h2&gt;&lt;h3&gt;Derivative of a Regex?! (Brzozowski Derivative)&lt;/h3&gt;&lt;p&gt;This video explains what a derivative is using the recursive definition of
+regular expressions.&lt;/p&gt;&lt;div class="embed-placeholder" data-type="youtube" data-id="s9EPoy9r-ok"&gt;&lt;/div&gt;&lt;h3&gt;Example&lt;/h3&gt;&lt;p&gt;This one walks through an example of a regex and its derivative.&lt;/p&gt;&lt;div class="embed-placeholder" data-type="youtube" data-id="P9FtoOCZMDM"&gt;&lt;/div&gt;&lt;h3&gt;Regex to DFA Directly Using Brzozowski Derivatives (No NFA)&lt;/h3&gt;&lt;p dir="ltr"&gt;This one shows how to directly convert a regular expression to a DFA with
+derivatives.  This is interesting because DFAs can be executed efficiently.
+See the &lt;a href="https://old.reddit.com/r/ProgrammingLanguages/comments/khec43/video_derivative_of_a_regex_brzozowski_derivative/" dir="ltr"&gt;Reddit thread&lt;/a&gt; for more color on this.&lt;/p&gt;&lt;div class="embed-placeholder" data-type="youtube" data-id="rcjR3--M7iM"&gt;&lt;/div&gt;&lt;h2&gt;Why Call This Operation a Derivative?&lt;/h2&gt;&lt;p&gt;I don't know, and the videos don't explain it!  I assume there is some
+connection between algebra and calculus.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://old.reddit.com/r/ProgrammingLanguages/comments/khec43/video_derivative_of_a_regex_brzozowski_derivative/" dir="ltr"&gt;Reddit thread&lt;/a&gt; has some speculation on this.  &lt;a href="https://old.reddit.com/r/oilshell/comments/kj6svq/three_great_videos_about_regex_derivatives/?" dir="ltr"&gt;Leave a
+comment&lt;/a&gt; if you have ideas.&lt;/p&gt;&lt;p dir="ltr"&gt;I recently explained that &lt;a href="https://old.reddit.com/r/ProgrammingLanguages/comments/k5yj4c/modern_parser_generator/geiew2e/" dir="ltr"&gt;languages are sets, not algorithms&lt;/a&gt;.
+And MathOverflow says that &lt;a href="https://math.stackexchange.com/a/1574197" dir="ltr"&gt;derivatives can be expressed in set
+theory&lt;/a&gt;.  But I don't know if that's
+a useful way to think about it.&lt;/p&gt;&lt;h2&gt;More Info&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;These videos are part of the &lt;a href="https://www.youtube.com/c/EasyTheory/videos" dir="ltr"&gt;EasyTheory
+channel&lt;/a&gt;, which started 9 months
+ago, and has many videos that go deeply into the theory of computation.
+&lt;UL&gt;&lt;LI&gt;Caveat: this is pure theory, and I'm mainly interested in &lt;strong dir="ltr"&gt;engineering
+consequences&lt;/strong&gt;, like compiling with fewer lines of code and executing
+efficiently.  Posts tagged #&lt;a href="http://www.oilshell.org/blog/tags.html?tag=computer-science#computer-science" dir="ltr"&gt;computer-science&lt;/a&gt; explain other
+such connections.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;Recent posts tagged #&lt;a href="http://www.oilshell.org/blog/tags.html?tag=eggex#eggex" dir="ltr"&gt;eggex&lt;/a&gt;:
+&lt;UL&gt;&lt;LI&gt;&lt;a href="http://www.oilshell.org/blog/2020/07/ideas-questions.html" dir="ltr"&gt;Regular Languages, Part 2: Ideas and
+Questions&lt;/a&gt; (July
+2020).  This post contains the section with many links about regex
+derivatives, also linked above.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Ad&lt;/strong&gt;: I'm looking for help with Oil, which is written in Python, shell, and
+C++.  See our
+&lt;a href="https://github.com/oilshell/oil/blob/master/README.md" dir="ltr"&gt;README.md&lt;/a&gt;.&lt;/p&gt;</description><pubDate>Wed, 23 Dec 2020 20:29:22 -0600</pubDate></item><item><title>Jepsen: Scylla 4.2-rc3</title><link>https://lobste.rs/s/lloot0</link><description>&lt;h1 data-number="1" dir="ltr"&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt; Background&lt;/h1&gt;&lt;p dir="ltr"&gt;Scylla is a distributed wide-column&lt;a href="https://jepsen.io/analyses/scylla-4.2-rc3#fn1" role="doc-noteref" dir="ltr"&gt;&lt;sup dir="ltr"&gt;1&lt;/sup&gt;&lt;/a&gt; database which originated as a C++ port of Cassandra, aiming for improved performance. It supports both Cassandra- and &lt;a href="https://aws.amazon.com/dynamodb/" dir="ltr"&gt;DynamoDB&lt;/a&gt;-compatible APIs, and is intended for high-throughput, low-latency workloads, including analytics, messaging, and other time-series data.&lt;/p&gt;&lt;p dir="ltr"&gt;Scylla organizes data into &lt;em dir="ltr"&gt;keyspaces&lt;/em&gt;, which contain &lt;em dir="ltr"&gt;tables&lt;/em&gt;, which contain &lt;em dir="ltr"&gt;rows&lt;/em&gt;. Rows are uniquely identified by a primary key. Each row is physically a sorted series of &lt;span dir="ltr"&gt;(&lt;em dir="ltr"&gt;k&lt;/em&gt;&lt;em dir="ltr"&gt;e&lt;/em&gt;&lt;em dir="ltr"&gt;y&lt;/em&gt;, &lt;em dir="ltr"&gt;v&lt;/em&gt;&lt;em dir="ltr"&gt;a&lt;/em&gt;&lt;em dir="ltr"&gt;l&lt;/em&gt;&lt;em dir="ltr"&gt;u&lt;/em&gt;&lt;em dir="ltr"&gt;e&lt;/em&gt;, &lt;em dir="ltr"&gt;t&lt;/em&gt;&lt;em dir="ltr"&gt;i&lt;/em&gt;&lt;em dir="ltr"&gt;m&lt;/em&gt;&lt;em dir="ltr"&gt;e&lt;/em&gt;&lt;em dir="ltr"&gt;s&lt;/em&gt;&lt;em dir="ltr"&gt;t&lt;/em&gt;&lt;em dir="ltr"&gt;a&lt;/em&gt;&lt;em dir="ltr"&gt;m&lt;/em&gt;&lt;em dir="ltr"&gt;p&lt;/em&gt;)&lt;/span&gt; triples called &lt;em dir="ltr"&gt;cells&lt;/em&gt;, but conceptually, a Scylla row is a map of column names to values. Those values may be &lt;a href="https://docs.scylladb.com/getting-started/types/#native-types" dir="ltr"&gt;primitives&lt;/a&gt; (e.g.&amp;nbsp;strings, integers, booleans, dates), &lt;a href="https://docs.scylladb.com/getting-started/types/#counters" dir="ltr"&gt;counters&lt;/a&gt;, or collections, such as &lt;a href="https://docs.scylladb.com/getting-started/types/#collections" dir="ltr"&gt;maps, lists, or sets&lt;/a&gt;. Collections are internally stored using multiple cells. Rows are grouped into &lt;em dir="ltr"&gt;partitions&lt;/em&gt; by a &lt;em dir="ltr"&gt;partition key&lt;/em&gt;, and those partitions are assigned via a &lt;a href="https://docs.scylladb.com/architecture/ringarchitecture/" dir="ltr"&gt;Dynamo-style hash ring&lt;/a&gt; to a subset of nodes in the cluster. Each partition is replicated across multiple nodes for redundancy.&lt;/p&gt;&lt;p dir="ltr"&gt;Like Cassandra, Scylla generally allows clients to write to any node at any time—even when nodes are crashed or partitioned away. Whether a write is durable depends on whether it reaches a node which can store that row; whether a write is acknowledged to the client depends on whether enough nodes respond to satisfy the client’s requested consistency level. Writes are isolated, &lt;a href="https://docs.scylladb.com/getting-started/dml/" dir="ltr"&gt;Scylla claimed&lt;/a&gt;, so long as they take place within a single partition:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;In an UPDATE statement, all updates within the same partition key are applied atomically and in isolation.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;When there are multiple writes to a single cell, Scylla resolves them using &lt;a href="https://aphyr.com/posts/294-jepsen-cassandra" dir="ltr"&gt;last-write-wins&lt;/a&gt; (LWW): values with newer timestamps replace those with older ones. In the event of a timestamp collision, the lexicographically higher value wins.&lt;/p&gt;&lt;p dir="ltr"&gt;Last-write-wins implies the potential for lost updates: if a client reads some value &lt;span dir="ltr"&gt;&lt;em dir="ltr"&gt;v&lt;/em&gt;&lt;sub dir="ltr"&gt;1&lt;/sub&gt;&lt;/span&gt;, then writes back &lt;span dir="ltr"&gt;&lt;em dir="ltr"&gt;v&lt;/em&gt;&lt;sub dir="ltr"&gt;2&lt;/sub&gt;&lt;/span&gt;, it is possible that a concurrent update could also observe &lt;span dir="ltr"&gt;&lt;em dir="ltr"&gt;v&lt;/em&gt;&lt;sub dir="ltr"&gt;1&lt;/sub&gt;&lt;/span&gt; and write &lt;span dir="ltr"&gt;&lt;em dir="ltr"&gt;v&lt;/em&gt;&lt;sub dir="ltr"&gt;3&lt;/sub&gt;&lt;/span&gt;, &lt;em dir="ltr"&gt;overwriting&lt;/em&gt; &lt;span dir="ltr"&gt;&lt;em dir="ltr"&gt;v&lt;/em&gt;&lt;sub dir="ltr"&gt;2&lt;/sub&gt;&lt;/span&gt;. The update of &lt;span dir="ltr"&gt;&lt;em dir="ltr"&gt;v&lt;/em&gt;&lt;sub dir="ltr"&gt;2&lt;/sub&gt;&lt;/span&gt; is effectively lost. To avoid this problem, Scylla users can structure their updates as &lt;em dir="ltr"&gt;unique inserts&lt;/em&gt;, taking advantage of Scylla’s wide rows to store each change as a distinct column in the row. Clients can then merge those columns together on read to recover an effective value.&lt;/p&gt;&lt;p dir="ltr"&gt;This approach requires that operations &lt;em dir="ltr"&gt;commute&lt;/em&gt;: writes should be able to take effect in either order. For &lt;em dir="ltr"&gt;non-commutative&lt;/em&gt; operations, Scylla (like Cassandra), offers &lt;a href="https://jepsen.io/consistency/models/linearizable" dir="ltr"&gt;linearizable&lt;/a&gt; updates via &lt;a href="https://docs.scylladb.com/using-scylla/lwt/" dir="ltr"&gt;&lt;em dir="ltr"&gt;lightweight transactions&lt;/em&gt;&lt;/a&gt; (LWTs). LWTs allow a single Cassandra operation to proceed only if a predicate holds. They do not offer arbitrary sessions or sequences of multiple operations in a single transaction. While this prevents transactions from mixing reads and writes, a single transactional &lt;a href="https://docs.scylladb.com/getting-started/dml/#select-statement" dir="ltr"&gt;select&lt;/a&gt; can read multiple rows, and a single &lt;a href="https://docs.scylladb.com/getting-started/dml/#batch-statement" dir="ltr"&gt;batch&lt;/a&gt; can insert, update, or delete multiple rows. Both of these constructs are limited to a single partition, which means that an all-LWT history over a single partition should be &lt;a href="https://jepsen.io/consistency/models/strict-serializable" dir="ltr"&gt;strict serializable&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Both Scylla and Cassandra use a Paxos-based consensus algorithm for these transactions, but where Cassandra requires &lt;a href="https://docs.datastax.com/en/cassandra-oss/3.0/cassandra/dml/dmlLtwtTransactions.html" dir="ltr"&gt;four round trips&lt;/a&gt; per transaction, Scylla requires &lt;a href="https://www.scylladb.com/2020/07/15/getting-the-most-out-of-lightweight-transactions-in-scylla/" dir="ltr"&gt;only three&lt;/a&gt;. Other consensus algorithms, such as Raft, can achieve consensus in one round trip, which is why Scylla is laying the groundwork for a Raft-based LWT implementation.&lt;/p&gt;&lt;h1 data-number="2" dir="ltr"&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt; Test Design&lt;/h1&gt;&lt;p dir="ltr"&gt;Scylla had an &lt;a href="https://github.com/scylladb/jepsen/tree/0e1544d33af6bb164415a3912831b78e56809971" dir="ltr"&gt;existing Jepsen test suite&lt;/a&gt; adapted from Cassandra’s Jepsen tests. We reviewed and &lt;a href="https://github.com/jepsen-io/scylla/tree/0fbf866f24e9d98553c4021a64d3f448147585a1" dir="ltr"&gt;significantly expanded&lt;/a&gt; this test suite for Scylla 4.2-rc3 through 4.2.rc5, including the creation of new, more aggressive workloads and more sophisticated nemeses for fault injection. Our new tests ran on clusters of five Debian Buster nodes, deployed in LXC, Docker, and EC2.&lt;/p&gt;&lt;p dir="ltr"&gt;We made several &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/resources/scylla.yaml#L502-L508" dir="ltr"&gt;tuning changes&lt;/a&gt; to Scylla’s default configuration to speed up testing. By default, Scylla takes over a minute to detect a node failure, and 300 seconds to recover from a process crash, due to a temporary deadlock involved in gossip on boot. We lowered &lt;code dir="ltr"&gt;phi_convict_threshold&lt;/code&gt;, &lt;code dir="ltr"&gt;ring_delay_ms&lt;/code&gt;, &lt;code dir="ltr"&gt;shadow_round_ms&lt;/code&gt;, and adjusted other settings to reduce startup and recovery times.&lt;/p&gt;&lt;p dir="ltr"&gt;During these tests, we injected a &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/nemesis.clj#L393-L409" dir="ltr"&gt;variety of faults&lt;/a&gt;, including network partitions, process kills, process pauses, clock skew, and membership changes, including adding, repairing, decommissioning, and forcibly removing nodes. In addition, we measured behavior both with and without custom timestamp generators which introduced synthetic clock skew and increased the probability of timestamp collisions.&lt;/p&gt;&lt;h2 data-number="2.1" dir="ltr"&gt;&lt;span dir="ltr"&gt;2.1&lt;/span&gt; Workloads&lt;/h2&gt;&lt;p dir="ltr"&gt;Scylla’s original test suite included workloads for CQL (Cassandra Query Language) &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/collections/map.clj" dir="ltr"&gt;maps&lt;/a&gt; and &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/collections/set.clj" dir="ltr"&gt;sets&lt;/a&gt;, both of which insert several elements with consistency &lt;code dir="ltr"&gt;ONE&lt;/code&gt; into a single collection, and attempt to read them back with a final read at consistency &lt;code dir="ltr"&gt;ALL&lt;/code&gt;. The &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/batch.clj" dir="ltr"&gt;batch&lt;/a&gt; workload inserts pairs of rows together, and attempts to read back both rows. A &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/counter.clj" dir="ltr"&gt;counter&lt;/a&gt; workload creates a single CQL counter and attempts to increment it repeatedly. Reads verify that the counter value remains within expected ranges. A &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/mv.clj" dir="ltr"&gt;dedicated materialized-view workload&lt;/a&gt; updates map values and queries a materialized view to see if those changes are reflected.&lt;/p&gt;&lt;p&gt;While we briefly evaluated these workloads, the present work focused on Scylla’s lightweight transaction safety. To verify LWT safety, we used three workloads.&lt;/p&gt;&lt;p dir="ltr"&gt;The first, &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/cas_register.clj#L22-L85" dir="ltr"&gt;cas-register&lt;/a&gt;, uses LWT to perform reads, writes, and compare-and-set operations over several rows. It uses &lt;a href="https://github.com/jepsen-io/knossos" dir="ltr"&gt;Knossos&lt;/a&gt; to verify that the history of operations over each individual row is &lt;a href="https://jepsen.io/consistency/models/linearizable" dir="ltr"&gt;linearizable&lt;/a&gt;. Knossos is exponential with respect to concurrency, and concurrency (thanks to indeterminate responses) rises rapidly in Jepsen testing. This limits the length of histories to a few hundred operations per row.&lt;/p&gt;&lt;p dir="ltr"&gt;To complement the Knossos checker, we designed &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/list_append.clj" dir="ltr"&gt;list-append&lt;/a&gt; and &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/wr_register.clj" dir="ltr"&gt;wr-register&lt;/a&gt; workloads, both of which use &lt;a href="https://github.com/jepsen-io/elle" dir="ltr"&gt;Elle&lt;/a&gt; to search for violations of strict serializability. Elle uses knowledge of the history and data structures involved to infer constraints on the order of versions of each individual key, and the order of transactions over those keys. Cycles in these constraint graphs correspond to isolation anomalies. The list-append test performs transactions which append unique integers to CQL lists, and reads those lists by primary key, whereas the wr-register test writes unique integers to individual rows, rather than CQL collections.&lt;/p&gt;&lt;p dir="ltr"&gt;Both workloads perform LWT transactions composed of a single &lt;code dir="ltr"&gt;SELECT&lt;/code&gt; or &lt;code dir="ltr"&gt;BATCH&lt;/code&gt; update. Scylla prohibits mixing reads and writes in a single query, as well as queries which read multiple rows with CQL collections, and LWT queries that cross partition boundaries. Even with these restrictions we are able to verify single key linearizability, as well as limited multi-key &lt;a href="https://jepsen.io/consistency/models/strict-serializable" dir="ltr"&gt;strict serializability&lt;/a&gt; within a single partition.&lt;/p&gt;&lt;p dir="ltr"&gt;We also designed a variety of special-purpose workloads to investigate anomalous behavior. &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/batch_return.clj" dir="ltr"&gt;Batch-return&lt;/a&gt; examines the rows returned in response to LWT batches. This test verifies that returned rows correspond to requested updates in each batch. &lt;a href="https://github.com/jepsen-io/scylla/blob/0fbf866f24e9d98553c4021a64d3f448147585a1/src/scylla/write_isolation.clj" dir="ltr"&gt;Write-isolation&lt;/a&gt; performs non-LWT writes to multiple cells, and performs concurrent reads, looking for cases where only some values came from the same write: evidence of read skew.&lt;/p&gt;&lt;h1 data-number="3" dir="ltr"&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt; Results&lt;/h1&gt;&lt;p&gt;Our testing focused on lightweight transaction safety, but along the way we uncovered some additional behaviors in non-LWT operations. We’ll start by discussing some minor issues around timestamps, batch returns, and non-LWT isolation, then cover stale reads and split-brain in lightweight transactions.&lt;/p&gt;&lt;h2 data-number="3.1" dir="ltr"&gt;&lt;span dir="ltr"&gt;3.1&lt;/span&gt; Destructive INSERTs&lt;/h2&gt;&lt;p dir="ltr"&gt;We uncovered an unusual behavior with Scylla’s existing tests for CQL sets and maps: when we tested with imperfect timestamps, they appeared to &lt;a href="https://github.com/scylladb/scylla/issues/7082" dir="ltr"&gt;lose acknowledged inserts&lt;/a&gt;. Higher degrees of clock skew resulted in more writes lost, but even skews as small as one second resulted in lost updates. This behavior was particularly surprising because distinct set and map inserts should commute. In other words, adding &lt;code dir="ltr"&gt;a&lt;/code&gt; then &lt;code dir="ltr"&gt;b&lt;/code&gt; to a set ought to be the same as adding &lt;code dir="ltr"&gt;b&lt;/code&gt; then &lt;code dir="ltr"&gt;a&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;This behavior turned out &lt;em dir="ltr"&gt;not&lt;/em&gt; to be a bug; it is, in fact, documented behavior. To understand why, we have to look at the transactions performed during the set (or map) workload. They begin by creating a table with a set (map) column, and inserting a single row:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;CREATE TABLE sets (
   id    int PRIMARY KEY,
   value set&amp;lt;int&amp;gt;
 );
@@ -547,41 +740,7 @@ Our &lt;a href="https://smallstep.com/docs/step-ca/certificate-authority-server-
 for setting up renewal on your clients.&lt;/p&gt;&lt;h4&gt;Further Reading&lt;/h4&gt;&lt;p&gt;Now that you have an internal CA, here’s a few useful resources:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;To get more familiar with the &lt;code dir="ltr"&gt;step&lt;/code&gt; command and how it interfaces with your CA, try out some of the examples in &lt;a href="https://smallstep.com/docs/step-ca/basic-certificate-authority-operations" dir="ltr"&gt;Basic Certificate Authority Operations&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://smallstep.com/hello-mtls" dir="ltr"&gt;Hello mTLS&lt;/a&gt; shows you how to get mutual TLS authentication configured for several common services and programming languages, using the &lt;code dir="ltr"&gt;step&lt;/code&gt; command.&lt;/LI&gt;&lt;LI&gt;There’s also a lot to learn about the different provisioners you can add to your CA to suit your workflows.
 See &lt;a href="https://smallstep.com/docs/step-ca/configuration" dir="ltr"&gt;Configuring &lt;code dir="ltr"&gt;step-ca&lt;/code&gt;&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;Bonus: Want to use SSH certificates?
 You can turn your tiny CA into an SSH CA, and use certificates and single sign-on for your SSH hosts.
-We have a &lt;a href="https://smallstep.com/blog/diy-single-sign-on-for-ssh/" dir="ltr"&gt;blog post&lt;/a&gt; and &lt;a href="https://www.youtube.com/watch?v=ZhxLRlcNUM4" dir="ltr"&gt;video walk-through&lt;/a&gt; that describes how to set it up.&lt;/LI&gt;&lt;/UL&gt;&lt;div&gt;Subscribe to updates&lt;/div&gt;&lt;div dir="ltr"&gt;Unsubscribe anytime, see &lt;a href="https://smallstep.com/privacy-policy" dir="ltr"&gt;Privacy Policy&lt;/a&gt;&lt;/div&gt;</description><pubDate>Wed, 23 Dec 2020 13:03:05 -0600</pubDate></item><item><title>Three Great Videos About Regex Derivatives</title><link>https://lobste.rs/s/srrkdq</link><description>&lt;h2&gt;Context&lt;/h2&gt;&lt;p dir="ltr"&gt;For context, see the two July 2020 posts  tagged #&lt;a href="http://www.oilshell.org/blog/tags.html?tag=eggex#eggex" dir="ltr"&gt;eggex&lt;/a&gt;,
-particularly &lt;a href="http://www.oilshell.org/blog/2020/07/ideas-questions.html#regular-expression-derivatives-papers-and-code" dir="ltr"&gt;this part of the second post, on derivatives&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;Summary: A 2009 paper revived this regex matching technique.  There have been
-many implementations since, though no popular ones.&lt;/p&gt;&lt;h3&gt;How Does This Relate to Shell?&lt;/h3&gt;&lt;UL&gt;&lt;LI&gt;As mentioned in those posts, a &lt;strong dir="ltr"&gt;glob&lt;/strong&gt; like &lt;code dir="ltr"&gt;[a-c]*.py&lt;/code&gt; is essentially a
-limited form of regex.
-&lt;UL&gt;&lt;LI&gt;I noted in &lt;a href="https://news.ycombinator.com/item?id=25491467" dir="ltr"&gt;this Hacker News comment&lt;/a&gt; that the obscure
-"extended glob" feature of bash gives globs the power of regular
-expressions, by adding repetition and alternation.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;It would be nice if &lt;a href="http://www.oilshell.org/cross-ref.html?tag=eggex#eggex" dir="ltr"&gt;egg expressions&lt;/a&gt; could be &lt;strong dir="ltr"&gt;compiled&lt;/strong&gt; to a
-full DFA in C, as we do in &lt;a href="http://www.oilshell.org/blog/tags.html?tag=lexing#lexing" dir="ltr"&gt;Oil's lexer&lt;/a&gt; via &lt;a href="http://www.oilshell.org/cross-ref.html?tag=re2c#re2c" dir="ltr"&gt;re2c&lt;/a&gt;.
-&lt;UL&gt;&lt;LI&gt;This seems doable, and the author of an &lt;a href="https://github.com/jack-pappas/facio/tree/master/Reggie" dir="ltr"&gt;F# compiler
-toolkit&lt;/a&gt; relays
-valuable experience at the bottom of the thread.  I'd like to do the same
-thing without the .NET runtime, depending only on code in Oil.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;It would be nice if &lt;a href="http://www.oilshell.org/cross-ref.html?tag=eggex#eggex" dir="ltr"&gt;egg expressions&lt;/a&gt; weren't limited to the
-features of the pattern matching engine in &lt;a href="http://www.oilshell.org/cross-ref.html?tag=libc#libc" dir="ltr"&gt;libc&lt;/a&gt;.  Non-greedy
-capturing like &lt;code dir="ltr"&gt;foo.*?bar&lt;/code&gt; would be nice, although capturing and matching are
-two different problems.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;EasyTheory Videos&lt;/h2&gt;&lt;h3&gt;Derivative of a Regex?! (Brzozowski Derivative)&lt;/h3&gt;&lt;p&gt;This video explains what a derivative is using the recursive definition of
-regular expressions.&lt;/p&gt;&lt;div class="embed-placeholder" data-type="youtube" data-id="s9EPoy9r-ok"&gt;&lt;/div&gt;&lt;h3&gt;Example&lt;/h3&gt;&lt;p&gt;This one walks through an example of a regex and its derivative.&lt;/p&gt;&lt;div class="embed-placeholder" data-type="youtube" data-id="P9FtoOCZMDM"&gt;&lt;/div&gt;&lt;h3&gt;Regex to DFA Directly Using Brzozowski Derivatives (No NFA)&lt;/h3&gt;&lt;p dir="ltr"&gt;This one shows how to directly convert a regular expression to a DFA with
-derivatives.  This is interesting because DFAs can be executed efficiently.
-See the &lt;a href="https://old.reddit.com/r/ProgrammingLanguages/comments/khec43/video_derivative_of_a_regex_brzozowski_derivative/" dir="ltr"&gt;Reddit thread&lt;/a&gt; for more color on this.&lt;/p&gt;&lt;div class="embed-placeholder" data-type="youtube" data-id="rcjR3--M7iM"&gt;&lt;/div&gt;&lt;h2&gt;Why Call This Operation a Derivative?&lt;/h2&gt;&lt;p&gt;I don't know, and the videos don't explain it!  I assume there is some
-connection between algebra and calculus.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://old.reddit.com/r/ProgrammingLanguages/comments/khec43/video_derivative_of_a_regex_brzozowski_derivative/" dir="ltr"&gt;Reddit thread&lt;/a&gt; has some speculation on this.  &lt;a href="https://old.reddit.com/r/oilshell/comments/kj6svq/three_great_videos_about_regex_derivatives/?" dir="ltr"&gt;Leave a
-comment&lt;/a&gt; if you have ideas.&lt;/p&gt;&lt;p dir="ltr"&gt;I recently explained that &lt;a href="https://old.reddit.com/r/ProgrammingLanguages/comments/k5yj4c/modern_parser_generator/geiew2e/" dir="ltr"&gt;languages are sets, not algorithms&lt;/a&gt;.
-And MathOverflow says that &lt;a href="https://math.stackexchange.com/a/1574197" dir="ltr"&gt;derivatives can be expressed in set
-theory&lt;/a&gt;.  But I don't know if that's
-a useful way to think about it.&lt;/p&gt;&lt;h2&gt;More Info&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;These videos are part of the &lt;a href="https://www.youtube.com/c/EasyTheory/videos" dir="ltr"&gt;EasyTheory
-channel&lt;/a&gt;, which started 9 months
-ago, and has many videos that go deeply into the theory of computation.
-&lt;UL&gt;&lt;LI&gt;Caveat: this is pure theory, and I'm mainly interested in &lt;strong dir="ltr"&gt;engineering
-consequences&lt;/strong&gt;, like compiling with fewer lines of code and executing
-efficiently.  Posts tagged #&lt;a href="http://www.oilshell.org/blog/tags.html?tag=computer-science#computer-science" dir="ltr"&gt;computer-science&lt;/a&gt; explain other
-such connections.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;Recent posts tagged #&lt;a href="http://www.oilshell.org/blog/tags.html?tag=eggex#eggex" dir="ltr"&gt;eggex&lt;/a&gt;:
-&lt;UL&gt;&lt;LI&gt;&lt;a href="http://www.oilshell.org/blog/2020/07/ideas-questions.html" dir="ltr"&gt;Regular Languages, Part 2: Ideas and
-Questions&lt;/a&gt; (July
-2020).  This post contains the section with many links about regex
-derivatives, also linked above.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Ad&lt;/strong&gt;: I'm looking for help with Oil, which is written in Python, shell, and
-C++.  See our
-&lt;a href="https://github.com/oilshell/oil/blob/master/README.md" dir="ltr"&gt;README.md&lt;/a&gt;.&lt;/p&gt;</description><pubDate>Wed, 23 Dec 2020 20:29:22 -0600</pubDate></item><item><title>Announcing NeoChat 1.0, the KDE Matrix client</title><link>https://lobste.rs/s/6cfjln</link><description>&lt;footer&gt;&lt;time&gt;Dec 23, 2020&lt;/time&gt;&lt;/footer&gt;&lt;p&gt;Matrix is an instant messaging system similar to Whatsapp or Telegram, but
+We have a &lt;a href="https://smallstep.com/blog/diy-single-sign-on-for-ssh/" dir="ltr"&gt;blog post&lt;/a&gt; and &lt;a href="https://www.youtube.com/watch?v=ZhxLRlcNUM4" dir="ltr"&gt;video walk-through&lt;/a&gt; that describes how to set it up.&lt;/LI&gt;&lt;/UL&gt;&lt;div&gt;Subscribe to updates&lt;/div&gt;&lt;div dir="ltr"&gt;Unsubscribe anytime, see &lt;a href="https://smallstep.com/privacy-policy" dir="ltr"&gt;Privacy Policy&lt;/a&gt;&lt;/div&gt;</description><pubDate>Wed, 23 Dec 2020 13:03:05 -0600</pubDate></item><item><title>Announcing NeoChat 1.0, the KDE Matrix client</title><link>https://lobste.rs/s/6cfjln</link><description>&lt;footer&gt;&lt;time&gt;Dec 23, 2020&lt;/time&gt;&lt;/footer&gt;&lt;p&gt;Matrix is an instant messaging system similar to Whatsapp or Telegram, but
 uses an open and decentralized network for secure and privacy-protected
 communications. NeoChat is a visually attractive Matrix client that works on
 desktop computers and mobile phones.&lt;/p&gt;&lt;h2&gt;Convergence&lt;/h2&gt;&lt;p&gt;NeoChat provides an elegant and convergent user interface, allowing
@@ -759,166 +918,7 @@ directory with some example files and a README with information and
 instructions. You can use two of the files to generate a Gitea VM to take a
 quick poke around. There is also an example of how you can deploy Gitea in
 production using NixOps, as per this post.&lt;/p&gt;&lt;p dir="ltr"&gt;If you wish to dig a little deeper, I have my production deployment over at
-&lt;a href="https://source.mcwhirter.io/craige/mio-ops" dir="ltr"&gt;mio-ops&lt;/a&gt;.&lt;/p&gt;</description><pubDate>Wed, 23 Dec 2020 09:55:22 -0600</pubDate></item><item><title>10 KB Club</title><link>https://lobste.rs/s/hxmtsx</link><description>&lt;p dir="ltr"&gt;
-The &lt;em dir="ltr"&gt;10 KB Club&lt;/em&gt; is a curated collection of &lt;em dir="ltr"&gt;interesting&lt;/em&gt;
-websites whose home pages do not exceed 10 KB compressed size. Whether a
-website is interesting enough to be a member of this club is decided
-based on the criteria specified in the &lt;a href="https://10kbclub.com/#club-rules" dir="ltr"&gt;Club
-Rules&lt;/a&gt; section.
-&lt;/p&gt;&lt;h2&gt;Club Members&lt;/h2&gt;&lt;p dir="ltr"&gt;
-The following websites are members of the 10 KB Club. The data in the
-table below was fetched on Thu, 24 Dec 2020 03:12:28 GMT. This data is
-refreshed at least once a day. To suggest a new website to be added to
-here, see the &lt;a href="https://10kbclub.com/#new-membership" dir="ltr"&gt;New Membership&lt;/a&gt; section.
-&lt;/p&gt;&lt;table dir="ltr"&gt;
-  &lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
-    &lt;th class="rank" dir="ltr"&gt;#
-    &lt;/th&gt;&lt;th class="url" dir="ltr"&gt;Website
-    &lt;/th&gt;&lt;th class="total" dir="ltr"&gt;Total Size
-    &lt;/th&gt;&lt;th class="content" dir="ltr"&gt;Content Size
-    &lt;/th&gt;&lt;th class="ratio" dir="ltr"&gt;Content Ratio
-  &lt;/th&gt;&lt;/tr&gt;
-  &lt;tr dir="ltr"&gt;
-    &lt;td class="rank" dir="ltr"&gt;1.&lt;/td&gt;
-    &lt;td class="url" dir="ltr"&gt;&lt;a href="http://neverssl.com/" dir="ltr"&gt;neverssl.com&lt;/a&gt;&lt;/td&gt;
-    &lt;td class="total" title="1716 bytes" dir="ltr"&gt;1.7&amp;nbsp;KB&lt;/td&gt;
-    &lt;td class="content" title="1716 bytes" dir="ltr"&gt;1.7&amp;nbsp;KB&lt;/td&gt;
-    &lt;td class="ratio" dir="ltr"&gt;100%&lt;/td&gt;
-  &lt;/tr&gt;
-  &lt;tr dir="ltr"&gt;
-    &lt;td class="rank" dir="ltr"&gt;2.&lt;/td&gt;
-    &lt;td class="url" dir="ltr"&gt;&lt;a href="https://sjmulder.nl/" dir="ltr"&gt;sjmulder.nl&lt;/a&gt;&lt;/td&gt;
-    &lt;td class="total" title="2391 bytes" dir="ltr"&gt;2.3&amp;nbsp;KB&lt;/td&gt;
-    &lt;td class="content" title="2391 bytes" dir="ltr"&gt;2.3&amp;nbsp;KB&lt;/td&gt;
-    &lt;td class="ratio" dir="ltr"&gt;100%&lt;/td&gt;
-  &lt;/tr&gt;
-  &lt;tr dir="ltr"&gt;
-    &lt;td class="rank" dir="ltr"&gt;3.&lt;/td&gt;
-    &lt;td class="url" dir="ltr"&gt;&lt;a href="https://augustl.com/" dir="ltr"&gt;augustl.com&lt;/a&gt;&lt;/td&gt;
-    &lt;td class="total" title="3056 bytes" dir="ltr"&gt;3.0&amp;nbsp;KB&lt;/td&gt;
-    &lt;td class="content" title="1285 bytes" dir="ltr"&gt;1.3&amp;nbsp;KB&lt;/td&gt;
-    &lt;td class="ratio" dir="ltr"&gt;42%&lt;/td&gt;
-  &lt;/tr&gt;
-  &lt;tr dir="ltr"&gt;
-    &lt;td class="rank" dir="ltr"&gt;4.&lt;/td&gt;
-    &lt;td class="url" dir="ltr"&gt;&lt;a href="https://plumebio.com/" dir="ltr"&gt;plumebio.com&lt;/a&gt;&lt;/td&gt;
-    &lt;td class="total" title="3592 bytes" dir="ltr"&gt;3.5&amp;nbsp;KB&lt;/td&gt;
-    &lt;td class="content" title="1994 bytes" dir="ltr"&gt;1.9&amp;nbsp;KB&lt;/td&gt;
-    &lt;td class="ratio" dir="ltr"&gt;56%&lt;/td&gt;
-  &lt;/tr&gt;
-  &lt;tr dir="ltr"&gt;
-    &lt;td class="rank" dir="ltr"&gt;5.&lt;/td&gt;
-    &lt;td class="url" dir="ltr"&gt;&lt;a href="https://sdf.org/" dir="ltr"&gt;sdf.org&lt;/a&gt;&lt;/td&gt;
-    &lt;td class="total" title="4721 bytes" dir="ltr"&gt;4.6&amp;nbsp;KB&lt;/td&gt;
-    &lt;td class="content" title="4721 bytes" dir="ltr"&gt;4.6&amp;nbsp;KB&lt;/td&gt;
-    &lt;td class="ratio" dir="ltr"&gt;100%&lt;/td&gt;
-  &lt;/tr&gt;
-  &lt;tr dir="ltr"&gt;
-    &lt;td class="rank" dir="ltr"&gt;6.&lt;/td&gt;
-    &lt;td class="url" dir="ltr"&gt;&lt;a href="https://susam.in/" dir="ltr"&gt;susam.in&lt;/a&gt;&lt;/td&gt;
-    &lt;td class="total" title="5773 bytes" dir="ltr"&gt;5.6&amp;nbsp;KB&lt;/td&gt;
-    &lt;td class="content" title="2312 bytes" dir="ltr"&gt;2.3&amp;nbsp;KB&lt;/td&gt;
-    &lt;td class="ratio" dir="ltr"&gt;40%&lt;/td&gt;
-  &lt;/tr&gt;
-  &lt;tr dir="ltr"&gt;
-    &lt;td class="rank" dir="ltr"&gt;7.&lt;/td&gt;
-    &lt;td class="url" dir="ltr"&gt;&lt;a href="https://john-doe.neocities.org/" dir="ltr"&gt;john-doe.neocities.org&lt;/a&gt;&lt;/td&gt;
-    &lt;td class="total" title="7448 bytes" dir="ltr"&gt;7.3&amp;nbsp;KB&lt;/td&gt;
-    &lt;td class="content" title="4696 bytes" dir="ltr"&gt;4.6&amp;nbsp;KB&lt;/td&gt;
-    &lt;td class="ratio" dir="ltr"&gt;63%&lt;/td&gt;
-  &lt;/tr&gt;
-  &lt;tr dir="ltr"&gt;
-    &lt;td class="rank" dir="ltr"&gt;8.&lt;/td&gt;
-    &lt;td class="url" dir="ltr"&gt;&lt;a href="https://kerkour.fr/" dir="ltr"&gt;kerkour.fr&lt;/a&gt;&lt;/td&gt;
-    &lt;td class="total" title="7465 bytes" dir="ltr"&gt;7.3&amp;nbsp;KB&lt;/td&gt;
-    &lt;td class="content" title="5638 bytes" dir="ltr"&gt;5.5&amp;nbsp;KB&lt;/td&gt;
-    &lt;td class="ratio" dir="ltr"&gt;76%&lt;/td&gt;
-  &lt;/tr&gt;
-  &lt;tr dir="ltr"&gt;
-    &lt;td class="rank" dir="ltr"&gt;9.&lt;/td&gt;
-    &lt;td class="url" dir="ltr"&gt;&lt;a href="https://1mb.club/" dir="ltr"&gt;1mb.club&lt;/a&gt;&lt;/td&gt;
-    &lt;td class="total" title="7787 bytes" dir="ltr"&gt;7.6&amp;nbsp;KB&lt;/td&gt;
-    &lt;td class="content" title="7098 bytes" dir="ltr"&gt;6.9&amp;nbsp;KB&lt;/td&gt;
-    &lt;td class="ratio" dir="ltr"&gt;91%&lt;/td&gt;
-  &lt;/tr&gt;
-  &lt;tr dir="ltr"&gt;
-    &lt;td class="rank" dir="ltr"&gt;10.&lt;/td&gt;
-    &lt;td class="url" dir="ltr"&gt;&lt;a href="http://cat-v.org/" dir="ltr"&gt;cat-v.org&lt;/a&gt;&lt;/td&gt;
-    &lt;td class="total" title="10119 bytes" dir="ltr"&gt;9.9&amp;nbsp;KB&lt;/td&gt;
-    &lt;td class="content" title="6647 bytes" dir="ltr"&gt;6.5&amp;nbsp;KB&lt;/td&gt;
-    &lt;td class="ratio" dir="ltr"&gt;66%&lt;/td&gt;
-  &lt;/tr&gt;
-&lt;/tbody&gt;&lt;/table&gt;&lt;p dir="ltr"&gt;
-Do not take the content size and content ratio columns too seriously.
-The content size is calculated using &lt;a href="https://github.com/susam/10kbclub/blob/master/refresh.js" dir="ltr"&gt;refresh.js&lt;/a&gt;
-in the source code of the repository. It is not always accurate. For
-example, it considers internal CSS to be content but external CSS to be
-not content. Therefore, home pages that use CSS within an HTML page have
-an unfair advantage to get a higher content ratio than it should. &lt;a href="https://250kb.club/" dir="ltr"&gt;250 KB Club&lt;/a&gt; too suffers from the same
-issue.
-&lt;/p&gt;&lt;h2&gt;Club Rules&lt;/h2&gt;&lt;p&gt;
-Each website that is a member of the 10 KB Club is identified by a URL
-to its home page. The URL must satisfy the following rules:
-&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p&gt;
-      If the URL is opened in a web browser with no ad blockers or
-      script blockers enabled, the compressed data that the web browser
-      has to fetch to load the complete web page must not exceed 10240
-      bytes. To check this on Firefox or Chrome, open a new
-      private/incognito window, then right click on the blank page and
-      select "Inspect", then go to the "Network" tab, and finally enter
-      the URL in the address bar and press enter. The transferred size
-      appears in the status bar at the bottom of the network tab.
-    &lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;
-      The URL must point to a home page of the website. This is usually
-      the root directory of the domain, i.e., of the form &lt;a href="https://www.example.com/" dir="ltr"&gt;https://www.example.com&lt;/a&gt; but it need not
-      always be so. An URL of the form &lt;a href="https://www.example.com/alice/" dir="ltr"&gt;https://www.example.com/alice/&lt;/a&gt;
-      is also okay as long as it is a home page of some website that
-      exists under that directory, i.e., a top-level user page within a
-      domain is considered as a website home page.
-    &lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
-      The URL must point to a page that contains useful content (e.g.,
-      an article, a manifesto page, etc.) or a list of links to such
-      content (e.g., blog listing, catalog of websites, etc.), or
-      provides useful functionality (e.g., a web-based game, an online
-      currency convertor, etc.).
-    &lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;
-      The URL must not point merely to a page with metadata about a
-      person or an organization (e.g., welcome page, about page, contact
-      information page, etc. without any other content are not okay).
-    &lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;
-      Some content under the URL of the website must have received at
-      least 100 points on &lt;a href="https://news.ycombinator.com/" dir="ltr"&gt;Hacker
-      News&lt;/a&gt; on at least one occasion. Use the following URL to check
-      submissions for a website on Hacker News and the votes each
-      submission has received: &lt;a href="https://news.ycombinator.com/from?site=example.com" dir="ltr"&gt;https://news.ycombinator.com/from?site=example.com&lt;/a&gt;
-      (replace "example.com" with the domain of the website).
-    &lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;
-Note that the steps provided for Firefox and Chrome in the 1st point do
-not constitute a definitive decision criteria for membership. The final
-decision on whether the compressed transfer size is done by &lt;a href="https://github.com/susam/10kbclub/blob/master/refresh.js" dir="ltr"&gt;refresh.js&lt;/a&gt;
-in the source code of this website. It does not always exactly match
-what Firefox or Chrome shows. For example, this script does not count
-the &lt;a href="https://en.wikipedia.org/wiki/Favicon" dir="ltr"&gt;favicon&lt;/a&gt; transfer
-size, so the transfer size that this script determines is usually a
-little less than what Firefox or Chrome shows.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-If you think that there is a very useful website that does not satisfy
-the 4th point but is still noteworthy enough to be a part of this list,
-please go ahead and propose it for addition by following the &lt;a href="https://10kbclub.com/#new-membership" dir="ltr"&gt;next section&lt;/a&gt;. We will decide whether to add
-such websites on a case by case basis.
-&lt;/p&gt;&lt;h2&gt;New Membership&lt;/h2&gt;&lt;p dir="ltr"&gt;
-To add a new member website to this club, first ensure that it satisfies
-the rules laid out in the &lt;a href="https://10kbclub.com/#club-rules" dir="ltr"&gt;Club Rules&lt;/a&gt; section.
-If it satisfies the club rules, then &lt;a href="https://github.com/susam/10kbclub/issues/new" dir="ltr"&gt;create a new issue
-on GitHub&lt;/a&gt; and provide the URL of the website.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-The 10 KB Club was created by &lt;a href="https://github.com/susam" dir="ltr"&gt;Susam
-Pal&lt;/a&gt;. The source code of this website is available on &lt;a href="https://github.com/susam/10kbclub" dir="ltr"&gt;GitHub&lt;/a&gt;.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-This website is inspired by Bradley Taunt's &lt;a href="https://1mb.club/" dir="ltr"&gt;1 MB Club&lt;/a&gt; and Norman Köhring's &lt;a href="https://250kb.club/" dir="ltr"&gt;250 KB Club&lt;/a&gt;.
-&lt;/p&gt;&lt;p&gt;
-Made with ♥ for a performant web.
-&lt;/p&gt;</description><pubDate>Wed, 23 Dec 2020 21:16:56 -0600</pubDate></item><item><title>My e-mail honeypots</title><link>https://lobste.rs/s/9feje5</link><description>&lt;p dir="ltr"&gt;
+&lt;a href="https://source.mcwhirter.io/craige/mio-ops" dir="ltr"&gt;mio-ops&lt;/a&gt;.&lt;/p&gt;</description><pubDate>Wed, 23 Dec 2020 09:55:22 -0600</pubDate></item><item><title>My e-mail honeypots</title><link>https://lobste.rs/s/9feje5</link><description>&lt;p dir="ltr"&gt;
     dnes 06:36
     | Přečteno: 67×
             | &lt;a href="https://www.abclinuxu.cz/blog/jenda/linux" title="Kategorie zápisu" dir="ltr"&gt;Linux&lt;/a&gt;
@@ -1342,7 +1342,7 @@ Nimming! (Is that even a word? I guess it is now…)&lt;/p&gt;&lt;OL&gt;&lt;LI&g
     You can follow the HTML-over-the-wire approach as merely inspiration for your own tooling, or you can use these Hotwire designed frameworks created by the team at &lt;a href="https://basecamp.com/" rel="noopener" dir="ltr"&gt;Basecamp&lt;/a&gt; to power &lt;a href="https://hey.com/" rel="noopener" dir="ltr"&gt;HEY&lt;/a&gt;. They work together, complementing each other to give you a complete solution across all platforms:
   &lt;/p&gt;&lt;p dir="ltr"&gt;
     Brought to you by:&lt;br dir="ltr"&gt;
-    &lt;/p&gt;&lt;img width="104" height="23" src="https://hotwire.dev/assets/logos/basecamp.svg" alt="Basecamp"&gt;&lt;img width="50" height="23" src="https://hotwire.dev/assets/logos/hey.svg" alt="HEY"&gt;&lt;p dir="ltr"&gt;© 2020 &lt;a href="https://basecamp.com/" rel="noopener" dir="ltr"&gt;Basecamp&lt;/a&gt;&lt;/p&gt;</description><pubDate>Tue, 22 Dec 2020 10:39:34 -0600</pubDate></item><item><title>PC DOS Reimagined</title><link>https://basicdos.com/</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/f9sykv/pc_dos_reimagined"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Wed, 23 Dec 2020 05:37:57 -0600</pubDate></item><item><title>Why can’t you buy a good webcam?</title><link>https://lobste.rs/s/hmwpil</link><description>&lt;div&gt;
+    &lt;/p&gt;&lt;img width="104" height="23" src="https://hotwire.dev/assets/logos/basecamp.svg" alt="Basecamp"&gt;&lt;img width="50" height="23" src="https://hotwire.dev/assets/logos/hey.svg" alt="HEY"&gt;&lt;p dir="ltr"&gt;© 2020 &lt;a href="https://basecamp.com/" rel="noopener" dir="ltr"&gt;Basecamp&lt;/a&gt;&lt;/p&gt;</description><pubDate>Tue, 22 Dec 2020 10:39:34 -0600</pubDate></item><item><title>Why can’t you buy a good webcam?</title><link>https://lobste.rs/s/hmwpil</link><description>&lt;div&gt;
           13 min read
           
         &lt;/div&gt;&lt;p&gt;Some people are not satisfied with a webcam from their notebook or an old webcam
@@ -1491,7 +1491,7 @@ players seemingly don't think it's a good opportunity, and for newcomers the
 market is hard to enter.&lt;/p&gt;&lt;p&gt;We're also lucky that camera manufacturers added clean live HDMI into
 comparatively cheap cameras, so we don't need to spend $3000+ to set it all up.&lt;/p&gt;&lt;div dir="ltr"&gt;
         &lt;time dir="ltr"&gt;December 2020&lt;/time&gt;
-      &lt;/div&gt;</description><pubDate>Tue, 22 Dec 2020 04:18:44 -0600</pubDate></item><item><title>How Claude Shannon Invented the Future</title><link>https://lobste.rs/s/dwtsuy</link><description>&lt;div data-reactid="216"&gt;Today’s information age is only possible thanks to the groundbreaking work of a lone genius.&lt;/div&gt;&lt;h6 data-reactid="232"&gt;&lt;span data-reactid="233"&gt;Read Later&lt;/span&gt;&lt;/h6&gt;&lt;figure&gt;&lt;img alt="Black and white photo of Claude Shannon in front of a computer" src="https://d2r55xnwy6nx47.cloudfront.net/uploads/2020/12/Claude-Shannon_2880_Lede.jpg" width="485" height="273"&gt;&lt;figcaption dir="auto"&gt;Estate of Francis Bello / Science Source&lt;/figcaption&gt;&lt;/figure&gt;&lt;p&gt;Science seeks the basic laws of nature. Mathematics searches for new theorems to build upon the old. Engineering builds systems to solve human needs. The three disciplines are interdependent but distinct. Very rarely does one individual simultaneously make central contributions to all three — but Claude Shannon was a rare individual.&lt;/p&gt;&lt;p dir="ltr"&gt;Despite being the subject of &lt;a href="http://www.thebitplayer.com/" dir="ltr"&gt;the recent documentary &lt;em dir="ltr"&gt;The Bit Player&lt;/em&gt;&lt;/a&gt; — and someone whose work and research philosophy have inspired my own career — Shannon is not exactly a household name. He never won a Nobel Prize, and he wasn’t a celebrity like Albert Einstein or Richard Feynman, either before or after his death in 2001. But more than 70 years ago, in a single groundbreaking paper, he laid the foundation for the entire communication infrastructure underlying the modern information age.&lt;/p&gt;&lt;p dir="ltr"&gt;Shannon was born in Gaylord, Michigan, in 1916, the son of a local businessman and a teacher. After graduating from the University of Michigan with degrees in electrical engineering and mathematics, he wrote &lt;a href="https://www.cs.virginia.edu/~evans/greatworks/shannon38.pdf" dir="ltr"&gt;a master’s thesis&lt;/a&gt; at the Massachusetts Institute of Technology that applied a mathematical discipline called Boolean algebra to the analysis and synthesis of switching circuits. It was a transformative work, turning circuit design from an art into a science, and is now considered to have been the starting point of digital circuit design.&lt;/p&gt;&lt;figure&gt;&lt;picture&gt;&lt;div&gt;&lt;!--[if IE 9]&gt;&lt;video style="display: none;"&gt;&lt;![endif]--&gt;&lt;/div&gt;&lt;div&gt;&lt;!--[if IE 9]&gt;&lt;/video&gt;&lt;![endif]--&gt;&lt;/div&gt;&lt;img alt="Black and white photo of a young Claude Shannon posing for the camera" width="445" height="561"&gt;&lt;/picture&gt;&lt;figcaption dir="auto"&gt;Claude Shannon wrote a master’s thesis that jump-started digital circuit design, and a decade later he wrote his seminal paper on information theory, “A Mathematical Theory of Communication.”
+      &lt;/div&gt;</description><pubDate>Tue, 22 Dec 2020 04:18:44 -0600</pubDate></item><item><title>PC DOS Reimagined</title><link>https://basicdos.com/</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/f9sykv/pc_dos_reimagined"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Wed, 23 Dec 2020 05:37:57 -0600</pubDate></item><item><title>How Claude Shannon Invented the Future</title><link>https://lobste.rs/s/dwtsuy</link><description>&lt;div data-reactid="216"&gt;Today’s information age is only possible thanks to the groundbreaking work of a lone genius.&lt;/div&gt;&lt;h6 data-reactid="232"&gt;&lt;span data-reactid="233"&gt;Read Later&lt;/span&gt;&lt;/h6&gt;&lt;figure&gt;&lt;img alt="Black and white photo of Claude Shannon in front of a computer" src="https://d2r55xnwy6nx47.cloudfront.net/uploads/2020/12/Claude-Shannon_2880_Lede.jpg" width="485" height="273"&gt;&lt;figcaption dir="auto"&gt;Estate of Francis Bello / Science Source&lt;/figcaption&gt;&lt;/figure&gt;&lt;p&gt;Science seeks the basic laws of nature. Mathematics searches for new theorems to build upon the old. Engineering builds systems to solve human needs. The three disciplines are interdependent but distinct. Very rarely does one individual simultaneously make central contributions to all three — but Claude Shannon was a rare individual.&lt;/p&gt;&lt;p dir="ltr"&gt;Despite being the subject of &lt;a href="http://www.thebitplayer.com/" dir="ltr"&gt;the recent documentary &lt;em dir="ltr"&gt;The Bit Player&lt;/em&gt;&lt;/a&gt; — and someone whose work and research philosophy have inspired my own career — Shannon is not exactly a household name. He never won a Nobel Prize, and he wasn’t a celebrity like Albert Einstein or Richard Feynman, either before or after his death in 2001. But more than 70 years ago, in a single groundbreaking paper, he laid the foundation for the entire communication infrastructure underlying the modern information age.&lt;/p&gt;&lt;p dir="ltr"&gt;Shannon was born in Gaylord, Michigan, in 1916, the son of a local businessman and a teacher. After graduating from the University of Michigan with degrees in electrical engineering and mathematics, he wrote &lt;a href="https://www.cs.virginia.edu/~evans/greatworks/shannon38.pdf" dir="ltr"&gt;a master’s thesis&lt;/a&gt; at the Massachusetts Institute of Technology that applied a mathematical discipline called Boolean algebra to the analysis and synthesis of switching circuits. It was a transformative work, turning circuit design from an art into a science, and is now considered to have been the starting point of digital circuit design.&lt;/p&gt;&lt;figure&gt;&lt;picture&gt;&lt;div&gt;&lt;!--[if IE 9]&gt;&lt;video style="display: none;"&gt;&lt;![endif]--&gt;&lt;/div&gt;&lt;div&gt;&lt;!--[if IE 9]&gt;&lt;/video&gt;&lt;![endif]--&gt;&lt;/div&gt;&lt;img alt="Black and white photo of a young Claude Shannon posing for the camera" width="445" height="561"&gt;&lt;/picture&gt;&lt;figcaption dir="auto"&gt;Claude Shannon wrote a master’s thesis that jump-started digital circuit design, and a decade later he wrote his seminal paper on information theory, “A Mathematical Theory of Communication.”
 
 Courtesy of MIT Museum&lt;/figcaption&gt;&lt;/figure&gt;&lt;p&gt;Next, Shannon set his sights on an even bigger target: communication.&lt;/p&gt;&lt;p dir="ltr"&gt;Communication is one of the most basic human needs. From smoke signals to carrier pigeons to the telephone to television, humans have always sought methods that would allow them to communicate farther, faster and more reliably. But the engineering of communication systems was always tied to the specific source and physical medium. Shannon instead asked, “Is there a grand unified theory for communication?” In a 1939 letter to his mentor, Vannevar Bush, Shannon outlined some of his initial ideas on “fundamental properties of general systems for the transmission of intelligence.” After working on the problem for a decade, Shannon finally published &lt;a href="http://people.math.harvard.edu/~ctm/home/text/others/shannon/entropy/entropy.pdf" dir="ltr"&gt;his masterpiece&lt;/a&gt; in 1948: “A Mathematical Theory of Communication.”&lt;/p&gt;&lt;p&gt;The heart of his theory is a simple but very general model of communication: A transmitter encodes information into a signal, which is corrupted by noise and then decoded by the receiver. Despite its simplicity, Shannon’s model incorporates two key insights: isolating the information and noise sources from the communication system to be designed, and modeling both of these sources probabilistically. He imagined the information source generating one of many possible messages to communicate, each of which had a certain probability. The probabilistic noise added further randomness for the receiver to disentangle.&lt;/p&gt;&lt;p&gt;Before Shannon, the problem of communication was primarily viewed as a deterministic signal-reconstruction problem: how to transform a received signal, distorted by the physical medium, to reconstruct the original as accurately as possible. Shannon’s genius lay in his observation that the key to communication is uncertainty. After all, if you knew ahead of time what I would say to you in this column, what would be the point of writing it?&lt;/p&gt;&lt;figure&gt;&lt;picture&gt;&lt;div&gt;&lt;!--[if IE 9]&gt;&lt;video style="display: none;"&gt;&lt;![endif]--&gt;&lt;/div&gt;&lt;div&gt;&lt;!--[if IE 9]&gt;&lt;/video&gt;&lt;![endif]--&gt;&lt;/div&gt;&lt;img alt="A figure from Claude Shannon’s major paper showing his model of communication" width="445" height="162"&gt;&lt;/picture&gt;&lt;figcaption class="image__meta mt1" dir="ltr"&gt;&lt;div class="caption wysiwyg h5 theme__anchors--solid fill-h post__aside__caption post__aside__caption--shortcode" dir="ltr"&gt;&lt;p dir="ltr"&gt;A schematic diagram of Shannon’s model of communication, as taken from his paper.&lt;/p&gt;
 &lt;/div&gt;&lt;div class="attribution theme__anchors--solid wysiwyg pangram h6 mb1 fill-h post__aside__attribution" dir="ltr"&gt;&lt;p dir="ltr"&gt;&lt;a href="https://archive.org/details/bellsystemtechni27amerrich/page/380/mode/2up" dir="ltr"&gt;The Bell System Technical Journal&lt;/a&gt;&lt;/p&gt;
