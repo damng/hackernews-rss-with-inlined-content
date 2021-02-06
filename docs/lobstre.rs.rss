@@ -69,157 +69,7 @@ More experiments with different page implementations would be interesting as wel
 &lt;strong dir="ltr"&gt;Tagged&lt;/strong&gt;:
 &lt;span dir="ltr"&gt;Privacy&lt;/span&gt;&lt;/div&gt;&lt;div dir="ltr"&gt;
 You can connect with me on &lt;a href="https://twitter.com/_SupunKavinda" rel="nofollow" dir="ltr"&gt;Twitter&lt;/a&gt; or &lt;a href="https://www.linkedin.com/in/supunkavinda/" rel="nofollow" dir="ltr"&gt;Linkedin&lt;/a&gt;.&lt;/div&gt;&lt;div&gt;Written On&lt;/div&gt;&lt;div&gt;
-Jan 30, 2021&lt;/div&gt;</description><pubDate>Fri, 05 Feb 2021 05:14:37 -0600</pubDate></item><item><title>On the Missed Opportunities of Static Types</title><link>https://lobste.rs/s/izpz2n</link><description>&lt;p dir="ltr"&gt;Recently, a colleague spent a bunch of time working on a bug. When
-attempting to perform some action, the system would provide feedback
-that everything was going as planned, and then "go dark," seemingly
-out of no where. It's important to realize that this is a complex
-distributed system, and that there is a network connection between the
-"part that worked" and "the part that went dark." But, there wasn't a
-change to the connection logic, and it worked before, so that
-"couldn't possibly be it." &lt;em dir="ltr"&gt;(Yes. I already told you where this is going—Ed)&lt;/em&gt;&lt;/p&gt;&lt;p&gt;Suppose you're writing a Go program and you want to perform a different
-action based on the value of another value. You might do this:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;func Greeter(lang, name string) {
-    switch lang {
-    case "english":
-        fmt.Printf("Hello, %s!\n", name)
-    case "spanish":
-        fmt.Printf("Hola, %s!\n", name)
-    default:
-        fmt.Printf("excuse me?\n")
-    }
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Based on &lt;code dir="ltr"&gt;lang&lt;/code&gt;, the function will (naively) print to the screen a
-greeting, for &lt;code dir="ltr"&gt;name&lt;/code&gt;, in the specified language. &lt;/p&gt;&lt;PRE&gt;&lt;code&gt;Greeter("spanish", "Andrew")  // outputs: Hola, Andrew!
-Greeter("english", "Andrew") // outputs: Hello, Andrew!
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;&lt;em dir="ltr"&gt;(Now, you can argue with me about whether strings are appropriate here, when an &lt;code dir="ltr"&gt;iota&lt;/code&gt; would do, but that would be silly, as that's not the point. In the bug, strings were used, so that's what we're going to use here.—Ed)&lt;/em&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;In the case of &lt;code dir="ltr"&gt;Greeter&lt;/code&gt;, there's no dependency between &lt;code dir="ltr"&gt;lang&lt;/code&gt;
-and &lt;code dir="ltr"&gt;name&lt;/code&gt;. &lt;code dir="ltr"&gt;name&lt;/code&gt; is perfectly valid for each &lt;code dir="ltr"&gt;lang&lt;/code&gt;, unless you're
-fancy and do a translation of "Andrew" to "Andres". Again, not the point.&lt;/p&gt;&lt;p dir="ltr"&gt;In a more complicated setting there &lt;em dir="ltr"&gt;is&lt;/em&gt; a dependency between the two
-values. Let's take a look at a Go API many of us are familiar with
-because it's front and center on the package documentation for
-&lt;a href="https://golang.org/pkg/net/" dir="ltr"&gt;net&lt;/a&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;conn, err := net.Dial("tcp", "golang.org:80")
-if err != nil {
-    // handle error
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This demonstrates something beautiful; flexibility! If I want to
-&lt;code dir="ltr"&gt;Dial&lt;/code&gt; a &lt;code dir="ltr"&gt;unix&lt;/code&gt; socket, the right parameters are &lt;code dir="ltr"&gt;"unix",
-"/path/to/socket"&lt;/code&gt;, and &lt;code dir="ltr"&gt;hostname:port&lt;/code&gt; is meaningless. This works
-because &lt;code dir="ltr"&gt;Dial&lt;/code&gt; implements validation logic to ensure that the
-address provided makes sense for the protocol, and returns an error if
-not. This is helpful in reducing the amount of code required to
-dynamically &lt;code dir="ltr"&gt;Dial&lt;/code&gt; a socket specified from external configuration, but
-it pushes error checking to &lt;em dir="ltr"&gt;runtime&lt;/em&gt; which is an aphorism for "you're
-eventually going to be woken up due to this bug."&lt;/p&gt;&lt;p&gt;If we redesign the API, we can get the compiler to ensure we're
-not doing something silly; but we need to make a few concessions.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;DialUnix(addr UnixSocket)&lt;/code&gt; could ensure that &lt;code dir="ltr"&gt;addr&lt;/code&gt; is a path to a
-unix socket. It may &lt;em dir="ltr"&gt;not&lt;/em&gt; delegate everything to the compiler, but
-obvious errors could be detected. You wouldn't be able to, say,
-&lt;code dir="ltr"&gt;DialUnix(HostPort("golang.org", 80))&lt;/code&gt; since &lt;code dir="ltr"&gt;HostPort&lt;/code&gt; is not of type
-&lt;code dir="ltr"&gt;UnixSocket&lt;/code&gt;. This particular example works better if file paths
-aren't represented as strings, a &lt;a href="https://fasterthanli.me/articles/i-want-off-mr-golangs-wild-ride" dir="ltr"&gt;sore point of
-sorts&lt;/a&gt;. Then,
-&lt;code dir="ltr"&gt;UnixSocket&lt;/code&gt; can be an effective alias to &lt;code dir="ltr"&gt;Path&lt;/code&gt;, for instance.&lt;/p&gt;&lt;p dir="ltr"&gt;But what is the cost here? Well, in the case of &lt;code dir="ltr"&gt;Dial&lt;/code&gt;, the interface
-that the &lt;code dir="ltr"&gt;net&lt;/code&gt; package exposes becomes much larger, creating more
-cognitive overhead for programmers, and &lt;code dir="ltr"&gt;net&lt;/code&gt; developers. Go &lt;code dir="ltr"&gt;net&lt;/code&gt; developers
-have to create a new function, and type for every new type of supported
-socket. Programmerss must adopt those new functions, increase the things
-they know about, and no one is truly happy with the experience.&lt;/p&gt;&lt;p dir="ltr"&gt;Go doesn't provide an obvious mechanism to make this more generic, and
-while the generics proposal &lt;em dir="ltr"&gt;may make solving this possible&lt;/em&gt; that's not
-going to help us for quite some time.&lt;/p&gt;&lt;p&gt;So what is a programmer to do?&lt;/p&gt;&lt;p&gt;To recap the problem here: when using strings as arguments to simplify
-an interface, the compiler cannot create assurances that the two
-strings relate to each other in any meaningful way, which means that
-all validation must be done at runtime, which almost certainly means
-bugs are gonna slip into production, despite the fact that we already
-pay for static types in the language, and the compiler.&lt;/p&gt;&lt;p dir="ltr"&gt;The other possibility, which keeps a singular function, is to have
-&lt;code dir="ltr"&gt;Dial&lt;/code&gt; and an interface instead, say, &lt;code dir="ltr"&gt;ProtoAddr&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;// SIDENOTE: This, effectively, already exists as net.Addr ... :tableflip:
-type ProtoAddr interface {
-    Protocol() string // wait, wuh????
-    Addr() string
-}
-
-func Dial(pa ProtoAddr) (net.Conn, err) {
-    return originalDial(pa.Protocol(), pa.Addr())
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;We can then create helper functions and types that &lt;em dir="ltr"&gt;constrain&lt;/em&gt; our
-inputs and allow for more assurances that the caller isn't doing
-something silly, like providing a filesystem path instead of an IP
-address. Want to &lt;code dir="ltr"&gt;Dial&lt;/code&gt; an IP address?
-&lt;code dir="ltr"&gt;Dial(TCPIPv4Addr{net.IPv4{127,0,0,1}, 8000})&lt;/code&gt;. &lt;/p&gt;&lt;p dir="ltr"&gt;Similar types can just as easily be constructed for &lt;code dir="ltr"&gt;hostname:port&lt;/code&gt; addresses,
-Unix Sockets, etc. The important aspect here is that the caller's intentions
-are stated, in a way that the compiler can catch, and that the library
-author can quickly assert validity of.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;type TCPIPv4Addr struct {
-    IP IPv4
-    Port uint16
-}
-
-func (t TCPIPv4Addr) Protocol() string { return "tcp" }
-func (t TCPIPV4Addr Addr() string { return fmt.Sprint("%s:%d", t.IP.String(), t.Port) }
-
-func NewTCPIPv4Addr(ip IPv4, port uint16) TCPIPv4Addr ...
-
-type UnixAddr struct {
-    Socket filesystem.Path // made up, because, in Go, strings are totally fine for everything, including file paths.
-}
-
-func (u UnixAddr) Protocol() string { return "unix" }
-func (u UnixAddr) Addr() string { return u.Socket.String() }
-
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;In the above code snippets, you'll notice something odd--that
-&lt;code dir="ltr"&gt;string&lt;/code&gt;'s are ultimately passed into
-&lt;code dir="ltr"&gt;originalDial&lt;/code&gt; as before. This is meant to address and illustrate how you might
-take &lt;code dir="ltr"&gt;Dial&lt;/code&gt; and evolve it, just as you might evolve instances in your
-own codebase. This whole idea, of course, fundamentally is not backward compatible.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;"But wait a minute, Andrew! What the hell? All you've done is add more boilerplate for me to type out, and I already have enough of that with Go's error checking. What's this got to do with me? Why is this any better?"&lt;/em&gt;, you say.&lt;/p&gt;&lt;p&gt;The primary job of a program is to take input and produce some output.
-This is vague; yes. The primary job of a programmer is to ensure that
-the input given to a program makes sense in order to produce the
-desired output.&lt;/p&gt;&lt;p dir="ltr"&gt;In other words, the fact that we build APIs that take arbitrary
-strings, like &lt;code dir="ltr"&gt;Dial&lt;/code&gt;, doesn't give us a pass from validating that the
-input makes sense, and indeed &lt;code dir="ltr"&gt;Dial&lt;/code&gt; heavily validates input. But, why
-not leverage the type system to check as much of your work as
-possible at compile time?&lt;/p&gt;&lt;p dir="ltr"&gt;Go's type system doesn't provide us with enough expressive power to solve
-this simply, unfortunately. And so, as written, it's not possible to 
-prevent a silly programmer from calling the new &lt;code dir="ltr"&gt;Dial&lt;/code&gt; with a &lt;code dir="ltr"&gt;LOLAddr&lt;/code&gt;
-defined like so:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;type LOLAddr struct { 
-   What string
-   Lol string
-}
-
-func (l LOLAddr) Protocol() string { return l.What }
-func (l LOLAddr) Addr() string { return l.Lol }
-
-Dial(LOLAddr{"unix", "localhost:8383"})
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Because of this, you might think that the implementation I've described
-is totally useless; I don't think so. Go &lt;em dir="ltr"&gt;does&lt;/em&gt; provide a mechanism
-that you can use which gives you all of the good properties of what I
-described without the bad. &lt;/p&gt;&lt;PRE&gt;&lt;code&gt;type ClosedProtoAddr interface {
-    Protocol() string
-    Addr() string
-    closed() struct{}
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This interface is impossible to implement outside of the package it's
-defined in, because &lt;code dir="ltr"&gt;closed() struct{}&lt;/code&gt; is not exported. Using this,
-we can &lt;em dir="ltr"&gt;constrain&lt;/em&gt; the input to known good values, and exhaustively
-create all of the supported &lt;code dir="ltr"&gt;Dial&lt;/code&gt; compatible &lt;code dir="ltr"&gt;ProtoAddr&lt;/code&gt;s in the
-package. &lt;code dir="ltr"&gt;Dial&lt;/code&gt; just has to handle the possibility that &lt;code dir="ltr"&gt;nil&lt;/code&gt; was
-passed in, and validate that nothing sneaky is hiding in one of those
-strings, something that is done right now in the old interface, too.&lt;/p&gt;&lt;p dir="ltr"&gt;So about that bug? Well, it was especially sinister as it was
-contained in a subsystem that implements a proxy with a virtual
-network address overlay. The proxy's connection is &lt;em dir="ltr"&gt;always&lt;/em&gt; supposed
-to be alive and so it reconnects in a loop, without providing much in
-the way of visibility in regards to its status. There's no timeout
-errors. There's no error logs. There's an assumption made that if the
-link goes down, a retry will eventually succeed. &lt;/p&gt;&lt;p dir="ltr"&gt;There are, also, two virtual address types. The two types of addresses are there to allow you to say "connect to this
-specific node" or "connect to &lt;em dir="ltr"&gt;any&lt;/em&gt; of the nodes in this
-cluster". These are reasonable things. The addresses &lt;em dir="ltr"&gt;look&lt;/em&gt;
-different, but are each represented by strings. The address type,
-itself, is represented by strings.  There is no
-&lt;code dir="ltr"&gt;DialRandomNodeInCluster(clusterId)&lt;/code&gt;. There is no
-&lt;code dir="ltr"&gt;DialHost(hostId)&lt;/code&gt;. There is an analog to &lt;code dir="ltr"&gt;Dial(type, addr)&lt;/code&gt;,
-and then a &lt;em dir="ltr"&gt;lot&lt;/em&gt; of screaming when you realize that the feature you
-are working on required you to dial a specific host—&lt;em dir="ltr"&gt;not a random one&lt;/em&gt;—and 
-you didn't change the first argument that provides the context for how to interpret the address.&lt;/p&gt;&lt;p&gt;As developers, it is important to create clear guidance on how not to
-be frustrated when attempting to use our libraries. This, too often,
-is delegated to poorly written documentation, even when the best
-documentation, the code, can be used to point out our misuse, by 
-our friend the type checker.&lt;/p&gt;&lt;p&gt;&lt;em&gt;- published: 2021/02/05. written: 2020/11/15&lt;/em&gt;&lt;/p&gt;</description><pubDate>Fri, 05 Feb 2021 14:07:17 -0600</pubDate></item><item><title>Homebrew 3.0.0</title><link>https://lobste.rs/s/cu5jxw</link><description>&lt;h3&gt;&lt;a href="https://github.com/MikeMcQuaid"&gt;MikeMcQuaid&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Today I’d like to announce Homebrew 3.0.0. The most significant changes since 2.7.0 are official Apple Silicon support and a new bottle format in formulae.&lt;/p&gt;&lt;p&gt;Major changes and deprecations since 2.7.0:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Apple Silicon is now officially supported for installations in &lt;code dir="ltr"&gt;/opt/homebrew&lt;/code&gt;. &lt;a href="https://formulae.brew.sh/" dir="ltr"&gt;formulae.brew.sh&lt;/a&gt; formula pages &lt;a href="https://github.com/Homebrew/formulae.brew.sh/pull/408" dir="ltr"&gt;indicate for which platforms bottles (binary packages) are provided&lt;/a&gt; and therefore whether they are supported by Homebrew. Homebrew doesn’t (yet) provide bottles for all packages on Apple Silicon that we do on Intel x86_64 but we welcome your help in doing so. Rosetta 2 on Apple Silicon still provides support for Intel x86_64 in &lt;code dir="ltr"&gt;/usr/local&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/Homebrew/brew/pull/10229" dir="ltr"&gt;Bash&lt;/a&gt;, &lt;a href="https://github.com/Homebrew/brew/pull/10431" dir="ltr"&gt;fish&lt;/a&gt; and &lt;a href="https://github.com/Homebrew/brew/pull/10403" dir="ltr"&gt;zsh&lt;/a&gt; completions are generated automatically from the &lt;code dir="ltr"&gt;CLI::Parser&lt;/code&gt; DSL. This will ensure they are kept up-to-date.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Other changes since 2.7.0 I’d like to highlight are the following:&lt;/p&gt;&lt;p&gt;Finally:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;a href="http://discourse.brew.sh/" dir="ltr"&gt;Discourse&lt;/a&gt; was made read-only on January 1st 2021 in favour of &lt;a href="https://github.com/Homebrew/discussions/discussions" dir="ltr"&gt;GitHub Discussions&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/sponsors/Homebrew" dir="ltr"&gt;Homebrew accepts donations through GitHub Sponsors&lt;/a&gt; and &lt;a href="https://www.patreon.com/homebrew" dir="ltr"&gt;still accepts donations through Patreon&lt;/a&gt;. If you can afford it, please consider donating. If you’d rather not use GitHub Sponsors or Patreon (our preferred donation methods), &lt;a href="https://github.com/homebrew/brew/#donations" dir="ltr"&gt;check out the other ways to donate in our README&lt;/a&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Thanks to all our hard-working maintainers, contributors, sponsors and supporters for getting us this far. Particular thanks on Homebrew 3.0.0 go to MacStadium and Apple for providing us with a lot of Apple Silicon hardware and Cassidy from Apple for helping us in many ways with this migration. Enjoy using Homebrew!&lt;/p&gt;&lt;h3 dir="ltr"&gt;
-    &lt;label for="newsletter-email" dir="ltr"&gt;Subscribe to be notified about new posts&lt;/label&gt;
-  &lt;/h3&gt;&lt;img src="https://aral.github.io/fork-me-on-github-retina-ribbons/right-grey@2x.png" alt="Fork me on GitHub" width="100" height="100"&gt;</description><pubDate>Fri, 05 Feb 2021 08:46:35 -0600</pubDate></item><item><title>Is abstraction killing civilization?</title><link>https://lobste.rs/s/z78h6s</link><description>&lt;h2&gt;Is Software Abstraction Killing Civilization?&lt;/h2&gt;&lt;p&gt;&lt;b&gt;Or: Jonathan Blow is wrong but also right and we still
+Jan 30, 2021&lt;/div&gt;</description><pubDate>Fri, 05 Feb 2021 05:14:37 -0600</pubDate></item><item><title>Is abstraction killing civilization?</title><link>https://lobste.rs/s/z78h6s</link><description>&lt;h2&gt;Is Software Abstraction Killing Civilization?&lt;/h2&gt;&lt;p&gt;&lt;b&gt;Or: Jonathan Blow is wrong but also right and we still
 need to prevent the collapse of civilization&lt;/b&gt;&lt;/p&gt;&lt;p&gt;&lt;i&gt;Early 2021&lt;/i&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;
 I recently stumbled upon
 &lt;a href="https://www.youtube.com/watch?v=ZSRHeXYDLko" dir="ltr"&gt;a talk by game
@@ -491,9 +341,159 @@ increasingly locked down, remote controlled platforms.
 What really bothers me with Blow's talk is that instead of providing real examples and data to support his thesis, a lot of what he says is deceitful and comes off as a setup for complaining about some pains in his development tooling and the state of kids today. I can certainly relate to that - it's two of my favorite pastimes - but Blow has quite ironically had to selectively forget large parts of computer history in order to make his point.
 &lt;/p&gt;&lt;p dir="ltr"&gt;
 privacy notice: datagubbe.se uses neither cookies nor javascript. | &lt;a href="https://www.datagubbe.se/atom.xml" dir="ltr"&gt;rss feed&lt;/a&gt;&lt;br dir="ltr"&gt;
-&lt;/p&gt;</description><pubDate>Sat, 06 Feb 2021 01:34:18 -0600</pubDate></item><item><title>Malware attachment using Morse Code to encode itself</title><link>https://lobste.rs/s/plnnps</link><description>&lt;p&gt;Gotta admit... I'm pretty impressed by the creativity. Never seen this kind of attack on any of our clients before&lt;/p&gt;&lt;div&gt;&lt;button data-click-id="awards"&gt;&amp;amp; 2 More&lt;/button&gt;&lt;/div&gt;&lt;p&gt;I can't believe i'm putting this out onto the Internet, but i'm surprised I haven't seen one where you click on unsubscibe now at the bottom of an email.&lt;/p&gt;&lt;p&gt;Mods, delete and ban me.&lt;/p&gt;&lt;div&gt;580&lt;/div&gt;&lt;div&gt;244&lt;/div&gt;&lt;div&gt;48&lt;/div&gt;&lt;div&gt;14&lt;/div&gt;&lt;div&gt;17&lt;/div&gt;&lt;div&gt;6&lt;/div&gt;&lt;div&gt;6&lt;/div&gt;&lt;div&gt;13&lt;/div&gt;&lt;p&gt;Fuck you.&lt;/p&gt;&lt;p&gt;I’ve been sandboxing all unsubscribe links for a year now for specific users, now I gotta do for all.&lt;/p&gt;&lt;div&gt;4&lt;/div&gt;&lt;div&gt;3&lt;/div&gt;&lt;div&gt;5&lt;/div&gt;&lt;div&gt;2&lt;/div&gt;&lt;div&gt;4&lt;/div&gt;&lt;div&gt;0&lt;/div&gt;&lt;div&gt;0&lt;/div&gt;&lt;p&gt;This is clearly someone having fun. (Quite possibly at the expense of the spammers who ripped this "l337 technique" off a blog somewhere.)&lt;/p&gt;&lt;p dir="ltr"&gt;You could do this with &lt;em dir="ltr"&gt;any&lt;/em&gt; cypher and Morse code has got to be one of the least efficient choices you could pick to digitally encode anything. As long as you're not using a super common algorithm like ROT13 or base64, I doubt any spam filter that would pass Morse would fail anything else.&lt;/p&gt;&lt;div&gt;97&lt;/div&gt;&lt;p&gt;They probably just used morse code because its an easily referenced "cypher". No need to come up with an enigma rival if it's just to get pass filters not looking for morse.&lt;/p&gt;&lt;p&gt;Maybe the dev was just having fun. But it was sent to one of largest financial clients, who are obsessed with security, so they didn't think it was very fun it managed to slip through.&lt;/p&gt;&lt;div&gt;48&lt;/div&gt;&lt;div&gt;1&lt;/div&gt;&lt;div&gt;0&lt;/div&gt;&lt;div&gt;54&lt;/div&gt;&lt;div&gt;21&lt;/div&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;I'll be more impressed when the payload is in&lt;/p&gt;&lt;del&gt;Brainfuck&lt;/del&gt;&lt;/BLOCKQUOTE&gt;&lt;div&gt;4&lt;/div&gt;&lt;div&gt;8&lt;/div&gt;&lt;div&gt;3&lt;/div&gt;&lt;div&gt;&lt;span&gt;level 1&lt;/span&gt;&lt;/div&gt;&lt;p&gt;I had an incident where an email was received out our providers system as normal. The email was just a basic email and no attachment as per the logs and scan signature reported. When the email was received, at the exchange server, it suddenly had an attachment along with a basic here is our PO or invoice kind of attack. The attachment was a payload to download a malicious file. In the end the provider could provide no information why their system was bypassed and provided no feedback as to how and email can be processed as just a basic email, but then delivered by them with a malicious payload. I know the bad guys are always finding the next best attack to tryout so new attacks are expected and we always have to be on our guard. I'm mad at the provider for having shit support, shit feedback and not working with their client to understand a flaw in their system. The attacks only lasted a few days, so i assume the engineers took my sample files and were able to find the cause, but this is only a guess and i still had zero feedback even after months of correspondence. I will be looking for a new provider in the future.&lt;/p&gt;&lt;div&gt;23&lt;/div&gt;</description><pubDate>Sat, 06 Feb 2021 05:58:23 -0600</pubDate></item><item><title>Is license compatibility a partial order?</title><link>https://lobste.rs/s/6loqzq</link><description>&lt;div itemprop="upvoteCount" data-value="2"&gt;2&lt;/div&gt;&lt;p dir="ltr"&gt;When we say that some license X is (one-way) compatible with another license Y, I gather that we often intend for compatibility to be &lt;a href="https://en.wikipedia.org/wiki/Transitive_relation" rel="nofollow noreferrer" dir="ltr"&gt;transitive&lt;/a&gt;; that is, given some other license W which is compatible with X, W is also compatible with Y.&lt;/p&gt;&lt;p dir="ltr"&gt;This happens to be the key property of &lt;a href="https://en.wikipedia.org/wiki/Partially_ordered_set" rel="nofollow noreferrer" dir="ltr"&gt;partial orders&lt;/a&gt;. A partial order has two other properties which seem trivial to establish. First, any license is trivially compatible with itself. Second, if two licenses are each compatible with each other, then the licensed software can be offered equivalently under both licenses simultaneously; this equivalence is &lt;a href="https://en.wikipedia.org/wiki/Antisymmetric_relation" rel="nofollow noreferrer" dir="ltr"&gt;antisymmetry&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;So, to detail my question, I think that in an ideal world, yes, license compatibility is a partial order. But that's not the world that we find ourselves inhabiting today. &lt;strong dir="ltr"&gt;What counterexamples show that license compatibility is not a partial order?&lt;/strong&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;The main pragmatic purpose of this question is to establish the degree to which we are allowed to use &lt;a href="https://en.wikipedia.org/wiki/Boolean_algebra" rel="nofollow noreferrer" dir="ltr"&gt;Boolean algebra&lt;/a&gt; (AND, OR, NOT, etc.) to compose many licenses together. Given how often folks informally do this, I would not be surprised to learn that I am not the first person to ask this question. Prior questions have involved informally considering &lt;a href="https://opensource.stackexchange.com/questions/326/dual-license-compatibility" dir="ltr"&gt;unions of single licenses&lt;/a&gt; or &lt;a href="https://opensource.stackexchange.com/questions/8702/would-a-multi-license-consisting-of-all-possible-non-exclusive-licenses-work" dir="ltr"&gt;unions of license families&lt;/a&gt;.&lt;/p&gt;&lt;div itemprop="upvoteCount" data-value="3"&gt;3&lt;/div&gt;&lt;p&gt;No, license compatibility is generally transitive but does not quite form a partial order in the mathematical sense.&lt;/p&gt;&lt;p&gt;Viewing license compatibility as a partial order makes sense in the context of copyleft licenses like the GPL. These require that the software as a whole must be available as the same license. Thus, if we include compatibly-licensed software into a GPL-covered program, the entire program is effectively licensed under GPL. And any GPL software can also be used in an AGPL-covered program.&lt;/p&gt;&lt;p&gt;This view stops making sense with more permissive licenses. Here, the licenses do not impose any requirements on the program as a whole, but can freely provide permissions and impose conditions. The licensee will then effectively have the intersection of permissions, and the union of conditions to comply with.&lt;/p&gt;&lt;p&gt;As an abstract example, consider the following made-up licenses:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, subject to the following condition:&lt;br dir="ltr"&gt;
+&lt;/p&gt;</description><pubDate>Sat, 06 Feb 2021 01:34:18 -0600</pubDate></item><item><title>On the Missed Opportunities of Static Types</title><link>https://lobste.rs/s/izpz2n</link><description>&lt;p dir="ltr"&gt;Recently, a colleague spent a bunch of time working on a bug. When
+attempting to perform some action, the system would provide feedback
+that everything was going as planned, and then "go dark," seemingly
+out of no where. It's important to realize that this is a complex
+distributed system, and that there is a network connection between the
+"part that worked" and "the part that went dark." But, there wasn't a
+change to the connection logic, and it worked before, so that
+"couldn't possibly be it." &lt;em dir="ltr"&gt;(Yes. I already told you where this is going—Ed)&lt;/em&gt;&lt;/p&gt;&lt;p&gt;Suppose you're writing a Go program and you want to perform a different
+action based on the value of another value. You might do this:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;func Greeter(lang, name string) {
+    switch lang {
+    case "english":
+        fmt.Printf("Hello, %s!\n", name)
+    case "spanish":
+        fmt.Printf("Hola, %s!\n", name)
+    default:
+        fmt.Printf("excuse me?\n")
+    }
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Based on &lt;code dir="ltr"&gt;lang&lt;/code&gt;, the function will (naively) print to the screen a
+greeting, for &lt;code dir="ltr"&gt;name&lt;/code&gt;, in the specified language. &lt;/p&gt;&lt;PRE&gt;&lt;code&gt;Greeter("spanish", "Andrew")  // outputs: Hola, Andrew!
+Greeter("english", "Andrew") // outputs: Hello, Andrew!
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;&lt;em dir="ltr"&gt;(Now, you can argue with me about whether strings are appropriate here, when an &lt;code dir="ltr"&gt;iota&lt;/code&gt; would do, but that would be silly, as that's not the point. In the bug, strings were used, so that's what we're going to use here.—Ed)&lt;/em&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;In the case of &lt;code dir="ltr"&gt;Greeter&lt;/code&gt;, there's no dependency between &lt;code dir="ltr"&gt;lang&lt;/code&gt;
+and &lt;code dir="ltr"&gt;name&lt;/code&gt;. &lt;code dir="ltr"&gt;name&lt;/code&gt; is perfectly valid for each &lt;code dir="ltr"&gt;lang&lt;/code&gt;, unless you're
+fancy and do a translation of "Andrew" to "Andres". Again, not the point.&lt;/p&gt;&lt;p dir="ltr"&gt;In a more complicated setting there &lt;em dir="ltr"&gt;is&lt;/em&gt; a dependency between the two
+values. Let's take a look at a Go API many of us are familiar with
+because it's front and center on the package documentation for
+&lt;a href="https://golang.org/pkg/net/" dir="ltr"&gt;net&lt;/a&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;conn, err := net.Dial("tcp", "golang.org:80")
+if err != nil {
+    // handle error
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This demonstrates something beautiful; flexibility! If I want to
+&lt;code dir="ltr"&gt;Dial&lt;/code&gt; a &lt;code dir="ltr"&gt;unix&lt;/code&gt; socket, the right parameters are &lt;code dir="ltr"&gt;"unix",
+"/path/to/socket"&lt;/code&gt;, and &lt;code dir="ltr"&gt;hostname:port&lt;/code&gt; is meaningless. This works
+because &lt;code dir="ltr"&gt;Dial&lt;/code&gt; implements validation logic to ensure that the
+address provided makes sense for the protocol, and returns an error if
+not. This is helpful in reducing the amount of code required to
+dynamically &lt;code dir="ltr"&gt;Dial&lt;/code&gt; a socket specified from external configuration, but
+it pushes error checking to &lt;em dir="ltr"&gt;runtime&lt;/em&gt; which is an aphorism for "you're
+eventually going to be woken up due to this bug."&lt;/p&gt;&lt;p&gt;If we redesign the API, we can get the compiler to ensure we're
+not doing something silly; but we need to make a few concessions.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;DialUnix(addr UnixSocket)&lt;/code&gt; could ensure that &lt;code dir="ltr"&gt;addr&lt;/code&gt; is a path to a
+unix socket. It may &lt;em dir="ltr"&gt;not&lt;/em&gt; delegate everything to the compiler, but
+obvious errors could be detected. You wouldn't be able to, say,
+&lt;code dir="ltr"&gt;DialUnix(HostPort("golang.org", 80))&lt;/code&gt; since &lt;code dir="ltr"&gt;HostPort&lt;/code&gt; is not of type
+&lt;code dir="ltr"&gt;UnixSocket&lt;/code&gt;. This particular example works better if file paths
+aren't represented as strings, a &lt;a href="https://fasterthanli.me/articles/i-want-off-mr-golangs-wild-ride" dir="ltr"&gt;sore point of
+sorts&lt;/a&gt;. Then,
+&lt;code dir="ltr"&gt;UnixSocket&lt;/code&gt; can be an effective alias to &lt;code dir="ltr"&gt;Path&lt;/code&gt;, for instance.&lt;/p&gt;&lt;p dir="ltr"&gt;But what is the cost here? Well, in the case of &lt;code dir="ltr"&gt;Dial&lt;/code&gt;, the interface
+that the &lt;code dir="ltr"&gt;net&lt;/code&gt; package exposes becomes much larger, creating more
+cognitive overhead for programmers, and &lt;code dir="ltr"&gt;net&lt;/code&gt; developers. Go &lt;code dir="ltr"&gt;net&lt;/code&gt; developers
+have to create a new function, and type for every new type of supported
+socket. Programmerss must adopt those new functions, increase the things
+they know about, and no one is truly happy with the experience.&lt;/p&gt;&lt;p dir="ltr"&gt;Go doesn't provide an obvious mechanism to make this more generic, and
+while the generics proposal &lt;em dir="ltr"&gt;may make solving this possible&lt;/em&gt; that's not
+going to help us for quite some time.&lt;/p&gt;&lt;p&gt;So what is a programmer to do?&lt;/p&gt;&lt;p&gt;To recap the problem here: when using strings as arguments to simplify
+an interface, the compiler cannot create assurances that the two
+strings relate to each other in any meaningful way, which means that
+all validation must be done at runtime, which almost certainly means
+bugs are gonna slip into production, despite the fact that we already
+pay for static types in the language, and the compiler.&lt;/p&gt;&lt;p dir="ltr"&gt;The other possibility, which keeps a singular function, is to have
+&lt;code dir="ltr"&gt;Dial&lt;/code&gt; and an interface instead, say, &lt;code dir="ltr"&gt;ProtoAddr&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;// SIDENOTE: This, effectively, already exists as net.Addr ... :tableflip:
+type ProtoAddr interface {
+    Protocol() string // wait, wuh????
+    Addr() string
+}
+
+func Dial(pa ProtoAddr) (net.Conn, err) {
+    return originalDial(pa.Protocol(), pa.Addr())
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;We can then create helper functions and types that &lt;em dir="ltr"&gt;constrain&lt;/em&gt; our
+inputs and allow for more assurances that the caller isn't doing
+something silly, like providing a filesystem path instead of an IP
+address. Want to &lt;code dir="ltr"&gt;Dial&lt;/code&gt; an IP address?
+&lt;code dir="ltr"&gt;Dial(TCPIPv4Addr{net.IPv4{127,0,0,1}, 8000})&lt;/code&gt;. &lt;/p&gt;&lt;p dir="ltr"&gt;Similar types can just as easily be constructed for &lt;code dir="ltr"&gt;hostname:port&lt;/code&gt; addresses,
+Unix Sockets, etc. The important aspect here is that the caller's intentions
+are stated, in a way that the compiler can catch, and that the library
+author can quickly assert validity of.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;type TCPIPv4Addr struct {
+    IP IPv4
+    Port uint16
+}
+
+func (t TCPIPv4Addr) Protocol() string { return "tcp" }
+func (t TCPIPV4Addr Addr() string { return fmt.Sprint("%s:%d", t.IP.String(), t.Port) }
+
+func NewTCPIPv4Addr(ip IPv4, port uint16) TCPIPv4Addr ...
+
+type UnixAddr struct {
+    Socket filesystem.Path // made up, because, in Go, strings are totally fine for everything, including file paths.
+}
+
+func (u UnixAddr) Protocol() string { return "unix" }
+func (u UnixAddr) Addr() string { return u.Socket.String() }
+
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;In the above code snippets, you'll notice something odd--that
+&lt;code dir="ltr"&gt;string&lt;/code&gt;'s are ultimately passed into
+&lt;code dir="ltr"&gt;originalDial&lt;/code&gt; as before. This is meant to address and illustrate how you might
+take &lt;code dir="ltr"&gt;Dial&lt;/code&gt; and evolve it, just as you might evolve instances in your
+own codebase. This whole idea, of course, fundamentally is not backward compatible.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;"But wait a minute, Andrew! What the hell? All you've done is add more boilerplate for me to type out, and I already have enough of that with Go's error checking. What's this got to do with me? Why is this any better?"&lt;/em&gt;, you say.&lt;/p&gt;&lt;p&gt;The primary job of a program is to take input and produce some output.
+This is vague; yes. The primary job of a programmer is to ensure that
+the input given to a program makes sense in order to produce the
+desired output.&lt;/p&gt;&lt;p dir="ltr"&gt;In other words, the fact that we build APIs that take arbitrary
+strings, like &lt;code dir="ltr"&gt;Dial&lt;/code&gt;, doesn't give us a pass from validating that the
+input makes sense, and indeed &lt;code dir="ltr"&gt;Dial&lt;/code&gt; heavily validates input. But, why
+not leverage the type system to check as much of your work as
+possible at compile time?&lt;/p&gt;&lt;p dir="ltr"&gt;Go's type system doesn't provide us with enough expressive power to solve
+this simply, unfortunately. And so, as written, it's not possible to 
+prevent a silly programmer from calling the new &lt;code dir="ltr"&gt;Dial&lt;/code&gt; with a &lt;code dir="ltr"&gt;LOLAddr&lt;/code&gt;
+defined like so:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;type LOLAddr struct { 
+   What string
+   Lol string
+}
+
+func (l LOLAddr) Protocol() string { return l.What }
+func (l LOLAddr) Addr() string { return l.Lol }
+
+Dial(LOLAddr{"unix", "localhost:8383"})
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Because of this, you might think that the implementation I've described
+is totally useless; I don't think so. Go &lt;em dir="ltr"&gt;does&lt;/em&gt; provide a mechanism
+that you can use which gives you all of the good properties of what I
+described without the bad. &lt;/p&gt;&lt;PRE&gt;&lt;code&gt;type ClosedProtoAddr interface {
+    Protocol() string
+    Addr() string
+    closed() struct{}
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This interface is impossible to implement outside of the package it's
+defined in, because &lt;code dir="ltr"&gt;closed() struct{}&lt;/code&gt; is not exported. Using this,
+we can &lt;em dir="ltr"&gt;constrain&lt;/em&gt; the input to known good values, and exhaustively
+create all of the supported &lt;code dir="ltr"&gt;Dial&lt;/code&gt; compatible &lt;code dir="ltr"&gt;ProtoAddr&lt;/code&gt;s in the
+package. &lt;code dir="ltr"&gt;Dial&lt;/code&gt; just has to handle the possibility that &lt;code dir="ltr"&gt;nil&lt;/code&gt; was
+passed in, and validate that nothing sneaky is hiding in one of those
+strings, something that is done right now in the old interface, too.&lt;/p&gt;&lt;p dir="ltr"&gt;So about that bug? Well, it was especially sinister as it was
+contained in a subsystem that implements a proxy with a virtual
+network address overlay. The proxy's connection is &lt;em dir="ltr"&gt;always&lt;/em&gt; supposed
+to be alive and so it reconnects in a loop, without providing much in
+the way of visibility in regards to its status. There's no timeout
+errors. There's no error logs. There's an assumption made that if the
+link goes down, a retry will eventually succeed. &lt;/p&gt;&lt;p dir="ltr"&gt;There are, also, two virtual address types. The two types of addresses are there to allow you to say "connect to this
+specific node" or "connect to &lt;em dir="ltr"&gt;any&lt;/em&gt; of the nodes in this
+cluster". These are reasonable things. The addresses &lt;em dir="ltr"&gt;look&lt;/em&gt;
+different, but are each represented by strings. The address type,
+itself, is represented by strings.  There is no
+&lt;code dir="ltr"&gt;DialRandomNodeInCluster(clusterId)&lt;/code&gt;. There is no
+&lt;code dir="ltr"&gt;DialHost(hostId)&lt;/code&gt;. There is an analog to &lt;code dir="ltr"&gt;Dial(type, addr)&lt;/code&gt;,
+and then a &lt;em dir="ltr"&gt;lot&lt;/em&gt; of screaming when you realize that the feature you
+are working on required you to dial a specific host—&lt;em dir="ltr"&gt;not a random one&lt;/em&gt;—and 
+you didn't change the first argument that provides the context for how to interpret the address.&lt;/p&gt;&lt;p&gt;As developers, it is important to create clear guidance on how not to
+be frustrated when attempting to use our libraries. This, too often,
+is delegated to poorly written documentation, even when the best
+documentation, the code, can be used to point out our misuse, by 
+our friend the type checker.&lt;/p&gt;&lt;p&gt;&lt;em&gt;- published: 2021/02/05. written: 2020/11/15&lt;/em&gt;&lt;/p&gt;</description><pubDate>Fri, 05 Feb 2021 14:07:17 -0600</pubDate></item><item><title>Homebrew 3.0.0</title><link>https://lobste.rs/s/cu5jxw</link><description>&lt;h3&gt;&lt;a href="https://github.com/MikeMcQuaid"&gt;MikeMcQuaid&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Today I’d like to announce Homebrew 3.0.0. The most significant changes since 2.7.0 are official Apple Silicon support and a new bottle format in formulae.&lt;/p&gt;&lt;p&gt;Major changes and deprecations since 2.7.0:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Apple Silicon is now officially supported for installations in &lt;code dir="ltr"&gt;/opt/homebrew&lt;/code&gt;. &lt;a href="https://formulae.brew.sh/" dir="ltr"&gt;formulae.brew.sh&lt;/a&gt; formula pages &lt;a href="https://github.com/Homebrew/formulae.brew.sh/pull/408" dir="ltr"&gt;indicate for which platforms bottles (binary packages) are provided&lt;/a&gt; and therefore whether they are supported by Homebrew. Homebrew doesn’t (yet) provide bottles for all packages on Apple Silicon that we do on Intel x86_64 but we welcome your help in doing so. Rosetta 2 on Apple Silicon still provides support for Intel x86_64 in &lt;code dir="ltr"&gt;/usr/local&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/Homebrew/brew/pull/10229" dir="ltr"&gt;Bash&lt;/a&gt;, &lt;a href="https://github.com/Homebrew/brew/pull/10431" dir="ltr"&gt;fish&lt;/a&gt; and &lt;a href="https://github.com/Homebrew/brew/pull/10403" dir="ltr"&gt;zsh&lt;/a&gt; completions are generated automatically from the &lt;code dir="ltr"&gt;CLI::Parser&lt;/code&gt; DSL. This will ensure they are kept up-to-date.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Other changes since 2.7.0 I’d like to highlight are the following:&lt;/p&gt;&lt;p&gt;Finally:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;a href="http://discourse.brew.sh/" dir="ltr"&gt;Discourse&lt;/a&gt; was made read-only on January 1st 2021 in favour of &lt;a href="https://github.com/Homebrew/discussions/discussions" dir="ltr"&gt;GitHub Discussions&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/sponsors/Homebrew" dir="ltr"&gt;Homebrew accepts donations through GitHub Sponsors&lt;/a&gt; and &lt;a href="https://www.patreon.com/homebrew" dir="ltr"&gt;still accepts donations through Patreon&lt;/a&gt;. If you can afford it, please consider donating. If you’d rather not use GitHub Sponsors or Patreon (our preferred donation methods), &lt;a href="https://github.com/homebrew/brew/#donations" dir="ltr"&gt;check out the other ways to donate in our README&lt;/a&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Thanks to all our hard-working maintainers, contributors, sponsors and supporters for getting us this far. Particular thanks on Homebrew 3.0.0 go to MacStadium and Apple for providing us with a lot of Apple Silicon hardware and Cassidy from Apple for helping us in many ways with this migration. Enjoy using Homebrew!&lt;/p&gt;&lt;h3 dir="ltr"&gt;
+    &lt;label for="newsletter-email" dir="ltr"&gt;Subscribe to be notified about new posts&lt;/label&gt;
+  &lt;/h3&gt;&lt;img src="https://aral.github.io/fork-me-on-github-retina-ribbons/right-grey@2x.png" alt="Fork me on GitHub" width="100" height="100"&gt;</description><pubDate>Fri, 05 Feb 2021 08:46:35 -0600</pubDate></item><item><title>Is license compatibility a partial order?</title><link>https://lobste.rs/s/6loqzq</link><description>&lt;div itemprop="upvoteCount" data-value="2"&gt;2&lt;/div&gt;&lt;p dir="ltr"&gt;When we say that some license X is (one-way) compatible with another license Y, I gather that we often intend for compatibility to be &lt;a href="https://en.wikipedia.org/wiki/Transitive_relation" rel="nofollow noreferrer" dir="ltr"&gt;transitive&lt;/a&gt;; that is, given some other license W which is compatible with X, W is also compatible with Y.&lt;/p&gt;&lt;p dir="ltr"&gt;This happens to be the key property of &lt;a href="https://en.wikipedia.org/wiki/Partially_ordered_set" rel="nofollow noreferrer" dir="ltr"&gt;partial orders&lt;/a&gt;. A partial order has two other properties which seem trivial to establish. First, any license is trivially compatible with itself. Second, if two licenses are each compatible with each other, then the licensed software can be offered equivalently under both licenses simultaneously; this equivalence is &lt;a href="https://en.wikipedia.org/wiki/Antisymmetric_relation" rel="nofollow noreferrer" dir="ltr"&gt;antisymmetry&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;So, to detail my question, I think that in an ideal world, yes, license compatibility is a partial order. But that's not the world that we find ourselves inhabiting today. &lt;strong dir="ltr"&gt;What counterexamples show that license compatibility is not a partial order?&lt;/strong&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;The main pragmatic purpose of this question is to establish the degree to which we are allowed to use &lt;a href="https://en.wikipedia.org/wiki/Boolean_algebra" rel="nofollow noreferrer" dir="ltr"&gt;Boolean algebra&lt;/a&gt; (AND, OR, NOT, etc.) to compose many licenses together. Given how often folks informally do this, I would not be surprised to learn that I am not the first person to ask this question. Prior questions have involved informally considering &lt;a href="https://opensource.stackexchange.com/questions/326/dual-license-compatibility" dir="ltr"&gt;unions of single licenses&lt;/a&gt; or &lt;a href="https://opensource.stackexchange.com/questions/8702/would-a-multi-license-consisting-of-all-possible-non-exclusive-licenses-work" dir="ltr"&gt;unions of license families&lt;/a&gt;.&lt;/p&gt;&lt;div itemprop="upvoteCount" data-value="3"&gt;3&lt;/div&gt;&lt;p&gt;No, license compatibility is generally transitive but does not quite form a partial order in the mathematical sense.&lt;/p&gt;&lt;p&gt;Viewing license compatibility as a partial order makes sense in the context of copyleft licenses like the GPL. These require that the software as a whole must be available as the same license. Thus, if we include compatibly-licensed software into a GPL-covered program, the entire program is effectively licensed under GPL. And any GPL software can also be used in an AGPL-covered program.&lt;/p&gt;&lt;p&gt;This view stops making sense with more permissive licenses. Here, the licenses do not impose any requirements on the program as a whole, but can freely provide permissions and impose conditions. The licensee will then effectively have the intersection of permissions, and the union of conditions to comply with.&lt;/p&gt;&lt;p&gt;As an abstract example, consider the following made-up licenses:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, subject to the following condition:&lt;br dir="ltr"&gt;
 This notice shall be included in all copies or substantial portions of the Software.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;(&lt;strong dir="ltr"&gt;X-Attribution&lt;/strong&gt;, a made-up combination of 0BSD + MIT)&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, subject to the following condition:
-If the software is modified, the modified version shall only be distributed (a) under any OSI-approved license, or (b) in a manner that doesn't prevent installation of the unmodified version.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;(&lt;strong dir="ltr"&gt;X-Compat&lt;/strong&gt;, a made-up combination of 0BSD with a core feature of the Artistic License)&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;A software that combines software under these two licenses is licensed under neither of these alone, but under both in combination. The relicensing mechanism of X-Compat clause (a) cannot be used to switch to X-Attribution because X-Attribution is not OSI-approved. However, the licenses are clearly compatible: nothing prevents a licensee from complying with both license conditions.&lt;/p&gt;&lt;p&gt;So we might say that “X-Attribution is-compatible-with X-Compat” and “X-Compat is-compatible-with X-Attribution”, but the licenses are not equal. This violates the antisymmetric condition you propose.&lt;/p&gt;&lt;p&gt;I think it would be possible to find a practical example of this issue with more exotic permissive licenses, e.g. involving the Artistic License, Attribution Assurance License, or SIL Open Font License. But I haven't checked this in detail.&lt;/p&gt;&lt;p&gt;A more rigorous definition would consider that the compatibility relation should not consider compatibility between two “input” licenses, but possible changes to licensing that a covered software can undergo. Here, it would be more precise to say:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;X-Compat is-compatible-with (X-Compat AND X-Attribution)&lt;/LI&gt;&lt;LI&gt;X-Attribution is-compatible-with (X-Compat AND X-Attribution)&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;In contrast, we can say for some licenses with explicit relicensing provisions there wouldn't be an AND operator on the right side:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;GPL-2.0+ is-compatible-with GPL-2.0&lt;/LI&gt;&lt;LI&gt;GPL-2.0+ is-compatible-with GPL-3.0&lt;/LI&gt;&lt;LI&gt;LGPL-3.0 is-compatible-with GPL-3.0&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;This post uses the &lt;code dir="ltr"&gt;AND&lt;/code&gt; operator as defined in SPDX license expressions.&lt;/p&gt;</description><pubDate>Sat, 06 Feb 2021 08:50:59 -0600</pubDate></item><item><title>Data Science Setup with Swift in 2021</title><link>https://lobste.rs/s/tlfwfj</link><description>&lt;p dir="ltr"&gt;I started to work on a new data science related project last year. Our initial setup was fairly traditional: it is Python-centric, with &lt;a href="https://www.anaconda.com/" dir="ltr"&gt;Anaconda&lt;/a&gt; for dependency management and environment setup.&lt;/p&gt;&lt;p dir="ltr"&gt;Anaconda is interesting. It is probably useful if you have a ton of dependencies and the system tries really hard to figure out the package compatibilities with each other based on their claims (version numbers of their dependencies). For us though, we only use a handful of packages with clean dependencies on each other (your usual suspects: &lt;a href="https://pandas.pydata.org/" dir="ltr"&gt;Pandas&lt;/a&gt;, &lt;a href="https://www.scipy.org/" dir="ltr"&gt;SciPy&lt;/a&gt;, &lt;a href="https://numpy.org/" dir="ltr"&gt;numpy&lt;/a&gt;), and the version number check just means each time package upgrade is half-an-hour SMT solving.&lt;/p&gt;&lt;p&gt;On the other hand, I made my fortune in the past decade by doing app development (Facebook, Snapchat). I’ve been eyeing on Swift since the 1.0 version. Since then, the language matured a lot. After gaining some Swift experience with my last employer, it seems to be a good compromise between expressivity and performance. The noise from the language itself is minimal, and the performance can be tuned if you are hard on it, otherwise still better than raw Python.&lt;/p&gt;&lt;p&gt;After a few months of probing, investing, bug fixes, we’ve migrated our setup to Swift in last December. It has been serving us well so far.&lt;/p&gt;&lt;h2&gt;Problems&lt;/h2&gt;&lt;p&gt;We have a small project, and the problem with packages mostly around package management and upgrade. Since Anaconda’s environment is not per project based, we have to switch back and forth when entering / leaving the project.&lt;/p&gt;&lt;p&gt;Our project, although small, is a bit exotic. Our core algorithm was implemented in C, and we don’t want to ship a Python plugin in-tree. Hence, we opt-ed to talk with the C lib through standard IO (subprocess). It turns out to be hairy and the core algorithm update process is more than terrible.&lt;/p&gt;&lt;p&gt;Pandas has a reasonable performance if these are builtin functions, once we drop to use apply / lambda, going through a few million rows for a particular column can take 30 to 40 seconds. For these cases, we also cannot use the rest of idle cores efficiently.&lt;/p&gt;&lt;p&gt;However, switching to a new language setup is not an easy task. Besides solving the above said problems, we would still like to keep a few things we liked with our old setup:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Jupyter notebook:&lt;/strong&gt; we really liked to do data exploration with Jupyter notebooks. Anything requires us to compile / run / print would be a no go. The interactive data exploration experience is essential for our workflow.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Pandas:&lt;/strong&gt; we liked Pandas, it is a Swiss Army knife for data science. It also has a big API surface that would be very hard to reimplement from scratch.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;PyCharm or alike IDE:&lt;/strong&gt; we liked to use PyCharm for Python development a lot. Data inspection, re-run, and in general, debugging experience within an IDE is no comparison with tools like vim (although I still use vim for a lot of development personally).&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Other Potential Choices&lt;/h2&gt;&lt;p&gt;Before embarking on this quest, we briefly looked at other potential choices:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;TypeScript / JavaScript:&lt;/strong&gt; it has some interesting data exploration patterns, such as &lt;a href="https://observablehq.com/" dir="ltr"&gt;observablehq.com&lt;/a&gt;. However, it doesn’t have good C library integration points, making the fore-mentioned core algorithm integration problem unsolved.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Rust:&lt;/strong&gt; when I did my investigation, I didn’t notice the &lt;a href="https://github.com/google/evcxr" dir="ltr"&gt;evcxr&lt;/a&gt; project. Other than that, the syntax for modeling would be a bit noisier than I’d like. The way to call Python through &lt;a href="https://pyo3.rs/" dir="ltr"&gt;PyO3&lt;/a&gt; is a bit clumsy too.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Julia:&lt;/strong&gt; if I have more experience with the language, I may have a different opinion. But as it stands, the language has its own ecosystem, and I didn’t see a good way to call Python libraries from the language. On the C lib integration part, it seems to require dynamic linking, and that would be a little bit more hurdle on my toolchain setup.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;New Setup&lt;/h2&gt;&lt;h3&gt;Monorepo&lt;/h3&gt;&lt;p&gt;Our new setup is a monorepo, with Bazel as the build system for both our Swift code, C libraries and our Python dependencies. In the meantime, we still have some legacy Python libraries that are now managed by Bazel too.&lt;/p&gt;&lt;p dir="ltr"&gt;Bazel’s new &lt;a href="https://github.com/bazelbuild/rules_python" dir="ltr"&gt;rules_python&lt;/a&gt; has a pretty reasonable &lt;code dir="ltr"&gt;pip_install&lt;/code&gt; rule for 3rd-party dependencies. As I mentioned, because we use relatively a small number of Python packages, cross package compatibility is not a concern for us.&lt;/p&gt;&lt;p dir="ltr"&gt;All our open-source dependencies are managed through &lt;code dir="ltr"&gt;WORKSPACE&lt;/code&gt; rules. This worked for our monorepo because we don’t really have a large number of open-source dependencies in the Swift ecosystem. The things we import mostly are Swift &lt;a href="https://github.com/apple/swift-numerics" dir="ltr"&gt;numerics&lt;/a&gt;, &lt;a href="https://github.com/apple/swift-algorithms/" dir="ltr"&gt;algorithms&lt;/a&gt; and &lt;a href="https://github.com/apple/swift-argument-parser" dir="ltr"&gt;argument-parser&lt;/a&gt;.&lt;/p&gt;&lt;h3&gt;Jupyterlab&lt;/h3&gt;&lt;p dir="ltr"&gt;We don’t use a separate Jupyter installation anymore. Jupyterlab is installed as a &lt;code dir="ltr"&gt;pip_install&lt;/code&gt; requirement for our monorepo. Opening a Jupyterlab would be as simple as &lt;code dir="ltr"&gt;bazel run :lab&lt;/code&gt;. This enables us to in-tree our Swift Jupyter kernel. We adopted the &lt;a href="https://github.com/google/swift-jupyter" dir="ltr"&gt;swift-jupyter&lt;/a&gt; and added &lt;a href="https://github.com/google/swift-jupyter/pull/121" dir="ltr"&gt;Bazel dependency support&lt;/a&gt;. We also have a pending PR to upstream our sourcekit-lsp integration with the Swift Jupyter kernel.&lt;/p&gt;&lt;p&gt;This complicates a bit on plugin management for Jupyterlab. But we haven’t yet found a well-maintained out-of-tree plugin that we would like to use.&lt;/p&gt;&lt;h3&gt;Python&lt;/h3&gt;&lt;p dir="ltr"&gt;To support calling Python from Swift, we opted to use &lt;a href="https://github.com/pvieito/PythonKit" dir="ltr"&gt;PythonKit&lt;/a&gt; library. We’ve upstreamed &lt;a href="https://github.com/pvieito/PythonKit/pull/28" dir="ltr"&gt;a patch&lt;/a&gt; to make Pandas work better within Swift. We made a few more enhancements around &lt;a href="https://github.com/liuliu/PythonKit/commit/0973cebf0dfc66ffd486639108ea8e439c8212bd" dir="ltr"&gt;UnboundedRange syntax&lt;/a&gt;, &lt;a href="https://github.com/liuliu/PythonKit/commit/af00ca39bc5366aff3a30d8841220128d1eec221" dir="ltr"&gt;passing Swift closures as Python lambda&lt;/a&gt;, which haven’t been upstreamed at the moment.&lt;/p&gt;&lt;p&gt;One thing that makes calling Python from Swift easy is the use of reference counting in both languages. This makes memory management cross the language boundary much more natural.&lt;/p&gt;&lt;p dir="ltr"&gt;We also wrote a simple &lt;code dir="ltr"&gt;pyswift_binary&lt;/code&gt; macro within Bazel such that a Swift binary can declare their Python dependencies and these will be setup properly before invoking the Swift binary.&lt;/p&gt;&lt;p dir="ltr"&gt;We haven’t yet vendoring our Python runtime at the moment. Just painstakingly making sure all machines on Python 3.8. However, we do intend to use &lt;code dir="ltr"&gt;py_runtime&lt;/code&gt; to solve this discrepancy in the future.&lt;/p&gt;&lt;h3&gt;C Libraries&lt;/h3&gt;&lt;p&gt;Swift’s interoperability with C is top-notch. Calling and compiling C dependencies (with Bazel) and integrating with Swift is as easy as it should be. So far, we’ve fully migrated our core algorithms to Swift. The iterations on the core algorithms are much easier.&lt;/p&gt;&lt;h3&gt;IDE Integration&lt;/h3&gt;&lt;p&gt;For obvious reasons, we cannot use PyCharm with Swift. However, we successfully migrated most of our workflow to VS Code. LLDB support makes debugging easy. However, we did compile our own Swift LLDB with Python support for this purpose (still in the process to figure out with the core team why the shipped Swift LLDB on Linux has no Python support).&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/apple/sourcekit-lsp" dir="ltr"&gt;Sourcekit-lsp&lt;/a&gt; doesn’t recognize Bazel targets. The work for Build Server Protocol support on both Bazel side and on sourcekit-lsp side seems stalled at the moment. We ended up writing a simple script to query compilation parameters from bazel aquery for all our Swift source code, and put these into compile_commands.json. Sourcekit-lsp just has enough support for Clang’s &lt;a href="https://clang.llvm.org/docs/JSONCompilationDatabase.html" dir="ltr"&gt;compilation database format&lt;/a&gt; to make code highlighting, auto-complete, go to definition and inline documentation work again.&lt;/p&gt;&lt;p dir="ltr"&gt;We committed &lt;code dir="ltr"&gt;.vscode/settings.json.tpl&lt;/code&gt; and &lt;code dir="ltr"&gt;.vscode/launch.json.tpl&lt;/code&gt; into the codebase. Upon initial checkout, a small script can run to convert these template files into actual &lt;code dir="ltr"&gt;settings.json&lt;/code&gt; and &lt;code dir="ltr"&gt;launch.json&lt;/code&gt;. We did this to workaround issues with some VS Code plugins requiring absolute paths. These two files will keep in sync with the templates as part of the build process ever since.&lt;/p&gt;&lt;h3&gt;Bonus&lt;/h3&gt;&lt;p dir="ltr"&gt;Swift’s argument-parser library makes creating command line tools really easy. Furthermore, it also supports auto-complete in your favorite shells. We implemented one all-encompassing CLI tool for our monorepo to do all kinds of stuff: data downloading, transformation, model evaluation, launching Jupyterlab etc. With auto-completion and help messages, it is much easier to navigate than our previous &lt;code dir="ltr"&gt;./bin&lt;/code&gt; directory with twenty-something separate scripts.&lt;/p&gt;&lt;h2&gt;Is this the End?&lt;/h2&gt;&lt;p&gt;We’ve been happy with this new setup since the beginning of this year, but it is far from the end-all be-all solution.&lt;/p&gt;&lt;p&gt;Swift is great for local development, however, the Bazel support on Linux generates binary that dynamically links to Swift runtime. This makes deployment a little bit more involved than we’d like it to be.&lt;/p&gt;&lt;p dir="ltr"&gt;Pandas uses internal data structure for DataFrame (column-based numpy). While we do have efficient numpy to tensor conversions, these cannot be leveraged in the context of Pandas (we want to lift the whole data frame, not just numpy-ready columns). Our current solution calls itertuples, which can be quite slow. We’d like to sponsor an open-source project to implement &lt;a href="https://arrow.apache.org/" dir="ltr"&gt;Apache Arrow&lt;/a&gt; support for Swift. This should enable us to pass data from Pandas to Swift through Arrow in-memory format, which may be faster than what we currently do.&lt;/p&gt;&lt;div&gt;Related Posts&lt;/div&gt;</description><pubDate>Fri, 05 Feb 2021 22:05:43 -0600</pubDate></item><item><title>FOSDEM 2021 - Schedule</title><link>https://lobste.rs/s/de4y6i</link><description>&lt;p dir="ltr"&gt;
+If the software is modified, the modified version shall only be distributed (a) under any OSI-approved license, or (b) in a manner that doesn't prevent installation of the unmodified version.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;(&lt;strong dir="ltr"&gt;X-Compat&lt;/strong&gt;, a made-up combination of 0BSD with a core feature of the Artistic License)&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;A software that combines software under these two licenses is licensed under neither of these alone, but under both in combination. The relicensing mechanism of X-Compat clause (a) cannot be used to switch to X-Attribution because X-Attribution is not OSI-approved. However, the licenses are clearly compatible: nothing prevents a licensee from complying with both license conditions.&lt;/p&gt;&lt;p&gt;So we might say that “X-Attribution is-compatible-with X-Compat” and “X-Compat is-compatible-with X-Attribution”, but the licenses are not equal. This violates the antisymmetric condition you propose.&lt;/p&gt;&lt;p&gt;I think it would be possible to find a practical example of this issue with more exotic permissive licenses, e.g. involving the Artistic License, Attribution Assurance License, or SIL Open Font License. But I haven't checked this in detail.&lt;/p&gt;&lt;p&gt;A more rigorous definition would consider that the compatibility relation should not consider compatibility between two “input” licenses, but possible changes to licensing that a covered software can undergo. Here, it would be more precise to say:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;X-Compat is-compatible-with (X-Compat AND X-Attribution)&lt;/LI&gt;&lt;LI&gt;X-Attribution is-compatible-with (X-Compat AND X-Attribution)&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;In contrast, we can say for some licenses with explicit relicensing provisions there wouldn't be an AND operator on the right side:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;GPL-2.0+ is-compatible-with GPL-2.0&lt;/LI&gt;&lt;LI&gt;GPL-2.0+ is-compatible-with GPL-3.0&lt;/LI&gt;&lt;LI&gt;LGPL-3.0 is-compatible-with GPL-3.0&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;This post uses the &lt;code dir="ltr"&gt;AND&lt;/code&gt; operator as defined in SPDX license expressions.&lt;/p&gt;</description><pubDate>Sat, 06 Feb 2021 08:50:59 -0600</pubDate></item><item><title>Malware attachment using Morse Code to encode itself</title><link>https://lobste.rs/s/plnnps</link><description>&lt;p&gt;Gotta admit... I'm pretty impressed by the creativity. Never seen this kind of attack on any of our clients before&lt;/p&gt;&lt;div&gt;&lt;button data-click-id="awards"&gt;&amp;amp; 2 More&lt;/button&gt;&lt;/div&gt;&lt;p&gt;I can't believe i'm putting this out onto the Internet, but i'm surprised I haven't seen one where you click on unsubscibe now at the bottom of an email.&lt;/p&gt;&lt;p&gt;Mods, delete and ban me.&lt;/p&gt;&lt;div&gt;580&lt;/div&gt;&lt;div&gt;244&lt;/div&gt;&lt;div&gt;48&lt;/div&gt;&lt;div&gt;14&lt;/div&gt;&lt;div&gt;17&lt;/div&gt;&lt;div&gt;6&lt;/div&gt;&lt;div&gt;6&lt;/div&gt;&lt;div&gt;13&lt;/div&gt;&lt;p&gt;Fuck you.&lt;/p&gt;&lt;p&gt;I’ve been sandboxing all unsubscribe links for a year now for specific users, now I gotta do for all.&lt;/p&gt;&lt;div&gt;4&lt;/div&gt;&lt;div&gt;3&lt;/div&gt;&lt;div&gt;5&lt;/div&gt;&lt;div&gt;2&lt;/div&gt;&lt;div&gt;4&lt;/div&gt;&lt;div&gt;0&lt;/div&gt;&lt;div&gt;0&lt;/div&gt;&lt;p&gt;This is clearly someone having fun. (Quite possibly at the expense of the spammers who ripped this "l337 technique" off a blog somewhere.)&lt;/p&gt;&lt;p dir="ltr"&gt;You could do this with &lt;em dir="ltr"&gt;any&lt;/em&gt; cypher and Morse code has got to be one of the least efficient choices you could pick to digitally encode anything. As long as you're not using a super common algorithm like ROT13 or base64, I doubt any spam filter that would pass Morse would fail anything else.&lt;/p&gt;&lt;div&gt;97&lt;/div&gt;&lt;p&gt;They probably just used morse code because its an easily referenced "cypher". No need to come up with an enigma rival if it's just to get pass filters not looking for morse.&lt;/p&gt;&lt;p&gt;Maybe the dev was just having fun. But it was sent to one of largest financial clients, who are obsessed with security, so they didn't think it was very fun it managed to slip through.&lt;/p&gt;&lt;div&gt;48&lt;/div&gt;&lt;div&gt;1&lt;/div&gt;&lt;div&gt;0&lt;/div&gt;&lt;div&gt;54&lt;/div&gt;&lt;div&gt;21&lt;/div&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;I'll be more impressed when the payload is in&lt;/p&gt;&lt;del&gt;Brainfuck&lt;/del&gt;&lt;/BLOCKQUOTE&gt;&lt;div&gt;4&lt;/div&gt;&lt;div&gt;8&lt;/div&gt;&lt;div&gt;3&lt;/div&gt;&lt;div&gt;&lt;span&gt;level 1&lt;/span&gt;&lt;/div&gt;&lt;p&gt;I had an incident where an email was received out our providers system as normal. The email was just a basic email and no attachment as per the logs and scan signature reported. When the email was received, at the exchange server, it suddenly had an attachment along with a basic here is our PO or invoice kind of attack. The attachment was a payload to download a malicious file. In the end the provider could provide no information why their system was bypassed and provided no feedback as to how and email can be processed as just a basic email, but then delivered by them with a malicious payload. I know the bad guys are always finding the next best attack to tryout so new attacks are expected and we always have to be on our guard. I'm mad at the provider for having shit support, shit feedback and not working with their client to understand a flaw in their system. The attacks only lasted a few days, so i assume the engineers took my sample files and were able to find the cause, but this is only a guess and i still had zero feedback even after months of correspondence. I will be looking for a new provider in the future.&lt;/p&gt;&lt;div&gt;23&lt;/div&gt;</description><pubDate>Sat, 06 Feb 2021 05:58:23 -0600</pubDate></item><item><title>Data Science Setup with Swift in 2021</title><link>https://lobste.rs/s/tlfwfj</link><description>&lt;p dir="ltr"&gt;I started to work on a new data science related project last year. Our initial setup was fairly traditional: it is Python-centric, with &lt;a href="https://www.anaconda.com/" dir="ltr"&gt;Anaconda&lt;/a&gt; for dependency management and environment setup.&lt;/p&gt;&lt;p dir="ltr"&gt;Anaconda is interesting. It is probably useful if you have a ton of dependencies and the system tries really hard to figure out the package compatibilities with each other based on their claims (version numbers of their dependencies). For us though, we only use a handful of packages with clean dependencies on each other (your usual suspects: &lt;a href="https://pandas.pydata.org/" dir="ltr"&gt;Pandas&lt;/a&gt;, &lt;a href="https://www.scipy.org/" dir="ltr"&gt;SciPy&lt;/a&gt;, &lt;a href="https://numpy.org/" dir="ltr"&gt;numpy&lt;/a&gt;), and the version number check just means each time package upgrade is half-an-hour SMT solving.&lt;/p&gt;&lt;p&gt;On the other hand, I made my fortune in the past decade by doing app development (Facebook, Snapchat). I’ve been eyeing on Swift since the 1.0 version. Since then, the language matured a lot. After gaining some Swift experience with my last employer, it seems to be a good compromise between expressivity and performance. The noise from the language itself is minimal, and the performance can be tuned if you are hard on it, otherwise still better than raw Python.&lt;/p&gt;&lt;p&gt;After a few months of probing, investing, bug fixes, we’ve migrated our setup to Swift in last December. It has been serving us well so far.&lt;/p&gt;&lt;h2&gt;Problems&lt;/h2&gt;&lt;p&gt;We have a small project, and the problem with packages mostly around package management and upgrade. Since Anaconda’s environment is not per project based, we have to switch back and forth when entering / leaving the project.&lt;/p&gt;&lt;p&gt;Our project, although small, is a bit exotic. Our core algorithm was implemented in C, and we don’t want to ship a Python plugin in-tree. Hence, we opt-ed to talk with the C lib through standard IO (subprocess). It turns out to be hairy and the core algorithm update process is more than terrible.&lt;/p&gt;&lt;p&gt;Pandas has a reasonable performance if these are builtin functions, once we drop to use apply / lambda, going through a few million rows for a particular column can take 30 to 40 seconds. For these cases, we also cannot use the rest of idle cores efficiently.&lt;/p&gt;&lt;p&gt;However, switching to a new language setup is not an easy task. Besides solving the above said problems, we would still like to keep a few things we liked with our old setup:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Jupyter notebook:&lt;/strong&gt; we really liked to do data exploration with Jupyter notebooks. Anything requires us to compile / run / print would be a no go. The interactive data exploration experience is essential for our workflow.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Pandas:&lt;/strong&gt; we liked Pandas, it is a Swiss Army knife for data science. It also has a big API surface that would be very hard to reimplement from scratch.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;PyCharm or alike IDE:&lt;/strong&gt; we liked to use PyCharm for Python development a lot. Data inspection, re-run, and in general, debugging experience within an IDE is no comparison with tools like vim (although I still use vim for a lot of development personally).&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Other Potential Choices&lt;/h2&gt;&lt;p&gt;Before embarking on this quest, we briefly looked at other potential choices:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;TypeScript / JavaScript:&lt;/strong&gt; it has some interesting data exploration patterns, such as &lt;a href="https://observablehq.com/" dir="ltr"&gt;observablehq.com&lt;/a&gt;. However, it doesn’t have good C library integration points, making the fore-mentioned core algorithm integration problem unsolved.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Rust:&lt;/strong&gt; when I did my investigation, I didn’t notice the &lt;a href="https://github.com/google/evcxr" dir="ltr"&gt;evcxr&lt;/a&gt; project. Other than that, the syntax for modeling would be a bit noisier than I’d like. The way to call Python through &lt;a href="https://pyo3.rs/" dir="ltr"&gt;PyO3&lt;/a&gt; is a bit clumsy too.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Julia:&lt;/strong&gt; if I have more experience with the language, I may have a different opinion. But as it stands, the language has its own ecosystem, and I didn’t see a good way to call Python libraries from the language. On the C lib integration part, it seems to require dynamic linking, and that would be a little bit more hurdle on my toolchain setup.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;New Setup&lt;/h2&gt;&lt;h3&gt;Monorepo&lt;/h3&gt;&lt;p&gt;Our new setup is a monorepo, with Bazel as the build system for both our Swift code, C libraries and our Python dependencies. In the meantime, we still have some legacy Python libraries that are now managed by Bazel too.&lt;/p&gt;&lt;p dir="ltr"&gt;Bazel’s new &lt;a href="https://github.com/bazelbuild/rules_python" dir="ltr"&gt;rules_python&lt;/a&gt; has a pretty reasonable &lt;code dir="ltr"&gt;pip_install&lt;/code&gt; rule for 3rd-party dependencies. As I mentioned, because we use relatively a small number of Python packages, cross package compatibility is not a concern for us.&lt;/p&gt;&lt;p dir="ltr"&gt;All our open-source dependencies are managed through &lt;code dir="ltr"&gt;WORKSPACE&lt;/code&gt; rules. This worked for our monorepo because we don’t really have a large number of open-source dependencies in the Swift ecosystem. The things we import mostly are Swift &lt;a href="https://github.com/apple/swift-numerics" dir="ltr"&gt;numerics&lt;/a&gt;, &lt;a href="https://github.com/apple/swift-algorithms/" dir="ltr"&gt;algorithms&lt;/a&gt; and &lt;a href="https://github.com/apple/swift-argument-parser" dir="ltr"&gt;argument-parser&lt;/a&gt;.&lt;/p&gt;&lt;h3&gt;Jupyterlab&lt;/h3&gt;&lt;p dir="ltr"&gt;We don’t use a separate Jupyter installation anymore. Jupyterlab is installed as a &lt;code dir="ltr"&gt;pip_install&lt;/code&gt; requirement for our monorepo. Opening a Jupyterlab would be as simple as &lt;code dir="ltr"&gt;bazel run :lab&lt;/code&gt;. This enables us to in-tree our Swift Jupyter kernel. We adopted the &lt;a href="https://github.com/google/swift-jupyter" dir="ltr"&gt;swift-jupyter&lt;/a&gt; and added &lt;a href="https://github.com/google/swift-jupyter/pull/121" dir="ltr"&gt;Bazel dependency support&lt;/a&gt;. We also have a pending PR to upstream our sourcekit-lsp integration with the Swift Jupyter kernel.&lt;/p&gt;&lt;p&gt;This complicates a bit on plugin management for Jupyterlab. But we haven’t yet found a well-maintained out-of-tree plugin that we would like to use.&lt;/p&gt;&lt;h3&gt;Python&lt;/h3&gt;&lt;p dir="ltr"&gt;To support calling Python from Swift, we opted to use &lt;a href="https://github.com/pvieito/PythonKit" dir="ltr"&gt;PythonKit&lt;/a&gt; library. We’ve upstreamed &lt;a href="https://github.com/pvieito/PythonKit/pull/28" dir="ltr"&gt;a patch&lt;/a&gt; to make Pandas work better within Swift. We made a few more enhancements around &lt;a href="https://github.com/liuliu/PythonKit/commit/0973cebf0dfc66ffd486639108ea8e439c8212bd" dir="ltr"&gt;UnboundedRange syntax&lt;/a&gt;, &lt;a href="https://github.com/liuliu/PythonKit/commit/af00ca39bc5366aff3a30d8841220128d1eec221" dir="ltr"&gt;passing Swift closures as Python lambda&lt;/a&gt;, which haven’t been upstreamed at the moment.&lt;/p&gt;&lt;p&gt;One thing that makes calling Python from Swift easy is the use of reference counting in both languages. This makes memory management cross the language boundary much more natural.&lt;/p&gt;&lt;p dir="ltr"&gt;We also wrote a simple &lt;code dir="ltr"&gt;pyswift_binary&lt;/code&gt; macro within Bazel such that a Swift binary can declare their Python dependencies and these will be setup properly before invoking the Swift binary.&lt;/p&gt;&lt;p dir="ltr"&gt;We haven’t yet vendoring our Python runtime at the moment. Just painstakingly making sure all machines on Python 3.8. However, we do intend to use &lt;code dir="ltr"&gt;py_runtime&lt;/code&gt; to solve this discrepancy in the future.&lt;/p&gt;&lt;h3&gt;C Libraries&lt;/h3&gt;&lt;p&gt;Swift’s interoperability with C is top-notch. Calling and compiling C dependencies (with Bazel) and integrating with Swift is as easy as it should be. So far, we’ve fully migrated our core algorithms to Swift. The iterations on the core algorithms are much easier.&lt;/p&gt;&lt;h3&gt;IDE Integration&lt;/h3&gt;&lt;p&gt;For obvious reasons, we cannot use PyCharm with Swift. However, we successfully migrated most of our workflow to VS Code. LLDB support makes debugging easy. However, we did compile our own Swift LLDB with Python support for this purpose (still in the process to figure out with the core team why the shipped Swift LLDB on Linux has no Python support).&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/apple/sourcekit-lsp" dir="ltr"&gt;Sourcekit-lsp&lt;/a&gt; doesn’t recognize Bazel targets. The work for Build Server Protocol support on both Bazel side and on sourcekit-lsp side seems stalled at the moment. We ended up writing a simple script to query compilation parameters from bazel aquery for all our Swift source code, and put these into compile_commands.json. Sourcekit-lsp just has enough support for Clang’s &lt;a href="https://clang.llvm.org/docs/JSONCompilationDatabase.html" dir="ltr"&gt;compilation database format&lt;/a&gt; to make code highlighting, auto-complete, go to definition and inline documentation work again.&lt;/p&gt;&lt;p dir="ltr"&gt;We committed &lt;code dir="ltr"&gt;.vscode/settings.json.tpl&lt;/code&gt; and &lt;code dir="ltr"&gt;.vscode/launch.json.tpl&lt;/code&gt; into the codebase. Upon initial checkout, a small script can run to convert these template files into actual &lt;code dir="ltr"&gt;settings.json&lt;/code&gt; and &lt;code dir="ltr"&gt;launch.json&lt;/code&gt;. We did this to workaround issues with some VS Code plugins requiring absolute paths. These two files will keep in sync with the templates as part of the build process ever since.&lt;/p&gt;&lt;h3&gt;Bonus&lt;/h3&gt;&lt;p dir="ltr"&gt;Swift’s argument-parser library makes creating command line tools really easy. Furthermore, it also supports auto-complete in your favorite shells. We implemented one all-encompassing CLI tool for our monorepo to do all kinds of stuff: data downloading, transformation, model evaluation, launching Jupyterlab etc. With auto-completion and help messages, it is much easier to navigate than our previous &lt;code dir="ltr"&gt;./bin&lt;/code&gt; directory with twenty-something separate scripts.&lt;/p&gt;&lt;h2&gt;Is this the End?&lt;/h2&gt;&lt;p&gt;We’ve been happy with this new setup since the beginning of this year, but it is far from the end-all be-all solution.&lt;/p&gt;&lt;p&gt;Swift is great for local development, however, the Bazel support on Linux generates binary that dynamically links to Swift runtime. This makes deployment a little bit more involved than we’d like it to be.&lt;/p&gt;&lt;p dir="ltr"&gt;Pandas uses internal data structure for DataFrame (column-based numpy). While we do have efficient numpy to tensor conversions, these cannot be leveraged in the context of Pandas (we want to lift the whole data frame, not just numpy-ready columns). Our current solution calls itertuples, which can be quite slow. We’d like to sponsor an open-source project to implement &lt;a href="https://arrow.apache.org/" dir="ltr"&gt;Apache Arrow&lt;/a&gt; support for Swift. This should enable us to pass data from Pandas to Swift through Arrow in-memory format, which may be faster than what we currently do.&lt;/p&gt;&lt;div&gt;Related Posts&lt;/div&gt;</description><pubDate>Fri, 05 Feb 2021 22:05:43 -0600</pubDate></item><item><title>FOSDEM 2021 - Schedule</title><link>https://lobste.rs/s/de4y6i</link><description>&lt;p dir="ltr"&gt;
   Every year, FOSDEM hosts a wide variety of activities.
   This page gives an overview with links to further information about
   scheduled events. &lt;b dir="ltr"&gt;All times CET (UTC+1).&lt;/b&gt;
@@ -655,7 +655,119 @@ If the software is modified, the modified version shall only be distributed (a) 
 &lt;/p&gt;&lt;h3&gt;Mobile Apps&lt;/h3&gt;&lt;p dir="ltr"&gt;People have submitted a variety of &lt;a href="https://fosdem.org/2021/schedule/mobile/" dir="ltr"&gt;apps for mobile devices&lt;/a&gt; that display the FOSDEM schedule.
 &lt;/p&gt;&lt;h3&gt;Raw schedule data&lt;/h3&gt;&lt;p&gt;
 The schedule data is available in:
-&lt;/p&gt;</description><pubDate>Fri, 05 Feb 2021 07:01:59 -0600</pubDate></item><item><title>Dynamic type errors lack relevance</title><link>https://lobste.rs/s/zivgqx</link><description>&lt;p dir="ltr"&gt;Proponents of statically typed languages commonly motivate types as a way to safely detect bugs ahead of time. For example, consider the following Python program that attempts to increment a number stored in &lt;code dir="ltr"&gt;counter.txt&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;# ./increment.py&lt;/span&gt;&lt;/span&gt;
+&lt;/p&gt;</description><pubDate>Fri, 05 Feb 2021 07:01:59 -0600</pubDate></item><item><title>GHC 9.0 Reading Guide</title><link>https://takenobu-hs.github.io/downloads/haskell_ghc_reading_guide.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/7zlqnm/ghc_9_0_reading_guide"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sat, 06 Feb 2021 08:58:23 -0600</pubDate></item><item><title>Setting up a Signal Proxy using FreeBSD</title><link>https://lobste.rs/s/irkzsg</link><description>&lt;h5 dir="ltr"&gt;
+		
+		&lt;time datetime="2021-02-05 20:00:00 -0800 PST" dir="ltr"&gt;Feb 05, 2021&lt;/time&gt;
+		&lt;span dir="ltr"&gt;
+			&lt;span dir="ltr"&gt;
+	&lt;/span&gt;&lt;/span&gt;&lt;/h5&gt;&lt;p dir="ltr"&gt;With the events that
+&lt;a href="https://www.aljazeera.com/news/2021/1/26/iran-blocks-signal-messaging-app-after-whatsapp-exodus" dir="ltr"&gt;the private messaging app Signal has been blocked in Iran&lt;/a&gt;,
+Signal has come up with an “proxy” solution akin to
+&lt;a href="https://www.torproject.org/" dir="ltr"&gt;Tor&lt;/a&gt;’s
+&lt;a href="https://tb-manual.torproject.org/bridges/" dir="ltr"&gt;Bridges&lt;/a&gt;, and have given
+instructions on how to do it.&lt;/p&gt;&lt;p&gt;For people who prefer FreeBSD over Linux like myself, we obviously can’t run
+Docker, which is what Signal’s instructions focus on.&lt;/p&gt;&lt;p dir="ltr"&gt;Fortunately, the Docker image is just a fancy wrapper around nginx,
+&lt;a href="https://twitter.com/ahfaeroey/status/1357878573785362437" dir="ltr"&gt;and the configs can be ported to any OS&lt;/a&gt;.
+Here, I’ll show you how to set up a Signal Proxy on FreeBSD.&lt;/p&gt;&lt;h1&gt;Prerequisites&lt;/h1&gt;&lt;p&gt;You will need a FreeBSD server that is not running anything on Port 80 or 443.
+If you don’t run FreeBSD, you can substitute the commands with ones specific to
+your OS or Linux distro.&lt;/p&gt;&lt;p dir="ltr"&gt;You can also substitute &lt;code dir="ltr"&gt;acme.sh&lt;/code&gt; with another ACME-compatible Let’s Encrypt
+client, or use another CA. I used &lt;code dir="ltr"&gt;acme.sh&lt;/code&gt; with ZeroSSL, but won’t describe
+the latter here for simplicity’s sake.&lt;/p&gt;&lt;h1&gt;Steps&lt;/h1&gt;&lt;p dir="ltr"&gt;First, you’ll need to install &lt;code dir="ltr"&gt;acme.sh&lt;/code&gt; and &lt;code dir="ltr"&gt;nginx&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;pkg install acme.sh nginx
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Then, you’ll need to get an SSL certificate:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;acme.sh --register-account -m neel@neelc.org --server zerossl
+acme.sh --issue --standalone -d DOMAIN
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Replace &lt;code dir="ltr"&gt;DOMAIN&lt;/code&gt; with the hostname you want to use.&lt;/p&gt;&lt;p dir="ltr"&gt;Next, use the following config for &lt;code dir="ltr"&gt;/usr/local/etc/nginx/nginx.conf&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;load_module /usr/local/libexec/nginx/ngx_stream_module.so;
+user www;
+
+events {}
+
+stream {
+    map $ssl_preread_server_name $name {
+        textsecure-service.whispersystems.org    signal-service;
+        storage.signal.org                       storage-service;
+        cdn.signal.org                           signal-cdn;
+        cdn2.signal.org                          signal-cdn2;
+        api.directory.signal.org                 directory;
+        contentproxy.signal.org                  content-proxy;
+        uptime.signal.org                        uptime;
+        api.backup.signal.org                    backup;
+        sfu.voip.signal.org                      sfu;
+        updates.signal.org                       updates;
+        updates2.signal.org                      updates2;
+        default                                  deny;
+    }
+
+    upstream relay {
+         server localhost:4433;
+    }
+
+    upstream signal-service {
+         server textsecure-service.whispersystems.org:443;
+    }
+
+    upstream storage-service {
+        server storage.signal.org:443;
+    }
+
+    upstream signal-cdn {
+        server cdn.signal.org:443;
+    }
+
+    upstream signal-cdn2 {
+        server cdn2.signal.org:443;
+    }
+
+    upstream directory {
+        server api.directory.signal.org:443;
+    }
+
+    upstream content-proxy {
+        server contentproxy.signal.org:443;
+    }
+
+    upstream backup {
+        server api.backup.signal.org:443;
+    }
+
+    upstream sfu {
+        server sfu.voip.signal.org:443;
+    }
+
+    upstream updates {
+        server updates.signal.org:443;
+    }
+
+    upstream updates2 {
+        server updates2.signal.org:443;
+    }
+
+    upstream deny {
+        server 127.0.0.1:9;
+    }
+
+    server {
+        listen                443 ssl;
+        proxy_pass            relay;
+
+        access_log            off;
+        error_log             /dev/null;
+
+        ssl_certificate     /root/.acme.sh/DOMAIN/fullchain.cer;
+        ssl_certificate_key /root/.acme.sh/DOMAIN/DOMAIN.key;
+     }
+
+    server {
+        listen                4433;
+        proxy_pass            $name;
+        ssl_preread           on;
+        error_log             /dev/null;
+        access_log            off;
+     }
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Again replace &lt;code dir="ltr"&gt;DOMAIN&lt;/code&gt; with the domain your Signal proxy is on.&lt;/p&gt;&lt;p dir="ltr"&gt;After you have set the &lt;code dir="ltr"&gt;nginx&lt;/code&gt; config, enable it via sysrc:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;sysrc nginx_enable=YES
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;And start it:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;service nginx start
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;You should have a fully-functioning Signal proxy.&lt;/p&gt;&lt;h1&gt;Share the proxy&lt;/h1&gt;&lt;p&gt;While the official Signal instructions are very Docker-centric for the tech
+part, it does have other useful information on sharing the proxy securely.
+This means I won’t duplicate the information here.&lt;/p&gt;</description><pubDate>Sat, 06 Feb 2021 08:48:26 -0600</pubDate></item><item><title>Dynamic type errors lack relevance</title><link>https://lobste.rs/s/zivgqx</link><description>&lt;p dir="ltr"&gt;Proponents of statically typed languages commonly motivate types as a way to safely detect bugs ahead of time. For example, consider the following Python program that attempts to increment a number stored in &lt;code dir="ltr"&gt;counter.txt&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;# ./increment.py&lt;/span&gt;&lt;/span&gt;
 
 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;with&lt;/span&gt; &lt;span dir="ltr"&gt;open&lt;/span&gt;(&lt;span dir="ltr"&gt;'counter.txt'&lt;/span&gt;, &lt;span dir="ltr"&gt;'r'&lt;/span&gt;) &lt;span dir="ltr"&gt;as&lt;/span&gt; handle:&lt;/span&gt;
 &lt;span dir="ltr"&gt;    x &lt;span dir="ltr"&gt;=&lt;/span&gt; handle.readline()&lt;/span&gt;
@@ -963,119 +1075,7 @@ post&lt;/a&gt; in which
 it openly boasted about how it was going to game the FSF's RYF criteria to be
 able to ship this blob.&lt;/p&gt;&lt;p xmlns="http://www.w3.org/1999/xhtml" dir="ltr"&gt;Someone did inform me informally that the RYF program intends to have none
 of this and will not certify the Librem 5, but this is just a rumour. Make of
-it what you will. &lt;a href="#fn3b" dir="ltr"&gt;⏎&lt;/a&gt;&lt;/p&gt;&lt;a xmlns="http://www.w3.org/1999/xhtml" href="."&gt;Home&lt;/a&gt;&lt;footer xmlns="http://www.w3.org/1999/xhtml" dir="ltr"&gt;Page last modified on 20210204 by &lt;a href="./contact" dir="ltr"&gt;Hugo Landau&lt;/a&gt;&lt;/footer&gt;</description><pubDate>Thu, 04 Feb 2021 15:10:40 -0600</pubDate></item><item><title>GHC 9.0 Reading Guide</title><link>https://takenobu-hs.github.io/downloads/haskell_ghc_reading_guide.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/7zlqnm/ghc_9_0_reading_guide"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sat, 06 Feb 2021 08:58:23 -0600</pubDate></item><item><title>Setting up a Signal Proxy using FreeBSD</title><link>https://lobste.rs/s/irkzsg</link><description>&lt;h5 dir="ltr"&gt;
-		
-		&lt;time datetime="2021-02-05 20:00:00 -0800 PST" dir="ltr"&gt;Feb 05, 2021&lt;/time&gt;
-		&lt;span dir="ltr"&gt;
-			&lt;span dir="ltr"&gt;
-	&lt;/span&gt;&lt;/span&gt;&lt;/h5&gt;&lt;p dir="ltr"&gt;With the events that
-&lt;a href="https://www.aljazeera.com/news/2021/1/26/iran-blocks-signal-messaging-app-after-whatsapp-exodus" dir="ltr"&gt;the private messaging app Signal has been blocked in Iran&lt;/a&gt;,
-Signal has come up with an “proxy” solution akin to
-&lt;a href="https://www.torproject.org/" dir="ltr"&gt;Tor&lt;/a&gt;’s
-&lt;a href="https://tb-manual.torproject.org/bridges/" dir="ltr"&gt;Bridges&lt;/a&gt;, and have given
-instructions on how to do it.&lt;/p&gt;&lt;p&gt;For people who prefer FreeBSD over Linux like myself, we obviously can’t run
-Docker, which is what Signal’s instructions focus on.&lt;/p&gt;&lt;p dir="ltr"&gt;Fortunately, the Docker image is just a fancy wrapper around nginx,
-&lt;a href="https://twitter.com/ahfaeroey/status/1357878573785362437" dir="ltr"&gt;and the configs can be ported to any OS&lt;/a&gt;.
-Here, I’ll show you how to set up a Signal Proxy on FreeBSD.&lt;/p&gt;&lt;h1&gt;Prerequisites&lt;/h1&gt;&lt;p&gt;You will need a FreeBSD server that is not running anything on Port 80 or 443.
-If you don’t run FreeBSD, you can substitute the commands with ones specific to
-your OS or Linux distro.&lt;/p&gt;&lt;p dir="ltr"&gt;You can also substitute &lt;code dir="ltr"&gt;acme.sh&lt;/code&gt; with another ACME-compatible Let’s Encrypt
-client, or use another CA. I used &lt;code dir="ltr"&gt;acme.sh&lt;/code&gt; with ZeroSSL, but won’t describe
-the latter here for simplicity’s sake.&lt;/p&gt;&lt;h1&gt;Steps&lt;/h1&gt;&lt;p dir="ltr"&gt;First, you’ll need to install &lt;code dir="ltr"&gt;acme.sh&lt;/code&gt; and &lt;code dir="ltr"&gt;nginx&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;pkg install acme.sh nginx
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Then, you’ll need to get an SSL certificate:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;acme.sh --register-account -m neel@neelc.org --server zerossl
-acme.sh --issue --standalone -d DOMAIN
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Replace &lt;code dir="ltr"&gt;DOMAIN&lt;/code&gt; with the hostname you want to use.&lt;/p&gt;&lt;p dir="ltr"&gt;Next, use the following config for &lt;code dir="ltr"&gt;/usr/local/etc/nginx/nginx.conf&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;load_module /usr/local/libexec/nginx/ngx_stream_module.so;
-user www;
-
-events {}
-
-stream {
-    map $ssl_preread_server_name $name {
-        textsecure-service.whispersystems.org    signal-service;
-        storage.signal.org                       storage-service;
-        cdn.signal.org                           signal-cdn;
-        cdn2.signal.org                          signal-cdn2;
-        api.directory.signal.org                 directory;
-        contentproxy.signal.org                  content-proxy;
-        uptime.signal.org                        uptime;
-        api.backup.signal.org                    backup;
-        sfu.voip.signal.org                      sfu;
-        updates.signal.org                       updates;
-        updates2.signal.org                      updates2;
-        default                                  deny;
-    }
-
-    upstream relay {
-         server localhost:4433;
-    }
-
-    upstream signal-service {
-         server textsecure-service.whispersystems.org:443;
-    }
-
-    upstream storage-service {
-        server storage.signal.org:443;
-    }
-
-    upstream signal-cdn {
-        server cdn.signal.org:443;
-    }
-
-    upstream signal-cdn2 {
-        server cdn2.signal.org:443;
-    }
-
-    upstream directory {
-        server api.directory.signal.org:443;
-    }
-
-    upstream content-proxy {
-        server contentproxy.signal.org:443;
-    }
-
-    upstream backup {
-        server api.backup.signal.org:443;
-    }
-
-    upstream sfu {
-        server sfu.voip.signal.org:443;
-    }
-
-    upstream updates {
-        server updates.signal.org:443;
-    }
-
-    upstream updates2 {
-        server updates2.signal.org:443;
-    }
-
-    upstream deny {
-        server 127.0.0.1:9;
-    }
-
-    server {
-        listen                443 ssl;
-        proxy_pass            relay;
-
-        access_log            off;
-        error_log             /dev/null;
-
-        ssl_certificate     /root/.acme.sh/DOMAIN/fullchain.cer;
-        ssl_certificate_key /root/.acme.sh/DOMAIN/DOMAIN.key;
-     }
-
-    server {
-        listen                4433;
-        proxy_pass            $name;
-        ssl_preread           on;
-        error_log             /dev/null;
-        access_log            off;
-     }
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Again replace &lt;code dir="ltr"&gt;DOMAIN&lt;/code&gt; with the domain your Signal proxy is on.&lt;/p&gt;&lt;p dir="ltr"&gt;After you have set the &lt;code dir="ltr"&gt;nginx&lt;/code&gt; config, enable it via sysrc:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;sysrc nginx_enable=YES
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;And start it:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;service nginx start
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;You should have a fully-functioning Signal proxy.&lt;/p&gt;&lt;h1&gt;Share the proxy&lt;/h1&gt;&lt;p&gt;While the official Signal instructions are very Docker-centric for the tech
-part, it does have other useful information on sharing the proxy securely.
-This means I won’t duplicate the information here.&lt;/p&gt;</description><pubDate>Sat, 06 Feb 2021 08:48:26 -0600</pubDate></item><item><title>What are you doing this weekend?</title><link>https://lobste.rs/s/3499ew</link><description>&lt;p&gt;Feel free to tell what you plan on doing this weekend and even ask for help or feedback.&lt;/p&gt;&lt;p&gt;Please keep in mind it’s more than OK to do nothing at all too!&lt;/p&gt;</description><pubDate>Fri, 05 Feb 2021 06:03:27 -0600</pubDate></item><item><title>8 bits are enough for a version number</title><link>https://lobste.rs/s/1qfylg</link><description>&lt;p dir="ltr"&gt;
+it what you will. &lt;a href="#fn3b" dir="ltr"&gt;⏎&lt;/a&gt;&lt;/p&gt;&lt;a xmlns="http://www.w3.org/1999/xhtml" href="."&gt;Home&lt;/a&gt;&lt;footer xmlns="http://www.w3.org/1999/xhtml" dir="ltr"&gt;Page last modified on 20210204 by &lt;a href="./contact" dir="ltr"&gt;Hugo Landau&lt;/a&gt;&lt;/footer&gt;</description><pubDate>Thu, 04 Feb 2021 15:10:40 -0600</pubDate></item><item><title>8 bits are enough for a version number</title><link>https://lobste.rs/s/1qfylg</link><description>&lt;p dir="ltr"&gt;
         
 
 
@@ -1137,7 +1137,7 @@ these branches for a single week only (i.e. February 12, 2021).&lt;/p&gt;&lt;p d
 -device virtio-net-device,netdev=eth0 -netdev user,id=eth0 \&lt;/PRE&gt;&lt;p&gt;The important options to use are: &lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Machine type &lt;tt dir="ltr"&gt;virt&lt;/tt&gt; aka &lt;tt dir="ltr"&gt;-machine&amp;nbsp;virt&lt;/tt&gt; &lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Bios is OpenSBI &lt;tt dir="ltr"&gt;-bios&amp;nbsp;/usr/lib/riscv64-linux-gnu/opensbi/generic/fw_jump.elf&lt;/tt&gt; &lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;"kernel" is qemu smode uboot &lt;tt dir="ltr"&gt;-kernel&amp;nbsp;/usr/lib/u-boot/qemu-riscv64_smode/uboot.elf&lt;/tt&gt; &lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;One can use pass through networking, adjust memory (&lt;tt dir="ltr"&gt;-m&lt;/tt&gt;) &amp;amp; cpu counts (&lt;tt dir="ltr"&gt;-smp&lt;/tt&gt;) as needed. &lt;/p&gt;&lt;p dir="ltr"&gt;Switch to the serial console, wait for cloud-init to complete, then login using &lt;tt dir="ltr"&gt;ubuntu:ubuntu&lt;/tt&gt;. See the cloud-init section below to further customise the first boot behaviour with cloud-init. &lt;/p&gt;&lt;h2&gt;Booting on SiFive HiFive Unleashed board&lt;/h2&gt;&lt;p dir="ltr"&gt;The above image has U-Boot SPL loader as well as &lt;a href="https://wiki.ubuntu.com/SiFive" dir="ltr"&gt;SiFive&lt;/a&gt; U-Boot to boot on the board. &lt;/p&gt;&lt;p dir="ltr"&gt;Set jumpers to boot from the microSD by setting &lt;tt dir="ltr"&gt;MSEL=1011&lt;/tt&gt; (MSEL2 to the outside of the board, the rest to the inside).  &lt;/p&gt;&lt;p dir="ltr"&gt;You can then use "Gnome Disks" app to restore &lt;tt dir="ltr"&gt;img.xz&lt;/tt&gt; image onto the microSD card, plug it into the board and boot. &lt;/p&gt;&lt;p&gt;You can also use cmdline to extract the image and dd it. &lt;/p&gt;&lt;PRE&gt;xz -dk focal-preinstalled-server-riscv64.img.xz
 dd if=focal-preinstalled-server-riscv64.img of=/dev/disk/by-id/&amp;lt;TAB&amp;gt;&amp;lt;TAB&amp;gt;complete-to-sdcard-device&lt;/PRE&gt;&lt;p dir="ltr"&gt;Monitor serial console, wait for cloud-init to complete, then login using &lt;tt dir="ltr"&gt;ubuntu:ubuntu&lt;/tt&gt;. See the cloud-init section below to further customise the first boot behaviour with cloud-init. &lt;/p&gt;&lt;h2&gt;cloud-init integration&lt;/h2&gt;&lt;p dir="ltr"&gt;The image has a fallback cloud-init datasource that configures sudo user &lt;tt dir="ltr"&gt;ubuntu&lt;/tt&gt; with password &lt;tt dir="ltr"&gt;ubuntu&lt;/tt&gt; and DHCP networking. You will be asked to change the password on first login. &lt;/p&gt;&lt;p dir="ltr"&gt;The image has &lt;tt dir="ltr"&gt;CIDATA&lt;/tt&gt; partition which can be used as a valid datasource to adjust cloud-config metadata. If you wish to customize user password, networking information, add ssh keys, etc. Please mount &lt;tt dir="ltr"&gt;CIDATA&lt;/tt&gt; partition rename &lt;tt dir="ltr"&gt;meta-data&lt;/tt&gt; and &lt;tt dir="ltr"&gt;user-data&lt;/tt&gt; files and adjust them to taste. You can use network-info to configure networking if something more sophisticated than just DHCP is desired. &lt;/p&gt;&lt;p dir="ltr"&gt;For example ssh keys, disabling interactive login, and so on. See &lt;a href="https://cloudinit.readthedocs.io/en/latest" dir="ltr"&gt;https://cloudinit.readthedocs.io/en/latest&lt;/a&gt; &lt;/p&gt;&lt;p lang="en" dir="ltr"&gt;RISC-V  (last edited 2021-02-05 13:26:58 by &lt;span title="xnox @ localhost[127.0.0.1]" dir="ltr"&gt;&lt;a href="https://launchpad.net/~xnox" title="xnox @ localhost[127.0.0.1]" dir="ltr"&gt;xnox&lt;/a&gt;&lt;/span&gt;)&lt;/p&gt;&lt;p dir="ltr"&gt; The material on this wiki is available under a free license, see 
 	&lt;a href="https://help.ubuntu.com/community/License" dir="ltr"&gt;Copyright / License&lt;/a&gt; for details.
-        &lt;/p&gt;</description><pubDate>Fri, 05 Feb 2021 13:41:28 -0600</pubDate></item><item><title>GHC 9.0.1 released</title><link>https://lobste.rs/s/5adl2d</link><description>&lt;p dir="ltr"&gt;The GHC team is very pleased to announce the availability of GHC 9.0.1.&lt;br dir="ltr"&gt;
+        &lt;/p&gt;</description><pubDate>Fri, 05 Feb 2021 13:41:28 -0600</pubDate></item><item><title>What are you doing this weekend?</title><link>https://lobste.rs/s/3499ew</link><description>&lt;p&gt;Feel free to tell what you plan on doing this weekend and even ask for help or feedback.&lt;/p&gt;&lt;p&gt;Please keep in mind it’s more than OK to do nothing at all too!&lt;/p&gt;</description><pubDate>Fri, 05 Feb 2021 06:03:27 -0600</pubDate></item><item><title>GHC 9.0.1 released</title><link>https://lobste.rs/s/5adl2d</link><description>&lt;p dir="ltr"&gt;The GHC team is very pleased to announce the availability of GHC 9.0.1.&lt;br dir="ltr"&gt;
 Source and binary distributions are available at the &lt;a href="https://downloads.haskell.org/ghc/9.0.1/" dir="ltr"&gt;usual&lt;br dir="ltr"&gt;
 place &lt;span title="34 clicks" dir="ltr"&gt;34&lt;/span&gt;&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;In addition to numerous bug fixes, GHC 9.0.1 will bring a number of new&lt;br dir="ltr"&gt;
 features:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;A first cut of the new &lt;code dir="ltr"&gt;LinearTypes&lt;/code&gt; &lt;a href="https://github.com/ghc-proposals/ghc-proposals/blob/master/proposals/0111-linear-types.rst" dir="ltr"&gt;language extension &lt;span title="95 clicks" dir="ltr"&gt;95&lt;/span&gt;&lt;/a&gt;, allowing use&lt;br dir="ltr"&gt;
