@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0"><channel><title>lobstre.rs rss with inlined content</title><link>http://n-gate.com</link><description>webshit condom</description><lastBuildDate>Sat, 27 Feb 2021 07:59:28 -0600</lastBuildDate><item><title>ISO 8601: the better date format</title><link>https://lobste.rs/s/m1obj4</link><description>&lt;div dir="ltr"&gt;
+<rss version="2.0"><channel><title>lobstre.rs rss with inlined content</title><link>http://n-gate.com</link><description>webshit condom</description><lastBuildDate>Sat, 27 Feb 2021 08:37:37 -0600</lastBuildDate><item><title>ISO 8601: the better date format</title><link>https://lobste.rs/s/m1obj4</link><description>&lt;div dir="ltr"&gt;
 						
 								
 	Published on &lt;time datetime="2021-02-26" dir="ltr"&gt;
@@ -371,7 +371,115 @@ Transfer/sec:    807.23MB
     see also
   &lt;/strong&gt;
 
-&lt;/p&gt;</description><pubDate>Fri, 26 Feb 2021 01:37:42 -0600</pubDate></item><item><title>Introducing the Framework Laptop</title><link>https://lobste.rs/s/hhqli7</link><description>&lt;div&gt;News&lt;/div&gt;&lt;div&gt;Feb 25 2021&lt;/div&gt;&lt;div dir="ltr"&gt;
+&lt;/p&gt;</description><pubDate>Fri, 26 Feb 2021 01:37:42 -0600</pubDate></item><item><title>The Bupstash Garbage Collector</title><link>https://lobste.rs/s/xnspcm</link><description>&lt;h2&gt;Overview&lt;/h2&gt;&lt;p dir="ltr"&gt;My backup tool &lt;a href="https://github.com/andrewchambers/bupstash" dir="ltr"&gt;bupstash&lt;/a&gt; stores backups in a repository as an evergrowing set of
+encrypted data trees which use content addressing and structural sharing
+to deduplicate data. In order to delete unused backups we need to do something very similar to how
+many programming languages free unreferenced memory - garbage collection. This post will
+explain the evolution and implementation of the garbage collector in bupstash for the curious.&lt;/p&gt;&lt;h2&gt;Stop, mark and sweep.&lt;/h2&gt;&lt;p&gt;The initial version of the bupstash garbage collector was a naive stop-the-world
+garbage collector. It walks all backup data trees creating a set of reachable data chunks
+by address and then deletes unreachable data.&lt;/p&gt;&lt;p&gt;The algorithm can be described as:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Stop the world.&lt;/LI&gt;&lt;LI&gt;Mark.&lt;/LI&gt;&lt;LI&gt;Sweep.&lt;/LI&gt;&lt;LI&gt;Restart the world.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Here is the pseudo code:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;lock_repository()
+reachable_addresses = empty_set()
+
+for data_tree in all_backups():
+  
+  work_list = new_work_list_from_backup(data_tree.root_address)
+  
+  until work_list.is_empty():
+    
+    node_height, node_address = work_list.pop()
+    reachable_addresses.add(node_address)
+    
+    if node_height != 0:
+      add_child_nodes_to_worklist(work_list, node_address)
+
+for chunk_address in repository:
+  if not reachable_addresses.has(chunk_address):
+    delete_chunk(chunk_address)
+
+unlock_repository()
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This algorithm is short and sweet, but if the repository is very large our repository becomes unavailable
+for a potentially long time. The next version shortens the downtime of the repository significantly.&lt;/p&gt;&lt;h2&gt;Mark, stop, mark and sweep.&lt;/h2&gt;&lt;p&gt;The bupstash v0.6.4 garbage collector takes advantage of two facts:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Because many backups share data with each other, we can memoize the walk phase to skip work.&lt;/LI&gt;&lt;LI&gt;Because backups are immutable while the repository is unlocked, we can walk most of them without
+stopping the world.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;This time we walk the repository without the repository locked, then lock it and walk
+the repository again using our memoization to quickly complete the job. If any new backups
+appeared during our first walk, we are guaranteed to mark them now that the repository lock is held. Doing the majority of the slow mark phase without locking the repository greatly increases
+the repository availability for other operations.&lt;/p&gt;&lt;p&gt;The algorithm can be described as:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Memoized mark repository.&lt;/LI&gt;&lt;LI&gt;Stop the world.&lt;/LI&gt;&lt;LI&gt;Memoized mark repository.&lt;/LI&gt;&lt;LI&gt;Sweep.&lt;/LI&gt;&lt;LI&gt;Restart the world.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Here is the pseudo code:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;walked_trees = empty_set()
+reachable_addresses = empty_set()
+
+func walk_repository():
+
+  for data_tree in all_backups():
+
+    if walked_trees.has(data_tree):
+      continue
+
+    walked_trees.add(data_tree)
+    
+    work_list = new_work_list_from_backup(data_tree.root_address)
+    
+    until work_list.is_empty():
+      
+      node_height, node_address = work_list.pop()
+      already_walked = reachable_addresses.has(node_address)
+      reachable_addresses.add(node_address)
+      
+      if node_height != 0 and not already_walked:
+        add_child_nodes_to_worklist(work_list, node_address)
+
+walk_repository()
+lock_repository()
+walk_repository()
+
+for chunk_address in repository:
+  if not reachable_addresses.has(chunk_address):
+    delete_chunk(chunk_address)
+
+unlock_repository()
+&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;Mark, stop, mark, bloom adjust, and sweep&lt;/h2&gt;&lt;p&gt;The next version of the garbage collector is a WIP unreleased version.&lt;/p&gt;&lt;p&gt;In bupstash each data chunk address is 32 bytes, which means we need at least 32 bytes of RAM per chunk in the repository to successfully perform a garbage collection. For a repository containing a 100 million chunks or
+more this could easily exhaust memory on a busy or small system.&lt;/p&gt;&lt;p dir="ltr"&gt;If we are willing to accept a very low probability of retaining some extra data, we can reduce this down
+to a few &lt;em dir="ltr"&gt;bits&lt;/em&gt; per chunk reducing memory usage by 64x or more.
+To do this we use a probabilistic data structure called a &lt;a href="https://en.wikipedia.org/wiki/Bloom_filter" dir="ltr"&gt;bloom filter&lt;/a&gt; to track reachable addresses.&lt;/p&gt;&lt;p&gt;Bloom filters have two downsides:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;They can have false positives. For us this means we might keep a data chunk by accident we could have actually freed.&lt;/LI&gt;&lt;LI&gt;We must presize them. They cannot grow if we got the size wrong.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Luckily for us these downsides are not bad:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Because memory use is so low per address, we can generously size our bloom filter reducing false positives to less than one percent, even for large repositories.&lt;/LI&gt;&lt;LI&gt;We can easily detect when a bloom filter gets overly full and produces many false positives, and thus adjust it’s size for future garbage collections.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;As a bonus, the bupstash implementation of a bloom filter is actually simpler than a hash table, with the implemenation
+weighing in at around 30 lines of code plus tests and helpers.&lt;/p&gt;&lt;p&gt;The algorithm can be described as:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Memoized mark repository.&lt;/LI&gt;&lt;LI&gt;Stop the world.&lt;/LI&gt;&lt;LI&gt;Memoized mark the repository.&lt;/LI&gt;&lt;LI&gt;Adjust bloom filter size.&lt;/LI&gt;&lt;LI&gt;Sweep.&lt;/LI&gt;&lt;LI&gt;Restart the world.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Here is the pseudo code:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;walked_trees = empty_set()
+walked_addresses = empty_cache()
+reachable_addresses = empty_bloom_filter(repository_bloom_size())
+
+func walk_repository():
+
+  for data_tree in all_backups():
+
+    if walked_trees.has(data_tree):
+      continue
+
+    walked_trees.add(data_tree)
+    work_list = new_work_list_from_backup(data_tree.root_address)
+    
+    until work_list.is_empty():
+      
+      node_height, node_address = work_list.pop()
+      already_walked = walked_addresses.has(node_address)
+      reachable_addresses.add(node_address)
+      walked_addresses.add(node_address)
+      
+      if node_height != 0 and not already_walked:
+        add_child_nodes_to_worklist(work_list, node_address)
+
+walk_repository()
+lock_repository()
+walk_repository()
+
+if bloom_filter_overutilized(reachable_addresses):
+  increase_bloom_filter_size_for_next_gc()
+else if bloom_filter_underutilized(reachable_addresses):
+  decrease_bloom_filter_size_for_next_gc()
+
+for chunk_address in repository:
+  if not reachable_addresses.has(chunk_address):
+    delete_chunk(chunk_address)
+
+unlock_repository()
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;One thing to note about this implementation is that because the bloom filter has false positives we can not use it to skip processing addresses, instead
+we must introduce a new cache for this purpose. A cache also lets us put a fixed upper bound on memory usage for large repositories.&lt;/p&gt;&lt;p&gt;Overall for large repositories, the addition of a bloom filter reduces ram requirements from the gigabyte range down to tens of megabytes while increasing the repository size by only a fraction of a percent.&lt;/p&gt;&lt;h1&gt;Conclusion and the future&lt;/h1&gt;&lt;p&gt;The bupstash garbage collector tries hard to keep the repository avaliable as long
+as possible while also providing excellent performance with a small memory profile. If you are implementing
+a content addressed storage system, this post will hopefully provide you with some new ideas.&lt;/p&gt;&lt;p&gt;In the future bupstash could follow the same path as programming language garbage collectors to find more improvements:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Parallelism in the mark phase.&lt;/LI&gt;&lt;LI&gt;Parallelism in the sweep phase.&lt;/LI&gt;&lt;LI&gt;Incremental collection.&lt;/LI&gt;&lt;LI&gt;Object generations.&lt;/LI&gt;&lt;LI&gt;Write barriers&lt;/LI&gt;&lt;LI&gt;Yet to be invented techniques…&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;As always, thanks for reading and please feel free to give &lt;a href="https://github.com/andrewchambers/bupstash" dir="ltr"&gt;bupstash&lt;/a&gt; a try.&lt;/p&gt;</description><pubDate>Fri, 26 Feb 2021 22:57:47 -0600</pubDate></item><item><title>Introducing the Framework Laptop</title><link>https://lobste.rs/s/hhqli7</link><description>&lt;div&gt;News&lt;/div&gt;&lt;div&gt;Feb 25 2021&lt;/div&gt;&lt;div dir="ltr"&gt;
 by &lt;span dir="ltr"&gt;Nirav Patel&lt;/span&gt;
 &lt;/div&gt;&lt;picture class=""&gt;
 &lt;source srcset="https://images.prismic.io/frameworkmarketplace/a472ef97-8e42-4f56-94ff-b18ee4de3bec_hero-clp-1600x1168.jpg?auto=compress, https://frame.work/blog/format&amp;amp;w=375" media="(max-width: 375px)"&gt;
@@ -762,115 +870,188 @@ given this code, so either there is a good reason to do them, or
 cleaning up stack pointer manipulations in the presence of
 variable-length arrays is just a hard or neglected problem in
 compilers. Again, feel free to reach out if you know which it is! &lt;a href="https://wolchok.org/posts/how-to-read-assembly-language/#fnref:8" role="doc-backlink" dir="ltr"&gt;↩︎&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Again, I built with &lt;code dir="ltr"&gt;-fno-exceptions&lt;/code&gt; to avoid
-complicating things with exception cleanup paths. &lt;a href="https://wolchok.org/posts/how-to-read-assembly-language/#fnref:9" role="doc-backlink" dir="ltr"&gt;↩︎&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;If we &lt;a href="https://godbolt.org/#g:!((g:!((g:!((h:codeEditor,i:(fontScale:14,j:1,lang:c%2B%2B,selection:(endColumn:40,endLineNumber:12,positionColumn:40,positionLineNumber:12,selectionStartColumn:40,selectionStartLineNumber:12,startColumn:40,startLineNumber:12),source:'%23include+%3Cstring%3E%0A%0Aclass+MyString+%7B%0A+std::string+str%3B%0A+public:%0A++explicit+MyString(std::string%26%26+s)+:+str(std::move(s))+%7B%7D%0A%7D%3B%0A%0Aclass+MyOtherString+%7B%0A++std::string+str%3B%0A+public:%0A++explicit+MyOtherString(std::string+s):+str(std::move(s))+%7B%7D%0A%7D%3B%0A%0Avoid+createRvalue1(std::string%26%26+s)+%7B%0A++++MyString+s2(std::move(s))%3B%0A%7D%3B%0A%0Avoid+createRvalue2(std::string%26%26+s)+%7B%0A++++MyOtherString+s2(std::move(s))%3B%0A%7D%3B'),l:'5',n:'0',o:'C%2B%2B+source+%231',t:'0')),k:40.48706240487063,l:'4',n:'0',o:'',s:0,t:'0'),(g:!((h:compiler,i:(compiler:clang1101,filters:(b:'0',binary:'1',commentOnly:'0',demangle:'0',directives:'0',execute:'1',intel:'1',libraryCode:'1',trim:'1'),fontScale:14,j:1,lang:c%2B%2B,libs:!(),options:'-O3+-std%3Dc%2B%2B20+-fno-exceptions',selection:(endColumn:1,endLineNumber:1,positionColumn:1,positionLineNumber:1,selectionStartColumn:1,selectionStartLineNumber:1,startColumn:1,startLineNumber:1),source:1),l:'5',n:'0',o:'x86-64+clang+11.0.1+(Editor+%231,+Compiler+%231)+C%2B%2B',t:'0')),k:59.51293759512938,l:'4',n:'0',o:'',s:0,t:'0')),l:'2',n:'0',o:'',t:'0')),version:4" dir="ltr"&gt;inline the constructors for &lt;code dir="ltr"&gt;MyString&lt;/code&gt; and &lt;code dir="ltr"&gt;MyOtherString&lt;/code&gt;&lt;/a&gt;, we do get some savings in &lt;code dir="ltr"&gt;createRvalue2&lt;/code&gt;: we call &lt;code dir="ltr"&gt;operator delete&lt;/code&gt; at most once. However, we still do 2 move operations and we require 32 extra bytes of stack space. &lt;a href="https://wolchok.org/posts/how-to-read-assembly-language/#fnref:10" role="doc-backlink" dir="ltr"&gt;↩︎&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Fri, 26 Feb 2021 23:02:41 -0600</pubDate></item><item><title>The Bupstash Garbage Collector</title><link>https://lobste.rs/s/xnspcm</link><description>&lt;h2&gt;Overview&lt;/h2&gt;&lt;p dir="ltr"&gt;My backup tool &lt;a href="https://github.com/andrewchambers/bupstash" dir="ltr"&gt;bupstash&lt;/a&gt; stores backups in a repository as an evergrowing set of
-encrypted data trees which use content addressing and structural sharing
-to deduplicate data. In order to delete unused backups we need to do something very similar to how
-many programming languages free unreferenced memory - garbage collection. This post will
-explain the evolution and implementation of the garbage collector in bupstash for the curious.&lt;/p&gt;&lt;h2&gt;Stop, mark and sweep.&lt;/h2&gt;&lt;p&gt;The initial version of the bupstash garbage collector was a naive stop-the-world
-garbage collector. It walks all backup data trees creating a set of reachable data chunks
-by address and then deletes unreachable data.&lt;/p&gt;&lt;p&gt;The algorithm can be described as:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Stop the world.&lt;/LI&gt;&lt;LI&gt;Mark.&lt;/LI&gt;&lt;LI&gt;Sweep.&lt;/LI&gt;&lt;LI&gt;Restart the world.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Here is the pseudo code:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;lock_repository()
-reachable_addresses = empty_set()
+complicating things with exception cleanup paths. &lt;a href="https://wolchok.org/posts/how-to-read-assembly-language/#fnref:9" role="doc-backlink" dir="ltr"&gt;↩︎&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;If we &lt;a href="https://godbolt.org/#g:!((g:!((g:!((h:codeEditor,i:(fontScale:14,j:1,lang:c%2B%2B,selection:(endColumn:40,endLineNumber:12,positionColumn:40,positionLineNumber:12,selectionStartColumn:40,selectionStartLineNumber:12,startColumn:40,startLineNumber:12),source:'%23include+%3Cstring%3E%0A%0Aclass+MyString+%7B%0A+std::string+str%3B%0A+public:%0A++explicit+MyString(std::string%26%26+s)+:+str(std::move(s))+%7B%7D%0A%7D%3B%0A%0Aclass+MyOtherString+%7B%0A++std::string+str%3B%0A+public:%0A++explicit+MyOtherString(std::string+s):+str(std::move(s))+%7B%7D%0A%7D%3B%0A%0Avoid+createRvalue1(std::string%26%26+s)+%7B%0A++++MyString+s2(std::move(s))%3B%0A%7D%3B%0A%0Avoid+createRvalue2(std::string%26%26+s)+%7B%0A++++MyOtherString+s2(std::move(s))%3B%0A%7D%3B'),l:'5',n:'0',o:'C%2B%2B+source+%231',t:'0')),k:40.48706240487063,l:'4',n:'0',o:'',s:0,t:'0'),(g:!((h:compiler,i:(compiler:clang1101,filters:(b:'0',binary:'1',commentOnly:'0',demangle:'0',directives:'0',execute:'1',intel:'1',libraryCode:'1',trim:'1'),fontScale:14,j:1,lang:c%2B%2B,libs:!(),options:'-O3+-std%3Dc%2B%2B20+-fno-exceptions',selection:(endColumn:1,endLineNumber:1,positionColumn:1,positionLineNumber:1,selectionStartColumn:1,selectionStartLineNumber:1,startColumn:1,startLineNumber:1),source:1),l:'5',n:'0',o:'x86-64+clang+11.0.1+(Editor+%231,+Compiler+%231)+C%2B%2B',t:'0')),k:59.51293759512938,l:'4',n:'0',o:'',s:0,t:'0')),l:'2',n:'0',o:'',t:'0')),version:4" dir="ltr"&gt;inline the constructors for &lt;code dir="ltr"&gt;MyString&lt;/code&gt; and &lt;code dir="ltr"&gt;MyOtherString&lt;/code&gt;&lt;/a&gt;, we do get some savings in &lt;code dir="ltr"&gt;createRvalue2&lt;/code&gt;: we call &lt;code dir="ltr"&gt;operator delete&lt;/code&gt; at most once. However, we still do 2 move operations and we require 32 extra bytes of stack space. &lt;a href="https://wolchok.org/posts/how-to-read-assembly-language/#fnref:10" role="doc-backlink" dir="ltr"&gt;↩︎&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Fri, 26 Feb 2021 23:02:41 -0600</pubDate></item><item><title>murex: Bash-like $SHELL designed for greater commandline productivity and safer shell scripts</title><link>https://lobste.rs/s/kws24j</link><description>&lt;h1&gt;&lt;em&gt;murex&lt;/em&gt;&lt;/h1&gt;&lt;img src="https://camo.githubusercontent.com/c449f3a219922f773ff77ad3db5f21487f4bda58e8b9e1360a0242541a2147d3/68747470733a2f2f676f646f632e6f72672f6769746875622e636f6d2f6c6d6f72672f6d757265783f7374617475732e737667" alt="GoDoc" width="90" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/9ff7cbe3112185dd10c016b51e3f5d2bacb2fb55bde375cb3ddde2b5ba6e893d/68747470733a2f2f676f7265706f7274636172642e636f6d2f62616467652f6769746875622e636f6d2f6c6d6f72672f6d75726578" alt="Go Report Card" width="88" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/75264b5064a0ab903b30f113b12b50d9493b853ad768da990b1d54b3cca96313/68747470733a2f2f636f64656275696c642e65752d776573742d312e616d617a6f6e6177732e636f6d2f6261646765733f757569643d65794a6c626d4e79655842305a57524559585268496a6f6962336378566e6f795a5574425a5535774e3156555955744b51544a55566d746d4d48424a63554a58535546574d5845796332643357574a6c64556450544868345157513165464e52656e64704f554a48566e5a35555842704d587046566b565362336b325555684b4c32784359324a68566e684a50534973496d6c32554746795957316c644756795533426c59794936496d39515a32645053336f7a6457467957484976626d38694c434a745958526c636d6c6862464e6c64464e6c636d6c68624349364d5830253344266272616e63683d6d6173746572" alt="CodeBuild" width="167" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/875d7e622e13a8efb5cf0f70177c8cb2e9ea9c09474be2347f759af0caef59eb/68747470733a2f2f636972636c6563692e636f6d2f67682f6c6d6f72672f6d757265782f747265652f6d61737465722e7376673f7374796c653d737667" alt="CircleCI" width="83" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/ae54ad53f81ffc12063e395ebf591f5286cc49317df300bd9e3cd2e9e8abcfe4/68747470733a2f2f636f6465636f762e696f2f67682f6c6d6f72672f6d757265782f6272616e63682f6d61737465722f67726170682f62616467652e737667" alt="codecov" width="112" height="20"&gt;&lt;h2 dir="ltr"&gt;About &lt;em dir="ltr"&gt;murex&lt;/em&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;murex&lt;/em&gt; is a shell, like bash / zsh / fish / etc. It follows a similar syntax
+to POSIX shells like Bash however supports more advanced features than you'd
+typically expect from a $SHELL.&lt;/p&gt;&lt;p&gt;It aims to be similar enough to traditional
+shells that you can retain most of your muscle memory, while not
+being afraid to make breaking changes where "bash-isms" lead to unreadable,
+hard to maintain, or unsafe code.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;murex&lt;/em&gt; is designed for DevOps productivity so it isn't suited is high
+performance workloads beyond what you'd typically run in Bash (eg pipelines
+forked as concurrent processes).&lt;/p&gt;&lt;p&gt;A non-exhaustive list features would include:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Testing frameworks baked right into the language itself&lt;/LI&gt;&lt;LI&gt;Smarter handling of errors (for example try/catch blocks, line numbers
+included in error messages, errors optionally highlighted in red, etc)&lt;/LI&gt;&lt;LI&gt;Support for typed pipelines - which can be used to work with complex data
+formats like JSON natively. But also the ability to override or even ignore
+typed data entirely so it works transparently with standard UNIX tools too&lt;/LI&gt;&lt;LI&gt;Lots of data-mangling tools baked into the shell&lt;/LI&gt;&lt;LI&gt;Parses man pages for a richer user experience&lt;/LI&gt;&lt;LI&gt;In-line spell checking&lt;/LI&gt;&lt;LI&gt;Optional support for event-driven programming&lt;/LI&gt;&lt;LI&gt;Plus every aspect of the shell is easily extendable, inspectable and can
+be managed via &lt;em dir="ltr"&gt;murex&lt;/em&gt;'s own package manager&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;The language employs a relatively simple syntax modelled loosely on functional
+and stack-based programming paradigms (albeit without the LISP-style nested
+parentheses that scare a lot of developers) while maintaining compatibility
+with POSIX-like shells (eg Bash) wherever sensible. For example, a program
+structure could look like the following:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;command | command | [ index ] | if { command }
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;However where &lt;em dir="ltr"&gt;murex&lt;/em&gt; differs is that, while the pipe token, &lt;code dir="ltr"&gt;|&lt;/code&gt; is supported
+for compatibility with existing shells, &lt;em dir="ltr"&gt;murex&lt;/em&gt; idioms prefer &lt;code dir="ltr"&gt;-&amp;gt;&lt;/code&gt; used for
+readability as it clearly demonstrates the direction of the data flow. eg&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;command -&amp;gt; command -&amp;gt; [ index ] -&amp;gt; if { command }
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The language supports multiple data types natively; such as JSON, YAML,
+CSV, S-Expressions and even loosely tabulated terminal output (eg
+&lt;code dir="ltr"&gt;ps&lt;/code&gt;, &lt;code dir="ltr"&gt;ls -l&lt;/code&gt;). This makes passing data through the pipeline and
+parsing output easier when dealing with more complex arrangements of
+data than a simple byte stream in traditional shells like Bash.&lt;/p&gt;&lt;h2&gt;Interactive shell&lt;/h2&gt;&lt;p dir="ltr"&gt;Aside from &lt;em dir="ltr"&gt;murex&lt;/em&gt; being carefully designed with scripting in mind, the
+interactive shell itself is also built around productivity. To achieve this,
+we wrote our own readline library. Below is an example of that library in use:&lt;/p&gt;&lt;img src="https://camo.githubusercontent.com/df250d896d0510e040c56e6186d246b55cb4cc761a720aa2cad4b8d9e196a0d3/68747470733a2f2f61736369696e656d612e6f72672f612f3233323731342e737667" alt="asciicast" width="419" height="248"&gt;&lt;p dir="ltr"&gt;The above demo includes the following features of &lt;em dir="ltr"&gt;murex&lt;/em&gt;'s bespoke readline
+library:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;hint text - blue status text below the prompt (the colour is configurable)&lt;/LI&gt;&lt;LI&gt;syntax highlighting (albeit there isn’t much syntax to highlight in the
+example). This can also be turned off if your preference is to have colours
+disabled&lt;/LI&gt;&lt;LI&gt;tab-completion in gridded mode (seen when typing &lt;code dir="ltr"&gt;cd&lt;/code&gt;)&lt;/LI&gt;&lt;LI&gt;tab-completion in list view (seen when selecting a process name to &lt;code dir="ltr"&gt;kill&lt;/code&gt;
+where the process ID was substituted when selected)&lt;/LI&gt;&lt;LI&gt;regex searching through the tab-completion suggestions (seen in both &lt;code dir="ltr"&gt;cd&lt;/code&gt; and
+&lt;code dir="ltr"&gt;kill&lt;/code&gt; - enabled by pressing &lt;code dir="ltr"&gt;[CTRL+f]&lt;/code&gt;)&lt;/LI&gt;&lt;LI&gt;line editing using $EDITOR (&lt;code dir="ltr"&gt;vi&lt;/code&gt; in the example - enabled by pressing &lt;code dir="ltr"&gt;[ESC]&lt;/code&gt;
+followed by &lt;code dir="ltr"&gt;[v]&lt;/code&gt;)&lt;/LI&gt;&lt;LI&gt;readline’s warning before pasting multiple lines of data into the buffer and
+the preview option that’s available as part of the aforementioned warning&lt;/LI&gt;&lt;LI&gt;and VIM keys (enabled by pressing &lt;code dir="ltr"&gt;[ESC]&lt;/code&gt;)&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Concise yet predictable&lt;/h2&gt;&lt;p dir="ltr"&gt;Despite the amount of features added to shell, we have tried to keep the
+amount of "magic" to a minimum and follow a pretty standard structure so
+the language is predictable. However there are times when a little magic
+goes a long way. For example &lt;em dir="ltr"&gt;murex&lt;/em&gt;'s support for complex data objects
+of differing formats is managed in the pipeline so you don't need to think
+about the data format when querying data from them.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;open: file.csv  -&amp;gt; [ column_name ] # returns specific columns (or rows) in CSV file
+open: file.json -&amp;gt; [ index ]       # returns specific items from JSON
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The index function (&lt;code dir="ltr"&gt;[&lt;/code&gt;) alters its matching algorithm depending on the
+piped data type and &lt;code dir="ltr"&gt;open&lt;/code&gt; sets the data type depending on the file
+extension or MIME type.&lt;/p&gt;&lt;p&gt;Sometimes you will want less guesswork or just the robustness of a forced
+behavior. On those occasions you can remove one layer of magic by
+casting the data type:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;open: file.txt -&amp;gt; cast csv  -&amp;gt; [ column_name ]
+open: file.txt -&amp;gt; cast json -&amp;gt; [ index ]
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This awareness of data structures is also utilised in &lt;code dir="ltr"&gt;foreach&lt;/code&gt; (which
+will cycle through each index in an array) and &lt;code dir="ltr"&gt;formap&lt;/code&gt; (key/value
+iteration against complex objects). See &lt;a href="https://github.com/lmorg/murex/blob/master/docs/GUIDE.control-structures.md" dir="ltr"&gt;GUIDE.control-structures&lt;/a&gt;
+for more details on these and other control structures.&lt;/p&gt;&lt;h2&gt;More robust scripts / shell one liners&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;murex&lt;/em&gt; employs a few methods to make shell scripting more robust:&lt;/p&gt;&lt;p dir="ltr"&gt;Bash, for all it's power, is littered with hidden traps. The aim of &lt;em dir="ltr"&gt;murex&lt;/em&gt; is
+to address as many of them as we can without taking the flexibility or power
+away from the interactive command line. This is achieved through a couple of
+key concepts:&lt;/p&gt;&lt;h3&gt;Everything is a function&lt;/h3&gt;&lt;p&gt;The biggest breaking change from regular shells is how globbing isn't expanded
+by the shell by default. This is instead done by inlining functions as arrays:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;# Bash
+ls -l *.go
 
-for data_tree in all_backups():
-  
-  work_list = new_work_list_from_backup(data_tree.root_address)
-  
-  until work_list.is_empty():
-    
-    node_height, node_address = work_list.pop()
-    reachable_addresses.add(node_address)
-    
-    if node_height != 0:
-      add_child_nodes_to_worklist(work_list, node_address)
+# Murex
+ls -l @{g *.go}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The advantage of &lt;em dir="ltr"&gt;murex&lt;/em&gt;'s method is that we can now offer other ways of
+matching file system objects that follows the same idiomatic pattern:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;# Match files by regexp pattern
+ls -l @{rx \.go$}
 
-for chunk_address in repository:
-  if not reachable_addresses.has(chunk_address):
-    delete_chunk(chunk_address)
+# Match only directories
+ls -l @{f +d}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;(more information on &lt;code dir="ltr"&gt;g&lt;/code&gt;, &lt;code dir="ltr"&gt;rx&lt;/code&gt; and &lt;code dir="ltr"&gt;f&lt;/code&gt; are available in &lt;a href="https://github.com/lmorg/murex/blob/master/docs/GUIDE.quick-start.md" dir="ltr"&gt;GUIDE.quick-start&lt;/a&gt;).&lt;/p&gt;&lt;p dir="ltr"&gt;However there will be occasions when you just want an inlined expansion
+(eg when using an interactive shell) and that can be achieved via the &lt;code dir="ltr"&gt;@g&lt;/code&gt;
+command prefix:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;@g ls -l *.go
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Powerful autocompletion&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;murex&lt;/em&gt; takes a slightly different approach to command line autocompletion,
+both from a usability perspective as well as defining completion rules.&lt;/p&gt;&lt;p dir="ltr"&gt;Inspired by IDEs, &lt;em dir="ltr"&gt;murex&lt;/em&gt; queries man pages directly for flags as well as
+"tooltip" descriptions. Custom completions are defined via JSON meaning
+simple commands are much easier to define and complex commands can still
+fallback to using dynamic shell code just like they are in other shells.&lt;/p&gt;&lt;p dir="ltr"&gt;This makes it easier to write completion rules as well as making the code
+more readable. An example of &lt;code dir="ltr"&gt;git&lt;/code&gt;s autocompletion definition:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;private git-branch {
+    # returns git branches and removes the current one from the list
+    git branch -&amp;gt; [ :0 ] -&amp;gt; !match *
+}
 
-unlock_repository()
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This algorithm is short and sweet, but if the repository is very large our repository becomes unavailable
-for a potentially long time. The next version shortens the downtime of the repository significantly.&lt;/p&gt;&lt;h2&gt;Mark, stop, mark and sweep.&lt;/h2&gt;&lt;p&gt;The bupstash v0.6.4 garbage collector takes advantage of two facts:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Because many backups share data with each other, we can memoize the walk phase to skip work.&lt;/LI&gt;&lt;LI&gt;Because backups are immutable while the repository is unlocked, we can walk most of them without
-stopping the world.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;This time we walk the repository without the repository locked, then lock it and walk
-the repository again using our memoization to quickly complete the job. If any new backups
-appeared during our first walk, we are guaranteed to mark them now that the repository lock is held. Doing the majority of the slow mark phase without locking the repository greatly increases
-the repository availability for other operations.&lt;/p&gt;&lt;p&gt;The algorithm can be described as:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Memoized mark repository.&lt;/LI&gt;&lt;LI&gt;Stop the world.&lt;/LI&gt;&lt;LI&gt;Memoized mark repository.&lt;/LI&gt;&lt;LI&gt;Sweep.&lt;/LI&gt;&lt;LI&gt;Restart the world.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Here is the pseudo code:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;walked_trees = empty_set()
-reachable_addresses = empty_set()
+autocomplete set git { [{
+    # define the top level flags
+    "Flags": [
+        "clone", "init", "add", "mv", "reset", "rm", "bisect", "grep",
+        "log", "show", "status", "branch", "checkout", "commit", "diff",
+        "merge", "rebase", "tag", "fetch", "pull", "push", "stash"
+    ],
 
-func walk_repository():
+    # specify what values those flags support
+    "FlagValues": {
+        "init": [{
+            "Flags": [ "--bare" ]
+        }],
+        "add": [{
+            "IncFiles": true,
+            "AllowMultiple": true
+        }],
+        "mv": [{
+            "IncFiles": true
+        }],
+        "rm": [{
+            "IncFiles": true,
+            "AllowMultiple": true
+        }],
+        "checkout": [{
+            "Dynamic": ({ git-branch }),
+            "Flags": [ "-b" ]
+        }],
+        "merge": [{
+            "Dynamic": ({ git-branch })
+        }]
+    }
+}] }
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;murex&lt;/em&gt; also supports several different styles of completion suggestion
+"popups" to cater for different scenarios (demo above) as well as built in
+support for jumping to files within nested directories quickly and easily:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;cat [ctrl+f]app.g[return]
+# same as typing: cat config/app.go
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Error handling&lt;/h3&gt;&lt;p dir="ltr"&gt;Like traditional shells, &lt;em dir="ltr"&gt;murex&lt;/em&gt; is verbose with errors by default with
+options to mute them. However &lt;em dir="ltr"&gt;murex&lt;/em&gt; also supports cleaner decision
+structures for when you want you want errors captured in a useful way:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;try {
+    # do something
+}
+catch {
+    err: "Could not perform action"
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;As well as a saner &lt;code dir="ltr"&gt;if&lt;/code&gt; syntax:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;# compare two strings
+if { = `foo`==`bar` } then {
+    out: "`foo` matched `bar`"
+}
 
-  for data_tree in all_backups():
+# check if command ran successfully
+!if { foobar } then {
+    err: "`foobar` could not be run"
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Test and debugging frameworks&lt;/h3&gt;&lt;p dir="ltr"&gt;Unlike traditional shells, &lt;em dir="ltr"&gt;murex&lt;/em&gt; is designed with a test and debugging modes
+baked into the shell language. This means you can write tests against your
+shell scripts as part of the shell scripts themselves.&lt;/p&gt;&lt;p&gt;For example:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;function: hello-world {
+    test: define example {
+        "StdoutRegex": (^Hello World$)
+    }
 
-    if walked_trees.has(data_tree):
-      continue
+    out: &amp;lt;test_example&amp;gt; "Hello Earth"
+}
 
-    walked_trees.add(data_tree)
-    
-    work_list = new_work_list_from_backup(data_tree.root_address)
-    
-    until work_list.is_empty():
-      
-      node_height, node_address = work_list.pop()
-      already_walked = reachable_addresses.has(node_address)
-      reachable_addresses.add(node_address)
-      
-      if node_height != 0 and not already_walked:
-        add_child_nodes_to_worklist(work_list, node_address)
+test: run { hello-world }
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;...will output:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;Hello Earth
+ Status  Definition Function                                           Line Col. Message
+[FAILED] example    out                                                5    9    stdout: regexp did not match 'Hello Earth'
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;If test mode isn't enabled then any &lt;code dir="ltr"&gt;test&lt;/code&gt; commands are skipped without being
+executed so you can liberally include test cases throughout your functions
+without worrying about any performance impact.&lt;/p&gt;&lt;h4 dir="ltr"&gt;&lt;em dir="ltr"&gt;murex&lt;/em&gt; also supports unit tests&lt;/h4&gt;&lt;p&gt;For example:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;test: unit function aliases {
+    "PreBlock": ({
+        alias ALIAS_UNIT_TEST=example param1 param2 param3
+    }),
+    "StdoutRegex": "([- _0-9a-zA-Z]+ =&amp;gt; .*?\n)+",
+    "StdoutType": "str",
+    "PostBlock": ({
+        !alias ALIAS_UNIT_TEST
+    })
+}
 
-walk_repository()
-lock_repository()
-walk_repository()
+function: aliases {
+    # Output the aliases in human readable format
+    runtime: --aliases -&amp;gt; formap: name alias {
+        $name -&amp;gt; sprintf: "%10s =&amp;gt; ${esccli @alias}\n"
+    } -&amp;gt; cast: str
+}
 
-for chunk_address in repository:
-  if not reachable_addresses.has(chunk_address):
-    delete_chunk(chunk_address)
-
-unlock_repository()
-&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;Mark, stop, mark, bloom adjust, and sweep&lt;/h2&gt;&lt;p&gt;The next version of the garbage collector is a WIP unreleased version.&lt;/p&gt;&lt;p&gt;In bupstash each data chunk address is 32 bytes, which means we need at least 32 bytes of RAM per chunk in the repository to successfully perform a garbage collection. For a repository containing a 100 million chunks or
-more this could easily exhaust memory on a busy or small system.&lt;/p&gt;&lt;p dir="ltr"&gt;If we are willing to accept a very low probability of retaining some extra data, we can reduce this down
-to a few &lt;em dir="ltr"&gt;bits&lt;/em&gt; per chunk reducing memory usage by 64x or more.
-To do this we use a probabilistic data structure called a &lt;a href="https://en.wikipedia.org/wiki/Bloom_filter" dir="ltr"&gt;bloom filter&lt;/a&gt; to track reachable addresses.&lt;/p&gt;&lt;p&gt;Bloom filters have two downsides:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;They can have false positives. For us this means we might keep a data chunk by accident we could have actually freed.&lt;/LI&gt;&lt;LI&gt;We must presize them. They cannot grow if we got the size wrong.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Luckily for us these downsides are not bad:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Because memory use is so low per address, we can generously size our bloom filter reducing false positives to less than one percent, even for large repositories.&lt;/LI&gt;&lt;LI&gt;We can easily detect when a bloom filter gets overly full and produces many false positives, and thus adjust it’s size for future garbage collections.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;As a bonus, the bupstash implementation of a bloom filter is actually simpler than a hash table, with the implemenation
-weighing in at around 30 lines of code plus tests and helpers.&lt;/p&gt;&lt;p&gt;The algorithm can be described as:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Memoized mark repository.&lt;/LI&gt;&lt;LI&gt;Stop the world.&lt;/LI&gt;&lt;LI&gt;Memoized mark the repository.&lt;/LI&gt;&lt;LI&gt;Adjust bloom filter size.&lt;/LI&gt;&lt;LI&gt;Sweep.&lt;/LI&gt;&lt;LI&gt;Restart the world.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Here is the pseudo code:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;walked_trees = empty_set()
-walked_addresses = empty_cache()
-reachable_addresses = empty_bloom_filter(repository_bloom_size())
-
-func walk_repository():
-
-  for data_tree in all_backups():
-
-    if walked_trees.has(data_tree):
-      continue
-
-    walked_trees.add(data_tree)
-    work_list = new_work_list_from_backup(data_tree.root_address)
-    
-    until work_list.is_empty():
-      
-      node_height, node_address = work_list.pop()
-      already_walked = walked_addresses.has(node_address)
-      reachable_addresses.add(node_address)
-      walked_addresses.add(node_address)
-      
-      if node_height != 0 and not already_walked:
-        add_child_nodes_to_worklist(work_list, node_address)
-
-walk_repository()
-lock_repository()
-walk_repository()
-
-if bloom_filter_overutilized(reachable_addresses):
-  increase_bloom_filter_size_for_next_gc()
-else if bloom_filter_underutilized(reachable_addresses):
-  decrease_bloom_filter_size_for_next_gc()
-
-for chunk_address in repository:
-  if not reachable_addresses.has(chunk_address):
-    delete_chunk(chunk_address)
-
-unlock_repository()
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;One thing to note about this implementation is that because the bloom filter has false positives we can not use it to skip processing addresses, instead
-we must introduce a new cache for this purpose. A cache also lets us put a fixed upper bound on memory usage for large repositories.&lt;/p&gt;&lt;p&gt;Overall for large repositories, the addition of a bloom filter reduces ram requirements from the gigabyte range down to tens of megabytes while increasing the repository size by only a fraction of a percent.&lt;/p&gt;&lt;h1&gt;Conclusion and the future&lt;/h1&gt;&lt;p&gt;The bupstash garbage collector tries hard to keep the repository avaliable as long
-as possible while also providing excellent performance with a small memory profile. If you are implementing
-a content addressed storage system, this post will hopefully provide you with some new ideas.&lt;/p&gt;&lt;p&gt;In the future bupstash could follow the same path as programming language garbage collectors to find more improvements:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Parallelism in the mark phase.&lt;/LI&gt;&lt;LI&gt;Parallelism in the sweep phase.&lt;/LI&gt;&lt;LI&gt;Incremental collection.&lt;/LI&gt;&lt;LI&gt;Object generations.&lt;/LI&gt;&lt;LI&gt;Write barriers&lt;/LI&gt;&lt;LI&gt;Yet to be invented techniques…&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;As always, thanks for reading and please feel free to give &lt;a href="https://github.com/andrewchambers/bupstash" dir="ltr"&gt;bupstash&lt;/a&gt; a try.&lt;/p&gt;</description><pubDate>Fri, 26 Feb 2021 22:57:47 -0600</pubDate></item><item><title>microui: A tiny, portable, immediate-mode UI library written in ANSI C</title><link>https://lobste.rs/s/q0z96t</link><description>&lt;p dir="ltr"&gt;A &lt;em dir="ltr"&gt;tiny&lt;/em&gt;, portable, immediate-mode UI library written in ANSI C&lt;/p&gt;&lt;h2&gt;Features&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;Tiny: around &lt;code dir="ltr"&gt;1100 sloc&lt;/code&gt; of ANSI C&lt;/LI&gt;&lt;LI&gt;Works within a fixed-sized memory region: no additional memory is allocated&lt;/LI&gt;&lt;LI&gt;Built-in controls: window, scrollable panel, button, slider, textbox, label,
+test: run aliases
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;...will output:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt; Status  Definition Function                                           Line Col. Message
+[PASSED] (unit)     aliases                                            13   1    All test conditions were met
+&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;Language guides&lt;/h2&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/lmorg/murex/blob/master/docs/GUIDE.syntax.md" dir="ltr"&gt;GUIDE.syntax&lt;/a&gt; is recommended first
+as it gives an overview if the shell scripting languages syntax and data
+types.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/lmorg/murex/blob/master/docs/GUIDE.type-system.md" dir="ltr"&gt;GUIDE.type-system&lt;/a&gt; describes
+&lt;em dir="ltr"&gt;murex&lt;/em&gt;'s type system. Most of the time you will not need to worry about
+typing in &lt;em dir="ltr"&gt;murex&lt;/em&gt; as the shell is designed around productivity.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/lmorg/murex/blob/master/docs/GUIDE.builtin-functions.md" dir="ltr"&gt;GUIDE.builtin-functions&lt;/a&gt;
+lists some of the builtin functions available for this shell.&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;Or if you're already a seasoned Bash developer then you read the Quick
+Start Guide, &lt;a href="https://github.com/lmorg/murex/blob/master/docs/GUIDE.quick-start.md" dir="ltr"&gt;GUIDE.quick-start&lt;/a&gt;,
+to jump straight into using &lt;em dir="ltr"&gt;murex&lt;/em&gt;.&lt;/p&gt;&lt;h2&gt;Install instructions&lt;/h2&gt;&lt;p dir="ltr"&gt;There are various ways you can load &lt;em dir="ltr"&gt;murex&lt;/em&gt; on to your system. See &lt;a href="https://github.com/lmorg/murex/blob/master/INSTALL.md" dir="ltr"&gt;INSTALL&lt;/a&gt; for details.&lt;/p&gt;&lt;h2&gt;CI/CD&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;murex&lt;/em&gt; makes heavy use of testing and CI/CD to ensure the latest builds are
+safe for use.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Git &lt;code dir="ltr"&gt;pre-commit&lt;/code&gt; and &lt;code dir="ltr"&gt;pre-push&lt;/code&gt; files exist to help developers catch any
+regression errors before they even hit the feature branches.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Each and every git push is validated against hundreds of distinct tests and
+race detectors (run in Circle CI). These tests are run 10 times to shake out
+any possible timing related bugs.&lt;/p&gt;&lt;p dir="ltr"&gt;Each push to &lt;code dir="ltr"&gt;develop&lt;/code&gt; and &lt;code dir="ltr"&gt;master&lt;/code&gt; also creates a new docker container,
+&lt;code dir="ltr"&gt;lmorg/murex:develop&lt;/code&gt; and &lt;code dir="ltr"&gt;lmorg/murex:latest&lt;/code&gt; (for the &lt;code dir="ltr"&gt;master&lt;/code&gt; branch).&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Weekly automated builds are then run against the latest container. These
+builds are run in AWS CodeBuild and they generate the &lt;a href="https://murex.rocks/" rel="nofollow" dir="ltr"&gt;murex.rocks&lt;/a&gt;
+website and build pre-compiled binaries for &lt;a href="https://github.com/lmorg/murex/blob/master/DOWNLOAD.md" dir="ltr"&gt;download&lt;/a&gt;.&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;h2&gt;Known bugs / TODO&lt;/h2&gt;&lt;p dir="ltr"&gt;Please see GitHub's issue tracker: &lt;a href="https://github.com/lmorg/murex/issues" dir="ltr"&gt;https://github.com/lmorg/murex/issues&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sat, 27 Feb 2021 07:14:14 -0600</pubDate></item><item><title>microui: A tiny, portable, immediate-mode UI library written in ANSI C</title><link>https://lobste.rs/s/q0z96t</link><description>&lt;p dir="ltr"&gt;A &lt;em dir="ltr"&gt;tiny&lt;/em&gt;, portable, immediate-mode UI library written in ANSI C&lt;/p&gt;&lt;h2&gt;Features&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;Tiny: around &lt;code dir="ltr"&gt;1100 sloc&lt;/code&gt; of ANSI C&lt;/LI&gt;&lt;LI&gt;Works within a fixed-sized memory region: no additional memory is allocated&lt;/LI&gt;&lt;LI&gt;Built-in controls: window, scrollable panel, button, slider, textbox, label,
 checkbox, wordwrapped text&lt;/LI&gt;&lt;LI&gt;Works with any rendering system that can draw rectangles and text&lt;/LI&gt;&lt;LI&gt;Designed to allow the user to easily add custom controls&lt;/LI&gt;&lt;LI&gt;Simple layout system&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Example&lt;/h2&gt;&lt;img src="https://user-images.githubusercontent.com/3920290/75187058-2b598800-5741-11ea-9358-38caf59f8791.png" alt="example" width="200" height="98"&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;if&lt;/span&gt; (mu_begin_window(ctx, &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;My Window&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;, mu_rect(&lt;span dir="ltr"&gt;10&lt;/span&gt;, &lt;span dir="ltr"&gt;10&lt;/span&gt;, &lt;span dir="ltr"&gt;140&lt;/span&gt;, &lt;span dir="ltr"&gt;86&lt;/span&gt;))) {
   &lt;span dir="ltr"&gt;mu_layout_row&lt;/span&gt;(ctx, &lt;span dir="ltr"&gt;2&lt;/span&gt;, (&lt;span dir="ltr"&gt;int&lt;/span&gt;[]) { &lt;span dir="ltr"&gt;60&lt;/span&gt;, -&lt;span dir="ltr"&gt;1&lt;/span&gt; }, &lt;span dir="ltr"&gt;0&lt;/span&gt;);
 
@@ -1098,7 +1279,33 @@ metadata:
 	
 (199)	DO FORGET #1
 	DO RESUME #1
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Oh God.&lt;/p&gt;&lt;p dir="ltr"&gt;Well, ok, maybe not INTERCAL but anything else. &lt;sup dir="ltr"&gt;&lt;a href="https://blog.earthly.dev/intercal-yaml-and-other-horrible-programming-languages/#fn3" dir="ltr"&gt;[3]&lt;/a&gt;&lt;/sup&gt;&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;See my interview with &lt;a href="https://www.se-radio.net/2019/08/episode-375-gabriel-gonzalez-on-configuration/" dir="ltr"&gt;Gabriel Gonzalez on Configuration&lt;/a&gt; at Software Engineering Radio. &lt;a href="https://blog.earthly.dev/intercal-yaml-and-other-horrible-programming-languages/#fnref1" dir="ltr"&gt;↩︎&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Ansible and Helm use templating languages built on top of YAML, which is better than embedded control flow, but I think the point still stands. &lt;a href="https://blog.earthly.dev/intercal-yaml-and-other-horrible-programming-languages/#fnref2" dir="ltr"&gt;↩︎&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Practically, you may have to use tools that encode a DSL into config, but you can use them while recognizing that we can do better.  I think something like &lt;a href="https://dhall-lang.org/#" dir="ltr"&gt;Dhall&lt;/a&gt; for complicated config and something like &lt;a href="https://www.pulumi.com/" dir="ltr"&gt;pulumi&lt;/a&gt; for complex configuration as code should be where we aim for as an industry. &lt;a href="https://blog.earthly.dev/intercal-yaml-and-other-horrible-programming-languages/#fnref3" dir="ltr"&gt;↩︎&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;img srcset="https://blog.earthly.dev/content/images/size/w300/2021/02/top1.png 300w, https://blog.earthly.dev/content/images/size/w600/2021/02/top1.png 600w, https://blog.earthly.dev/content/images/size/w1000/2021/02/top1.png 1000w, https://blog.earthly.dev/content/images/size/w2000/2021/02/top1.png 2000w" src="https://blog.earthly.dev/content/images/size/w600/2021/02/top1.png" alt="What is Buildkit?" width="435" height="200"&gt;</description><pubDate>Thu, 25 Feb 2021 22:30:17 -0600</pubDate></item><item><title>FreeBSD Wall Display Computer</title><link>https://lobste.rs/s/pvxx0e</link><description>&lt;p dir="ltr"&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Oh God.&lt;/p&gt;&lt;p dir="ltr"&gt;Well, ok, maybe not INTERCAL but anything else. &lt;sup dir="ltr"&gt;&lt;a href="https://blog.earthly.dev/intercal-yaml-and-other-horrible-programming-languages/#fn3" dir="ltr"&gt;[3]&lt;/a&gt;&lt;/sup&gt;&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;See my interview with &lt;a href="https://www.se-radio.net/2019/08/episode-375-gabriel-gonzalez-on-configuration/" dir="ltr"&gt;Gabriel Gonzalez on Configuration&lt;/a&gt; at Software Engineering Radio. &lt;a href="https://blog.earthly.dev/intercal-yaml-and-other-horrible-programming-languages/#fnref1" dir="ltr"&gt;↩︎&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Ansible and Helm use templating languages built on top of YAML, which is better than embedded control flow, but I think the point still stands. &lt;a href="https://blog.earthly.dev/intercal-yaml-and-other-horrible-programming-languages/#fnref2" dir="ltr"&gt;↩︎&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Practically, you may have to use tools that encode a DSL into config, but you can use them while recognizing that we can do better.  I think something like &lt;a href="https://dhall-lang.org/#" dir="ltr"&gt;Dhall&lt;/a&gt; for complicated config and something like &lt;a href="https://www.pulumi.com/" dir="ltr"&gt;pulumi&lt;/a&gt; for complex configuration as code should be where we aim for as an industry. &lt;a href="https://blog.earthly.dev/intercal-yaml-and-other-horrible-programming-languages/#fnref3" dir="ltr"&gt;↩︎&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;img srcset="https://blog.earthly.dev/content/images/size/w300/2021/02/top1.png 300w, https://blog.earthly.dev/content/images/size/w600/2021/02/top1.png 600w, https://blog.earthly.dev/content/images/size/w1000/2021/02/top1.png 1000w, https://blog.earthly.dev/content/images/size/w2000/2021/02/top1.png 2000w" src="https://blog.earthly.dev/content/images/size/w600/2021/02/top1.png" alt="What is Buildkit?" width="435" height="200"&gt;</description><pubDate>Thu, 25 Feb 2021 22:30:17 -0600</pubDate></item><item><title>FLOSS-UX: A project trying to enrich user experiences (UX) in FLOSS projects</title><link>https://lobste.rs/s/wqi2bl</link><description>&lt;h1&gt;FLOSS UX&lt;/h1&gt;&lt;p&gt;A project trying to enrich user experiences in FLOSS projects through discussion and collaboration.&lt;/p&gt;&lt;p&gt;&lt;strong dir="ltr"&gt;Content is still being added to the site, and at the time of writing it is far from finished. The study and foundation for the site is not finished, and will be by &lt;em dir="ltr"&gt;April 6th 2021&lt;/em&gt;&lt;/strong&gt;&lt;/p&gt;</description><pubDate>Sat, 27 Feb 2021 08:37:37 -0600</pubDate></item><item><title>mrsh: A strictly POSIX-compliant shell</title><link>https://lobste.rs/s/coz8km</link><description>&lt;p dir="ltr"&gt;
+      mrsh provides a binary suitable as &lt;code dir="ltr"&gt;/bin/sh&lt;/code&gt; and a library
+      for building new shells.
+    &lt;/p&gt;&lt;h2&gt;mrsh shell&lt;/h2&gt;&lt;p&gt;
+      The mrsh shell is strictly POSIX compliant, encouraging users to write
+      portable shell scripts. Optional readline/libedit support is included to
+      provide a comfortable interactive shell.
+    &lt;/p&gt;&lt;h3&gt;imrsh&lt;/h3&gt;&lt;p dir="ltr"&gt;
+      &lt;a href="https://git.sr.ht/~sircmpwn/imrsh" dir="ltr"&gt;imrsh&lt;/a&gt; (interactive mrsh)
+      is a related project which provides a more comprehensive interactive
+      shell based on mrsh.
+    &lt;/p&gt;&lt;h2&gt;libmrsh&lt;/h2&gt;&lt;p&gt;
+      libmrsh provides you the pieces necessary to build your own POSIX shell
+      frontends. The standalone parser can be used to obtain a shell AST, which
+      can be fed into our task runner to execute the script. It is also
+      suitable for building linters, syntax highlighters, etc. The code is
+      simple &amp;amp; portable, with no external dependencies outside of POSIX
+      C99.
+    &lt;/p&gt;&lt;h2&gt;Releases&lt;/h2&gt;&lt;p&gt;Still to come...&lt;/p&gt;&lt;h2&gt;Development&lt;/h2&gt;&lt;p dir="ltr"&gt;
+      The upstream development repository may be found
+      &lt;a href="https://git.sr.ht/~emersion/mrsh" dir="ltr"&gt;on sr.ht&lt;/a&gt;.
+    &lt;/p&gt;&lt;p dir="ltr"&gt;
+      Contribute by
+      &lt;a href="https://github.com/emersion/mrsh" dir="ltr"&gt;submitting GitHub pull
+      requests&lt;/a&gt; or sending patches to the
+      &lt;a href="https://lists.sr.ht/~emersion/mrsh-dev" dir="ltr"&gt;mailing list&lt;/a&gt;.
+    &lt;/p&gt;</description><pubDate>Sat, 27 Feb 2021 08:33:55 -0600</pubDate></item><item><title>FreeBSD Wall Display Computer</title><link>https://lobste.rs/s/pvxx0e</link><description>&lt;p dir="ltr"&gt;
                         by &lt;a href="https://blog.tyk.nu/about/" dir="ltr"&gt;Tykling&lt;/a&gt;
                     &lt;/p&gt;&lt;p&gt; 10. oct 2020 16:22 UTC&lt;/p&gt;&lt;p&gt;I've recently added a wall mounted 30" monitor for Grafana in my home. I can highly recommend doing the same, especially in a world where more work from home is becoming the norm.&lt;/p&gt;&lt;p dir="ltr"&gt;Having metrics visible at all times can be incredibly helpful in spotting trends and issues. This is the reason we all have wall mounted Grafanas in our workplaces! Since we are all going to be working from home for the foreseeable future it makes sense to have visible metrics at home as well. Also, much of the stuff I need metrics for is not work related at all - &lt;a href="https://blog.uncensoreddns.org/" dir="ltr"&gt;UncensoredDNS&lt;/a&gt; for example, the &lt;a href="https://bornhack.dk/bornhack-2020/" dir="ltr"&gt;BornHack&lt;/a&gt; infrastructure, and so on. I see no reason why projects run outside of $dayjob should receive any less attention, such as visualisation of metrics.&lt;/p&gt;&lt;p dir="ltr"&gt;Sometime before summer I physically mounted the screen using &lt;a href="https://vivo-us.com/collections/monitor-mounts/products/stand-v002l" dir="ltr"&gt;this very nice&lt;/a&gt; over/under 2 monitor stand, and then started considering which computer to use for it. Ideally something I already had lying around, and of course something with enough power to run some Grafana dashboards without choking.&lt;/p&gt;&lt;p&gt;Not for a moment had I anticipated that actually displaying the graphs in a browser that doesn't crash constantly would be the most time-consuming part of getting this up and running. I mean, I've spent hours playing with various Prometheus exporters for all the different servers I run (and Ansible roles for them). I've also spent hours fiddling with Grafana dashboards until they show the level of information I like. Both of these are complex jobs and and I am absolutely fine with spending time on them. But when I finally had nice working dashboards in my Firefox browser on my laptop I fully expected it to be trivial to put those on a monitor on the wall. It was not. This tale is left here for future metrics aficionados in the hopes that you will spend less time on this dreary task than I did.&lt;/p&gt;&lt;p&gt;I've documented the failed attempts as well as the final well-working solution. Feel free to skip over the first two sections if you are just here to learn what works :)&lt;/p&gt;&lt;h3&gt;First Attempt: ODROID-C2 with Ubuntu&lt;/h3&gt;&lt;p dir="ltr"&gt;Originally I wanted to use an &lt;a href="https://wiki.odroid.com/odroid-c2/odroid-c2" dir="ltr"&gt;ODROID C2&lt;/a&gt; which I had lying around because I used it as a mediacenter with &lt;code dir="ltr"&gt;Kodi&lt;/code&gt; provided by &lt;code dir="ltr"&gt;Liberelec&lt;/code&gt; previously. This seemed like a good choice, I mean if it can show a 1080p video without choking it should be able to render a few &lt;code dir="ltr"&gt;Grafana&lt;/code&gt; dashboards, right?&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;code dir="ltr"&gt;ODROID-C2&lt;/code&gt; is an &lt;code dir="ltr"&gt;Amlogic S905&lt;/code&gt; SOC with a &lt;code dir="ltr"&gt;Cortex A53&lt;/code&gt; ARMv8 64bit CPU. It has 4 cores and 2GB RAM. It supports &lt;code dir="ltr"&gt;eMMC&lt;/code&gt; storage which is a nice and faster alternative to the SD cards used by many of the "Raspberry PI-sized" computers that exists today.&lt;/p&gt;&lt;p dir="ltr"&gt;I tried to figure out wether it was possible to run &lt;code dir="ltr"&gt;FreeBSD&lt;/code&gt; on it, but the &lt;a href="https://www.freebsd.org/platforms/arm.html" dir="ltr"&gt;ARM Wiki page&lt;/a&gt; seems to say that 64bit ARM support is still being worked on. I thought it was too much to hope for anyway.&lt;/p&gt;&lt;p dir="ltr"&gt;Then I tried to go for a stock Debian, but that didn't boot at all. Turns out I need to use either the &lt;a href="https://wiki.odroid.com/odroid-c2/os_images/ubuntu/ubuntu" dir="ltr"&gt;Ubuntu&lt;/a&gt; image provided by the ODROID people, or a &lt;a href="https://wiki.odroid.com/odroid-c2/os_images/third_party" dir="ltr"&gt;third party&lt;/a&gt; OS image.&lt;/p&gt;&lt;p&gt;Once I got Ubuntu up and running and found a Firefox browser it quickly became apparent that it would not work. The browser kept freezing up, or crashing, or both. I tried using Chromium which annoyingly worked a bit better. It was not stable, but it would run for half a day or maybe a day and then stop working somehow. And this was with just one dashboard, If I opened another tab with another Grafana dashboard it made matters worse.&lt;/p&gt;&lt;p&gt;It wasn't immediately clear what the problem was, in hindsight it was probably RAM, but either way I decided to try something else.&lt;/p&gt;&lt;h3&gt;Second Attempt: Raspberry PI 3b+ with Raspbian&lt;/h3&gt;&lt;p dir="ltr"&gt;I had an RPI3b lying around and decided to try that instead. I am not a big fan of the RPI platform in general, I've had way too many weird issues over the years, I guess I just prefer a more normal computer. But I needed something to show my graphs, so I launched &lt;a href="https://www.raspberrypi.org/downloads/noobs/" dir="ltr"&gt;NOOBS&lt;/a&gt; and asked it to install &lt;code dir="ltr"&gt;Rasbbian&lt;/code&gt; and I was pretty soon up and running with graphs on my wall again.&lt;/p&gt;&lt;p dir="ltr"&gt;The Raspberry PI 3b+ has a full 1GB of RAM, much more than previous PIs, but only half of what the &lt;code dir="ltr"&gt;ODROID-C2&lt;/code&gt; has. It still performed about the same as the &lt;code dir="ltr"&gt;ODROID-C2&lt;/code&gt;. It didn't work at all with Firefox, with Chromium it was okay with a single tab or two, but after 12-24 hours it would stop working. Sometimes it would be an "unresponsive tab" error from the browser, and sometimes the whole OS would freeze up completely.&lt;/p&gt;&lt;p dir="ltr"&gt;Around this time the annual &lt;a href="https://bornhack.dk/bornhack-2020/" dir="ltr"&gt;BornHack&lt;/a&gt; was approaching, so my attention was needed elsewhere. I made due with the unstable PI for a couple of months - daily reboot helped a little, but it isn't exactly a nice solution.&lt;/p&gt;&lt;h3&gt;Third Time is the Charm: A NUC with FreeBSD&lt;/h3&gt;&lt;p dir="ltr"&gt;So last week I finally got around to taking another whack it. No more beating around the bush, I was going to buy something with enough power, and then some. I started looking around and soon found that a Danish shop with pickup service had an Intel &lt;code dir="ltr"&gt;NUC8I7BEH&lt;/code&gt; in stock. While physically larger than the Raspberry PI and ODROID-C2 (it is just under 12x12cm long and wide, and just under 6cm tall, including the VESA mount), it is still a pretty small computer.&lt;/p&gt;&lt;p dir="ltr"&gt;I picked it up around along with 2 sticks of &lt;code dir="ltr"&gt;Kingston 16GB DDR4 2400MHz SODIMM&lt;/code&gt; non-ECC RAM, (the NUCs are delivered as a "kit" without RAM and storage) and a &lt;code dir="ltr"&gt;Samsung 870 QVO MZ-77Q1T0BW&lt;/code&gt; 1TB SATA SSD. Assembling it was really easy, four screws and and a couple of minutes later the RAM and SSD were in, and the NUC POST revealed it found all 32GB RAM and also the SSD. It refused to boot from the FreeBSD installer USB stick though. This was because secure boot was enabled in the BIOS. After disabling it the FreeBSD install was absolutely standard, no issues at all.&lt;/p&gt;&lt;p dir="ltr"&gt;This was in the beginning of October 2020 so the latest &lt;code dir="ltr"&gt;12-STABLE&lt;/code&gt; was something like &lt;code dir="ltr"&gt;12.2-BETA3&lt;/code&gt; or so, it doesn't really matter since I upgrade to latest &lt;code dir="ltr"&gt;12-STABLE&lt;/code&gt; after installing anyway. As always I used the auto-ZFS option in the installer so I can use &lt;code dir="ltr"&gt;bectl&lt;/code&gt; to make nice boot environments for easy rollbacks in case of problems when upgrading.&lt;/p&gt;&lt;p dir="ltr"&gt;A quick &lt;code dir="ltr"&gt;pkg install xorg slim fluxbox firefox&lt;/code&gt; and a bit of fiddling later I was looking at a very smoothly running Grafana dashboard in X. The rest of this blogpost is about the configuration of FreeBSD, X, Slim, Fluxbox and Firefox for an ideal wall-mounted Grafana screen. Much of this is done in Ansible, but not all of it. I've documented everything here for the sake of completeness, but a lot of basic configuration is done by my Ansible roles, and is not that relevant for this blogpost. Stuff like configuring syslog, monitoring, SSH keys and all the other sysadminy stuff that all machines need. This blogpost just focuses on what to do to go from a fresh FreeBSD machine to a well oiled Grafana wall display.&lt;/p&gt;&lt;p dir="ltr"&gt;Finally: I realize that comparing a NUC to a Raspberry PI is not even close to a fair comparison, for starters the NUC is ten times more expensive. It has a powerful &lt;code dir="ltr"&gt;CPU: Intel(R) Core(TM) i7-8559U CPU @ 2.70GHz (2712.12-MHz K8-class CPU)&lt;/code&gt; and 32GB memory, so obviously it is going to perform a lot better. But overkill was the whole point of this exercise! I  had spent &lt;i dir="ltr"&gt;far&lt;/i&gt; too much time faffing about with insufficient hardware and at this point I was perfectly happy to throw money at the problem until it went away. YMMV.&lt;/p&gt;&lt;h3&gt;Dedicated User&lt;/h3&gt;&lt;p dir="ltr"&gt;First off I added a dedicated user to show the graphs, since I intend to enable autologin for this setup. This user is not going to have &lt;code dir="ltr"&gt;wheel&lt;/code&gt; or &lt;code dir="ltr"&gt;sudo&lt;/code&gt; access, it really only has to be able to start X and Firefox. I also have another user with my regular SSH key which I used for debugging and whatever else is needed (rarely sysadm stuff though, since that is handled by Ansible).&lt;/p&gt;&lt;h3&gt;X Configuration&lt;/h3&gt;&lt;p dir="ltr"&gt;On modern FreeBSD X mostly configures itself, but the &lt;code dir="ltr"&gt;i7-8559U&lt;/code&gt; inside the &lt;code dir="ltr"&gt;NUC8i7BEH&lt;/code&gt; is a Gen9 Intel Coffee Lake CPU, the integrated &lt;code dir="ltr"&gt;Iris Plus Graphics 655&lt;/code&gt; GPU inside it is too new to be supported by the &lt;code dir="ltr"&gt;i915kms&lt;/code&gt; module in FreeBSD base. This is the output from &lt;code dir="ltr"&gt;pciconf -lv&lt;/code&gt; concerning the GPU:&lt;/p&gt;&lt;PRE&gt;vgapci0@pci0:0:2:0:     class=0x030000 card=0x20748086 chip=0x3ea58086 rev=0x01 hdr=0x00
     vendor     = 'Intel Corporation'
@@ -1369,188 +1576,92 @@ and follow the instructions.&lt;/p&gt;&lt;h3&gt;Exploring your 22120 archive&lt;
   &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;*.gustymeadows.com&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;,
   &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;*.nytimes.com&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;,
   &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;*.cnn.co?&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;
-]&lt;/PRE&gt;&lt;p&gt;Will not cache any resource with a host matching those. Wildcards:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;*&lt;/code&gt; (0 or more anything) and&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;?&lt;/code&gt; (0 or 1 anything)&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;*&lt;em dir="ltr"&gt;Note: the &lt;code dir="ltr"&gt;no&lt;/code&gt; file is per-archive. &lt;code dir="ltr"&gt;22120-arc&lt;/code&gt; is the archive root of a single archive, and by defualt it is placed in your home directory. But you can change the parent directory for &lt;code dir="ltr"&gt;22120-arc&lt;/code&gt; to have multiple archvies, and each archive requires its own &lt;code dir="ltr"&gt;no&lt;/code&gt; file, if you want a blacklist in that archive.&lt;/em&gt;&lt;/p&gt;&lt;h3&gt;Is there a DEBUG mode for troubleshooting?&lt;/h3&gt;&lt;p dir="ltr"&gt;Yes, just make sure you set an environment variable called &lt;code dir="ltr"&gt;DEBUG_22120&lt;/code&gt; to anything non empty.&lt;/p&gt;&lt;p&gt;So for example in posix systems:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;export&lt;/span&gt; DEBUG_22120=True&lt;/PRE&gt;&lt;h3&gt;Can I version the archive?&lt;/h3&gt;&lt;p dir="ltr"&gt;Yes! But you need to use &lt;code dir="ltr"&gt;git&lt;/code&gt; for versioning. Just initiate a git repo in your archive repository. And when you want to save a snapshot, make a new git commit.&lt;/p&gt;&lt;h3&gt;Can I change the archive path?&lt;/h3&gt;&lt;p dir="ltr"&gt;Yes, there's a control for changing the archive path in the control page: &lt;a href="http://localhost:22120/" rel="nofollow" dir="ltr"&gt;http://localhost:22120&lt;/a&gt;&lt;/p&gt;&lt;h3&gt;Can I change this other thing?&lt;/h3&gt;&lt;p&gt;There's a few command line arguments. You'll see the format printed as the first printed line when you start the program.&lt;/p&gt;&lt;p&gt;For other things you can examine the source code.&lt;/p&gt;</description><pubDate>Fri, 26 Feb 2021 10:31:01 -0600</pubDate></item><item><title>murex: Bash-like $SHELL designed for greater commandline productivity and safer shell scripts</title><link>https://lobste.rs/s/kws24j</link><description>&lt;h1&gt;&lt;em&gt;murex&lt;/em&gt;&lt;/h1&gt;&lt;img src="https://camo.githubusercontent.com/c449f3a219922f773ff77ad3db5f21487f4bda58e8b9e1360a0242541a2147d3/68747470733a2f2f676f646f632e6f72672f6769746875622e636f6d2f6c6d6f72672f6d757265783f7374617475732e737667" alt="GoDoc" width="90" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/9ff7cbe3112185dd10c016b51e3f5d2bacb2fb55bde375cb3ddde2b5ba6e893d/68747470733a2f2f676f7265706f7274636172642e636f6d2f62616467652f6769746875622e636f6d2f6c6d6f72672f6d75726578" alt="Go Report Card" width="88" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/75264b5064a0ab903b30f113b12b50d9493b853ad768da990b1d54b3cca96313/68747470733a2f2f636f64656275696c642e65752d776573742d312e616d617a6f6e6177732e636f6d2f6261646765733f757569643d65794a6c626d4e79655842305a57524559585268496a6f6962336378566e6f795a5574425a5535774e3156555955744b51544a55566d746d4d48424a63554a58535546574d5845796332643357574a6c64556450544868345157513165464e52656e64704f554a48566e5a35555842704d587046566b565362336b325555684b4c32784359324a68566e684a50534973496d6c32554746795957316c644756795533426c59794936496d39515a32645053336f7a6457467957484976626d38694c434a745958526c636d6c6862464e6c64464e6c636d6c68624349364d5830253344266272616e63683d6d6173746572" alt="CodeBuild" width="167" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/875d7e622e13a8efb5cf0f70177c8cb2e9ea9c09474be2347f759af0caef59eb/68747470733a2f2f636972636c6563692e636f6d2f67682f6c6d6f72672f6d757265782f747265652f6d61737465722e7376673f7374796c653d737667" alt="CircleCI" width="83" height="20"&gt;&lt;img src="https://camo.githubusercontent.com/ae54ad53f81ffc12063e395ebf591f5286cc49317df300bd9e3cd2e9e8abcfe4/68747470733a2f2f636f6465636f762e696f2f67682f6c6d6f72672f6d757265782f6272616e63682f6d61737465722f67726170682f62616467652e737667" alt="codecov" width="112" height="20"&gt;&lt;h2 dir="ltr"&gt;About &lt;em dir="ltr"&gt;murex&lt;/em&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;murex&lt;/em&gt; is a shell, like bash / zsh / fish / etc. It follows a similar syntax
-to POSIX shells like Bash however supports more advanced features than you'd
-typically expect from a $SHELL.&lt;/p&gt;&lt;p&gt;It aims to be similar enough to traditional
-shells that you can retain most of your muscle memory, while not
-being afraid to make breaking changes where "bash-isms" lead to unreadable,
-hard to maintain, or unsafe code.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;murex&lt;/em&gt; is designed for DevOps productivity so it isn't suited is high
-performance workloads beyond what you'd typically run in Bash (eg pipelines
-forked as concurrent processes).&lt;/p&gt;&lt;p&gt;A non-exhaustive list features would include:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Testing frameworks baked right into the language itself&lt;/LI&gt;&lt;LI&gt;Smarter handling of errors (for example try/catch blocks, line numbers
-included in error messages, errors optionally highlighted in red, etc)&lt;/LI&gt;&lt;LI&gt;Support for typed pipelines - which can be used to work with complex data
-formats like JSON natively. But also the ability to override or even ignore
-typed data entirely so it works transparently with standard UNIX tools too&lt;/LI&gt;&lt;LI&gt;Lots of data-mangling tools baked into the shell&lt;/LI&gt;&lt;LI&gt;Parses man pages for a richer user experience&lt;/LI&gt;&lt;LI&gt;In-line spell checking&lt;/LI&gt;&lt;LI&gt;Optional support for event-driven programming&lt;/LI&gt;&lt;LI&gt;Plus every aspect of the shell is easily extendable, inspectable and can
-be managed via &lt;em dir="ltr"&gt;murex&lt;/em&gt;'s own package manager&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;The language employs a relatively simple syntax modelled loosely on functional
-and stack-based programming paradigms (albeit without the LISP-style nested
-parentheses that scare a lot of developers) while maintaining compatibility
-with POSIX-like shells (eg Bash) wherever sensible. For example, a program
-structure could look like the following:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;command | command | [ index ] | if { command }
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;However where &lt;em dir="ltr"&gt;murex&lt;/em&gt; differs is that, while the pipe token, &lt;code dir="ltr"&gt;|&lt;/code&gt; is supported
-for compatibility with existing shells, &lt;em dir="ltr"&gt;murex&lt;/em&gt; idioms prefer &lt;code dir="ltr"&gt;-&amp;gt;&lt;/code&gt; used for
-readability as it clearly demonstrates the direction of the data flow. eg&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;command -&amp;gt; command -&amp;gt; [ index ] -&amp;gt; if { command }
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The language supports multiple data types natively; such as JSON, YAML,
-CSV, S-Expressions and even loosely tabulated terminal output (eg
-&lt;code dir="ltr"&gt;ps&lt;/code&gt;, &lt;code dir="ltr"&gt;ls -l&lt;/code&gt;). This makes passing data through the pipeline and
-parsing output easier when dealing with more complex arrangements of
-data than a simple byte stream in traditional shells like Bash.&lt;/p&gt;&lt;h2&gt;Interactive shell&lt;/h2&gt;&lt;p dir="ltr"&gt;Aside from &lt;em dir="ltr"&gt;murex&lt;/em&gt; being carefully designed with scripting in mind, the
-interactive shell itself is also built around productivity. To achieve this,
-we wrote our own readline library. Below is an example of that library in use:&lt;/p&gt;&lt;img src="https://camo.githubusercontent.com/df250d896d0510e040c56e6186d246b55cb4cc761a720aa2cad4b8d9e196a0d3/68747470733a2f2f61736369696e656d612e6f72672f612f3233323731342e737667" alt="asciicast" width="419" height="248"&gt;&lt;p dir="ltr"&gt;The above demo includes the following features of &lt;em dir="ltr"&gt;murex&lt;/em&gt;'s bespoke readline
-library:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;hint text - blue status text below the prompt (the colour is configurable)&lt;/LI&gt;&lt;LI&gt;syntax highlighting (albeit there isn’t much syntax to highlight in the
-example). This can also be turned off if your preference is to have colours
-disabled&lt;/LI&gt;&lt;LI&gt;tab-completion in gridded mode (seen when typing &lt;code dir="ltr"&gt;cd&lt;/code&gt;)&lt;/LI&gt;&lt;LI&gt;tab-completion in list view (seen when selecting a process name to &lt;code dir="ltr"&gt;kill&lt;/code&gt;
-where the process ID was substituted when selected)&lt;/LI&gt;&lt;LI&gt;regex searching through the tab-completion suggestions (seen in both &lt;code dir="ltr"&gt;cd&lt;/code&gt; and
-&lt;code dir="ltr"&gt;kill&lt;/code&gt; - enabled by pressing &lt;code dir="ltr"&gt;[CTRL+f]&lt;/code&gt;)&lt;/LI&gt;&lt;LI&gt;line editing using $EDITOR (&lt;code dir="ltr"&gt;vi&lt;/code&gt; in the example - enabled by pressing &lt;code dir="ltr"&gt;[ESC]&lt;/code&gt;
-followed by &lt;code dir="ltr"&gt;[v]&lt;/code&gt;)&lt;/LI&gt;&lt;LI&gt;readline’s warning before pasting multiple lines of data into the buffer and
-the preview option that’s available as part of the aforementioned warning&lt;/LI&gt;&lt;LI&gt;and VIM keys (enabled by pressing &lt;code dir="ltr"&gt;[ESC]&lt;/code&gt;)&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Concise yet predictable&lt;/h2&gt;&lt;p dir="ltr"&gt;Despite the amount of features added to shell, we have tried to keep the
-amount of "magic" to a minimum and follow a pretty standard structure so
-the language is predictable. However there are times when a little magic
-goes a long way. For example &lt;em dir="ltr"&gt;murex&lt;/em&gt;'s support for complex data objects
-of differing formats is managed in the pipeline so you don't need to think
-about the data format when querying data from them.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;open: file.csv  -&amp;gt; [ column_name ] # returns specific columns (or rows) in CSV file
-open: file.json -&amp;gt; [ index ]       # returns specific items from JSON
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The index function (&lt;code dir="ltr"&gt;[&lt;/code&gt;) alters its matching algorithm depending on the
-piped data type and &lt;code dir="ltr"&gt;open&lt;/code&gt; sets the data type depending on the file
-extension or MIME type.&lt;/p&gt;&lt;p&gt;Sometimes you will want less guesswork or just the robustness of a forced
-behavior. On those occasions you can remove one layer of magic by
-casting the data type:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;open: file.txt -&amp;gt; cast csv  -&amp;gt; [ column_name ]
-open: file.txt -&amp;gt; cast json -&amp;gt; [ index ]
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This awareness of data structures is also utilised in &lt;code dir="ltr"&gt;foreach&lt;/code&gt; (which
-will cycle through each index in an array) and &lt;code dir="ltr"&gt;formap&lt;/code&gt; (key/value
-iteration against complex objects). See &lt;a href="https://github.com/lmorg/murex/blob/master/docs/GUIDE.control-structures.md" dir="ltr"&gt;GUIDE.control-structures&lt;/a&gt;
-for more details on these and other control structures.&lt;/p&gt;&lt;h2&gt;More robust scripts / shell one liners&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;murex&lt;/em&gt; employs a few methods to make shell scripting more robust:&lt;/p&gt;&lt;p dir="ltr"&gt;Bash, for all it's power, is littered with hidden traps. The aim of &lt;em dir="ltr"&gt;murex&lt;/em&gt; is
-to address as many of them as we can without taking the flexibility or power
-away from the interactive command line. This is achieved through a couple of
-key concepts:&lt;/p&gt;&lt;h3&gt;Everything is a function&lt;/h3&gt;&lt;p&gt;The biggest breaking change from regular shells is how globbing isn't expanded
-by the shell by default. This is instead done by inlining functions as arrays:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;# Bash
-ls -l *.go
+]&lt;/PRE&gt;&lt;p&gt;Will not cache any resource with a host matching those. Wildcards:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;*&lt;/code&gt; (0 or more anything) and&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;?&lt;/code&gt; (0 or 1 anything)&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;*&lt;em dir="ltr"&gt;Note: the &lt;code dir="ltr"&gt;no&lt;/code&gt; file is per-archive. &lt;code dir="ltr"&gt;22120-arc&lt;/code&gt; is the archive root of a single archive, and by defualt it is placed in your home directory. But you can change the parent directory for &lt;code dir="ltr"&gt;22120-arc&lt;/code&gt; to have multiple archvies, and each archive requires its own &lt;code dir="ltr"&gt;no&lt;/code&gt; file, if you want a blacklist in that archive.&lt;/em&gt;&lt;/p&gt;&lt;h3&gt;Is there a DEBUG mode for troubleshooting?&lt;/h3&gt;&lt;p dir="ltr"&gt;Yes, just make sure you set an environment variable called &lt;code dir="ltr"&gt;DEBUG_22120&lt;/code&gt; to anything non empty.&lt;/p&gt;&lt;p&gt;So for example in posix systems:&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;export&lt;/span&gt; DEBUG_22120=True&lt;/PRE&gt;&lt;h3&gt;Can I version the archive?&lt;/h3&gt;&lt;p dir="ltr"&gt;Yes! But you need to use &lt;code dir="ltr"&gt;git&lt;/code&gt; for versioning. Just initiate a git repo in your archive repository. And when you want to save a snapshot, make a new git commit.&lt;/p&gt;&lt;h3&gt;Can I change the archive path?&lt;/h3&gt;&lt;p dir="ltr"&gt;Yes, there's a control for changing the archive path in the control page: &lt;a href="http://localhost:22120/" rel="nofollow" dir="ltr"&gt;http://localhost:22120&lt;/a&gt;&lt;/p&gt;&lt;h3&gt;Can I change this other thing?&lt;/h3&gt;&lt;p&gt;There's a few command line arguments. You'll see the format printed as the first printed line when you start the program.&lt;/p&gt;&lt;p&gt;For other things you can examine the source code.&lt;/p&gt;</description><pubDate>Fri, 26 Feb 2021 10:31:01 -0600</pubDate></item><item><title>GNU poke - Release notes for poke 1.0</title><link>https://lobste.rs/s/ft6lki</link><description>&lt;PRE&gt;
 
-# Murex
-ls -l @{g *.go}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The advantage of &lt;em dir="ltr"&gt;murex&lt;/em&gt;'s method is that we can now offer other ways of
-matching file system objects that follows the same idiomatic pattern:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;# Match files by regexp pattern
-ls -l @{rx \.go$}
 
-# Match only directories
-ls -l @{f +d}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;(more information on &lt;code dir="ltr"&gt;g&lt;/code&gt;, &lt;code dir="ltr"&gt;rx&lt;/code&gt; and &lt;code dir="ltr"&gt;f&lt;/code&gt; are available in &lt;a href="https://github.com/lmorg/murex/blob/master/docs/GUIDE.quick-start.md" dir="ltr"&gt;GUIDE.quick-start&lt;/a&gt;).&lt;/p&gt;&lt;p dir="ltr"&gt;However there will be occasions when you just want an inlined expansion
-(eg when using an interactive shell) and that can be achieved via the &lt;code dir="ltr"&gt;@g&lt;/code&gt;
-command prefix:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;@g ls -l *.go
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Powerful autocompletion&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;murex&lt;/em&gt; takes a slightly different approach to command line autocompletion,
-both from a usability perspective as well as defining completion rules.&lt;/p&gt;&lt;p dir="ltr"&gt;Inspired by IDEs, &lt;em dir="ltr"&gt;murex&lt;/em&gt; queries man pages directly for flags as well as
-"tooltip" descriptions. Custom completions are defined via JSON meaning
-simple commands are much easier to define and complex commands can still
-fallback to using dynamic shell code just like they are in other shells.&lt;/p&gt;&lt;p dir="ltr"&gt;This makes it easier to write completion rules as well as making the code
-more readable. An example of &lt;code dir="ltr"&gt;git&lt;/code&gt;s autocompletion definition:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;private git-branch {
-    # returns git branches and removes the current one from the list
-    git branch -&amp;gt; [ :0 ] -&amp;gt; !match *
-}
+     _____
+ ---'   __\_______
+            ______)         &lt;span dir="ltr"&gt;&lt;h1 dir="ltr"&gt;&lt;a href="http://www.jemarch.net/poke.html" dir="ltr"&gt;GNU poke&lt;/a&gt;&lt;/h1&gt;&lt;/span&gt;
+            __)             &lt;h2 dir="ltr"&gt;Release notes for poke 1.0&lt;/h2&gt;
+           __)
+ ---._______)
 
-autocomplete set git { [{
-    # define the top level flags
-    "Flags": [
-        "clone", "init", "add", "mv", "reset", "rm", "bisect", "grep",
-        "log", "show", "status", "branch", "checkout", "commit", "diff",
-        "merge", "rebase", "tag", "fetch", "pull", "push", "stash"
-    ],
 
-    # specify what values those flags support
-    "FlagValues": {
-        "init": [{
-            "Flags": [ "--bare" ]
-        }],
-        "add": [{
-            "IncFiles": true,
-            "AllowMultiple": true
-        }],
-        "mv": [{
-            "IncFiles": true
-        }],
-        "rm": [{
-            "IncFiles": true,
-            "AllowMultiple": true
-        }],
-        "checkout": [{
-            "Dynamic": ({ git-branch }),
-            "Flags": [ "-b" ]
-        }],
-        "merge": [{
-            "Dynamic": ({ git-branch })
-        }]
-    }
-}] }
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;murex&lt;/em&gt; also supports several different styles of completion suggestion
-"popups" to cater for different scenarios (demo above) as well as built in
-support for jumping to files within nested directories quickly and easily:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;cat [ctrl+f]app.g[return]
-# same as typing: cat config/app.go
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Error handling&lt;/h3&gt;&lt;p dir="ltr"&gt;Like traditional shells, &lt;em dir="ltr"&gt;murex&lt;/em&gt; is verbose with errors by default with
-options to mute them. However &lt;em dir="ltr"&gt;murex&lt;/em&gt; also supports cleaner decision
-structures for when you want you want errors captured in a useful way:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;try {
-    # do something
-}
-catch {
-    err: "Could not perform action"
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;As well as a saner &lt;code dir="ltr"&gt;if&lt;/code&gt; syntax:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;# compare two strings
-if { = `foo`==`bar` } then {
-    out: "`foo` matched `bar`"
-}
+I am happy to announce the first release of GNU poke, version 1.0.
 
-# check if command ran successfully
-!if { foobar } then {
-    err: "`foobar` could not be run"
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Test and debugging frameworks&lt;/h3&gt;&lt;p dir="ltr"&gt;Unlike traditional shells, &lt;em dir="ltr"&gt;murex&lt;/em&gt; is designed with a test and debugging modes
-baked into the shell language. This means you can write tests against your
-shell scripts as part of the shell scripts themselves.&lt;/p&gt;&lt;p&gt;For example:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;function: hello-world {
-    test: define example {
-        "StdoutRegex": (^Hello World$)
-    }
+The tarball poke-1.0.tar.gz is now available at
+&lt;a href="https://ftp.gnu.org/gnu/poke/poke-1.0.tar.gz" dir="ltr"&gt;https://ftp.gnu.org/gnu/poke/poke-1.0.tar.gz&lt;/a&gt;.
 
-    out: &amp;lt;test_example&amp;gt; "Hello Earth"
-}
+  GNU poke (&lt;a href="http://www.jemarch.net/poke" dir="ltr"&gt;http://www.jemarch.net/poke&lt;/a&gt;) is an interactive,
+  extensible editor for binary data.  Not limited to editing basic
+  entities such as bits and bytes, it provides a full-fledged
+  procedural, interactive programming language designed to describe
+  data structures and to operate on them.
 
-test: run { hello-world }
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;...will output:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;Hello Earth
- Status  Definition Function                                           Line Col. Message
-[FAILED] example    out                                                5    9    stdout: regexp did not match 'Hello Earth'
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;If test mode isn't enabled then any &lt;code dir="ltr"&gt;test&lt;/code&gt; commands are skipped without being
-executed so you can liberally include test cases throughout your functions
-without worrying about any performance impact.&lt;/p&gt;&lt;h4 dir="ltr"&gt;&lt;em dir="ltr"&gt;murex&lt;/em&gt; also supports unit tests&lt;/h4&gt;&lt;p&gt;For example:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;test: unit function aliases {
-    "PreBlock": ({
-        alias ALIAS_UNIT_TEST=example param1 param2 param3
-    }),
-    "StdoutRegex": "([- _0-9a-zA-Z]+ =&amp;gt; .*?\n)+",
-    "StdoutType": "str",
-    "PostBlock": ({
-        !alias ALIAS_UNIT_TEST
-    })
-}
+This release is the product of 3 years of work resulting in 4126
+commits, made by 19 contributors.
 
-function: aliases {
-    # Output the aliases in human readable format
-    runtime: --aliases -&amp;gt; formap: name alias {
-        $name -&amp;gt; sprintf: "%10s =&amp;gt; ${esccli @alias}\n"
-    } -&amp;gt; cast: str
-}
+The program is far from being perfect and there are known bugs and
+limitations in place.  We also have lots of awesome ideas still to be
+implemented, extensions we want to add, pickles for many data formats
+to write, documentation to improve, and lots of work in
+progress... the GUI, the machine-interface... working in poke is so
+fun that it is difficult to stop :'D
 
-test: run aliases
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;...will output:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt; Status  Definition Function                                           Line Col. Message
-[PASSED] (unit)     aliases                                            13   1    All test conditions were met
-&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;Language guides&lt;/h2&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/lmorg/murex/blob/master/docs/GUIDE.syntax.md" dir="ltr"&gt;GUIDE.syntax&lt;/a&gt; is recommended first
-as it gives an overview if the shell scripting languages syntax and data
-types.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/lmorg/murex/blob/master/docs/GUIDE.type-system.md" dir="ltr"&gt;GUIDE.type-system&lt;/a&gt; describes
-&lt;em dir="ltr"&gt;murex&lt;/em&gt;'s type system. Most of the time you will not need to worry about
-typing in &lt;em dir="ltr"&gt;murex&lt;/em&gt; as the shell is designed around productivity.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/lmorg/murex/blob/master/docs/GUIDE.builtin-functions.md" dir="ltr"&gt;GUIDE.builtin-functions&lt;/a&gt;
-lists some of the builtin functions available for this shell.&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;Or if you're already a seasoned Bash developer then you read the Quick
-Start Guide, &lt;a href="https://github.com/lmorg/murex/blob/master/docs/GUIDE.quick-start.md" dir="ltr"&gt;GUIDE.quick-start&lt;/a&gt;,
-to jump straight into using &lt;em dir="ltr"&gt;murex&lt;/em&gt;.&lt;/p&gt;&lt;h2&gt;Install instructions&lt;/h2&gt;&lt;p dir="ltr"&gt;There are various ways you can load &lt;em dir="ltr"&gt;murex&lt;/em&gt; on to your system. See &lt;a href="https://github.com/lmorg/murex/blob/master/INSTALL.md" dir="ltr"&gt;INSTALL&lt;/a&gt; for details.&lt;/p&gt;&lt;h2&gt;CI/CD&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;murex&lt;/em&gt; makes heavy use of testing and CI/CD to ensure the latest builds are
-safe for use.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Git &lt;code dir="ltr"&gt;pre-commit&lt;/code&gt; and &lt;code dir="ltr"&gt;pre-push&lt;/code&gt; files exist to help developers catch any
-regression errors before they even hit the feature branches.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Each and every git push is validated against hundreds of distinct tests and
-race detectors (run in Circle CI). These tests are run 10 times to shake out
-any possible timing related bugs.&lt;/p&gt;&lt;p dir="ltr"&gt;Each push to &lt;code dir="ltr"&gt;develop&lt;/code&gt; and &lt;code dir="ltr"&gt;master&lt;/code&gt; also creates a new docker container,
-&lt;code dir="ltr"&gt;lmorg/murex:develop&lt;/code&gt; and &lt;code dir="ltr"&gt;lmorg/murex:latest&lt;/code&gt; (for the &lt;code dir="ltr"&gt;master&lt;/code&gt; branch).&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Weekly automated builds are then run against the latest container. These
-builds are run in AWS CodeBuild and they generate the &lt;a href="https://murex.rocks/" rel="nofollow" dir="ltr"&gt;murex.rocks&lt;/a&gt;
-website and build pre-compiled binaries for &lt;a href="https://github.com/lmorg/murex/blob/master/DOWNLOAD.md" dir="ltr"&gt;download&lt;/a&gt;.&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;h2&gt;Known bugs / TODO&lt;/h2&gt;&lt;p dir="ltr"&gt;Please see GitHub's issue tracker: &lt;a href="https://github.com/lmorg/murex/issues" dir="ltr"&gt;https://github.com/lmorg/murex/issues&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sat, 27 Feb 2021 07:14:14 -0600</pubDate></item><item><title>Librsvg, Rust, and non-mainstream architectures</title><link>https://lobste.rs/s/udfjlx</link><description>&lt;p dir="ltr"&gt;Almost five years ago &lt;a href="https://people.gnome.org/~federico/news-2016-10.html#25" dir="ltr"&gt;librsvg introduced Rust into its source
+But it is time to start the releasing cycles so everyone can benefit
+from poke, which is already immensely useful for many activities like
+systems programming, testing of software, design and documentation of
+file formats and protocols, reverse engineering, and much more.
+Releasing often will hopefully also bring in more developers to our
+little but enthusiastic community... there is so much to do!
+
+In any case, we wish you have fun with poke and that you find it
+useful.
+
+Please send us comments, suggestions, bug reports, *patches*,
+questions, complaints, bitcoins, or whatever, to poke-devel@gnu.org.
+
+Many of the poke developers and users populate the #poke IRC channel
+at irc.freenode.net, and you are more than welcome to join us there
+and say hello.
+
+Now it is time to mention the names of all the people who have
+contributed with code and/or documentation to this release.  In
+certain but no significant order they are:
+
+   John Darrington
+   Tim Rühsen
+   Luca Saiu
+   Bruno Haible
+   Mohammad-Reza Nabipoor
+   Eric Blake
+   Egeyar Bagcioglu
+   Kostas Chasialis
+   Darshit Shah
+   Dan Čermák
+   David Faust
+   Carlo Caione
+   Henner Zeller
+   Aurelien Aptel
+   Indu Bhagat
+   Darkstar
+   Michael Drüing
+   Pierre-Evariste Dagand
+
+My gratitude to you all!  It is a real pleasure to hack with you.
+
+Finally, as a personal note, I would like to dedicate this release to
+my father Eduardo.  For this is also your work in a sense, and I love
+you very much.
+
+And this is all for now.
+Happy poking!
+
+--
+Jose E. Marchesi
+Frankfurt am Main
+26 February 2021
+    &lt;/PRE&gt;</description><pubDate>Fri, 26 Feb 2021 07:00:57 -0600</pubDate></item><item><title>Librsvg, Rust, and non-mainstream architectures</title><link>https://lobste.rs/s/udfjlx</link><description>&lt;p dir="ltr"&gt;Almost five years ago &lt;a href="https://people.gnome.org/~federico/news-2016-10.html#25" dir="ltr"&gt;librsvg introduced Rust into its source
 code&lt;/a&gt;.  Around the same time, Linux distributions
 started shipping the first versions of Firefox that also required
 Rust.  I unashamedly wanted to ride that wave: distros would &lt;em dir="ltr"&gt;have&lt;/em&gt; to
@@ -1695,92 +1806,7 @@ PowerBook.  Those were useful things for them to do.&lt;/p&gt;&lt;p&gt;Also — 
     &lt;time datetime="2021-02-24T19:14:55-06:00" dir="ltr"&gt;
       Last modified: Wednesday 24/February/2021
     &lt;/time&gt;
-  &lt;/footer&gt;</description><pubDate>Thu, 25 Feb 2021 15:15:40 -0600</pubDate></item><item><title>GNU poke - Release notes for poke 1.0</title><link>https://lobste.rs/s/ft6lki</link><description>&lt;PRE&gt;
-
-
-     _____
- ---'   __\_______
-            ______)         &lt;span dir="ltr"&gt;&lt;h1 dir="ltr"&gt;&lt;a href="http://www.jemarch.net/poke.html" dir="ltr"&gt;GNU poke&lt;/a&gt;&lt;/h1&gt;&lt;/span&gt;
-            __)             &lt;h2 dir="ltr"&gt;Release notes for poke 1.0&lt;/h2&gt;
-           __)
- ---._______)
-
-
-I am happy to announce the first release of GNU poke, version 1.0.
-
-The tarball poke-1.0.tar.gz is now available at
-&lt;a href="https://ftp.gnu.org/gnu/poke/poke-1.0.tar.gz" dir="ltr"&gt;https://ftp.gnu.org/gnu/poke/poke-1.0.tar.gz&lt;/a&gt;.
-
-  GNU poke (&lt;a href="http://www.jemarch.net/poke" dir="ltr"&gt;http://www.jemarch.net/poke&lt;/a&gt;) is an interactive,
-  extensible editor for binary data.  Not limited to editing basic
-  entities such as bits and bytes, it provides a full-fledged
-  procedural, interactive programming language designed to describe
-  data structures and to operate on them.
-
-This release is the product of 3 years of work resulting in 4126
-commits, made by 19 contributors.
-
-The program is far from being perfect and there are known bugs and
-limitations in place.  We also have lots of awesome ideas still to be
-implemented, extensions we want to add, pickles for many data formats
-to write, documentation to improve, and lots of work in
-progress... the GUI, the machine-interface... working in poke is so
-fun that it is difficult to stop :'D
-
-But it is time to start the releasing cycles so everyone can benefit
-from poke, which is already immensely useful for many activities like
-systems programming, testing of software, design and documentation of
-file formats and protocols, reverse engineering, and much more.
-Releasing often will hopefully also bring in more developers to our
-little but enthusiastic community... there is so much to do!
-
-In any case, we wish you have fun with poke and that you find it
-useful.
-
-Please send us comments, suggestions, bug reports, *patches*,
-questions, complaints, bitcoins, or whatever, to poke-devel@gnu.org.
-
-Many of the poke developers and users populate the #poke IRC channel
-at irc.freenode.net, and you are more than welcome to join us there
-and say hello.
-
-Now it is time to mention the names of all the people who have
-contributed with code and/or documentation to this release.  In
-certain but no significant order they are:
-
-   John Darrington
-   Tim Rühsen
-   Luca Saiu
-   Bruno Haible
-   Mohammad-Reza Nabipoor
-   Eric Blake
-   Egeyar Bagcioglu
-   Kostas Chasialis
-   Darshit Shah
-   Dan Čermák
-   David Faust
-   Carlo Caione
-   Henner Zeller
-   Aurelien Aptel
-   Indu Bhagat
-   Darkstar
-   Michael Drüing
-   Pierre-Evariste Dagand
-
-My gratitude to you all!  It is a real pleasure to hack with you.
-
-Finally, as a personal note, I would like to dedicate this release to
-my father Eduardo.  For this is also your work in a sense, and I love
-you very much.
-
-And this is all for now.
-Happy poking!
-
---
-Jose E. Marchesi
-Frankfurt am Main
-26 February 2021
-    &lt;/PRE&gt;</description><pubDate>Fri, 26 Feb 2021 07:00:57 -0600</pubDate></item><item><title>Security of the Intel Graphics Stack - Part 2 - FW &lt;-&gt; GuC</title><link>https://lobste.rs/s/7hbliu</link><description>&lt;p dir="ltr"&gt;
+  &lt;/footer&gt;</description><pubDate>Thu, 25 Feb 2021 15:15:40 -0600</pubDate></item><item><title>Security of the Intel Graphics Stack - Part 2 - FW &lt;-&gt; GuC</title><link>https://lobste.rs/s/7hbliu</link><description>&lt;p dir="ltr"&gt;
     
 
     
@@ -3156,4 +3182,4 @@ strictness analysis to realise that none of the number operations in
 here are non-strict, then the code wouuuld look like a native
 JavaScript implementation, using native &lt;code dir="ltr"&gt;-&lt;/code&gt; and &lt;code dir="ltr"&gt;+&lt;/code&gt; operations,
 Closure would determine that the &lt;code dir="ltr"&gt;(+)&lt;/code&gt; and &lt;code dir="ltr"&gt;-&lt;/code&gt; are no longer needed,
-and this code would be shorter still.&lt;/p&gt;</description><pubDate>Fri, 26 Feb 2021 19:02:17 -0600</pubDate></item><item><title>Recruiting community netbsd developers now beagleboard</title><link>https://twitter.com/Jadon/status/1349412990064406531?s=19</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/umogje/recruiting_community_netbsd_developers"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sat, 27 Feb 2021 03:06:25 -0600</pubDate></item><item><title>libcsp: Concurrent C Programming</title><link>https://lobste.rs/s/uqgnqq</link><description>&lt;h2&gt;Features&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;Multiple cpu cores supported.&lt;/LI&gt;&lt;LI&gt;High performance scheduler.&lt;/LI&gt;&lt;LI&gt;Stack size statically analyzed in compile time.&lt;/LI&gt;&lt;LI&gt;Lock-free channel.&lt;/LI&gt;&lt;LI&gt;Netpoll and timer are supported.&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Fri, 26 Feb 2021 10:45:21 -0600</pubDate></item></channel></rss>
+and this code would be shorter still.&lt;/p&gt;</description><pubDate>Fri, 26 Feb 2021 19:02:17 -0600</pubDate></item></channel></rss>
