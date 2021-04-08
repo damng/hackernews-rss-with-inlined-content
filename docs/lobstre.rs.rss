@@ -337,7 +337,644 @@ maybe batch execute (e.g. data pipelines) ahead 10 years, I would:&lt;/p&gt;&lt;
    as classically employed by build systems isn't appropriate for long-running
    test, release, or say data pipelines).&lt;/LI&gt;&lt;LI&gt;Throw a polished web UI for platform interaction, result reporting, etc on
    top.&lt;/LI&gt;&lt;LI&gt;Release it to the world.&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;Will this dream become a reality any time soon? Probably not. But I can dream.
-And maybe I'll have convinced a reader to pursue it.&lt;/p&gt;</description><pubDate>Wed, 07 Apr 2021 11:01:55 -0500</pubDate></item><item><title>Modern storage is plenty fast. It is the APIs that are bad</title><link>https://lobste.rs/s/vxpcur</link><description>&lt;figure&gt;&lt;img alt="" src="https://miro.medium.com/max/3000/1*AXK9Vi3UbLj5vtBJ2HFavg.jpeg" width="437" height="151"&gt;&lt;/figure&gt;&lt;img alt="Glauber Costa" src="https://miro.medium.com/fit/c/96/96/0*_vxmqP0UCaArfAxZ" width="48" height="48"&gt;&lt;p data-selectable-paragraph=""&gt;I have spent almost the entire last decade in a fairly specialized product company, building high performance I/O systems. I had the opportunity to see storage technology evolve rapidly and decisively. Talking about storage and its developments felt like preaching to the choir.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;This year, I have switched jobs. Being at a larger company with engineers from multiple backgrounds I was taken by surprise by the fact that although every one of my peers is certainly extremely bright, most of them carried misconceptions about how to best exploit the performance of modern storage technology leading to suboptimal designs, even if they were aware of the increasing improvements in storage technology.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;As I reflected about the causes of this disconnect I realized that a large part of the reason for the persistence of such misconceptions is that if they were to spend the time to validate their assumptions with benchmarks, the data would show that their assumptions are, or at least appear to be, true.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;Common examples of such misconceptions include:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;“Well, it is fine to copy memory here and perform this expensive computation because it saves us one I/O operation, which is even more expensive”.&lt;/LI&gt;&lt;LI&gt;“I am designing a system that needs to be fast. Therefore it needs to be in memory”.&lt;/LI&gt;&lt;LI&gt;“If we split this into multiple files it will be slow because it will generate random I/O patterns. We need to optimize this for sequential access and read from a single file”&lt;/LI&gt;&lt;LI&gt;“Direct I/O is very slow. It only works for very specialized applications. If you don’t have your own cache you are doomed”.&lt;/LI&gt;&lt;/UL&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;&lt;a href="https://www.samsung.com/semiconductor/global.semi.static/Ultra-Low_Latency_with_Samsung_Z-NAND_SSD-0.pdf" rel="noopener" dir="ltr"&gt;Yet if you skim through specs of modern NVMe devices&lt;/a&gt; you see commodity devices with latencies in the microseconds range and several GB/s of throughput supporting several hundred thousands random IOPS. So where’s the disconnect?&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;In this article I will demonstrate that while hardware changed dramatically over the past decade, software APIs have not, or at least not enough. Riddled with memory copies, memory allocations, overly optimistic read ahead caching and all sorts of expensive operations, legacy APIs prevent us from making the most of our modern devices.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;In the process of writing this piece I had the immense pleasure of getting early access to one of the next generation Optane devices, from Intel. While they are not common place in the market yet, they certainly represent the crowning of a trend towards faster and faster devices. The numbers you will see throughout this article were obtained using this device.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;In the interest of time I will focus this article on reads. Writes have their own unique set of issues — as well as opportunities for improvements that I intend to cover in a later article.&lt;/p&gt;&lt;h1 data-selectable-paragraph=""&gt;The claims&lt;/h1&gt;&lt;p data-selectable-paragraph=""&gt;There are three main problems with traditional file-based APIs:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong&gt;They perform a lot of expensive operations because “I/O is expensive”.&lt;/strong&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p data-selectable-paragraph=""&gt;When legacy APIs need to read data that is not cached in memory they generate a page fault. Then after the data is ready, an interrupt. Lastly, for a traditional system-call based read you have an extra copy to the user buffer, and for mmap-based operations you will have to update the virtual memory mappings.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;None of these operations: page fault, interrupts, copies or virtual memory mapping update are cheap. But years ago they were still ~100 times cheaper than the cost of the I/O itself, making this approach acceptable. This is no longer the case as device latency approaches single-digit microseconds. Those operations are now in the same order of magnitude of the I/O operation itself.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;A quick back-of-the-napkin calculation shows that in the worst case, less than half of the total busy cost is the cost of communication with the device per se. That’s not counting all the waste, which brings us to the second problem:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong&gt;Read amplification.&lt;/strong&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Although there are some details I will brush over (like memory used by file descriptors, the various metadata caches in Linux), if modern NVMe support many concurrent operations, there is no reason to believe that reading from many files is more expensive than reading from one. However &lt;em dir="ltr"&gt;the aggregate amount of data read&lt;/em&gt; certainly matters.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;The operating system reads data in &lt;em dir="ltr"&gt;page granularity&lt;/em&gt;, meaning it can only read at a minimum 4kB at a time. That means if you need to read read 1kB split in two files, 512 bytes each, you are effectively reading 8kB to serve 1kB, wasting 87% of the data read. In practice, the OS will also perform read ahead, with a default setting of 128kB, in anticipation of saving you cycles later when you do need the remaining data. But if you never do, as is often the case for random I/O, then you just read 256kB to serve 1kB and wasted 99% of it.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;If you feel tempted to validate my claim that reading from multiple files shouldn’t be fundamentally slower than reading from a single file, you may end up proving yourself right, but only because read amplification increased by a lot the amount of data effectively read.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;Since the issue is the OS page cache, what happens if you just open a file with Direct I/O, all else being equal? Unfortunately that likely won’t get faster either. But that’s because of our third and last issue:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Traditional APIs don’t exploit parallelism&lt;/strong&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;p data-selectable-paragraph=""&gt;A file is seen as a sequential stream of bytes, and whether data is in-memory or not is transparent to the reader. Traditional APIs will wait until you touch data that is not resident to issue an I/O operation. The I/O operation may be larger than what the user requested due to read-ahead, but is still just one.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;However as fast as modern devices are, they are still slower than the CPU. While the device is waiting for the I/O operation to come back, the CPU is not doing anything.&lt;/p&gt;&lt;figure&gt;&lt;img alt="" src="https://miro.medium.com/max/60/1*v74E8E9ick4-rpiYZ2uFKA.png?q=20" width="437" height="246"&gt;&lt;figcaption dir="auto"&gt;Lack of parallelism in traditional APIs result in the CPUs being idle while they wait for I/O to return.&lt;/figcaption&gt;&lt;/figure&gt;&lt;p data-selectable-paragraph=""&gt;Using multiple files is a step in the right direction, as it allows more effectively parallelism: while one reader is waiting, another can hopefully proceed. But if you are not careful you just end up amplifying one of the previous problems:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Multiple files mean multiple read-ahead buffers, increasing the waste factor for random I/O.&lt;/LI&gt;&lt;LI&gt;In thread-poll based APIs multiple files mean multiple threads, amplifying the amount of work done per I/O operation.&lt;/LI&gt;&lt;/UL&gt;&lt;p data-selectable-paragraph=""&gt;Not to mention that in many situations that’s not what you want: you may not have that many files to begin with.&lt;/p&gt;&lt;h1 data-selectable-paragraph=""&gt;Towards better APIs&lt;/h1&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;I have written extensively in the past about &lt;a href="https://www.scylladb.com/2020/05/05/how-io_uring-and-ebpf-will-revolutionize-programming-in-linux/" rel="noopener" dir="ltr"&gt;how revolutionary io_uring is&lt;/a&gt;. But being a fairly low level interface it is really just one piece of the API puzzle. Here’s why:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;I/O dispatched through io_uring will still suffer from most of the problems listed previously if it uses buffered files.&lt;/LI&gt;&lt;LI&gt;Direct I/O is full of caveats, and io_uring being a raw interface doesn’t even try (nor should it) to hide these problems: For example, memory must be properly aligned, as well as the positions where you are reading from.&lt;/LI&gt;&lt;LI&gt;It is also very low level and raw. For it to be useful you need to accumulate I/O and dispatch in batches. This calls for a policy of when to do it, and some form of event-loop, meaning it works better with a framework that already provides the machinery for that.&lt;/LI&gt;&lt;/UL&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;To tackle the API issue I have designed G&lt;a href="https://www.datadoghq.com/blog/engineering/introducing-glommio/" rel="noopener" dir="ltr"&gt;lommio&lt;/a&gt; (formerly known as Scipio), a Direct I/O-oriented thread-per-core Rust library. Glommio builds upon io_uring and supports many of its advanced features like registered buffers and poll-based (no interrupts) completions to make Direct I/O shine. For the sake of familiarity Glommio does support buffered files backed by the Linux page cache in a way that resembles the standard Rust APIs (which we will use in this comparison), but it is oriented towards bringing Direct I/O to the limelight.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;There are two classes of file in Glommio: &lt;a href="https://docs.rs/glommio/0.2.0-alpha/glommio/io/struct.DmaFile.html" rel="noopener" dir="ltr"&gt;Random access files&lt;/a&gt;, and &lt;a href="https://docs.rs/glommio/0.2.0-alpha/glommio/io/struct.DmaStreamReader.html" rel="noopener" dir="ltr"&gt;Streams&lt;/a&gt;.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;Random access files take a position as an argument, meaning there is no need to maintain a seek cursor. But more importantly: they don’t take a buffer as a parameter. Instead, they use io_uring’s pre-registered buffer area to allocate a buffer and return to the user. That means no memory mapping, no copying to the user buffer — there is only a copy from the device to the glommio buffer and the user get a reference counted pointer to that. And because we know this is random I/O, there is no need to read more data than what was requested.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;Streams, on the other hand, assume that you will eventually run through the entire file so they can afford to use a larger block size and a read-ahead factor.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Streams are designed to be mostly familiar to Rust’s default &lt;a href="https://docs.rs/futures-lite/1.11.2/futures_lite/io/trait.AsyncReadExt.html" rel="noopener" dir="ltr"&gt;AsyncRead&lt;/a&gt;, so it implements the AsyncRead trait and will still read data to a user buffer. All the benefits of Direct I/O-based scans are still there, but there is a copy between our internal read ahead buffers and the user buffer. That’s a tax on the convenience of using the standard API.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;If you need the extra performance, glommio provides an &lt;a href="https://docs.rs/glommio/0.2.0-alpha/glommio/io/struct.DmaStreamReader.html#method.get_buffer_aligned" rel="noopener" dir="ltr"&gt;API into the stream&lt;/a&gt; that also exposes the raw buffers too, saving the extra copy.&lt;/p&gt;&lt;h1 data-selectable-paragraph=""&gt;Putting scans to the test&lt;/h1&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;To demonstrate these APIs glommio has an &lt;a href="https://github.com/DataDog/glommio/blob/master/examples/storage.rs" rel="noopener" dir="ltr"&gt;example program&lt;/a&gt; that issues I/O with various settings using all those APIs (buffered, Direct I/O, random, sequential) and evaluates their performance.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;We start with a file that is around 2.5x the size of memory and start simple by reading it sequentially as a normal buffered file:&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph=""&gt;Buffered I/O: Scanned 53GB in 56s, 945.14 MB/s&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph=""&gt;That is certainly not bad considering that this file doesn’t fit in memory, but here the merits are all on Intel Optane’s out-of-this world performance and the io_uring backend. It still has an effective parallelism of one whenever I/O is dispatched and although the OS page size is 4kB, read-ahead allow us to effectively increase the I/O size.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;And in fact, should we try to emulate similar parameters using the Direct I/O API (4kB buffers, parallelism of one), the results would be disappointing, “confirming” our suspicion that Direct I/O is indeed, much slower.&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph=""&gt;Direct I/O: Scanned 53GB in 115s, 463.23 MB/s&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph=""&gt;But as we discussed, glommio’s Direct I/O file streams can take an explicit read-ahead parameter. If active glommio will issue I/O requests in advance of the position being currently read, to exploit the device’s parallelism.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;Glommio’s read-ahead works differently than OS-level read ahead: our goal is to exploit parallelism and not just increase I/O sizes. Instead of consuming the entire read-ahead buffer and only then sending a request for a new batch, glommio dispatches a new request as soon as the contents of a buffer is fully consumed and will always try to keep a fixed number of buffers in-flight, as shown in the image below.&lt;/p&gt;&lt;figure&gt;&lt;img alt="" src="https://miro.medium.com/max/60/1*6vnqwP1nkcOOQfHhlazRYA.png?q=20" width="437" height="246"&gt;&lt;figcaption dir="auto"&gt;As we exhaust one buffer, another is already being fetched. This has the effect of increasing parallelism and keeping it high.&lt;/figcaption&gt;&lt;/figure&gt;&lt;p data-selectable-paragraph=""&gt;As initially anticipated, once we exploit parallelism correctly by setting a read-ahead factor Direct I/O is not only on pair with buffered I/O but in fact much faster.&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph=""&gt;Direct I/O, read ahead: Scanned 53GB in 22s, 2.35 GB/s&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;This version is still using Rust’s &lt;a href="https://docs.rs/futures-lite/1.11.2/futures_lite/io/trait.AsyncReadExt.html" rel="noopener" dir="ltr"&gt;AsyncReadExt&lt;/a&gt; interfaces, which forces an extra copy from the glommio buffers to the user buffers.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Using the &lt;a href="https://docs.rs/glommio/0.2.0-alpha/glommio/io/struct.DmaStreamReader.html#method.get_buffer_aligned" rel="noopener" dir="ltr"&gt;get_buffer_aligned&lt;/a&gt; API gives you raw access to the buffer which avoids that last memory copy. If we use that now in our read test we gain a respectable 4% performance improvement&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph=""&gt;Direct I/O, glommio API: Scanned 53GB in 21s, 2.45 GB/s&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph=""&gt;The last step is to increase the buffer size. As this is a sequential scan there is no need for us to be constrained by 4kB buffer sizes, except for the sake of comparison with the OS page cache version.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;At this point, let’s summarize all the things that are going on behind the scenes with glommio and io_uring in the next test:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;each I/O request is 512kB in size,&lt;/LI&gt;&lt;LI&gt;many (5) of them are kept in flight for parallelism,&lt;/LI&gt;&lt;LI&gt;memory is pre-allocated and pre-registered&lt;/LI&gt;&lt;LI&gt;no extra copy is performed to a user-buffer&lt;/LI&gt;&lt;LI&gt;io_uring is set up for poll mode, meaning there are no memory copies, no interrupts, no context switches.&lt;/LI&gt;&lt;/UL&gt;&lt;p data-selectable-paragraph=""&gt;The results?&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph=""&gt;Direct I/O, glommio API, large buffer: Scanned 53GB in 7s, 7.29 GB/s&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph=""&gt;This is more than 7x better than the standard buffered approach. And better yet, the memory utilization was never higher than whatever we set as the read-ahead factor times the buffer size. In this example, 2.5MB.&lt;/p&gt;&lt;h1 data-selectable-paragraph=""&gt;Random Reads&lt;/h1&gt;&lt;p data-selectable-paragraph=""&gt;Scans are notoriously pernicious for the OS page cache. How do we fare with random I/O ? To test that we will read as much as we can in 20s, first restricting ourselves to the first 10% of the memory available (1.65GB)&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph=""&gt;Buffered I/O: size span of 1.65 GB, for 20s, 693870 IOPS&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph=""&gt;For Direct I/O:&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph=""&gt;Direct I/O: size span of 1.65 GB, for 20s, 551547 IOPS&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Direct I/O is 20% slower than buffered reads. While reading entirely from memory is still faster — which shouldn’t surprise anybody, that’s a far cry from the disaster one would expect. In fact, if we keep in mind that the buffered version is keeping 1.65GB of resident memory to achieve this whereas Direct I/O is only using 80kB (20 x 4kB buffers) this may even be &lt;em dir="ltr"&gt;preferable &lt;/em&gt;for a particular class of applications that may be better off employing that memory somewhere else.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;As any performance engineer would tell you, a good read benchmark needs to read data enough to hit the media. After all, “storage is slow”. So if we now read from the entire file, our buffered performance drops dramatically by 65%&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph=""&gt;Buffered I/O: size span of 53.69 GB, for 20s, 237858 IOPS&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph=""&gt;While Direct I/O, as expected, has the same performance and the same memory utilization irrespectively of the amount of data read.&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph=""&gt;Direct I/O: size span of 53.69 GB, for 20s, 547479 IOPS&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph=""&gt;If the larger scans are our comparison point, then Direct I/O is 2.3x faster, not slower, than buffered files.&lt;/p&gt;&lt;h1 data-selectable-paragraph=""&gt;Conclusion&lt;/h1&gt;&lt;p data-selectable-paragraph=""&gt;Modern NVMe devices change the nature of how to best perform I/O in stateful applications. This trend has been going on for a while but has been so far masked by the fact that the APIs, especially the higher level ones, haven’t evolved to match what has been happening in the device — and more recently Linux Kernel layers. With the right set of APIs, Direct I/O is the new black.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;Newer devices like the newest generation of the Intel Optane just seal the deal. There is no scenario in which standard buffered I/O is undisputedly better than Direct I/O.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;For scans the performance of well-tailored Direct I/O-based APIs is simply far superior. And while Buffered I/O standard APIs performed 20% faster for random reads that fully fit in memory, that comes at the cost of 200x more memory utilization making the trade offs not a clear cut.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;Applications that do need the extra performance will still want to cache some of those results, and providing an easy way to integrate specialized caches for usage with Direct I/O is in the works for glommio.&lt;/p&gt;</description><pubDate>Wed, 07 Apr 2021 14:35:45 -0500</pubDate></item><item><title>The Benefits of Learning Haskell</title><link>https://lobste.rs/s/fxc0j9</link><description>&lt;p&gt;As developers, there is so much we can learn to improve our skills, ranging from deep theory, to small practical tidbits of information. It can be overwhelming at times and we are forced to pick what we want to learn deeply and what we just want to gloss over. You can’t learn it all!&lt;/p&gt;&lt;p dir="ltr"&gt;My belief is that in terms of &lt;em dir="ltr"&gt;long term&lt;/em&gt; improvement, learning &lt;a href="https://www.haskell.org/" rel="noopener" dir="ltr"&gt;Haskell&lt;/a&gt; is one of the best ways to up your raw programming ability.&lt;/p&gt;&lt;img width="400" src="https://i.imgflip.com/537cg3.jpg" alt="Haskell meme" height="225"&gt;&lt;h2&gt;Why Learn any New Language&lt;/h2&gt;&lt;p&gt;Learning a new programming language is a great way to improve as a programmer. Each language has its own unique take on things and will have some great ideas.&lt;/p&gt;&lt;p dir="ltr"&gt;I ended up working in Ruby for a few years when at the time I was much more interested in Scala. However, I saw many cool things about Ruby and it ended up teaching me a lot. For example, I had not done strict &lt;a href="https://en.wikipedia.org/wiki/Test-driven_development" rel="noopener" dir="ltr"&gt;TDD&lt;/a&gt; before which is very popular in Ruby. I learnt the pros and cons of this approach and now I can apply it well when needed.&lt;/p&gt;&lt;p&gt;Usually these new learnings are not strictly tied to the new language. You can take them and use them in many different programming languages.&lt;/p&gt;&lt;img width="400" src="https://i.imgflip.com/537dq5.jpg" alt="Haskell meme" height="267"&gt;&lt;h2&gt;Ok but Why Learn Haskell&lt;/h2&gt;&lt;p&gt;When learning a new programming language for improvement, it is usually best to choose some language that is very different from your known programming languages. For example, if you know Ruby you probably wouldn’t get a huge amount out of learning Python, as they are quite similar.&lt;/p&gt;&lt;p&gt;Haskell is very different from mainstream popular programming languages. Most developers work in these mainstream languages and so Haskell has a lot to teach them.&lt;/p&gt;&lt;img width="400" src="https://i.imgflip.com/53jqnd.jpg" alt="Haskell meme" height="380"&gt;&lt;p&gt;How is it different?&lt;/p&gt;&lt;h3&gt;Functional Programming&lt;/h3&gt;&lt;p&gt;Haskell is a purely functional programming (FP) language. What is FP? I see it as programming enhanced by ideas and constructs from math.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Haskell uses FP from the ground up. The whole ecosystem builds on these concepts, so you can’t avoid them.&lt;/LI&gt;&lt;LI&gt;It is pure. It does not have unconstrained side effects, so you need to learn the FP way of handling them.&lt;/LI&gt;&lt;LI&gt;Similarly, it is immutable, so you must learn how FP manages this.&lt;/LI&gt;&lt;LI&gt;It’s implementation closely mirrors the math behind FP, so you are learning something close to the real underlying concepts.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Haskell actually inspired a lot of the FP implementations in more popular languages. Knowing FP in Haskell will make these (typically simpler) implementations easy to understand.&lt;/p&gt;&lt;p dir="ltr"&gt;For example, &lt;a href="https://docs.microsoft.com/en-us/dotnet/api/system.linq.enumerable.aggregate?view=net-5.0" rel="noopener" dir="ltr"&gt;&lt;code dir="ltr"&gt;Aggregate&lt;/code&gt;&lt;/a&gt; in &lt;a href="https://docs.microsoft.com/en-us/dotnet/csharp/programming-guide/concepts/linq/" dir="ltr"&gt;LINQ&lt;/a&gt;, is really just &lt;a href="https://hackage.haskell.org/package/base-4.15.0.0/docs/Data-List.html#v:foldl" rel="noopener" dir="ltr"&gt;&lt;code dir="ltr"&gt;foldl&lt;/code&gt;&lt;/a&gt; from Haskell.&lt;/p&gt;&lt;img width="400" src="https://i.imgflip.com/537fk6.jpg" alt="Haskell meme" height="561"&gt;&lt;h3&gt;Static Type Checking&lt;/h3&gt;&lt;p dir="ltr"&gt;Haskell builds on &lt;a href="https://en.wikipedia.org/wiki/Type_theory" rel="noopener" dir="ltr"&gt;type theory&lt;/a&gt; and has an advanced type system. This includes ‘type-level’ programming, or code that is run by the compiler at compile time, not at run time.&lt;/p&gt;&lt;p dir="ltr"&gt;Like how many mainstream languages are getting FP features, they are also getting (more sophisticated) &lt;a href="https://blog.appsignal.com/2021/01/27/rbs-the-new-ruby-3-typing-language-in-action.html" rel="noopener" dir="ltr"&gt;type&lt;/a&gt; &lt;a href="http://mypy-lang.org/" rel="noopener" dir="ltr"&gt;checkers&lt;/a&gt;. Again, if you learn Haskell these (likely simpler) type systems should be easy to use.&lt;/p&gt;&lt;p dir="ltr"&gt;For example, Kotlin has &lt;a href="https://kotlinlang.org/docs/sealed-classes.html" rel="noopener" dir="ltr"&gt;sealed classes&lt;/a&gt; which &lt;a href="https://kotlinlang.org/docs/sealed-classes.html#sealed-classes-and-when-expression" rel="noopener" dir="ltr"&gt;support matching&lt;/a&gt;. It can be hard to see how these might be useful and I imagine many OO background developers would ignore them.&lt;/p&gt;&lt;p dir="ltr"&gt;However, these a really just a form of &lt;a href="https://www.schoolofhaskell.com/school/to-infinity-and-beyond/pick-of-the-week/sum-types" rel="noopener" dir="ltr"&gt;sum types and pattern matching&lt;/a&gt;, which are incredibly useful. You can learn the clean implementation in Haskell then apply this knowledge in other languages.&lt;/p&gt;&lt;img width="400" src="https://i.imgflip.com/54rcfq.jpg" alt="Haskell meme" height="287"&gt;&lt;h2&gt;You Can Use Haskell in Prod&lt;/h2&gt;&lt;p dir="ltr"&gt;There are even fancier languages than Haskell. Not more advanced in all ways, but that take a specific idea and go much further than Haskell. Notably, &lt;a href="https://www.idris-lang.org/" rel="noopener" dir="ltr"&gt;Idris&lt;/a&gt; and &lt;a href="https://agda.readthedocs.io/" rel="noopener" dir="ltr"&gt;Agda&lt;/a&gt;. However, you can’t easily use these languages in prod. Either because they are too immature, or they aren’t really designed for it.&lt;/p&gt;&lt;p dir="ltr"&gt;Haskell on the other hand is a sweet spot where it is highly advanced, but you can (and many companies do) &lt;a href="https://alistairb.dev/benefits-of-learning-haskell/reflections-on-haskell-for-startup" rel="noopener" dir="ltr"&gt;use it in prod&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;This means:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;You can learn Haskell by building real things.&lt;/LI&gt;&lt;LI&gt;One day you might be able to just use Haskell directly in prod, not do FP in OO languages. 😉&lt;/LI&gt;&lt;/UL&gt;&lt;img width="400" src="https://i.imgflip.com/53ofxl.jpg" alt="Haskell meme" height="355"&gt;&lt;h2&gt;Learning Haskell&lt;/h2&gt;&lt;p&gt;Haskell is awesome, but it is a niche language. You can expect some challenge in getting things set up and of course learning the language. Some describe it as learning to program again from scratch.&lt;/p&gt;&lt;img width="400" src="https://i.imgflip.com/537i18.jpg" alt="Haskell meme" height="266"&gt;&lt;p dir="ltr"&gt;The key to making the journey manageable is to find some community to support you. The &lt;a href="https://fpchat-invite.herokuapp.com/" rel="noopener" dir="ltr"&gt;FP slack&lt;/a&gt; and &lt;a href="https://top.gg/servers/280033776820813825" rel="noopener" dir="ltr"&gt;FP discord&lt;/a&gt; are both excellent choices.&lt;/p&gt;&lt;p dir="ltr"&gt;I like &lt;a href="https://github.com/bitemyapp/learnhaskell" rel="noopener" dir="ltr"&gt;this guide&lt;/a&gt; (although I would use the official &lt;a href="https://github.com/system-f/fp-course" rel="noopener" dir="ltr"&gt;fp-course&lt;/a&gt; rather than the forked one).&lt;/p&gt;&lt;p&gt;Above all, I think learning Haskell should be fun. Try and enjoy the ride. 😊&lt;/p&gt;&lt;img width="400" src="https://i.imgflip.com/53oi49.jpg" alt="Haskell meme" height="501"&gt;</description><pubDate>Wed, 07 Apr 2021 16:15:48 -0500</pubDate></item><item><title>Wuffs the Language</title><link>https://lobste.rs/s/kuv1lj</link><description>&lt;h1&gt;Wuffs the Language&lt;/h1&gt;&lt;p dir="ltr"&gt;The Wuffs project is both a programming language and a standard library written
+And maybe I'll have convinced a reader to pursue it.&lt;/p&gt;</description><pubDate>Wed, 07 Apr 2021 11:01:55 -0500</pubDate></item><item><title>Modern storage is plenty fast. It is the APIs that are bad</title><link>https://lobste.rs/s/vxpcur</link><description>&lt;figure&gt;&lt;img alt="" src="https://miro.medium.com/max/3000/1*AXK9Vi3UbLj5vtBJ2HFavg.jpeg" width="437" height="151"&gt;&lt;/figure&gt;&lt;img alt="Glauber Costa" src="https://miro.medium.com/fit/c/96/96/0*_vxmqP0UCaArfAxZ" width="48" height="48"&gt;&lt;p data-selectable-paragraph=""&gt;I have spent almost the entire last decade in a fairly specialized product company, building high performance I/O systems. I had the opportunity to see storage technology evolve rapidly and decisively. Talking about storage and its developments felt like preaching to the choir.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;This year, I have switched jobs. Being at a larger company with engineers from multiple backgrounds I was taken by surprise by the fact that although every one of my peers is certainly extremely bright, most of them carried misconceptions about how to best exploit the performance of modern storage technology leading to suboptimal designs, even if they were aware of the increasing improvements in storage technology.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;As I reflected about the causes of this disconnect I realized that a large part of the reason for the persistence of such misconceptions is that if they were to spend the time to validate their assumptions with benchmarks, the data would show that their assumptions are, or at least appear to be, true.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;Common examples of such misconceptions include:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;“Well, it is fine to copy memory here and perform this expensive computation because it saves us one I/O operation, which is even more expensive”.&lt;/LI&gt;&lt;LI&gt;“I am designing a system that needs to be fast. Therefore it needs to be in memory”.&lt;/LI&gt;&lt;LI&gt;“If we split this into multiple files it will be slow because it will generate random I/O patterns. We need to optimize this for sequential access and read from a single file”&lt;/LI&gt;&lt;LI&gt;“Direct I/O is very slow. It only works for very specialized applications. If you don’t have your own cache you are doomed”.&lt;/LI&gt;&lt;/UL&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;&lt;a href="https://www.samsung.com/semiconductor/global.semi.static/Ultra-Low_Latency_with_Samsung_Z-NAND_SSD-0.pdf" rel="noopener" dir="ltr"&gt;Yet if you skim through specs of modern NVMe devices&lt;/a&gt; you see commodity devices with latencies in the microseconds range and several GB/s of throughput supporting several hundred thousands random IOPS. So where’s the disconnect?&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;In this article I will demonstrate that while hardware changed dramatically over the past decade, software APIs have not, or at least not enough. Riddled with memory copies, memory allocations, overly optimistic read ahead caching and all sorts of expensive operations, legacy APIs prevent us from making the most of our modern devices.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;In the process of writing this piece I had the immense pleasure of getting early access to one of the next generation Optane devices, from Intel. While they are not common place in the market yet, they certainly represent the crowning of a trend towards faster and faster devices. The numbers you will see throughout this article were obtained using this device.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;In the interest of time I will focus this article on reads. Writes have their own unique set of issues — as well as opportunities for improvements that I intend to cover in a later article.&lt;/p&gt;&lt;h1 data-selectable-paragraph=""&gt;The claims&lt;/h1&gt;&lt;p data-selectable-paragraph=""&gt;There are three main problems with traditional file-based APIs:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong&gt;They perform a lot of expensive operations because “I/O is expensive”.&lt;/strong&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p data-selectable-paragraph=""&gt;When legacy APIs need to read data that is not cached in memory they generate a page fault. Then after the data is ready, an interrupt. Lastly, for a traditional system-call based read you have an extra copy to the user buffer, and for mmap-based operations you will have to update the virtual memory mappings.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;None of these operations: page fault, interrupts, copies or virtual memory mapping update are cheap. But years ago they were still ~100 times cheaper than the cost of the I/O itself, making this approach acceptable. This is no longer the case as device latency approaches single-digit microseconds. Those operations are now in the same order of magnitude of the I/O operation itself.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;A quick back-of-the-napkin calculation shows that in the worst case, less than half of the total busy cost is the cost of communication with the device per se. That’s not counting all the waste, which brings us to the second problem:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong&gt;Read amplification.&lt;/strong&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Although there are some details I will brush over (like memory used by file descriptors, the various metadata caches in Linux), if modern NVMe support many concurrent operations, there is no reason to believe that reading from many files is more expensive than reading from one. However &lt;em dir="ltr"&gt;the aggregate amount of data read&lt;/em&gt; certainly matters.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;The operating system reads data in &lt;em dir="ltr"&gt;page granularity&lt;/em&gt;, meaning it can only read at a minimum 4kB at a time. That means if you need to read read 1kB split in two files, 512 bytes each, you are effectively reading 8kB to serve 1kB, wasting 87% of the data read. In practice, the OS will also perform read ahead, with a default setting of 128kB, in anticipation of saving you cycles later when you do need the remaining data. But if you never do, as is often the case for random I/O, then you just read 256kB to serve 1kB and wasted 99% of it.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;If you feel tempted to validate my claim that reading from multiple files shouldn’t be fundamentally slower than reading from a single file, you may end up proving yourself right, but only because read amplification increased by a lot the amount of data effectively read.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;Since the issue is the OS page cache, what happens if you just open a file with Direct I/O, all else being equal? Unfortunately that likely won’t get faster either. But that’s because of our third and last issue:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Traditional APIs don’t exploit parallelism&lt;/strong&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;p data-selectable-paragraph=""&gt;A file is seen as a sequential stream of bytes, and whether data is in-memory or not is transparent to the reader. Traditional APIs will wait until you touch data that is not resident to issue an I/O operation. The I/O operation may be larger than what the user requested due to read-ahead, but is still just one.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;However as fast as modern devices are, they are still slower than the CPU. While the device is waiting for the I/O operation to come back, the CPU is not doing anything.&lt;/p&gt;&lt;figure&gt;&lt;img alt="" src="https://miro.medium.com/max/60/1*v74E8E9ick4-rpiYZ2uFKA.png?q=20" width="437" height="246"&gt;&lt;figcaption dir="auto"&gt;Lack of parallelism in traditional APIs result in the CPUs being idle while they wait for I/O to return.&lt;/figcaption&gt;&lt;/figure&gt;&lt;p data-selectable-paragraph=""&gt;Using multiple files is a step in the right direction, as it allows more effectively parallelism: while one reader is waiting, another can hopefully proceed. But if you are not careful you just end up amplifying one of the previous problems:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Multiple files mean multiple read-ahead buffers, increasing the waste factor for random I/O.&lt;/LI&gt;&lt;LI&gt;In thread-poll based APIs multiple files mean multiple threads, amplifying the amount of work done per I/O operation.&lt;/LI&gt;&lt;/UL&gt;&lt;p data-selectable-paragraph=""&gt;Not to mention that in many situations that’s not what you want: you may not have that many files to begin with.&lt;/p&gt;&lt;h1 data-selectable-paragraph=""&gt;Towards better APIs&lt;/h1&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;I have written extensively in the past about &lt;a href="https://www.scylladb.com/2020/05/05/how-io_uring-and-ebpf-will-revolutionize-programming-in-linux/" rel="noopener" dir="ltr"&gt;how revolutionary io_uring is&lt;/a&gt;. But being a fairly low level interface it is really just one piece of the API puzzle. Here’s why:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;I/O dispatched through io_uring will still suffer from most of the problems listed previously if it uses buffered files.&lt;/LI&gt;&lt;LI&gt;Direct I/O is full of caveats, and io_uring being a raw interface doesn’t even try (nor should it) to hide these problems: For example, memory must be properly aligned, as well as the positions where you are reading from.&lt;/LI&gt;&lt;LI&gt;It is also very low level and raw. For it to be useful you need to accumulate I/O and dispatch in batches. This calls for a policy of when to do it, and some form of event-loop, meaning it works better with a framework that already provides the machinery for that.&lt;/LI&gt;&lt;/UL&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;To tackle the API issue I have designed G&lt;a href="https://www.datadoghq.com/blog/engineering/introducing-glommio/" rel="noopener" dir="ltr"&gt;lommio&lt;/a&gt; (formerly known as Scipio), a Direct I/O-oriented thread-per-core Rust library. Glommio builds upon io_uring and supports many of its advanced features like registered buffers and poll-based (no interrupts) completions to make Direct I/O shine. For the sake of familiarity Glommio does support buffered files backed by the Linux page cache in a way that resembles the standard Rust APIs (which we will use in this comparison), but it is oriented towards bringing Direct I/O to the limelight.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;There are two classes of file in Glommio: &lt;a href="https://docs.rs/glommio/0.2.0-alpha/glommio/io/struct.DmaFile.html" rel="noopener" dir="ltr"&gt;Random access files&lt;/a&gt;, and &lt;a href="https://docs.rs/glommio/0.2.0-alpha/glommio/io/struct.DmaStreamReader.html" rel="noopener" dir="ltr"&gt;Streams&lt;/a&gt;.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;Random access files take a position as an argument, meaning there is no need to maintain a seek cursor. But more importantly: they don’t take a buffer as a parameter. Instead, they use io_uring’s pre-registered buffer area to allocate a buffer and return to the user. That means no memory mapping, no copying to the user buffer — there is only a copy from the device to the glommio buffer and the user get a reference counted pointer to that. And because we know this is random I/O, there is no need to read more data than what was requested.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;Streams, on the other hand, assume that you will eventually run through the entire file so they can afford to use a larger block size and a read-ahead factor.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Streams are designed to be mostly familiar to Rust’s default &lt;a href="https://docs.rs/futures-lite/1.11.2/futures_lite/io/trait.AsyncReadExt.html" rel="noopener" dir="ltr"&gt;AsyncRead&lt;/a&gt;, so it implements the AsyncRead trait and will still read data to a user buffer. All the benefits of Direct I/O-based scans are still there, but there is a copy between our internal read ahead buffers and the user buffer. That’s a tax on the convenience of using the standard API.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;If you need the extra performance, glommio provides an &lt;a href="https://docs.rs/glommio/0.2.0-alpha/glommio/io/struct.DmaStreamReader.html#method.get_buffer_aligned" rel="noopener" dir="ltr"&gt;API into the stream&lt;/a&gt; that also exposes the raw buffers too, saving the extra copy.&lt;/p&gt;&lt;h1 data-selectable-paragraph=""&gt;Putting scans to the test&lt;/h1&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;To demonstrate these APIs glommio has an &lt;a href="https://github.com/DataDog/glommio/blob/master/examples/storage.rs" rel="noopener" dir="ltr"&gt;example program&lt;/a&gt; that issues I/O with various settings using all those APIs (buffered, Direct I/O, random, sequential) and evaluates their performance.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;We start with a file that is around 2.5x the size of memory and start simple by reading it sequentially as a normal buffered file:&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph=""&gt;Buffered I/O: Scanned 53GB in 56s, 945.14 MB/s&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph=""&gt;That is certainly not bad considering that this file doesn’t fit in memory, but here the merits are all on Intel Optane’s out-of-this world performance and the io_uring backend. It still has an effective parallelism of one whenever I/O is dispatched and although the OS page size is 4kB, read-ahead allow us to effectively increase the I/O size.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;And in fact, should we try to emulate similar parameters using the Direct I/O API (4kB buffers, parallelism of one), the results would be disappointing, “confirming” our suspicion that Direct I/O is indeed, much slower.&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph=""&gt;Direct I/O: Scanned 53GB in 115s, 463.23 MB/s&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph=""&gt;But as we discussed, glommio’s Direct I/O file streams can take an explicit read-ahead parameter. If active glommio will issue I/O requests in advance of the position being currently read, to exploit the device’s parallelism.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;Glommio’s read-ahead works differently than OS-level read ahead: our goal is to exploit parallelism and not just increase I/O sizes. Instead of consuming the entire read-ahead buffer and only then sending a request for a new batch, glommio dispatches a new request as soon as the contents of a buffer is fully consumed and will always try to keep a fixed number of buffers in-flight, as shown in the image below.&lt;/p&gt;&lt;figure&gt;&lt;img alt="" src="https://miro.medium.com/max/60/1*6vnqwP1nkcOOQfHhlazRYA.png?q=20" width="437" height="246"&gt;&lt;figcaption dir="auto"&gt;As we exhaust one buffer, another is already being fetched. This has the effect of increasing parallelism and keeping it high.&lt;/figcaption&gt;&lt;/figure&gt;&lt;p data-selectable-paragraph=""&gt;As initially anticipated, once we exploit parallelism correctly by setting a read-ahead factor Direct I/O is not only on pair with buffered I/O but in fact much faster.&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph=""&gt;Direct I/O, read ahead: Scanned 53GB in 22s, 2.35 GB/s&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;This version is still using Rust’s &lt;a href="https://docs.rs/futures-lite/1.11.2/futures_lite/io/trait.AsyncReadExt.html" rel="noopener" dir="ltr"&gt;AsyncReadExt&lt;/a&gt; interfaces, which forces an extra copy from the glommio buffers to the user buffers.&lt;/p&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Using the &lt;a href="https://docs.rs/glommio/0.2.0-alpha/glommio/io/struct.DmaStreamReader.html#method.get_buffer_aligned" rel="noopener" dir="ltr"&gt;get_buffer_aligned&lt;/a&gt; API gives you raw access to the buffer which avoids that last memory copy. If we use that now in our read test we gain a respectable 4% performance improvement&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph=""&gt;Direct I/O, glommio API: Scanned 53GB in 21s, 2.45 GB/s&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph=""&gt;The last step is to increase the buffer size. As this is a sequential scan there is no need for us to be constrained by 4kB buffer sizes, except for the sake of comparison with the OS page cache version.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;At this point, let’s summarize all the things that are going on behind the scenes with glommio and io_uring in the next test:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;each I/O request is 512kB in size,&lt;/LI&gt;&lt;LI&gt;many (5) of them are kept in flight for parallelism,&lt;/LI&gt;&lt;LI&gt;memory is pre-allocated and pre-registered&lt;/LI&gt;&lt;LI&gt;no extra copy is performed to a user-buffer&lt;/LI&gt;&lt;LI&gt;io_uring is set up for poll mode, meaning there are no memory copies, no interrupts, no context switches.&lt;/LI&gt;&lt;/UL&gt;&lt;p data-selectable-paragraph=""&gt;The results?&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph=""&gt;Direct I/O, glommio API, large buffer: Scanned 53GB in 7s, 7.29 GB/s&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph=""&gt;This is more than 7x better than the standard buffered approach. And better yet, the memory utilization was never higher than whatever we set as the read-ahead factor times the buffer size. In this example, 2.5MB.&lt;/p&gt;&lt;h1 data-selectable-paragraph=""&gt;Random Reads&lt;/h1&gt;&lt;p data-selectable-paragraph=""&gt;Scans are notoriously pernicious for the OS page cache. How do we fare with random I/O ? To test that we will read as much as we can in 20s, first restricting ourselves to the first 10% of the memory available (1.65GB)&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph=""&gt;Buffered I/O: size span of 1.65 GB, for 20s, 693870 IOPS&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph=""&gt;For Direct I/O:&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph=""&gt;Direct I/O: size span of 1.65 GB, for 20s, 551547 IOPS&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph="" dir="ltr"&gt;Direct I/O is 20% slower than buffered reads. While reading entirely from memory is still faster — which shouldn’t surprise anybody, that’s a far cry from the disaster one would expect. In fact, if we keep in mind that the buffered version is keeping 1.65GB of resident memory to achieve this whereas Direct I/O is only using 80kB (20 x 4kB buffers) this may even be &lt;em dir="ltr"&gt;preferable &lt;/em&gt;for a particular class of applications that may be better off employing that memory somewhere else.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;As any performance engineer would tell you, a good read benchmark needs to read data enough to hit the media. After all, “storage is slow”. So if we now read from the entire file, our buffered performance drops dramatically by 65%&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph=""&gt;Buffered I/O: size span of 53.69 GB, for 20s, 237858 IOPS&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph=""&gt;While Direct I/O, as expected, has the same performance and the same memory utilization irrespectively of the amount of data read.&lt;/p&gt;&lt;PRE&gt;&lt;span data-selectable-paragraph=""&gt;Direct I/O: size span of 53.69 GB, for 20s, 547479 IOPS&lt;/span&gt;&lt;/PRE&gt;&lt;p data-selectable-paragraph=""&gt;If the larger scans are our comparison point, then Direct I/O is 2.3x faster, not slower, than buffered files.&lt;/p&gt;&lt;h1 data-selectable-paragraph=""&gt;Conclusion&lt;/h1&gt;&lt;p data-selectable-paragraph=""&gt;Modern NVMe devices change the nature of how to best perform I/O in stateful applications. This trend has been going on for a while but has been so far masked by the fact that the APIs, especially the higher level ones, haven’t evolved to match what has been happening in the device — and more recently Linux Kernel layers. With the right set of APIs, Direct I/O is the new black.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;Newer devices like the newest generation of the Intel Optane just seal the deal. There is no scenario in which standard buffered I/O is undisputedly better than Direct I/O.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;For scans the performance of well-tailored Direct I/O-based APIs is simply far superior. And while Buffered I/O standard APIs performed 20% faster for random reads that fully fit in memory, that comes at the cost of 200x more memory utilization making the trade offs not a clear cut.&lt;/p&gt;&lt;p data-selectable-paragraph=""&gt;Applications that do need the extra performance will still want to cache some of those results, and providing an easy way to integrate specialized caches for usage with Direct I/O is in the works for glommio.&lt;/p&gt;</description><pubDate>Wed, 07 Apr 2021 14:35:45 -0500</pubDate></item><item><title>The Benefits of Learning Haskell</title><link>https://lobste.rs/s/fxc0j9</link><description>&lt;p&gt;As developers, there is so much we can learn to improve our skills, ranging from deep theory, to small practical tidbits of information. It can be overwhelming at times and we are forced to pick what we want to learn deeply and what we just want to gloss over. You can’t learn it all!&lt;/p&gt;&lt;p dir="ltr"&gt;My belief is that in terms of &lt;em dir="ltr"&gt;long term&lt;/em&gt; improvement, learning &lt;a href="https://www.haskell.org/" rel="noopener" dir="ltr"&gt;Haskell&lt;/a&gt; is one of the best ways to up your raw programming ability.&lt;/p&gt;&lt;img width="400" src="https://i.imgflip.com/537cg3.jpg" alt="Haskell meme" height="225"&gt;&lt;h2&gt;Why Learn any New Language&lt;/h2&gt;&lt;p&gt;Learning a new programming language is a great way to improve as a programmer. Each language has its own unique take on things and will have some great ideas.&lt;/p&gt;&lt;p dir="ltr"&gt;I ended up working in Ruby for a few years when at the time I was much more interested in Scala. However, I saw many cool things about Ruby and it ended up teaching me a lot. For example, I had not done strict &lt;a href="https://en.wikipedia.org/wiki/Test-driven_development" rel="noopener" dir="ltr"&gt;TDD&lt;/a&gt; before which is very popular in Ruby. I learnt the pros and cons of this approach and now I can apply it well when needed.&lt;/p&gt;&lt;p&gt;Usually these new learnings are not strictly tied to the new language. You can take them and use them in many different programming languages.&lt;/p&gt;&lt;img width="400" src="https://i.imgflip.com/537dq5.jpg" alt="Haskell meme" height="267"&gt;&lt;h2&gt;Ok but Why Learn Haskell&lt;/h2&gt;&lt;p&gt;When learning a new programming language for improvement, it is usually best to choose some language that is very different from your known programming languages. For example, if you know Ruby you probably wouldn’t get a huge amount out of learning Python, as they are quite similar.&lt;/p&gt;&lt;p&gt;Haskell is very different from mainstream popular programming languages. Most developers work in these mainstream languages and so Haskell has a lot to teach them.&lt;/p&gt;&lt;img width="400" src="https://i.imgflip.com/53jqnd.jpg" alt="Haskell meme" height="380"&gt;&lt;p&gt;How is it different?&lt;/p&gt;&lt;h3&gt;Functional Programming&lt;/h3&gt;&lt;p&gt;Haskell is a purely functional programming (FP) language. What is FP? I see it as programming enhanced by ideas and constructs from math.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Haskell uses FP from the ground up. The whole ecosystem builds on these concepts, so you can’t avoid them.&lt;/LI&gt;&lt;LI&gt;It is pure. It does not have unconstrained side effects, so you need to learn the FP way of handling them.&lt;/LI&gt;&lt;LI&gt;Similarly, it is immutable, so you must learn how FP manages this.&lt;/LI&gt;&lt;LI&gt;It’s implementation closely mirrors the math behind FP, so you are learning something close to the real underlying concepts.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Haskell actually inspired a lot of the FP implementations in more popular languages. Knowing FP in Haskell will make these (typically simpler) implementations easy to understand.&lt;/p&gt;&lt;p dir="ltr"&gt;For example, &lt;a href="https://docs.microsoft.com/en-us/dotnet/api/system.linq.enumerable.aggregate?view=net-5.0" rel="noopener" dir="ltr"&gt;&lt;code dir="ltr"&gt;Aggregate&lt;/code&gt;&lt;/a&gt; in &lt;a href="https://docs.microsoft.com/en-us/dotnet/csharp/programming-guide/concepts/linq/" dir="ltr"&gt;LINQ&lt;/a&gt;, is really just &lt;a href="https://hackage.haskell.org/package/base-4.15.0.0/docs/Data-List.html#v:foldl" rel="noopener" dir="ltr"&gt;&lt;code dir="ltr"&gt;foldl&lt;/code&gt;&lt;/a&gt; from Haskell.&lt;/p&gt;&lt;img width="400" src="https://i.imgflip.com/537fk6.jpg" alt="Haskell meme" height="561"&gt;&lt;h3&gt;Static Type Checking&lt;/h3&gt;&lt;p dir="ltr"&gt;Haskell builds on &lt;a href="https://en.wikipedia.org/wiki/Type_theory" rel="noopener" dir="ltr"&gt;type theory&lt;/a&gt; and has an advanced type system. This includes ‘type-level’ programming, or code that is run by the compiler at compile time, not at run time.&lt;/p&gt;&lt;p dir="ltr"&gt;Like how many mainstream languages are getting FP features, they are also getting (more sophisticated) &lt;a href="https://blog.appsignal.com/2021/01/27/rbs-the-new-ruby-3-typing-language-in-action.html" rel="noopener" dir="ltr"&gt;type&lt;/a&gt; &lt;a href="http://mypy-lang.org/" rel="noopener" dir="ltr"&gt;checkers&lt;/a&gt;. Again, if you learn Haskell these (likely simpler) type systems should be easy to use.&lt;/p&gt;&lt;p dir="ltr"&gt;For example, Kotlin has &lt;a href="https://kotlinlang.org/docs/sealed-classes.html" rel="noopener" dir="ltr"&gt;sealed classes&lt;/a&gt; which &lt;a href="https://kotlinlang.org/docs/sealed-classes.html#sealed-classes-and-when-expression" rel="noopener" dir="ltr"&gt;support matching&lt;/a&gt;. It can be hard to see how these might be useful and I imagine many OO background developers would ignore them.&lt;/p&gt;&lt;p dir="ltr"&gt;However, these a really just a form of &lt;a href="https://www.schoolofhaskell.com/school/to-infinity-and-beyond/pick-of-the-week/sum-types" rel="noopener" dir="ltr"&gt;sum types and pattern matching&lt;/a&gt;, which are incredibly useful. You can learn the clean implementation in Haskell then apply this knowledge in other languages.&lt;/p&gt;&lt;img width="400" src="https://i.imgflip.com/54rcfq.jpg" alt="Haskell meme" height="287"&gt;&lt;h2&gt;You Can Use Haskell in Prod&lt;/h2&gt;&lt;p dir="ltr"&gt;There are even fancier languages than Haskell. Not more advanced in all ways, but that take a specific idea and go much further than Haskell. Notably, &lt;a href="https://www.idris-lang.org/" rel="noopener" dir="ltr"&gt;Idris&lt;/a&gt; and &lt;a href="https://agda.readthedocs.io/" rel="noopener" dir="ltr"&gt;Agda&lt;/a&gt;. However, you can’t easily use these languages in prod. Either because they are too immature, or they aren’t really designed for it.&lt;/p&gt;&lt;p dir="ltr"&gt;Haskell on the other hand is a sweet spot where it is highly advanced, but you can (and many companies do) &lt;a href="https://alistairb.dev/benefits-of-learning-haskell/reflections-on-haskell-for-startup" rel="noopener" dir="ltr"&gt;use it in prod&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;This means:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;You can learn Haskell by building real things.&lt;/LI&gt;&lt;LI&gt;One day you might be able to just use Haskell directly in prod, not do FP in OO languages. 😉&lt;/LI&gt;&lt;/UL&gt;&lt;img width="400" src="https://i.imgflip.com/53ofxl.jpg" alt="Haskell meme" height="355"&gt;&lt;h2&gt;Learning Haskell&lt;/h2&gt;&lt;p&gt;Haskell is awesome, but it is a niche language. You can expect some challenge in getting things set up and of course learning the language. Some describe it as learning to program again from scratch.&lt;/p&gt;&lt;img width="400" src="https://i.imgflip.com/537i18.jpg" alt="Haskell meme" height="266"&gt;&lt;p dir="ltr"&gt;The key to making the journey manageable is to find some community to support you. The &lt;a href="https://fpchat-invite.herokuapp.com/" rel="noopener" dir="ltr"&gt;FP slack&lt;/a&gt; and &lt;a href="https://top.gg/servers/280033776820813825" rel="noopener" dir="ltr"&gt;FP discord&lt;/a&gt; are both excellent choices.&lt;/p&gt;&lt;p dir="ltr"&gt;I like &lt;a href="https://github.com/bitemyapp/learnhaskell" rel="noopener" dir="ltr"&gt;this guide&lt;/a&gt; (although I would use the official &lt;a href="https://github.com/system-f/fp-course" rel="noopener" dir="ltr"&gt;fp-course&lt;/a&gt; rather than the forked one).&lt;/p&gt;&lt;p&gt;Above all, I think learning Haskell should be fun. Try and enjoy the ride. 😊&lt;/p&gt;&lt;img width="400" src="https://i.imgflip.com/53oi49.jpg" alt="Haskell meme" height="501"&gt;</description><pubDate>Wed, 07 Apr 2021 16:15:48 -0500</pubDate></item><item><title>The history of UTF-8 as told by Rob Pike</title><link>https://lobste.rs/s/jo5he6</link><description>&lt;p dir="ltr"&gt;&lt;a href="http://genius.cat-v.org/rob-pike" dir="ltr"&gt;Rob Pike&lt;/a&gt; explains how &lt;a href="http://genius.cat-v.org/ken-thompson/" dir="ltr"&gt;Ken
+Thompson&lt;/a&gt; invented &lt;a href="http://doc.cat-v.org/plan_9/4th_edition/papers/utf" dir="ltr"&gt;UTF-8&lt;/a&gt; in one evening and how they
+together built the first system-wide implementation in less than a week.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;Subject: UTF-8 history
+From: "Rob 'Commander' Pike" &amp;lt;r (at) google.com&amp;gt;
+Date: Wed, 30 Apr 2003 22:32:32 -0700 (Thu 06:32 BST)
+To: mkuhn (at) acm.org, henry (at) spsystems.net
+Cc: ken (at) entrisphere.com
+
+Looking around at some UTF-8 background, I see the same incorrect
+story being repeated over and over.  The incorrect version is:
+    1. IBM designed UTF-8.
+    2. Plan 9 implemented it.
+That's not true.  UTF-8 was designed, in front of my eyes, on a
+placemat in a New Jersey diner one night in September or so 1992.
+
+What happened was this.  We had used the original UTF from ISO 10646
+to make Plan 9 support 16-bit characters, but we hated it.  We were
+close to shipping the system when, late one afternoon, I received a
+call from some folks, I think at IBM - I remember them being in Austin
+- who were in an X/Open committee meeting.  They wanted Ken and me to
+vet their FSS/UTF design.  We understood why they were introducing a
+new design, and Ken and I suddenly realized there was an opportunity
+to use our experience to design a really good standard and get the
+X/Open guys to push it out.  We suggested this and the deal was, if we
+could do it fast, OK.  So we went to dinner, Ken figured out the
+bit-packing, and when we came back to the lab after dinner we called
+the X/Open guys and explained our scheme.  We mailed them an outline
+of our spec, and they replied saying that it was better than theirs (I
+don't believe I ever actually saw their proposal; I know I don't
+remember it) and how fast could we implement it?  I think this was a
+Wednesday night and we promised a complete running system by Monday,
+which I think was when their big vote was.
+
+So that night Ken wrote packing and unpacking code and I started
+tearing into the C and graphics libraries.  The next day all the code
+was done and we started converting the text files on the system
+itself.  By Friday some time Plan 9 was running, and only running,
+what would be called UTF-8.  We called X/Open and the rest, as they
+say, is slightly rewritten history.
+
+Why didn't we just use their FSS/UTF?  As I remember, it was because
+in that first phone call I sang out a list of desiderata for any such
+encoding, and FSS/UTF was lacking at least one - the ability to
+synchronize a byte stream picked up mid-run, with less that one
+character being consumed before synchronization.  Becuase that was
+lacking, we felt free - and were given freedom - to roll our own.
+
+I think the "IBM designed it, Plan 9 implemented it" story originates
+in RFC2279.  At the time, we were so happy UTF-8 was catching on we
+didn't say anything about the bungled history.  Neither of us is at
+the Labs any more, but I bet there's an e-mail thread in the archive
+there that would support our story and I might be able to get someone
+to dig it out.
+
+So, full kudos to the X/Open and IBM folks for making the opportunity
+happen and for pushing it forward, but Ken designed it with me
+cheering him on, whatever the history books say.
+
+-rob
+
+Date: Sat, 07 Jun 2003 18:44:05 -0700
+From: "Rob `Commander' Pike" &amp;lt;r@google.com&amp;gt;
+To: Markus Kuhn &amp;lt;Markus.Kuhn@cl.cam.ac.uk&amp;gt;
+cc: henry@spsystems.net, ken@entrisphere.com,
+   Greger Leijonhufvud &amp;lt;greger@friherr.com&amp;gt;
+Subject: Re: UTF-8 history
+
+I asked Russ Cox to dig through the archives. I have attached his message.
+I think you'll agree it supports the story I sent earlier. The mail we
+sent to X/Open (I believe Ken did the editing and mailing of that document)
+includes a new desideratum #6 about discovering character boundaries.
+We'll never know how much the original X/Open proposal influenced us;
+the two proposals are very different but do share some characteristics.
+I don't remember looking at it in detail, but it was a long time ago.
+I very clearly remember Ken writing on the placemat and wished we had
+kept it!
+
+-rob
+
+From: Russ Cox &amp;lt;rsc@plan9.bell-labs.com&amp;gt;
+To: r@google.com
+Subject: utf digging
+Date-Sent: Saturday, June 07, 2003 7:46 PM -0400
+
+
+bootes's /sys/src/libc/port/rune.c changed from the
+division-heavy old utf on sep 4 1992.
+the version that made it into the dump
+is dated 19:51:55.  it was commented
+the next day but otherwise remained unchanged
+until nov 14 1996, when runelen was sped up by
+inspecting the rune explicitly rather than
+using runetochar's return value.  may 26 2001
+was the next and last change, to add runenlen.
+
+here are some mails from your mail boxes
+that turn up by grepping for utf.  the first
+refers to utf.c, which is a copy of a wctomb and mbtowc
+that handle the full 6-byte utf-8 encoding of 32-bit runes.
+it's quite ugly, with all the logic in control flow.
+i assume it became the code in the proposal
+as a result of that first mail.
+
+in /usr/ken/utf/xutf i found a copy of what
+appears to be the original not-self-synchronizing
+encoding proposal, with the utf-8 scheme tacked
+onto the end (starting at "We define 7 byte types").
+that's also below.  the version below is the first,
+dated sep 2 23:44:10.  it went through a number of
+edits to become the second mail below by the
+morning of Sep 8.
+
+the mail log shows that second mail going out
+as well as taking a while to come back to ken.
+
+helix: Sep  8 03:22:13: ken: upas/sendmail: remote inet!xopen.co.uk!xojig 
+&amp;gt;From ken Tue Sep  8 03:22:07 EDT 1992 (xojig@xopen.co.uk) 6833
+helix: Sep  8 03:22:13: ken: upas/sendmail: delivered rob From ken Tue Sep 
+8 03:22:07 EDT 1992 6833
+helix: Sep  8 03:22:16: ken: upas/sendmail: remote pyxis!andrew From ken 
+Tue Sep  8 03:22:07 EDT 1992 (andrew) 6833
+helix: Sep  8 03:22:19: ken: upas/sendmail: remote coma!dmr From ken Tue 
+Sep  8 03:22:07 EDT 1992 (dmr) 6833
+helix: Sep  8 03:25:52: ken: upas/sendmail: delivered rob From ken Tue Sep 
+8 03:24:58 EDT 1992 141
+helix: Sep  8 03:36:13: ken: upas/sendmail: delivered ken From ken Tue Sep 
+8 03:36:12 EDT 1992 6833
+
+enjoy.
+
+
+
+&amp;gt;From ken Fri Sep  4 03:37:39 EDT 1992
+you might want to look at
+    /usr/ken/utf/utf.c
+and see if you can make it prettier.
+
+&amp;gt;From ken Tue Sep  8 03:22:07 EDT 1992
+Here is our modified FSS-UTF proposal.  The words are the same as on
+the previous proposal.  My apologies to the author.  The code has been
+tested to some degree and should be pretty good shape.  We have
+converted Plan 9 to use this encoding and are about to issue a
+distribution to an initial set of university users.
+
+File System Safe Universal Character Set Transformation Format (FSS-UTF)
+--------------------------------------------------------------------------
+
+With the approval of ISO/IEC 10646 (Unicode) as an international
+standard and the anticipated wide spread use of this universal coded
+character set (UCS), it is necessary for historically ASCII based
+operating systems to devise ways to cope with representation and
+handling of the large number of characters that are possible to be
+encoded by this new standard.
+
+There are several challenges presented by UCS which must be dealt with
+by historical operating systems and the C-language programming
+environment.  The most significant of these challenges is the encoding
+scheme used by UCS. More precisely, the challenge is the marrying of
+the UCS standard with existing programming languages and existing
+operating systems and utilities.
+
+The challenges of the programming languages and the UCS standard are
+being dealt with by other activities in the industry.  However, we are
+still faced with the handling of UCS by historical operating systems
+and utilities.  Prominent among the operating system UCS handling
+concerns is the representation of the data within the file system.  An
+underlying assumption is that there is an absolute requirement to
+maintain the existing operating system software investment while at
+the same time taking advantage of the use the large number of
+characters provided by the UCS.
+
+UCS provides the capability to encode multi-lingual text within a
+single coded character set.  However, UCS and its UTF variant do not
+protect null bytes and/or the ASCII slash ("/") making these character
+encodings incompatible with existing Unix implementations.  The
+following proposal provides a Unix compatible transformation format of
+UCS such that Unix systems can support multi-lingual text in a single
+encoding.  This transformation format encoding is intended to be used
+as a file code.  This transformation format encoding of UCS is
+intended as an intermediate step towards full UCS support.  However,
+since nearly all Unix implementations face the same obstacles in
+supporting UCS, this proposal is intended to provide a common and
+compatible encoding during this transition stage.
+
+
+Goal/Objective
+--------------
+
+With the assumption that most, if not all, of the issues surrounding
+the handling and storing of UCS in historical operating system file
+systems are understood, the objective is to define a UCS
+transformation format which also meets the requirement of being usable
+on a historical operating system file system in a non-disruptive
+manner.  The intent is that UCS will be the process code for the
+transformation format, which is usable as a file code.
+
+Criteria for the Transformation Format
+--------------------------------------
+
+Below are the guidelines that were used in defining the UCS
+transformation format:
+
+    1) Compatibility with historical file systems:
+
+    Historical file systems disallow the null byte and the ASCII
+    slash character as a part of the file name.
+
+    2) Compatibility with existing programs:
+
+    The existing model for multibyte processing is that ASCII does
+    not occur anywhere in a multibyte encoding.  There should be
+    no ASCII code values for any part of a transformation format
+    representation of a character that was not in the ASCII
+    character set in the UCS representation of the character.
+
+    3) Ease of conversion from/to UCS.
+
+    4) The first byte should indicate the number of bytes to
+    follow in a multibyte sequence.
+
+    5) The transformation format should not be extravagant in
+    terms of number of bytes used for encoding.
+
+    6) It should be possible to find the start of a character
+    efficiently starting from an arbitrary location in a byte
+    stream.
+
+
+Proposed FSS-UTF
+----------------
+
+The proposed UCS transformation format encodes UCS values in the range
+[0,0x7fffffff] using multibyte characters of lengths 1, 2, 3, 4, 5,
+and 6 bytes.  For all encodings of more than one byte, the initial
+byte determines the number of bytes used and the high-order bit in
+each byte is set.  Every byte that does not start 10xxxxxx is the
+start of a UCS character sequence.
+
+An easy way to remember this transformation format is to note that the
+number of high-order 1's in the first byte signifies the number of
+bytes in the multibyte character:
+
+   Bits  Hex Min  Hex Max  Byte Sequence in Binary
+1    7  00000000 0000007f 0vvvvvvv
+2   11  00000080 000007FF 110vvvvv 10vvvvvv
+3   16  00000800 0000FFFF 1110vvvv 10vvvvvv 10vvvvvv
+4   21  00010000 001FFFFF 11110vvv 10vvvvvv 10vvvvvv 10vvvvvv
+5   26  00200000 03FFFFFF 111110vv 10vvvvvv 10vvvvvv 10vvvvvv 10vvvvvv
+6   31  04000000 7FFFFFFF 1111110v 10vvvvvv 10vvvvvv 10vvvvvv 10vvvvvv 
+10vvvvvv
+
+The UCS value is just the concatenation of the v bits in the multibyte
+encoding.  When there are multiple ways to encode a value, for example
+UCS 0, only the shortest encoding is legal.
+
+Below are sample implementations of the C standard wctomb() and
+mbtowc() functions which demonstrate the algorithms for converting
+from UCS to the transformation format and converting from the
+transformation format to UCS. The sample implementations include error
+checks, some of which may not be necessary for conformance:
+
+typedef
+struct
+{
+    int   cmask;
+    int   cval;
+    int   shift;
+    long  lmask;
+    long  lval;
+} Tab;
+
+static
+Tab       tab[] =
+{
+    0x80, 0x00,  0*6,   0x7F,         0,            /* 1 byte sequence */
+    0xE0, 0xC0,  1*6,   0x7FF,        0x80,         /* 2 byte sequence */
+    0xF0, 0xE0,  2*6,   0xFFFF,              0x800,        /* 3 byte sequence */
+    0xF8, 0xF0,  3*6,   0x1FFFFF,     0x10000,      /* 4 byte sequence */
+    0xFC, 0xF8,  4*6,   0x3FFFFFF,    0x200000,     /* 5 byte sequence */
+    0xFE, 0xFC,  5*6,   0x7FFFFFFF,   0x4000000,    /* 6 byte sequence */
+    0,                                              /* end of table */
+};
+
+int
+mbtowc(wchar_t *p, char *s, size_t n)
+{
+    long l;
+    int c0, c, nc;
+    Tab *t;
+
+    if(s == 0)
+        return 0;
+
+    nc = 0;
+    if(n &amp;lt;= nc)
+        return -1;
+    c0 = *s &amp;amp; 0xff;
+    l = c0;
+    for(t=tab; t-&amp;gt;cmask; t++) {
+        nc++;
+        if((c0 &amp;amp; t-&amp;gt;cmask) == t-&amp;gt;cval) {
+            l &amp;amp;= t-&amp;gt;lmask;
+            if(l &amp;lt; t-&amp;gt;lval)
+                return -1;
+            *p = l;
+            return nc;
+        }
+        if(n &amp;lt;= nc)
+            return -1;
+        s++;
+        c = (*s ^ 0x80) &amp;amp; 0xFF;
+        if(c &amp;amp; 0xC0)
+            return -1;
+        l = (l&amp;lt;&amp;lt;6) | c;
+    }
+    return -1;
+}
+
+int
+wctomb(char *s, wchar_t wc)
+{
+    long l;
+    int c, nc;
+    Tab *t;
+
+    if(s == 0)
+        return 0;
+
+    l = wc;
+    nc = 0;
+    for(t=tab; t-&amp;gt;cmask; t++) {
+        nc++;
+        if(l &amp;lt;= t-&amp;gt;lmask) {
+            c = t-&amp;gt;shift;
+            *s = t-&amp;gt;cval | (l&amp;gt;&amp;gt;c);
+            while(c &amp;gt; 0) {
+                c -= 6;
+                s++;
+                *s = 0x80 | ((l&amp;gt;&amp;gt;c) &amp;amp; 0x3F);
+            }
+            return nc;
+        }
+    }
+    return -1;
+}
+
+&amp;gt;From ken Tue Sep  8 03:24:58 EDT 1992
+i mailed it out, but it went into a black hole.
+i didnt get my copy. it must be hung up on the
+internat address with coma down or something.
+
+&amp;gt;From ken Tue Sep  8 03:42:43 EDT 1992
+i finally got my copy.
+
+
+
+--- /usr/ken/utf/xutf from dump of Sep 2 1992 ---
+
+ File System Safe Universal Character Set Transformation Format (FSS-UTF)
+ --------------------------------------------------------------------------
+
+ With the approval of ISO/IEC 10646 (Unicode) as an international
+ standard and the anticipated wide spread use of this universal coded
+ character set (UCS), it is necessary for historically ASCII based
+ operating systems to devise ways to cope with representation and
+ handling of the large number of characters that are possible to be
+ encoded by this new standard.
+
+ There are several challenges presented by UCS which must be dealt with
+ by historical operating systems and the C-language programming
+ environment. The most significant of these challenges is the encoding
+ scheme used by UCS.  More precisely, the challenge is the marrying of
+ the UCS standard with existing programming languages and existing
+ operating systems and utilities.
+
+ The challenges of the programming languages and the UCS standard are
+ being dealt with by other activities in the industry.     However, we are
+ still faced with the handling of UCS by historical operating systems and
+ utilities. Prominent among the operating system UCS handling concerns is
+ the representation of the data within the file system. An underlying
+ assumption is that there is an absolute requirement to maintain the
+ existing operating system software investment while at the same time
+ taking advantage of the use the large number of characters provided by
+ the UCS.
+
+ UCS provides the capability to encode multi-lingual text within a single
+ coded character set.  However, UCS and its UTF variant do not protect
+ null bytes and/or the ASCII slash ("/") making these character encodings
+ incompatible with existing Unix implementations.  The following proposal
+ provides a Unix compatible transformation format of UCS such that Unix
+ systems can support multi-lingual text in a single encoding.  This
+ transformation format encoding is intended to be used as a file code.
+ This transformation format encoding of UCS is intended as an
+ intermediate step towards full UCS support.  However, since nearly all
+ Unix implementations face the same obstacles in supporting UCS, this
+ proposal is intended to provide a common and compatible encoding during
+ this transition stage.
+
+
+ Goal/Objective
+ --------------
+
+ With the assumption that most, if not all, of the issues surrounding the
+ handling and storing of UCS in historical operating system file systems
+ are understood, the objective is to define a UCS transformation format
+ which also meets the requirement of being usable on a historical
+ operating system file system in a non-disruptive manner. The intent is
+ that UCS will be the process code for the transformation format, which
+ is usable as a file code.
+
+ Criteria for the Transformation Format
+ --------------------------------------
+
+ Below are the guidelines that were used in defining the UCS
+ transformation format:
+
+     1) Compatibility with historical file systems:
+
+    Historical file systems disallow the null byte and the ASCII
+    slash character as a part of the file name.
+
+     2) Compatibility with existing programs:
+
+    The existing model for multibyte processing is that ASCII does
+    not occur anywhere in a multibyte encoding.  There should be no
+    ASCII code values for any part of a transformation format
+    representation of a character that was not in the ASCII character
+    set in the UCS representation of the character.
+
+     3) Ease of conversion from/to UCS.
+
+     4) The first byte should indicate the number of bytes to follow in a
+    multibyte sequence.
+
+     5) The transformation format should not be extravagant in terms of
+    number of bytes used for encoding.
+
+
+ Proposed FSS-UTF
+ ----------------
+
+ The proposed UCS transformation format encodes UCS values in the range
+ [0,0x7fffffff] using multibyte characters of lengths 1, 2, 3, 4, and 5
+ bytes.  For all encodings of more than one byte, the initial byte
+ determines the number of bytes used and the high-order bit in each byte
+ is set.
+
+ An easy way to remember this transformation format is to note that the
+ number of high-order 1's in the first byte is the same as the number of
+ subsequent bytes in the multibyte character:
+
+    Bits  Hex Min  Hex Max         Byte Sequence in Binary
+ 1    7  00000000 0000007f 0zzzzzzz
+ 2   13  00000080 0000207f 10zzzzzz 1yyyyyyy
+ 3   19  00002080 0008207f 110zzzzz 1yyyyyyy 1xxxxxxx
+ 4   25  00082080 0208207f 1110zzzz 1yyyyyyy 1xxxxxxx 1wwwwwww
+ 5   31  02082080 7fffffff 11110zzz 1yyyyyyy 1xxxxxxx 1wwwwwww 1vvvvvvv
+
+ The bits included in the byte sequence is biased by the minimum value
+ so that if all the z's, y's, x's, w's, and v's are zero, the minimum
+ value is represented.  In the byte sequences, the lowest-order encoded
+ bits are in the last byte; the high-order bits (the z's) are in the
+ first byte.
+
+ This transformation format uses the byte values in the entire range of
+ 0x80 to 0xff, inclusive, as part of multibyte sequences.  Given the
+ assumption that at most there are seven (7) useful bits per byte, this
+ transformation format is close to minimal in its number of bytes used.
+
+ Below are sample implementations of the C standard wctomb() and
+ mbtowc() functions which demonstrate the algorithms for converting from
+ UCS to the transformation format and converting from the transformation
+ format to UCS.  The sample implementations include error checks, some
+ of which may not be necessary for conformance:
+
+#define OFF1   0x0000080
+#define OFF2   0x0002080
+#define OFF3   0x0082080
+#define OFF4   0x2082080
+
+int wctomb(char *s, wchar_t wc)
+{
+       if (s == 0)
+           return 0;       /* no shift states */
+#ifdef wchar_t_is_signed
+       if (wc &amp;lt; 0)
+           goto bad;
+#endif
+       if (wc &amp;lt;= 0x7f)         /* fits in 7 bits */
+       {
+           s[0] = wc;
+           return 1;
+       }
+       if (wc &amp;lt;= 0x1fff + OFF1)        /* fits in 13 bits */
+       {
+           wc -= OFF1;
+           s[0] = 0x80 | (wc &amp;gt;&amp;gt; 7);
+           s[1] = 0x80 | (wc &amp;amp; 0x7f);
+           return 2;
+       }
+       if (wc &amp;lt;= 0x7ffff + OFF2)       /* fits in 19 bits */
+       {
+           wc -= OFF2;
+           s[0] = 0xc0 | (wc &amp;gt;&amp;gt; 14);
+           s[1] = 0x80 | ((wc &amp;gt;&amp;gt; 7) &amp;amp; 0x7f);
+           s[2] = 0x80 | (wc &amp;amp; 0x7f);
+           return 3;
+       }
+       if (wc &amp;lt;= 0x1ffffff + OFF3)     /* fits in 25 bits */
+       {
+           wc -= OFF3;
+           s[0] = 0xe0 | (wc &amp;gt;&amp;gt; 21);
+           s[1] = 0x80 | ((wc &amp;gt;&amp;gt; 14) &amp;amp; 0x7f);
+           s[2] = 0x80 | ((wc &amp;gt;&amp;gt; 7) &amp;amp; 0x7f);
+           s[3] = 0x80 | (wc &amp;amp; 0x7f);
+           return 4;
+       }
+#if !defined(wchar_t_is_signed) || defined(wchar_t_is_more_than_32_bits)
+       if (wc &amp;gt; 0x7fffffff)
+           goto bad;
+#endif
+       wc -= OFF4;
+       s[0] = 0xf0 | (wc &amp;gt;&amp;gt; 28);
+       s[1] = 0x80 | ((wc &amp;gt;&amp;gt; 21) &amp;amp; 0x7f);
+       s[2] = 0x80 | ((wc &amp;gt;&amp;gt; 14) &amp;amp; 0x7f);
+       s[3] = 0x80 | ((wc &amp;gt;&amp;gt; 7) &amp;amp; 0x7f);
+       s[4] = 0x80 | (wc &amp;amp; 0x7f);
+       return 5;
+bad:;
+       errno = EILSEQ;
+       return -1;
+}
+
+
+int mbtowc(wchar_t *p, const char *s, size_t n)
+{
+       unsigned char *uc;      /* so that all bytes are nonnegative */
+
+       if ((uc = (unsigned char *)s) == 0)
+           return 0;               /* no shift states */
+       if (n == 0)
+           return -1;
+       if ((*p = uc[0]) &amp;lt; 0x80)
+           return uc[0] != '\0';   /* return 0 for '\0', else 1 */
+       if (uc[0] &amp;lt; 0xc0)
+       {
+           if (n &amp;lt; 2)
+               return -1;
+           if (uc[1] &amp;lt; 0x80)
+               goto bad;
+           *p &amp;amp;= 0x3f;
+           *p &amp;lt;&amp;lt;= 7;
+           *p |= uc[1] &amp;amp; 0x7f;
+           *p += OFF1;
+           return 2;
+       }
+       if (uc[0] &amp;lt; 0xe0)
+       {
+           if (n &amp;lt; 3)
+               return -1;
+           if (uc[1] &amp;lt; 0x80 || uc[2] &amp;lt; 0x80)
+               goto bad;
+           *p &amp;amp;= 0x1f;
+           *p &amp;lt;&amp;lt;= 14;
+           *p |= (uc[1] &amp;amp; 0x7f) &amp;lt;&amp;lt; 7;
+           *p |= uc[2] &amp;amp; 0x7f;
+           *p += OFF2;
+           return 3;
+       }
+       if (uc[0] &amp;lt; 0xf0)
+       {
+           if (n &amp;lt; 4)
+               return -1;
+           if (uc[1] &amp;lt; 0x80 || uc[2] &amp;lt; 0x80 || uc[3] &amp;lt; 0x80)
+               goto bad;
+           *p &amp;amp;= 0x0f;
+           *p &amp;lt;&amp;lt;= 21;
+           *p |= (uc[1] &amp;amp; 0x7f) &amp;lt;&amp;lt; 14;
+           *p |= (uc[2] &amp;amp; 0x7f) &amp;lt;&amp;lt; 7;
+           *p |= uc[3] &amp;amp; 0x7f;
+           *p += OFF3;
+           return 4;
+       }
+       if (uc[0] &amp;lt; 0xf8)
+       {
+           if (n &amp;lt; 5)
+               return -1;
+           if (uc[1] &amp;lt; 0x80 || uc[2] &amp;lt; 0x80 || uc[3] &amp;lt; 0x80 || uc[4] &amp;lt; 0x80)
+               goto bad;
+           *p &amp;amp;= 0x07;
+           *p &amp;lt;&amp;lt;= 28;
+           *p |= (uc[1] &amp;amp; 0x7f) &amp;lt;&amp;lt; 21;
+           *p |= (uc[2] &amp;amp; 0x7f) &amp;lt;&amp;lt; 14;
+           *p |= (uc[3] &amp;amp; 0x7f) &amp;lt;&amp;lt; 7;
+           *p |= uc[4] &amp;amp; 0x7f;
+           if (((*p += OFF4) &amp;amp; ~(wchar_t)0x7fffffff) == 0)
+               return 5;
+       }
+bad:;
+       errno = EILSEQ;
+       return -1;
+}
+
+We define 7 byte types:
+T0 0xxxxxxx      7 free bits
+Tx 10xxxxxx      6 free bits
+T1 110xxxxx      5 free bits
+T2 1110xxxx      4 free bits
+T3 11110xxx      3 free bits
+T4 111110xx      2 free bits
+T5 111111xx      2 free bits
+
+Encoding is as follows.
+&amp;gt;From hex Thru hex      Sequence             Bits
+00000000  0000007f      T0                   7
+00000080  000007FF      T1 Tx                11
+00000800  0000FFFF      T2 Tx Tx             16
+00010000  001FFFFF      T3 Tx Tx Tx          21
+00200000  03FFFFFF      T4 Tx Tx Tx Tx              26
+04000000  FFFFFFFF      T5 Tx Tx Tx Tx Tx    32
+
+Some notes:
+
+1. The 2 byte sequence has 2^11 codes, yet only 2^11-2^7
+are allowed. The codes in the range 0-7f are illegal.
+I think this is preferable to a pile of magic additive
+constants for no real benefit. Similar comment applies
+to all of the longer sequences.
+
+2. The 4, 5, and 6 byte sequences are only there for
+political reasons. I would prefer to delete these.
+
+3. The 6 byte sequence covers 32 bits, the FSS-UTF
+proposal only covers 31.
+
+4. All of the sequences synchronize on any byte that is
+not a Tx byte.
+&lt;/code&gt;&lt;/PRE&gt;</description><pubDate>Thu, 08 Apr 2021 01:49:58 -0500</pubDate></item><item><title>Wuffs the Language</title><link>https://lobste.rs/s/kuv1lj</link><description>&lt;h1&gt;Wuffs the Language&lt;/h1&gt;&lt;p dir="ltr"&gt;The Wuffs project is both a programming language and a standard library written
 in that programming language (and then e.g. transpiled to C). For more details
 on the latter, see the &lt;a href="https://github.com/google/wuffs/blob/main/doc/wuffs-the-library.md" dir="ltr"&gt;Wuffs the Library&lt;/a&gt; document.
 As for Wuffs the Language, it is an imperative C-like &lt;em dir="ltr"&gt;memory-safe&lt;/em&gt; language
@@ -391,7 +1028,7 @@ often compared with arbitrary binary data. For example, where other programming
 languages would check if JPEG data starts with the magic &lt;em dir="ltr"&gt;string&lt;/em&gt; &lt;code dir="ltr"&gt;"\xFF\xD8"&lt;/code&gt;,
 Wuffs would check if its opening 2 bytes, read as a little-endian &lt;code dir="ltr"&gt;base.u16&lt;/code&gt;,
 is a &lt;em dir="ltr"&gt;number&lt;/em&gt; that equals &lt;code dir="ltr"&gt;'\xFF\xD8'le&lt;/code&gt;.&lt;/p&gt;&lt;h2&gt;Introductory Example&lt;/h2&gt;&lt;p dir="ltr"&gt;A simple Wuffs the Language program, unrelated to Wuffs the Library, is
-discussed in &lt;a href="https://github.com/google/wuffs/blob/main/hello-wuffs-c" dir="ltr"&gt;/hello-wuffs-c&lt;/a&gt;.&lt;/p&gt;</description><pubDate>Wed, 07 Apr 2021 16:09:21 -0500</pubDate></item><item><title>How do you monitor your small scale server infrastructure?</title><link>https://lobste.rs/s/ddt1zo</link><description>&lt;p&gt;I was wondering what others are doing to monitor their server infrastructure for small(er) scale projects. I am currently looking for something that basically does the following for me:&lt;/p&gt;&lt;p&gt;On 3 VPS, monitor CPU usage, disk space usage and network traffic and send me alerts if any of these values reach a defined threshold or have very unusual spikes.&lt;/p&gt;&lt;p dir="ltr"&gt;All of the solutions I could find out there - both hosted as well as self-hosted - seem overly complex for my needs and required a lot of configuration wrangling and come with a lot of bells and whistles I do not need. I’ve got pretty decent metrics on application performance already, so this would really be about monitoring infrastructure to raise an alarm &lt;em dir="ltr"&gt;before&lt;/em&gt; systems go into an unhealthy state and brings down the services.&lt;/p&gt;</description><pubDate>Thu, 08 Apr 2021 03:53:06 -0500</pubDate></item><item><title>The history of UTF-8 as told by Rob Pike</title><link>http://doc.cat-v.org/bell_labs/utf-8_history</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/jo5he6/history_utf_8_as_told_by_rob_pike"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Thu, 08 Apr 2021 01:49:58 -0500</pubDate></item><item><title>I Don't Like Your Examples! — (2000)</title><link>https://lobste.rs/s/9xgkp2</link><description>&lt;h2&gt;I published this a long time ago, but thought it might be of interest in my latest blog iteration.&lt;/h2&gt;&lt;p dir="ltr"&gt;10/11/2000&amp;nbsp;&lt;br dir="ltr"&gt; I  have been writing books about the Oracle PL/SQL programming language  for the last five years. In 1999, O'Reilly published my fourth book,&amp;nbsp;&lt;a href="http://www.oreilly.com/catalog/ornewfeatures/" dir="ltr"&gt;Oracle PL/SQL Programming Guide to Oracle8i Features&lt;/a&gt;, which created a bit of an uproar among my readership, caused considerable discussion within O'Reilly, and led to my writing &lt;a href="http://archive.oreilly.com/pub/a/oreilly//news/feuerstein_1000.html" dir="ltr"&gt;this article&lt;/a&gt;.&lt;br dir="ltr"&gt;  &lt;br dir="ltr"&gt;  Why did this book cause a sensation? Consider this excerpt from Chapter 2: &lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Let's look at a simple  example. Suppose you are responsible for building a database to keep  track of war criminals for the International Court of Justice. You  create a package called wcpkg to keep track of alleged war criminals.  One of the programs in the package registers a new criminal. You want  that register program to always save its changes, even if the calling  program hasn't yet issued a COMMIT. These characters are, after all,  fairly slippery and you don't want them to get away.&amp;nbsp;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;The package specification holds no surprises; the transaction type is not evident here:&lt;br dir="ltr"&gt;  CREATE PACKAGE wcpkg AS&lt;br dir="ltr"&gt; &amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;... &amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;PROCEDURE register (&lt;br dir="ltr"&gt; &amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;culprit IN VARCHAR2, event IN VARCHAR2);&lt;br dir="ltr"&gt; END wcpkg;&lt;br dir="ltr"&gt; / The package body, however, contains that new and wonderful pragma:&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;  &lt;strong dir="ltr"&gt;CREATE PACKAGE BODY wcpkg AS&lt;br dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;...&lt;br dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;PROCEDURE register (&lt;br dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;culprit IN VARCHAR2, event IN VARCHAR2)&lt;br dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;IS&lt;br dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;PRAGMA AUTONOMOUS_TRANSACTION;&lt;br dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;BEGIN&lt;br dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;INSERT INTO war_criminal (name, activity)&lt;br dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;VALUES (culprit, event);&lt;br dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;COMMIT;&lt;br dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;END;&lt;br dir="ltr"&gt;END wcpkg;&lt;br dir="ltr"&gt;/&lt;/strong&gt; And now when I call wcpkg.register, I am assured that my changes have been duly recorded:&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;  &lt;strong dir="ltr"&gt;wcpkg.register ('Kissinger', 'Secret Bombing of Cambodia');&lt;/strong&gt; &lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;Now, I expect it's not every day you  pick up a technology text and read that Henry Kissinger is a war  criminal for the secret bombing of Cambodia. The examples I used in this  book, in fact, were dramatically different from my earlier texts--and  from just about any technology book you can buy. Here are some of the  other topics I incorporated into my text:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;Excessive CEO compensation--and excessive, destructive layoffs&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Union-busting activities&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Positive role of unions in society&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Police brutality&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;NATO bombing of civilian targets in Serbia&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Managed Care&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;National Rifle Association and gun control&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;The for-profit prison industry&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Slashing social programs to finance tax cuts&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;I did give my readers ample warning. Here is a section from the preface titled "About the Examples."&lt;br dir="ltr"&gt;   &lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;"I've been writing intensively about  PL/SQL since 1994, and I have a great time doing it. At the same time, I  must admit that I have simultaneously grown a little bit bored with  using the same set of examples again and again (yes, those infamous  emp/employee and dept/department tables), and I'm also very concerned  about the state of the world as we approach the end of the twentieth  century. Sure, things could be worse, but things could be a whole lot  better (with my examples and the world).&amp;nbsp;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;"Given these twin preoccupations, I  have decided to offer examples that are decidedly different from the  usual. I'll be talking about topics ranging from the state of health  care in the United States to the strength of the gun lobby, from wage  structures to environmental issues. I believe that even if you don't  agree with the positions I have on a particular issue, you will find  that this "breath of fresh air" approach will help you engage with the  technical material.&amp;nbsp;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;"I would also be very happy to hear from you--whether you agree or disagree!--and I encourage you to visit my Web site, at&amp;nbsp;&lt;a href="http://www.stevenfeuerstein.com/" dir="ltr"&gt;www.StevenFeuerstein.com&lt;/a&gt;, where you can read more about my life and viewpoints and can get in touch."&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;How Fresh Is That Air?&lt;/strong&gt;&lt;br dir="ltr"&gt;  Though  I thought these examples would be a "breath of fresh air," some of my  readers felt that the air stank. Here are some typical responses:&lt;br dir="ltr"&gt;   &lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Dear Mr. Feuerstein,&amp;nbsp;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;I, thankfully before buying the  book, was able to peruse a copy of your latest PL/SQL programming book. I  think you have forgotten one basic principle when you planned the  examples. This was supposed to be a book about PL/SQL, not blatant  sociopolitical rantings. If I had bought the book, I would be returning  it immediately for a complete refund. It doesn't matter whether I agreed  or disagreed with your views (in some cases I agreed, in some cases I  strongly disagreed). I found the examples so distracting that I was  unable to get the information I needed out of the book. Please in the  future, remember that we, the book buyers, are looking for information  about using PL/SQL. I am as tired of the emp and dept tables as you are,  but less distracting examples would have been more appropriate.&amp;nbsp;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Personally, I am no longer buying  your books nor am I recommending them to my clients as long as they  contain the types of examples you used in your latest books. I cannot,  in good conscience, recommend them as PL/SQL manuals because the  examples removed the books from that category.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;I have to admit, getting emails like these has not been fun. Here's another:&lt;br dir="ltr"&gt;   &lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;I have just been shown a copy of the&amp;nbsp;&lt;a href="http://www.oreilly.com/catalog/ornewfeatures/" dir="ltr"&gt;Guide to Oracle 8i Features&lt;/a&gt;&amp;nbsp;and  to be quite honest am embarrassed on behalf of the O'Reilly publishing  company. It is well-known throughout the industry that O'Reilly books  are said to be the bibles for technical reference. I am appalled at the  liberty that Feuerstein has taken in imposing his personal beliefs  throughout the text and examples and am even more appalled that O'Reilly  allowed this kind of content to be published. It is highly offensive  regardless of freedom of speech and Mr. Feuerstein's belief system and  to choose such an unwilling audience is absurd! I will not buy this book  and will tell each and every person I know in the industry to do the  same. I will as well be cautious when purchasing and or recommending any  other O'Reilly technical reference books. This is not the forum for  this kind of content!&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;You get the idea. Now, I should also mention that:&lt;br dir="ltr"&gt;   &lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;I have received at least an  equal amount of emails praising this particular book, sometimes for the  political content explicitly, sometimes simply for the technical  content, indicating that my choice of examples was not problematic.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;O'Reilly &amp;amp; Associates  reviewed the book's content and its lawyers did recommend making a few  changes. (They didn't, for example, want me to explicitly and blatantly  accuse a sitting governor of bribery.)&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;This book became a subject of  active debate among O'Reilly editors about what limits, if any, should  be placed on an author's desire to include possibly controversial  examples.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Tim O'Reilly and I talked about  this subject at length and he thought that it would make a great topic  for public discussion. So here I am!&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;All  the negative--in some cases strongly negative--feedback I got sent me  back to the book to examine the content and ask myself some questions:  Was I wrong to include this content? Why is it so difficult for people,  especially those in the United States, to hear viewpoints that make them  uncomfortable? Would I be willing to put these kinds of examples in my  "bestseller," the foundation of my series,&amp;nbsp;&lt;a href="http://www.oreilly.com/catalog/oraclep2/" dir="ltr"&gt;Oracle PL/SQL Programming&lt;/a&gt;, and take a chance at putting off readers?&amp;nbsp;&lt;br dir="ltr"&gt;  Were  my examples full of opinions or facts? Can I really separate the two?  And what about the examples in all those other books (mine and the  several hundred other Oracle books, and thousands of other technical  books)? Are they all free of political content?&lt;br dir="ltr"&gt;  &lt;strong dir="ltr"&gt;Democracy and Political Discourse&lt;/strong&gt;&lt;br dir="ltr"&gt;  As I work on this article, I am flying back from  a week's teaching in the United Kingdom. As is usual when I spend time  outside the United States, and particularly in the U.K. (where I can  understand the language), I am struck by the open political  discourse--and open challenge--in the media and among individuals.&lt;br dir="ltr"&gt;  &lt;br dir="ltr"&gt;  It seems to me that one part of  having a true and vibrant democracy is the free flow of ideas and active  debate among neighbors on the crucial issues of our day. Does that go  on around you? I sure don't experience it in my neck of the woods. On  the contrary, I find that, in the United States, very few people are  willing to talk "politics." It is, along with the topic of money and  sex, generally veered away from in trepidation. Better to comment on the  weather and sports.  Where would such an attitude come  from? Much of any individual's behavior in society is patterned after  what she or he perceives to be acceptable. Most of us do&amp;nbsp;&lt;em dir="ltr"&gt;not&lt;/em&gt;&amp;nbsp;want  to stand out as different, and certainly not as "troublemakers." What  determines acceptability in our society? To a large extent, the mass  media.    Reflect on the television, radio,  and print media reports you receive: How often do you see real political  debate, crossing the entire spectrum, taking place? How often do you  hear a member of the media truly challenge politicians and business  "leaders" to justify their policies and actions? I believe that very  little real debate ever takes place and our journalists, especially the  high-profile ones, treat those in power with kid gloves. Sometimes it  seems like there is a debate going on (within a T.V. program like  "Crossfire," for example), but in fact that debate is  missing/ignoring/silencing a large swath of viewpoints: pretty much  anything to the left of Bill Clinton.    As a result, it is very difficult to  talk politics in our society--especially if your politics are anywhere  to the left of center. And it is almost impossible to present an  informed, sophisticated critique of the role of global capitalism in the  world today.    Now, you might well say to yourself,  "Who cares?" You like global capitalism. You don't think it's all that  bad, or at least you don't care if a few hundred million people are paid  pennies for their labor. And, well, you don't&amp;nbsp;&lt;em dir="ltr"&gt;want&lt;/em&gt;&amp;nbsp;to talk politics. That's fine. That's your choice. But I also believe that almost every technology book we buy and read is&amp;nbsp;&lt;em dir="ltr"&gt;full of politics&lt;/em&gt;.    &lt;strong dir="ltr"&gt;The Hidden and Prevailing Ideology&lt;/strong&gt;   I  believe that just about every technical book comes with a body of  politics, an ideology that governs and usually restricts its example  set. We don't notice the political slant because it reflects the  dominant viewpoint in our society and is thus invisible.&lt;br dir="ltr"&gt;  &lt;br dir="ltr"&gt;  After reviewing many books, I feel comfortable in summarizing the vast majority of texts as having these characteristics:   &lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Business-centric&lt;/strong&gt;: Most  examples used in technology books focus on how to make business work  more efficiently, regardless of its impact on human society and the  world as a whole. As a result, we constantly read about human-resource  or personnel systems. And while examples frequently touch on education,  these applications have more to do with managing students (the business  side of education) than with improving the quality of education those  students receive. All of this seems perfectly "natural" since the vast  majority of technology is used by businesses to make profits. But does  it have to be that way?&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Consumer-oriented&lt;/strong&gt;: Many,  many examples promote the perspective that the only reason we exist in  this world is to buy things. Just about every book about the Internet  focuses on some aspect of e-commerce, such as how to maximize the use of  banner ads, how to grab and hold eyeballs, how to present product  information dynamically.In 1999 Addison-Wesley published a truly marvelous book titled&amp;nbsp;&lt;a href="http://www.awlonline.com/product/0,2627,0201485672,00.html" dir="ltr"&gt;Refactoring: Improving the Design of Existing Code&lt;/a&gt;,  by Martin Fowler. In it, Martin offers a systematic method for  improving the quality of our code without affecting the interface to and  behavior of that code. To demonstrate his techniques, the author offers  a refreshing example: video rentals. Yet it still comes down to&amp;nbsp;&lt;em dir="ltr"&gt;commerce&lt;/em&gt;. We are what we buy, not what we think and do with our lives outside of the exchange of items for money.&lt;br dir="ltr"&gt;  &lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Humans as numbered entities&lt;/strong&gt;:  This is particularly true in database-related books (including my  own!). Technology is presented through a medium of scenarios that  represent--and manipulate--humans as numbers. Just about any Oracle text  you pick up is dominated by "emp-dept" examples: a personnel  application that talks about salaries, bonuses, and commissions, when  you were hired, which department you belong to, the name of an employee  based on an employee_id, and so on. The message, so clearly presented in  this dominant theme, is that we are defined primarily as workers and  our value in life is derived from the contribution we make to our  employer.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Everything and anything as numbered entities&lt;/strong&gt;:  Hey, it's not just people! Technical examples extend the quantification  approach to natural resources, information, entertainment, etc. Oracle  also offers a standard demonstration base of tables and data for a  sales/order entry system. This, of course, makes perfect sense in the  world of Oracle--driven by the obsessive personality of Larry Ellison to  sell, sell, sell software and services. (I own shares of Oracle stock  and have benefitted directly from Larry's obsessions.)&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;There are exceptions. Scott Urman's latest book on PL/SQL,&amp;nbsp;&lt;a href="http://www.osborne.com/oracle/server_tech_tools/ora8i_advanced_plsql.html" dir="ltr"&gt;Oracle8i Advanced PL/SQL Programming&lt;/a&gt;,  uses a college registration system as his example base. Although many  American colleges are overly focused on preparing young people for a  life of drudgery in one job or another (and corporations are  commercializing higher education to an alarming degree), I congratulate  Scott on taking a road less traveled.&lt;/p&gt;&lt;p&gt;&lt;strong&gt;Breathing Life Into Technical Books&lt;/strong&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;I  could go on and on, but I think you get the drift. The bottom line for  me is that books written about technology are written by human beings  with perspectives and beliefs. Some of us center our lives around a  particular technology or around the business applications of that  technology. Many of us see the technology as one part of a rich, complex  way of life--and dream of ways that this technology can transform and  improve human society and our planet.&lt;br dir="ltr"&gt;  I  don't see what any of us gain - writers and readers alike - from the  unwritten but nonetheless rigorously followed rules that technical books  must conform to and further support the status quo in our society.&lt;/p&gt;&lt;div&gt;Share&lt;/div&gt;</description><pubDate>Thu, 08 Apr 2021 03:00:13 -0500</pubDate></item><item><title>How to Backdoor a Cipher</title><link>https://lobste.rs/s/4fsruo</link><description>&lt;p dir="ltr"&gt;
+discussed in &lt;a href="https://github.com/google/wuffs/blob/main/hello-wuffs-c" dir="ltr"&gt;/hello-wuffs-c&lt;/a&gt;.&lt;/p&gt;</description><pubDate>Wed, 07 Apr 2021 16:09:21 -0500</pubDate></item><item><title>How do you monitor your small scale server infrastructure?</title><link>https://lobste.rs/s/ddt1zo</link><description>&lt;p&gt;I was wondering what others are doing to monitor their server infrastructure for small(er) scale projects. I am currently looking for something that basically does the following for me:&lt;/p&gt;&lt;p&gt;On 3 VPS, monitor CPU usage, disk space usage and network traffic and send me alerts if any of these values reach a defined threshold or have very unusual spikes.&lt;/p&gt;&lt;p dir="ltr"&gt;All of the solutions I could find out there - both hosted as well as self-hosted - seem overly complex for my needs and required a lot of configuration wrangling and come with a lot of bells and whistles I do not need. I’ve got pretty decent metrics on application performance already, so this would really be about monitoring infrastructure to raise an alarm &lt;em dir="ltr"&gt;before&lt;/em&gt; systems go into an unhealthy state and brings down the services.&lt;/p&gt;</description><pubDate>Thu, 08 Apr 2021 03:53:06 -0500</pubDate></item><item><title>How to Backdoor a Cipher</title><link>https://lobste.rs/s/4fsruo</link><description>&lt;p dir="ltr"&gt;
 &lt;b dir="ltr"&gt;How  to  Backdoor  a  Cipher&lt;/b&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;
 &lt;i dir="ltr"&gt;Raluca  Posteuca   and  Tomer  Ashur&lt;/i&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;
 &lt;b dir="ltr"&gt;Abstract: &lt;/b&gt;Newly  designed  block  ciphers  are  required  to  show  resistance  against  known  attacks,  e.g.,  linear   and  differential  cryptanalysis.  Two  widely  used  methods  to  do  this  are  to  employ  an  automated  search  tool (e.g.,  MILP,  SAT/SMT,  etc.)   and/or  provide  a  wide-trail  argument.  In  both  cases,  the  core  of  the  argument  consists  of  bounding  the  transition  probability  of  the  statistical  property  over  an  isolated  non-linear  operation,  then  multiply  it  by  the  number  of  such  operations (e.g.,  number  of  active  S-boxes).
@@ -399,7 +1036,7 @@ In  this  paper  we  show  that  in  the  case  of  linear  cryptanalysis  such 
 &lt;/p&gt;&lt;p dir="ltr"&gt;
 &lt;b dir="ltr"&gt;Category / Keywords: &lt;/b&gt;secret-key cryptography / Block cipher Design, 0-correlation linear hulls, linear hull effect, Kleptography, backdoorgraphy&lt;/p&gt;&lt;p dir="ltr"&gt;
 &lt;b dir="ltr"&gt;Date: &lt;/b&gt;received 5 Apr 2021&lt;/p&gt;&lt;p dir="ltr"&gt;
-&lt;b dir="ltr"&gt;Contact author: &lt;/b&gt;raluca posteuca at esat kuleuven be,tomer ashur@esat kuleuven be&lt;/p&gt;</description><pubDate>Thu, 08 Apr 2021 03:04:07 -0500</pubDate></item><item><title>Surprisingly Slow</title><link>https://lobste.rs/s/vgldsr</link><description>&lt;h2&gt;&lt;a href="https://gregoryszorc.com/blog/2021/04/06/surprisingly-slow" rel="bookmark" title="Permanent Link to Surprisingly Slow"&gt;Surprisingly Slow&lt;/a&gt;&lt;/h2&gt;&lt;div dir="ltr"&gt;
+&lt;b dir="ltr"&gt;Contact author: &lt;/b&gt;raluca posteuca at esat kuleuven be,tomer ashur@esat kuleuven be&lt;/p&gt;</description><pubDate>Thu, 08 Apr 2021 03:04:07 -0500</pubDate></item><item><title>I Don't Like Your Examples! — (2000)</title><link>https://lobste.rs/s/9xgkp2</link><description>&lt;h2&gt;I published this a long time ago, but thought it might be of interest in my latest blog iteration.&lt;/h2&gt;&lt;p dir="ltr"&gt;10/11/2000&amp;nbsp;&lt;br dir="ltr"&gt; I  have been writing books about the Oracle PL/SQL programming language  for the last five years. In 1999, O'Reilly published my fourth book,&amp;nbsp;&lt;a href="http://www.oreilly.com/catalog/ornewfeatures/" dir="ltr"&gt;Oracle PL/SQL Programming Guide to Oracle8i Features&lt;/a&gt;, which created a bit of an uproar among my readership, caused considerable discussion within O'Reilly, and led to my writing &lt;a href="http://archive.oreilly.com/pub/a/oreilly//news/feuerstein_1000.html" dir="ltr"&gt;this article&lt;/a&gt;.&lt;br dir="ltr"&gt;  &lt;br dir="ltr"&gt;  Why did this book cause a sensation? Consider this excerpt from Chapter 2: &lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Let's look at a simple  example. Suppose you are responsible for building a database to keep  track of war criminals for the International Court of Justice. You  create a package called wcpkg to keep track of alleged war criminals.  One of the programs in the package registers a new criminal. You want  that register program to always save its changes, even if the calling  program hasn't yet issued a COMMIT. These characters are, after all,  fairly slippery and you don't want them to get away.&amp;nbsp;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;The package specification holds no surprises; the transaction type is not evident here:&lt;br dir="ltr"&gt;  CREATE PACKAGE wcpkg AS&lt;br dir="ltr"&gt; &amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;... &amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;PROCEDURE register (&lt;br dir="ltr"&gt; &amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;culprit IN VARCHAR2, event IN VARCHAR2);&lt;br dir="ltr"&gt; END wcpkg;&lt;br dir="ltr"&gt; / The package body, however, contains that new and wonderful pragma:&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;  &lt;strong dir="ltr"&gt;CREATE PACKAGE BODY wcpkg AS&lt;br dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;...&lt;br dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;PROCEDURE register (&lt;br dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;culprit IN VARCHAR2, event IN VARCHAR2)&lt;br dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;IS&lt;br dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;PRAGMA AUTONOMOUS_TRANSACTION;&lt;br dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;BEGIN&lt;br dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;INSERT INTO war_criminal (name, activity)&lt;br dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;VALUES (culprit, event);&lt;br dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;COMMIT;&lt;br dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;END;&lt;br dir="ltr"&gt;END wcpkg;&lt;br dir="ltr"&gt;/&lt;/strong&gt; And now when I call wcpkg.register, I am assured that my changes have been duly recorded:&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;  &lt;strong dir="ltr"&gt;wcpkg.register ('Kissinger', 'Secret Bombing of Cambodia');&lt;/strong&gt; &lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;Now, I expect it's not every day you  pick up a technology text and read that Henry Kissinger is a war  criminal for the secret bombing of Cambodia. The examples I used in this  book, in fact, were dramatically different from my earlier texts--and  from just about any technology book you can buy. Here are some of the  other topics I incorporated into my text:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;Excessive CEO compensation--and excessive, destructive layoffs&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Union-busting activities&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Positive role of unions in society&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Police brutality&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;NATO bombing of civilian targets in Serbia&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Managed Care&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;National Rifle Association and gun control&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;The for-profit prison industry&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Slashing social programs to finance tax cuts&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;I did give my readers ample warning. Here is a section from the preface titled "About the Examples."&lt;br dir="ltr"&gt;   &lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;"I've been writing intensively about  PL/SQL since 1994, and I have a great time doing it. At the same time, I  must admit that I have simultaneously grown a little bit bored with  using the same set of examples again and again (yes, those infamous  emp/employee and dept/department tables), and I'm also very concerned  about the state of the world as we approach the end of the twentieth  century. Sure, things could be worse, but things could be a whole lot  better (with my examples and the world).&amp;nbsp;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;"Given these twin preoccupations, I  have decided to offer examples that are decidedly different from the  usual. I'll be talking about topics ranging from the state of health  care in the United States to the strength of the gun lobby, from wage  structures to environmental issues. I believe that even if you don't  agree with the positions I have on a particular issue, you will find  that this "breath of fresh air" approach will help you engage with the  technical material.&amp;nbsp;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;"I would also be very happy to hear from you--whether you agree or disagree!--and I encourage you to visit my Web site, at&amp;nbsp;&lt;a href="http://www.stevenfeuerstein.com/" dir="ltr"&gt;www.StevenFeuerstein.com&lt;/a&gt;, where you can read more about my life and viewpoints and can get in touch."&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;How Fresh Is That Air?&lt;/strong&gt;&lt;br dir="ltr"&gt;  Though  I thought these examples would be a "breath of fresh air," some of my  readers felt that the air stank. Here are some typical responses:&lt;br dir="ltr"&gt;   &lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Dear Mr. Feuerstein,&amp;nbsp;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;I, thankfully before buying the  book, was able to peruse a copy of your latest PL/SQL programming book. I  think you have forgotten one basic principle when you planned the  examples. This was supposed to be a book about PL/SQL, not blatant  sociopolitical rantings. If I had bought the book, I would be returning  it immediately for a complete refund. It doesn't matter whether I agreed  or disagreed with your views (in some cases I agreed, in some cases I  strongly disagreed). I found the examples so distracting that I was  unable to get the information I needed out of the book. Please in the  future, remember that we, the book buyers, are looking for information  about using PL/SQL. I am as tired of the emp and dept tables as you are,  but less distracting examples would have been more appropriate.&amp;nbsp;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Personally, I am no longer buying  your books nor am I recommending them to my clients as long as they  contain the types of examples you used in your latest books. I cannot,  in good conscience, recommend them as PL/SQL manuals because the  examples removed the books from that category.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;I have to admit, getting emails like these has not been fun. Here's another:&lt;br dir="ltr"&gt;   &lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;I have just been shown a copy of the&amp;nbsp;&lt;a href="http://www.oreilly.com/catalog/ornewfeatures/" dir="ltr"&gt;Guide to Oracle 8i Features&lt;/a&gt;&amp;nbsp;and  to be quite honest am embarrassed on behalf of the O'Reilly publishing  company. It is well-known throughout the industry that O'Reilly books  are said to be the bibles for technical reference. I am appalled at the  liberty that Feuerstein has taken in imposing his personal beliefs  throughout the text and examples and am even more appalled that O'Reilly  allowed this kind of content to be published. It is highly offensive  regardless of freedom of speech and Mr. Feuerstein's belief system and  to choose such an unwilling audience is absurd! I will not buy this book  and will tell each and every person I know in the industry to do the  same. I will as well be cautious when purchasing and or recommending any  other O'Reilly technical reference books. This is not the forum for  this kind of content!&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;You get the idea. Now, I should also mention that:&lt;br dir="ltr"&gt;   &lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;I have received at least an  equal amount of emails praising this particular book, sometimes for the  political content explicitly, sometimes simply for the technical  content, indicating that my choice of examples was not problematic.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;O'Reilly &amp;amp; Associates  reviewed the book's content and its lawyers did recommend making a few  changes. (They didn't, for example, want me to explicitly and blatantly  accuse a sitting governor of bribery.)&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;This book became a subject of  active debate among O'Reilly editors about what limits, if any, should  be placed on an author's desire to include possibly controversial  examples.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Tim O'Reilly and I talked about  this subject at length and he thought that it would make a great topic  for public discussion. So here I am!&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;All  the negative--in some cases strongly negative--feedback I got sent me  back to the book to examine the content and ask myself some questions:  Was I wrong to include this content? Why is it so difficult for people,  especially those in the United States, to hear viewpoints that make them  uncomfortable? Would I be willing to put these kinds of examples in my  "bestseller," the foundation of my series,&amp;nbsp;&lt;a href="http://www.oreilly.com/catalog/oraclep2/" dir="ltr"&gt;Oracle PL/SQL Programming&lt;/a&gt;, and take a chance at putting off readers?&amp;nbsp;&lt;br dir="ltr"&gt;  Were  my examples full of opinions or facts? Can I really separate the two?  And what about the examples in all those other books (mine and the  several hundred other Oracle books, and thousands of other technical  books)? Are they all free of political content?&lt;br dir="ltr"&gt;  &lt;strong dir="ltr"&gt;Democracy and Political Discourse&lt;/strong&gt;&lt;br dir="ltr"&gt;  As I work on this article, I am flying back from  a week's teaching in the United Kingdom. As is usual when I spend time  outside the United States, and particularly in the U.K. (where I can  understand the language), I am struck by the open political  discourse--and open challenge--in the media and among individuals.&lt;br dir="ltr"&gt;  &lt;br dir="ltr"&gt;  It seems to me that one part of  having a true and vibrant democracy is the free flow of ideas and active  debate among neighbors on the crucial issues of our day. Does that go  on around you? I sure don't experience it in my neck of the woods. On  the contrary, I find that, in the United States, very few people are  willing to talk "politics." It is, along with the topic of money and  sex, generally veered away from in trepidation. Better to comment on the  weather and sports.  Where would such an attitude come  from? Much of any individual's behavior in society is patterned after  what she or he perceives to be acceptable. Most of us do&amp;nbsp;&lt;em dir="ltr"&gt;not&lt;/em&gt;&amp;nbsp;want  to stand out as different, and certainly not as "troublemakers." What  determines acceptability in our society? To a large extent, the mass  media.    Reflect on the television, radio,  and print media reports you receive: How often do you see real political  debate, crossing the entire spectrum, taking place? How often do you  hear a member of the media truly challenge politicians and business  "leaders" to justify their policies and actions? I believe that very  little real debate ever takes place and our journalists, especially the  high-profile ones, treat those in power with kid gloves. Sometimes it  seems like there is a debate going on (within a T.V. program like  "Crossfire," for example), but in fact that debate is  missing/ignoring/silencing a large swath of viewpoints: pretty much  anything to the left of Bill Clinton.    As a result, it is very difficult to  talk politics in our society--especially if your politics are anywhere  to the left of center. And it is almost impossible to present an  informed, sophisticated critique of the role of global capitalism in the  world today.    Now, you might well say to yourself,  "Who cares?" You like global capitalism. You don't think it's all that  bad, or at least you don't care if a few hundred million people are paid  pennies for their labor. And, well, you don't&amp;nbsp;&lt;em dir="ltr"&gt;want&lt;/em&gt;&amp;nbsp;to talk politics. That's fine. That's your choice. But I also believe that almost every technology book we buy and read is&amp;nbsp;&lt;em dir="ltr"&gt;full of politics&lt;/em&gt;.    &lt;strong dir="ltr"&gt;The Hidden and Prevailing Ideology&lt;/strong&gt;   I  believe that just about every technical book comes with a body of  politics, an ideology that governs and usually restricts its example  set. We don't notice the political slant because it reflects the  dominant viewpoint in our society and is thus invisible.&lt;br dir="ltr"&gt;  &lt;br dir="ltr"&gt;  After reviewing many books, I feel comfortable in summarizing the vast majority of texts as having these characteristics:   &lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Business-centric&lt;/strong&gt;: Most  examples used in technology books focus on how to make business work  more efficiently, regardless of its impact on human society and the  world as a whole. As a result, we constantly read about human-resource  or personnel systems. And while examples frequently touch on education,  these applications have more to do with managing students (the business  side of education) than with improving the quality of education those  students receive. All of this seems perfectly "natural" since the vast  majority of technology is used by businesses to make profits. But does  it have to be that way?&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Consumer-oriented&lt;/strong&gt;: Many,  many examples promote the perspective that the only reason we exist in  this world is to buy things. Just about every book about the Internet  focuses on some aspect of e-commerce, such as how to maximize the use of  banner ads, how to grab and hold eyeballs, how to present product  information dynamically.In 1999 Addison-Wesley published a truly marvelous book titled&amp;nbsp;&lt;a href="http://www.awlonline.com/product/0,2627,0201485672,00.html" dir="ltr"&gt;Refactoring: Improving the Design of Existing Code&lt;/a&gt;,  by Martin Fowler. In it, Martin offers a systematic method for  improving the quality of our code without affecting the interface to and  behavior of that code. To demonstrate his techniques, the author offers  a refreshing example: video rentals. Yet it still comes down to&amp;nbsp;&lt;em dir="ltr"&gt;commerce&lt;/em&gt;. We are what we buy, not what we think and do with our lives outside of the exchange of items for money.&lt;br dir="ltr"&gt;  &lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Humans as numbered entities&lt;/strong&gt;:  This is particularly true in database-related books (including my  own!). Technology is presented through a medium of scenarios that  represent--and manipulate--humans as numbers. Just about any Oracle text  you pick up is dominated by "emp-dept" examples: a personnel  application that talks about salaries, bonuses, and commissions, when  you were hired, which department you belong to, the name of an employee  based on an employee_id, and so on. The message, so clearly presented in  this dominant theme, is that we are defined primarily as workers and  our value in life is derived from the contribution we make to our  employer.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Everything and anything as numbered entities&lt;/strong&gt;:  Hey, it's not just people! Technical examples extend the quantification  approach to natural resources, information, entertainment, etc. Oracle  also offers a standard demonstration base of tables and data for a  sales/order entry system. This, of course, makes perfect sense in the  world of Oracle--driven by the obsessive personality of Larry Ellison to  sell, sell, sell software and services. (I own shares of Oracle stock  and have benefitted directly from Larry's obsessions.)&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;There are exceptions. Scott Urman's latest book on PL/SQL,&amp;nbsp;&lt;a href="http://www.osborne.com/oracle/server_tech_tools/ora8i_advanced_plsql.html" dir="ltr"&gt;Oracle8i Advanced PL/SQL Programming&lt;/a&gt;,  uses a college registration system as his example base. Although many  American colleges are overly focused on preparing young people for a  life of drudgery in one job or another (and corporations are  commercializing higher education to an alarming degree), I congratulate  Scott on taking a road less traveled.&lt;/p&gt;&lt;p&gt;&lt;strong&gt;Breathing Life Into Technical Books&lt;/strong&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;I  could go on and on, but I think you get the drift. The bottom line for  me is that books written about technology are written by human beings  with perspectives and beliefs. Some of us center our lives around a  particular technology or around the business applications of that  technology. Many of us see the technology as one part of a rich, complex  way of life--and dream of ways that this technology can transform and  improve human society and our planet.&lt;br dir="ltr"&gt;  I  don't see what any of us gain - writers and readers alike - from the  unwritten but nonetheless rigorously followed rules that technical books  must conform to and further support the status quo in our society.&lt;/p&gt;&lt;div&gt;Share&lt;/div&gt;</description><pubDate>Thu, 08 Apr 2021 03:00:13 -0500</pubDate></item><item><title>Surprisingly Slow</title><link>https://lobste.rs/s/vgldsr</link><description>&lt;h2&gt;&lt;a href="https://gregoryszorc.com/blog/2021/04/06/surprisingly-slow" rel="bookmark" title="Permanent Link to Surprisingly Slow"&gt;Surprisingly Slow&lt;/a&gt;&lt;/h2&gt;&lt;div dir="ltr"&gt;
   &lt;small dir="ltr"&gt;April 06, 2021 at 07:00 AM | categories: 
 
 &lt;a href="https://gregoryszorc.com/blog/category/programming" dir="ltr"&gt;Programming&lt;/a&gt;
