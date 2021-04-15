@@ -1502,7 +1502,421 @@ migrate code using these deprecated APIs as soon as possible.&lt;/p&gt;&lt;h2 di
 &lt;code dir="ltr"&gt;"useDefineForClassFields": true&lt;/code&gt; option. This option aligns TypeScript's
 handling of class field to the standard ECMA script semantics. This option can
 not be overwritten in user code. We expect that most users will not need to
-change their code.&lt;/p&gt;</description><pubDate>Wed, 14 Apr 2021 04:23:51 -0500</pubDate></item><item><title>Reproducible Builds: Increasing the Integrity of Software Supply Chains</title><link>https://lobste.rs/s/zhorms</link><description>&lt;div&gt;
+change their code.&lt;/p&gt;</description><pubDate>Wed, 14 Apr 2021 04:23:51 -0500</pubDate></item><item><title>Rust in the Linux kernel</title><link>https://lobste.rs/s/1mgsip</link><description>&lt;div itemprop="articleBody"&gt;&lt;span&gt;Posted by Wedson Almeida Filho, Android Team&lt;/span&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;
+In our &lt;a href="https://security.googleblog.com/2021/04/rust-in-android-platform.html" dir="ltr"&gt;previous post&lt;/a&gt;, we announced that Android now supports the &lt;a href="https://www.rust-lang.org/" dir="ltr"&gt;Rust&lt;/a&gt; programming language for developing the OS itself. Related to this, we are also participating in the effort to evaluate the use of Rust as a supported language for developing the Linux kernel. In this post, we discuss some technical aspects of this work using a few simple examples.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+C has been the language of choice for writing kernels for almost half a century because it offers the level of control and predictable performance required by such a critical component. Density of memory safety bugs in the Linux kernel is generally quite low due to high code quality, high standards of code review, and carefully implemented safeguards. However, &lt;a href="https://events19.linuxfoundation.org/wp-content/uploads/2017/11/Syzbot-and-the-Tale-of-Thousand-Kernel-Bugs-Dmitry-Vyukov-Google.pdf" dir="ltr"&gt;memory safety bugs do still regularly occur&lt;/a&gt;. On Android, vulnerabilities in the kernel are generally considered high-severity because they can result in a security model bypass due to the privileged mode that the kernel runs in.
+&lt;/p&gt;&lt;p&gt;
+We feel that Rust is now ready to join C as a practical language for implementing the kernel. It can help us reduce the number of potential bugs and security vulnerabilities in privileged code while playing nicely with the core kernel and preserving its performance characteristics.
+&lt;/p&gt;&lt;h1&gt;Supporting Rust&lt;/h1&gt;&lt;p dir="ltr"&gt;
+We developed an &lt;a href="https://github.com/Rust-for-Linux/linux/commit/d8dcaf80c9535056ea541d8dd876edad52c538a9#diff-8aa818b39daaf6497eaab2ec0b404bcabf43616362fe9551ed7dd2278682af08" dir="ltr"&gt;initial prototype&lt;/a&gt; of the Binder driver to allow us to make meaningful comparisons between the safety and performance characteristics of the existing C version and its Rust counterpart. The Linux kernel has over 30 million lines of code, so naturally our goal is not to convert it all to Rust but rather to allow new code to be written in Rust. We believe this incremental approach allows us to benefit from the kernel’s existing high-performance implementation while providing kernel developers with new tools to improve memory safety and maintain performance going forward.
+&lt;/p&gt;&lt;p dir="ltr"&gt;We joined the &lt;a href="https://github.com/Rust-for-Linux" dir="ltr"&gt;Rust for Linux&lt;/a&gt; organization, where the community had already done and continues to do great work toward adding Rust support to the Linux kernel build system. We also need designs that allow code in the two languages to interact with each other: we're particularly interested in safe, zero-cost abstractions that allow Rust code to use kernel functionality written in C, and how to implement functionality in idiomatic Rust that can be called seamlessly from the C portions of the kernel.&lt;/p&gt;&lt;p&gt;
+Since Rust is a new language for the kernel, we also have the opportunity to enforce best practices in terms of documentation and uniformity. For example, we have specific machine-checked requirements around the usage of unsafe code: for every unsafe function, the developer must document the requirements that need to be satisfied by callers to ensure that its usage is safe; additionally, for every call to unsafe functions (or usage of unsafe constructs like dereferencing a raw pointer), the developer must document the justification for why it is safe to do so.
+&lt;/p&gt;&lt;p&gt;
+Just as important as safety, Rust support needs to be convenient and helpful for developers to use. Let’s get into a few examples of how Rust can assist kernel developers in writing drivers that are safe and correct.
+&lt;/p&gt;&lt;h1&gt;Example driver&lt;/h1&gt;&lt;p dir="ltr"&gt;
+We'll use an implementation of a &lt;b dir="ltr"&gt;semaphore&lt;/b&gt; character device. Each device has a current value; writes of &lt;i dir="ltr"&gt;n&lt;/i&gt; bytes result in the device value being incremented by &lt;i dir="ltr"&gt;n&lt;/i&gt;; reads decrement the value by 1 unless the value is 0, in which case they will block until they can decrement the count without going below 0.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+  Suppose &lt;span dir="ltr"&gt;semaphore&lt;/span&gt; is a file representing our device. We can interact with it from the shell as follows:
+&lt;/p&gt;&lt;p&gt; &amp;gt; cat semaphore &lt;/p&gt;&lt;p dir="ltr"&gt;
+  When &lt;span dir="ltr"&gt;semaphore&lt;/span&gt; is a newly initialized device, the command above will block because the device's current value is 0. It will be unblocked if we run the following command from another shell because it increments the value by 1, which allows the original read to complete:
+&lt;/p&gt;&lt;p&gt;
+&amp;gt; echo -n a &amp;gt; semaphore
+&lt;/p&gt;&lt;p&gt;We could also increment the count by more than 1 if we write more data, for example:
+&lt;/p&gt;&lt;p&gt;
+&amp;gt; echo -n abc &amp;gt; semaphore
+&lt;/p&gt;&lt;p&gt;
+increments the count by 3, so the next 3 reads won't block.
+&lt;/p&gt;&lt;p&gt;
+To allow us to show a few more aspects of Rust, we'll add the following features to our driver: remember what the maximum value was throughout the lifetime of a device, and remember how many reads each file issued on the device.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+We'll now show how such a driver would be &lt;a href="https://github.com/Rust-for-Linux/linux/blob/e2382072517dd0b6b65d4e179e322f392efb9676/samples/rust/rust_semaphore.rs" dir="ltr"&gt;implemented in Rust&lt;/a&gt;, contrasting it with a &lt;a href="https://github.com/Rust-for-Linux/linux/blob/e2382072517dd0b6b65d4e179e322f392efb9676/samples/rust/rust_semaphore_c.c" dir="ltr"&gt;C implementation&lt;/a&gt;. We note, however, we are still early on so this is all subject to change in the future. How Rust can assist the developer is the aspect that we'd like to emphasize. For example, at compile time it allows us to eliminate or greatly reduce the chances of introducing classes of bugs, while at the same time remaining flexible and having minimal overhead.
+&lt;/p&gt;&lt;h2&gt;Character devices&lt;/h2&gt;&lt;p&gt;
+A developer needs to do the following to implement a driver for a new character device in Rust:
+&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Implement the &lt;a href="https://github.com/Rust-for-Linux/linux/blob/150939383ef391e3cab72aec1beaa6d65fe80c5b/rust/kernel/file_operations.rs#L448" dir="ltr"&gt;&lt;span dir="ltr"&gt;FileOperations&lt;/span&gt;&lt;/a&gt; trait: all associated functions are optional, so the developer only needs to implement the relevant ones for   their scenario. They relate to the fields in C's &lt;a href="https://elixir.bootlin.com/linux/v5.11.11/source/include/linux/fs.h#L1820" dir="ltr"&gt;&lt;span dir="ltr"&gt;struct file_operations&lt;/span&gt;&lt;/a&gt;.
+  &lt;/LI&gt;&lt;LI&gt;Implement the &lt;a href="https://github.com/Rust-for-Linux/linux/blob/150939383ef391e3cab72aec1beaa6d65fe80c5b/rust/kernel/file_operations.rs#L434" dir="ltr"&gt;&lt;span dir="ltr"&gt;FileOpener&lt;/span&gt;&lt;/a&gt; trait: it is a type-safe equivalent to C's &lt;span dir="ltr"&gt;open&lt;/span&gt; field of &lt;span dir="ltr"&gt;struct file_operations&lt;/span&gt;.&lt;/LI&gt;&lt;LI&gt;Register the new device type with the kernel: this lets the kernel know what functions need to be called in response to files of this new type being operated on.&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;
+The following outlines how the first two steps of our example compare in Rust and C:
+&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;impl&lt;/span&gt; FileOpener&amp;lt;Arc&amp;lt;Semaphore&amp;gt;&amp;gt; &lt;span dir="ltr"&gt;for&lt;/span&gt; FileState {
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;open&lt;/span&gt;&lt;/span&gt;(
+        shared: &amp;amp;Arc&amp;lt;Semaphore&amp;gt;
+    ) -&amp;gt; KernelResult&amp;lt;&lt;span dir="ltr"&gt;Box&lt;/span&gt;&amp;lt;&lt;span dir="ltr"&gt;Self&lt;/span&gt;&amp;gt;&amp;gt; {
+        [...]
+    }
+}
+ 
+&lt;span dir="ltr"&gt;impl&lt;/span&gt; FileOperations &lt;span dir="ltr"&gt;for&lt;/span&gt; FileState {
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;Wrapper&lt;/span&gt;&lt;/span&gt; = &lt;span dir="ltr"&gt;Box&lt;/span&gt;&amp;lt;&lt;span dir="ltr"&gt;Self&lt;/span&gt;&amp;gt;;
+ 
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;read&lt;/span&gt;&lt;/span&gt;(
+        &amp;amp;&lt;span dir="ltr"&gt;self&lt;/span&gt;,
+        _: &amp;amp;File,
+        data: &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; UserSlicePtrWriter,
+        offset: &lt;span dir="ltr"&gt;u64&lt;/span&gt;
+    ) -&amp;gt; KernelResult&amp;lt;&lt;span dir="ltr"&gt;usize&lt;/span&gt;&amp;gt; {
+        [...]
+    }
+ 
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;write&lt;/span&gt;&lt;/span&gt;(
+        &amp;amp;&lt;span dir="ltr"&gt;self&lt;/span&gt;,
+        data: &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; UserSlicePtrReader,
+        _offset: &lt;span dir="ltr"&gt;u64&lt;/span&gt;
+    ) -&amp;gt; KernelResult&amp;lt;&lt;span dir="ltr"&gt;usize&lt;/span&gt;&amp;gt; {
+        [...]
+    }
+ 
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;ioctl&lt;/span&gt;&lt;/span&gt;(
+        &amp;amp;&lt;span dir="ltr"&gt;self&lt;/span&gt;,
+        file: &amp;amp;File,
+        cmd: &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; IoctlCommand
+    ) -&amp;gt; KernelResult&amp;lt;&lt;span dir="ltr"&gt;i32&lt;/span&gt;&amp;gt; {
+        [...]
+    }
+ 
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;release&lt;/span&gt;&lt;/span&gt;(_obj: &lt;span dir="ltr"&gt;Box&lt;/span&gt;&amp;lt;&lt;span dir="ltr"&gt;Self&lt;/span&gt;&amp;gt;, _file: &amp;amp;File) {
+        [...]
+    }
+ 
+    declare_file_operations!(read, write, ioctl);
+}&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt; 
+&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;semaphore_open&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;struct&lt;/span&gt; inode *nodp,
+                   &lt;span dir="ltr"&gt;struct&lt;/span&gt; file *filp)&lt;/span&gt;
+&lt;/span&gt;{
+    &lt;span dir="ltr"&gt;struct&lt;/span&gt; semaphore_state *shared =
+        container_of(filp-&amp;gt;private_data,
+                     &lt;span dir="ltr"&gt;struct&lt;/span&gt; semaphore_state,
+                     miscdev);
+    [...]
+}
+ 
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt;
+ssize_t &lt;span dir="ltr"&gt;semaphore_write&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;struct&lt;/span&gt; file *filp,
+                        &lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;char&lt;/span&gt; __user *buffer,
+                        &lt;span dir="ltr"&gt;size_t&lt;/span&gt; count, &lt;span dir="ltr"&gt;loff_t&lt;/span&gt; *ppos)&lt;/span&gt;
+&lt;/span&gt;{
+    &lt;span dir="ltr"&gt;struct&lt;/span&gt; file_state *state = filp-&amp;gt;private_data;
+    [...]
+}
+ 
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt;
+ssize_t &lt;span dir="ltr"&gt;semaphore_read&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;struct&lt;/span&gt; file *filp,
+                       &lt;span dir="ltr"&gt;char&lt;/span&gt; __user *buffer,
+                       &lt;span dir="ltr"&gt;size_t&lt;/span&gt; count, &lt;span dir="ltr"&gt;loff_t&lt;/span&gt; *ppos)&lt;/span&gt;
+&lt;/span&gt;{
+    &lt;span dir="ltr"&gt;struct&lt;/span&gt; file_state *state = filp-&amp;gt;private_data;
+    [...]
+}
+ 
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt;
+&lt;span dir="ltr"&gt;long&lt;/span&gt; &lt;span dir="ltr"&gt;semaphore_ioctl&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;struct&lt;/span&gt; file *filp,
+                     &lt;span dir="ltr"&gt;unsigned&lt;/span&gt; &lt;span dir="ltr"&gt;int&lt;/span&gt; cmd,
+                     &lt;span dir="ltr"&gt;unsigned&lt;/span&gt; &lt;span dir="ltr"&gt;long&lt;/span&gt; arg)&lt;/span&gt;
+&lt;/span&gt;{
+    &lt;span dir="ltr"&gt;struct&lt;/span&gt; file_state *state = filp-&amp;gt;private_data;
+    [...]
+}
+ 
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt;
+&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;semaphore_release&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;struct&lt;/span&gt; inode *nodp,
+                      &lt;span dir="ltr"&gt;struct&lt;/span&gt; file *filp)&lt;/span&gt;
+&lt;/span&gt;{
+    &lt;span dir="ltr"&gt;struct&lt;/span&gt; file_state *state = filp-&amp;gt;private_data;
+    [...]
+}
+ 
+&lt;span dir="ltr"&gt;static&lt;/span&gt; &lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;struct&lt;/span&gt; file_operations semaphore_fops = {
+        .owner = THIS_MODULE,
+        .open = semaphore_open,
+        .read = semaphore_read,
+        .write = semaphore_write,
+        .compat_ioctl = semaphore_ioctl,
+        .release = semaphore_release,
+};&lt;/PRE&gt;&lt;p&gt;
+Character devices in Rust benefit from a number of safety features:
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Per-file state lifetime management: &lt;span dir="ltr"&gt;FileOpener::open&lt;/span&gt; returns an object whose lifetime is owned by the caller from then on. Any object that implements the &lt;span dir="ltr"&gt;&lt;a href="https://github.com/Rust-for-Linux/linux/blob/150939383ef391e3cab72aec1beaa6d65fe80c5b/rust/kernel/file_operations.rs#L516" dir="ltr"&gt;PointerWrapper&lt;/a&gt;&lt;/span&gt; trait can be returned, and we provide implementations for &lt;span dir="ltr"&gt;&lt;a href="https://doc.rust-lang.org/std/boxed/struct.Box.html" dir="ltr"&gt;Box&amp;lt;T&amp;gt;&lt;/a&gt;&lt;/span&gt; and &lt;span dir="ltr"&gt;&lt;a href="https://doc.rust-lang.org/std/sync/struct.Arc.html" dir="ltr"&gt;Arc&amp;lt;T&amp;gt;&lt;/a&gt;&lt;/span&gt;, so developers that use Rust's idiomatic heap-allocated or reference-counted pointers have no additional requirements.
+&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;
+All associated functions in &lt;span dir="ltr"&gt;FileOperations&lt;/span&gt; receive non-mutable references to &lt;span dir="ltr"&gt;self&lt;/span&gt; (more about this below), except the &lt;span dir="ltr"&gt;release&lt;/span&gt; function, which is the last function to be called and receives the plain object back (and its ownership with it). The &lt;span dir="ltr"&gt;release&lt;/span&gt; implementation can then defer the object destruction by transferring its ownership elsewhere, or destroy it then; in the case of a reference-counted object, 'destruction' means decrementing the reference count (and actual object destruction if the count goes to zero).
+&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;
+That is, we use Rust's ownership discipline when interacting with C code by handing the C portion ownership of a Rust object, allowing it to call functions implemented in Rust, then eventually giving ownership back. So as long as the C code is correct, the lifetime of Rust file objects work seamlessly as well, with the compiler enforcing correct lifetime management on the Rust side, for example: open cannot return stack-allocated pointers or heap-allocated objects containing pointers to the stack, &lt;span dir="ltr"&gt;ioctl&lt;/span&gt;/&lt;span dir="ltr"&gt;read&lt;/span&gt;/&lt;span dir="ltr"&gt;write&lt;/span&gt; cannot free (or modify without synchronization) the contents of the object stored in &lt;span dir="ltr"&gt;filp-&amp;gt;private_data&lt;/span&gt;, etc.
+  &lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;  &lt;/LI&gt;&lt;LI&gt;Non-mutable references: the associated functions called between &lt;span dir="ltr"&gt;open&lt;/span&gt; and &lt;span dir="ltr"&gt;release&lt;/span&gt; all receive non-mutable references to &lt;span dir="ltr"&gt;self&lt;/span&gt; because they can be called concurrently by multiple threads and Rust aliasing rules prohibit more than one mutable reference to an object at any given time.
+&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;
+If a developer needs to modify some state (and they generally do), they can do so via &lt;i dir="ltr"&gt;&lt;a href="https://doc.rust-lang.org/reference/interior-mutability.html" dir="ltr"&gt;interior mutability&lt;/a&gt;&lt;/i&gt;: mutable state can be wrapped in a &lt;span dir="ltr"&gt;&lt;a href="https://github.com/Rust-for-Linux/linux/blob/150939383ef391e3cab72aec1beaa6d65fe80c5b/rust/kernel/sync/mutex.rs#L29" dir="ltr"&gt;Mutex&amp;lt;T&amp;gt;&lt;/a&gt;&lt;/span&gt; or &lt;span dir="ltr"&gt;&lt;a href="https://github.com/Rust-for-Linux/linux/blob/150939383ef391e3cab72aec1beaa6d65fe80c5b/rust/kernel/sync/spinlock.rs#L45" dir="ltr"&gt;SpinLock&amp;lt;T&amp;gt;&lt;/a&gt;&lt;/span&gt; (or &lt;a href="https://doc.rust-lang.org/core/sync/atomic/" dir="ltr"&gt;atomics&lt;/a&gt;) and safely modified through them.
+&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;
+This prevents, at compile-time, bugs where a developer fails to acquire the appropriate lock when accessing a field (the field is inaccessible), or when a developer fails to wrap a field with a lock (the field is read-only).
+&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;&lt;/LI&gt;&lt;LI&gt;Per-device state: when file instances need to share per-device state, which is a very common occurrence in drivers, they can do so safely in Rust. When a device is registered, a typed object can be provided and a non-mutable reference to it is provided when &lt;span dir="ltr"&gt;FileOperation::open&lt;/span&gt; is called. In our example, the shared object is wrapped in &lt;span dir="ltr"&gt;Arc&amp;lt;T&amp;gt;&lt;/span&gt;, so files can safely clone and hold on to a reference to them.
+&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;
+The reason &lt;span dir="ltr"&gt;FileOperation&lt;/span&gt; is its own trait (as opposed to, for example, &lt;span dir="ltr"&gt;open&lt;/span&gt; being part of the &lt;span dir="ltr"&gt;FileOperations&lt;/span&gt; trait) is to allow a single file implementation to be registered in different ways.
+&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;
+This eliminates opportunities for developers to get the wrong data when trying to retrieve shared state. For example, in C when a &lt;span dir="ltr"&gt;&lt;a href="https://elixir.bootlin.com/linux/v5.11.11/source/include/linux/miscdevice.h#L79" dir="ltr"&gt;miscdevice&lt;/a&gt;&lt;/span&gt; is registered, a pointer to it is available in &lt;span dir="ltr"&gt;filp-&amp;gt;private_data&lt;/span&gt;; when a &lt;a href="https://elixir.bootlin.com/linux/v5.11.11/source/include/linux/cdev.h#L14" dir="ltr"&gt;&lt;span dir="ltr"&gt;cdev&lt;/span&gt;&lt;/a&gt; is registered, a pointer to it is available in &lt;span dir="ltr"&gt;inode-&amp;gt;i_cdev&lt;/span&gt;. These structs are usually embedded in an outer struct that contains the shared state, so developers usually use the &lt;a href="https://elixir.bootlin.com/linux/v5.11.11/source/include/linux/kernel.h#L685" dir="ltr"&gt;&lt;span dir="ltr"&gt;container_of&lt;/span&gt;&lt;/a&gt; macro to recover the shared state. Rust encapsulates all of this and the potentially troublesome pointer casts in a safe abstraction.
+      &lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;&lt;/LI&gt;&lt;LI&gt;
+    Static typing: we take advantage of Rust's support for generics to implement all of the above functions and types with static types. So there are no opportunities for a developer to convert an untyped variable or field to the wrong type. The C code in the table above has casts from an essentially untyped (&lt;span dir="ltr"&gt;void&lt;/span&gt; *) pointer to the desired type at the start of each function: this is likely to work fine when first written, but may lead to bugs as the code evolves and assumptions change. Rust would catch any such mistakes at compile time.&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;
+  &lt;/LI&gt;&lt;LI&gt;
+    File operations: as we mentioned before, a developer needs to implement the &lt;span dir="ltr"&gt;FileOperations&lt;/span&gt; trait to customize the behavior of their device. They do this with a block starting with &lt;span dir="ltr"&gt;impl FileOperations for Device&lt;/span&gt;, where &lt;span dir="ltr"&gt;Device&lt;/span&gt; is the type implementing the file behavior (&lt;span dir="ltr"&gt;FileState&lt;/span&gt; in our example). Once inside this block, tools know that only a limited number of functions can be defined, so they can automatically insert the prototypes. (Personally, I use &lt;span dir="ltr"&gt;&lt;a href="https://github.com/neovim/nvim-lspconfig" dir="ltr"&gt;neovim&lt;/a&gt;&lt;/span&gt; and the &lt;a href="https://rust-analyzer.github.io/" dir="ltr"&gt;&lt;span dir="ltr"&gt;rust-analyzer&lt;/span&gt;&lt;/a&gt; LSP server.)
+&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;While we use this trait in Rust, the C portion of the kernel still requires an instance of &lt;span dir="ltr"&gt;struct file_operations&lt;/span&gt;. The kernel crate automatically generates one from the trait implementation (and optionally the &lt;span dir="ltr"&gt;&lt;a href="https://github.com/Rust-for-Linux/linux/blob/150939383ef391e3cab72aec1beaa6d65fe80c5b/rust/kernel/file_operations.rs#L309" dir="ltr"&gt;declare_file_operations&lt;/a&gt;&lt;/span&gt; macro): although it has code to generate the correct struct, it is all &lt;span dir="ltr"&gt;const&lt;/span&gt;, so evaluated at compile-time with zero runtime cost.
+  &lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Ioctl handling&lt;/h2&gt;&lt;p dir="ltr"&gt;
+For a driver to provide a custom &lt;a href="https://man7.org/linux/man-pages/man2/ioctl.2.html" dir="ltr"&gt;ioctl&lt;/a&gt; handler, it needs to implement the&amp;nbsp;&lt;span dir="ltr"&gt;ioctl&lt;/span&gt; function that is part of the &lt;span dir="ltr"&gt;FileOperations&lt;/span&gt; trait, as exemplified in the table below.
+&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;ioctl&lt;/span&gt;&lt;/span&gt;(
+    &amp;amp;&lt;span dir="ltr"&gt;self&lt;/span&gt;,
+    file: &amp;amp;File,
+    cmd: &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; IoctlCommand
+) -&amp;gt; KernelResult&amp;lt;&lt;span dir="ltr"&gt;i32&lt;/span&gt;&amp;gt; {
+    cmd.dispatch(&lt;span dir="ltr"&gt;self&lt;/span&gt;, file)
+}
+ 
+&lt;span dir="ltr"&gt;impl&lt;/span&gt; IoctlHandler &lt;span dir="ltr"&gt;for&lt;/span&gt; FileState {
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;read&lt;/span&gt;&lt;/span&gt;(
+        &amp;amp;&lt;span dir="ltr"&gt;self&lt;/span&gt;,
+        _file: &amp;amp;File,
+        cmd: &lt;span dir="ltr"&gt;u32&lt;/span&gt;,
+        writer: &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; UserSlicePtrWriter
+    ) -&amp;gt; KernelResult&amp;lt;&lt;span dir="ltr"&gt;i32&lt;/span&gt;&amp;gt; {
+        &lt;span dir="ltr"&gt;match&lt;/span&gt; cmd {
+            IOCTL_GET_READ_COUNT =&amp;gt; {
+                writer.write(
+                    &amp;amp;&lt;span dir="ltr"&gt;self&lt;/span&gt;
+                    .read_count
+                    .load(Ordering::Relaxed))?;
+                &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(&lt;span dir="ltr"&gt;0&lt;/span&gt;)
+            }
+            _ =&amp;gt; &lt;span dir="ltr"&gt;Err&lt;/span&gt;(Error::EINVAL),
+        }
+    }
+ 
+    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;write&lt;/span&gt;&lt;/span&gt;(
+        &amp;amp;&lt;span dir="ltr"&gt;self&lt;/span&gt;,
+        _file: &amp;amp;File,
+        cmd: &lt;span dir="ltr"&gt;u32&lt;/span&gt;,
+        reader: &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; UserSlicePtrReader
+    ) -&amp;gt; KernelResult&amp;lt;&lt;span dir="ltr"&gt;i32&lt;/span&gt;&amp;gt; {
+        &lt;span dir="ltr"&gt;match&lt;/span&gt; cmd {
+            IOCTL_SET_READ_COUNT =&amp;gt; {
+                &lt;span dir="ltr"&gt;self&lt;/span&gt;
+                .read_count
+                .store(reader.read()?,
+                       Ordering::Relaxed);
+                &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(&lt;span dir="ltr"&gt;0&lt;/span&gt;)
+            }
+            _ =&amp;gt; &lt;span dir="ltr"&gt;Err&lt;/span&gt;(Error::EINVAL),
+        }
+    }
+}&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;define&lt;/span&gt; IOCTL_GET_READ_COUNT _IOR(&lt;span dir="ltr"&gt;'c'&lt;/span&gt;, 1, u64)&lt;/span&gt;
+&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;define&lt;/span&gt; IOCTL_SET_READ_COUNT _IOW(&lt;span dir="ltr"&gt;'c'&lt;/span&gt;, 1, u64)&lt;/span&gt;
+ 
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt;
+&lt;span dir="ltr"&gt;long&lt;/span&gt; &lt;span dir="ltr"&gt;semaphore_ioctl&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;struct&lt;/span&gt; file *filp,
+                     &lt;span dir="ltr"&gt;unsigned&lt;/span&gt; &lt;span dir="ltr"&gt;int&lt;/span&gt; cmd,
+                     &lt;span dir="ltr"&gt;unsigned&lt;/span&gt; &lt;span dir="ltr"&gt;long&lt;/span&gt; arg)&lt;/span&gt;
+&lt;/span&gt;{
+    &lt;span dir="ltr"&gt;struct&lt;/span&gt; file_state *state = filp-&amp;gt;private_data;
+    &lt;span dir="ltr"&gt;void&lt;/span&gt; __user *buffer = (&lt;span dir="ltr"&gt;void&lt;/span&gt; __user *)arg;
+    u64 value;
+ 
+    &lt;span dir="ltr"&gt;switch&lt;/span&gt; (cmd) {
+    &lt;span dir="ltr"&gt;case&lt;/span&gt; IOCTL_GET_READ_COUNT:
+        value = atomic64_read(&amp;amp;state-&amp;gt;read_count);
+        &lt;span dir="ltr"&gt;if&lt;/span&gt; (copy_to_user(buffer, &amp;amp;value, &lt;span dir="ltr"&gt;sizeof&lt;/span&gt;(value)))
+            &lt;span dir="ltr"&gt;return&lt;/span&gt; -EFAULT;
+        &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;;
+    &lt;span dir="ltr"&gt;case&lt;/span&gt; IOCTL_SET_READ_COUNT:
+        &lt;span dir="ltr"&gt;if&lt;/span&gt; (copy_from_user(&amp;amp;value, buffer, &lt;span dir="ltr"&gt;sizeof&lt;/span&gt;(value)))
+            &lt;span dir="ltr"&gt;return&lt;/span&gt; -EFAULT;
+        atomic64_set(&amp;amp;state-&amp;gt;read_count, value);
+        &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;;
+    &lt;span dir="ltr"&gt;default&lt;/span&gt;:
+        &lt;span dir="ltr"&gt;return&lt;/span&gt; -EINVAL;
+    }
+}&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+Ioctl commands are standardized such that, given a command, we know whether a user buffer is provided, its intended use (read, write, both, none), and its size. In Rust, we provide a &lt;a href="https://github.com/Rust-for-Linux/linux/blob/150939383ef391e3cab72aec1beaa6d65fe80c5b/rust/kernel/file_operations.rs#L386" dir="ltr"&gt;dispatcher&lt;/a&gt; (accessible by calling &lt;span dir="ltr"&gt;cmd.dispatch&lt;/span&gt;) that uses this information to automatically create user memory access helpers and pass them to the caller.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+A driver is not &lt;i dir="ltr"&gt;required&lt;/i&gt; to use this though. If, for example, it doesn't use the standard ioctl encoding, Rust offers the flexibility of simply calling &lt;span dir="ltr"&gt;cmd.raw&lt;/span&gt; to extract the raw arguments and using them to handle the ioctl (potentially with unsafe code, which will need to be justified).
+&lt;/p&gt;&lt;p&gt;
+However, if a driver implementation does use the standard dispatcher, it will benefit from not having to implement any unsafe code, and:
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The pointer to user memory is never a native pointer, so the developer cannot accidentally dereference it.
+&lt;/LI&gt;&lt;LI&gt;The types that allow the driver to read from user space only allow data to be read once, so we eliminate the risk of time-of-check to time-of-use (TOCTOU) bugs because when a driver needs to access data twice, it needs to copy it to kernel memory, where an attacker is not allowed to modify it. Excluding unsafe blocks, there is no way to introduce this class of bugs in Rust.
+&lt;/LI&gt;&lt;LI&gt;No accidental overflow of the user buffer: we'll never read or write past the end of the user buffer because this is enforced automatically based on the size encoded in the ioctl command. In our example above, the implementation of &lt;span dir="ltr"&gt;IOCTL_GET_READ_COUNT&lt;/span&gt; only has access to an instance of &lt;a href="https://github.com/Rust-for-Linux/linux/blob/150939383ef391e3cab72aec1beaa6d65fe80c5b/rust/kernel/user_ptr.rs#L230" dir="ltr"&gt;&lt;span dir="ltr"&gt;UserSlicePtrWriter&lt;/span&gt;&lt;/a&gt;, which limits the number of writable bytes to &lt;span dir="ltr"&gt;sizeof(u64)&lt;/span&gt; as encoded in the ioctl command.
+&lt;/LI&gt;&lt;LI&gt;No mixing of reads and writes: we'll never write buffers for ioctls that are only meant to read and never read buffers for ioctls that are only meant to write. This is enforced by read and write handlers only getting instances of &lt;a href="https://github.com/Rust-for-Linux/linux/blob/150939383ef391e3cab72aec1beaa6d65fe80c5b/rust/kernel/user_ptr.rs#L230" dir="ltr"&gt;&lt;span dir="ltr"&gt;UserSlicePtrWriter&lt;/span&gt;&lt;/a&gt; and &lt;a href="https://github.com/Rust-for-Linux/linux/blob/150939383ef391e3cab72aec1beaa6d65fe80c5b/rust/kernel/user_ptr.rs#L158" dir="ltr"&gt;&lt;span dir="ltr"&gt;UserSlicePtrReader&lt;/span&gt;&lt;/a&gt; respectively.
+&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
+All of the above could potentially also be done in C, but it's very easy for developers to (likely unintentionally) break contracts that lead to unsafety; Rust requires &lt;span dir="ltr"&gt;unsafe&lt;/span&gt; blocks for this, which should only be used in rare cases and brings additional scrutiny. Additionally, Rust offers the following:
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The types used to read and write user memory do not implement the &lt;span dir="ltr"&gt;&lt;a href="https://doc.rust-lang.org/std/marker/trait.Send.html" dir="ltr"&gt;Send&lt;/a&gt;&lt;/span&gt; and &lt;span dir="ltr"&gt;&lt;a href="https://doc.rust-lang.org/std/marker/trait.Sync.html" dir="ltr"&gt;Sync&lt;/a&gt;&lt;/span&gt; traits, which means that they (and pointers to them) are not safe to be used in another thread context. In Rust, if a driver developer attempted to write code that passed one of these objects to another thread (where it wouldn't be safe to use them because it isn't necessarily in the right memory manager context), they would get a compilation error.&lt;/LI&gt;&lt;LI&gt;When calling &lt;span dir="ltr"&gt;IoctlCommand::dispatch&lt;/span&gt;, one might understandably think that we need dynamic dispatching to reach the actual handler implementation (which would incur additional cost in comparison to C), but we don't. Our usage of generics will lead the compiler to monomorphize the function, which will result in static function calls that can even be inlined if the optimizer so chooses.
+&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Locking and condition variables&lt;/h2&gt;&lt;p&gt;We allow developers to use mutexes and spinlocks to provide interior mutability. In our example, we use a mutex to protect mutable data; in the tables below we show the data structures we use in C and Rust, and how we implement a wait until the count is nonzero so that we can satisfy a read:
+  &lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;SemaphoreInner&lt;/span&gt;&lt;/span&gt; {
+    count: &lt;span dir="ltr"&gt;usize&lt;/span&gt;,
+    max_seen: &lt;span dir="ltr"&gt;usize&lt;/span&gt;,
+}
+ 
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;Semaphore&lt;/span&gt;&lt;/span&gt; {
+    changed: CondVar,
+    inner: Mutex&amp;lt;SemaphoreInner&amp;gt;,
+}
+ 
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;FileState&lt;/span&gt;&lt;/span&gt; {
+    read_count: AtomicU64,
+    shared: Arc&amp;lt;Semaphore&amp;gt;,
+}&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; semaphore_state {
+    &lt;span dir="ltr"&gt;struct&lt;/span&gt; kref ref;
+    &lt;span dir="ltr"&gt;struct&lt;/span&gt; miscdevice miscdev;
+    &lt;span dir="ltr"&gt;wait_queue_head_t&lt;/span&gt; changed;
+    &lt;span dir="ltr"&gt;struct&lt;/span&gt; mutex mutex;
+    &lt;span dir="ltr"&gt;size_t&lt;/span&gt; count;
+    &lt;span dir="ltr"&gt;size_t&lt;/span&gt; max_seen;
+};
+ 
+&lt;span dir="ltr"&gt;struct&lt;/span&gt; file_state {
+    &lt;span dir="ltr"&gt;atomic64_t&lt;/span&gt; read_count;
+    &lt;span dir="ltr"&gt;struct&lt;/span&gt; semaphore_state *shared;
+};&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;consume&lt;/span&gt;&lt;/span&gt;(&amp;amp;&lt;span dir="ltr"&gt;self&lt;/span&gt;) -&amp;gt; KernelResult {
+    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; inner = &lt;span dir="ltr"&gt;self&lt;/span&gt;.shared.inner.lock();
+    &lt;span dir="ltr"&gt;while&lt;/span&gt; inner.count == &lt;span dir="ltr"&gt;0&lt;/span&gt; {
+        &lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;self&lt;/span&gt;.shared.changed.wait(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; inner) {
+            &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;Err&lt;/span&gt;(Error::EINTR);
+        }
+    }
+    inner.count -= &lt;span dir="ltr"&gt;1&lt;/span&gt;;
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
+}&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt; &lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;semaphore_consume&lt;/span&gt;&lt;span dir="ltr"&gt;(
+    &lt;span dir="ltr"&gt;struct&lt;/span&gt; semaphore_state *state)&lt;/span&gt;
+&lt;/span&gt;{
+    DEFINE_WAIT(wait);
+ 
+    mutex_lock(&amp;amp;state-&amp;gt;mutex);
+    &lt;span dir="ltr"&gt;while&lt;/span&gt; (state-&amp;gt;count == &lt;span dir="ltr"&gt;0&lt;/span&gt;) {
+        prepare_to_wait(&amp;amp;state-&amp;gt;changed, &amp;amp;wait,
+                        TASK_INTERRUPTIBLE);
+        mutex_unlock(&amp;amp;state-&amp;gt;mutex);
+        schedule();
+        finish_wait(&amp;amp;state-&amp;gt;changed, &amp;amp;wait);
+        &lt;span dir="ltr"&gt;if&lt;/span&gt; (signal_pending(current))
+            &lt;span dir="ltr"&gt;return&lt;/span&gt; -EINTR;
+        mutex_lock(&amp;amp;state-&amp;gt;mutex);
+    }
+ 
+    state-&amp;gt;count--;
+    mutex_unlock(&amp;amp;state-&amp;gt;mutex);
+ 
+    &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;;
+}&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+We note that such waits are not uncommon in the existing C code, for example, a &lt;a href="https://elixir.bootlin.com/linux/v5.12-rc6/source/fs/pipe.c#L1053" dir="ltr"&gt;pipe waiting&lt;/a&gt; for a "partner" to write, a &lt;a href="https://elixir.bootlin.com/linux/v5.12-rc6/source/net/unix/af_unix.c#L2189" dir="ltr"&gt;unix-domain socket waiting&lt;/a&gt; for data, an &lt;a href="https://elixir.bootlin.com/linux/v5.12-rc6/source/fs/inode.c#L829" dir="ltr"&gt;inode search waiting&lt;/a&gt; for completion of a delete, or a &lt;a href="https://elixir.bootlin.com/linux/v5.12-rc6/source/kernel/umh.c#L249" dir="ltr"&gt;user-mode helper waiting&lt;/a&gt; for state change.&lt;/p&gt;&lt;p&gt;
+The following are benefits from the Rust implementation:
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The &lt;span dir="ltr"&gt;Semaphore::inner&lt;/span&gt; field is only accessible when the lock is held, through the guard returned by the &lt;span dir="ltr"&gt;lock&lt;/span&gt; function. So developers cannot accidentally read or write protected data without locking it first. In the C example above, &lt;span dir="ltr"&gt;count&lt;/span&gt; and &lt;span dir="ltr"&gt;max_seen&lt;/span&gt; in &lt;span dir="ltr"&gt;semaphore_state&lt;/span&gt; are protected by &lt;span dir="ltr"&gt;mutex&lt;/span&gt;, but there is no enforcement that the lock is held while they're accessed.
+&lt;/LI&gt;&lt;LI&gt;Resource Acquisition Is Initialization (RAII): the lock is unlocked automatically when the guard (&lt;span dir="ltr"&gt;inner&lt;/span&gt; in this case) goes out of scope. This ensures that locks are always unlocked: if the developer needs to keep a lock locked, they can keep the guard alive, for example, by returning the guard itself; conversely, if they need to unlock before the end of the scope, they can explicitly do it by calling the &lt;span dir="ltr"&gt;drop&lt;/span&gt; function.
+&lt;/LI&gt;&lt;LI&gt;Developers can use any lock that implements the &lt;span dir="ltr"&gt;Lock&lt;/span&gt; trait, which includes &lt;span dir="ltr"&gt;Mutex&lt;/span&gt; and &lt;span dir="ltr"&gt;SpinLock&lt;/span&gt;, at no additional runtime cost when compared to a C implementation. Other synchronization constructs, including condition variables, also work transparently and with zero additional run-time cost.
+&lt;/LI&gt;&lt;LI&gt;Rust implements condition variables using kernel wait queues. This allows developers to benefit from atomic release of the lock and putting the thread to sleep without having to reason about low-level kernel scheduler functions. In the C example above, &lt;span dir="ltr"&gt;semaphore_consume&lt;/span&gt; is a mix of semaphore logic and subtle Linux scheduling: for example, the code is incorrect if &lt;span dir="ltr"&gt;mutex_unlock&lt;/span&gt; is called before &lt;span dir="ltr"&gt;prepare_to_wait&lt;/span&gt; because it may result in a wake up being missed.
+&lt;/LI&gt;&lt;LI&gt;No unsynchronized access: as we mentioned before, variables shared by multiple threads/CPUs must be read-only, with interior mutability being the solution for cases when mutability is needed. In addition to the example with locks above, the ioctl example in the previous section also has an example of using an atomic variable; Rust also requires developers to specify how memory is to &lt;a href="https://doc.rust-lang.org/core/sync/atomic/enum.Ordering.html" dir="ltr"&gt;be synchronized&lt;/a&gt; by atomic accesses. In the C part of the example, we happen to use &lt;span dir="ltr"&gt;atomic64_t&lt;/span&gt;, but the compiler won't alert a developer to this need.
+&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Error handling and control flow&lt;/h2&gt;&lt;p dir="ltr"&gt;
+In the tables below, we show how &lt;span dir="ltr"&gt;open&lt;/span&gt;, &lt;span dir="ltr"&gt;read&lt;/span&gt;, and &lt;span dir="ltr"&gt;write&lt;/span&gt; are implemented in our example driver:
+&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;read&lt;/span&gt;&lt;/span&gt;(
+    &amp;amp;&lt;span dir="ltr"&gt;self&lt;/span&gt;,
+    _: &amp;amp;File,
+    data: &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; UserSlicePtrWriter,
+    offset: &lt;span dir="ltr"&gt;u64&lt;/span&gt;
+) -&amp;gt; KernelResult&amp;lt;&lt;span dir="ltr"&gt;usize&lt;/span&gt;&amp;gt; {
+   &lt;span dir="ltr"&gt;if&lt;/span&gt; data.is_empty() &lt;span dir="ltr"&gt;||&lt;/span&gt; offset &amp;gt; &lt;span dir="ltr"&gt;0&lt;/span&gt; {
+        &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(&lt;span dir="ltr"&gt;0&lt;/span&gt;);
+    }
+ 
+    &lt;span dir="ltr"&gt;self&lt;/span&gt;.consume()?;
+    data.write_slice(&amp;amp;[&lt;span dir="ltr"&gt;0u8&lt;/span&gt;; &lt;span dir="ltr"&gt;1&lt;/span&gt;])?;
+    &lt;span dir="ltr"&gt;self&lt;/span&gt;.read_count.fetch_add(&lt;span dir="ltr"&gt;1&lt;/span&gt;, Ordering::Relaxed);
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(&lt;span dir="ltr"&gt;1&lt;/span&gt;)
+}
+ 
+&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt;
+ssize_t &lt;span dir="ltr"&gt;semaphore_read&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;struct&lt;/span&gt; file *filp,
+                       &lt;span dir="ltr"&gt;char&lt;/span&gt; __user *buffer,
+                       &lt;span dir="ltr"&gt;size_t&lt;/span&gt; count, &lt;span dir="ltr"&gt;loff_t&lt;/span&gt; *ppos)&lt;/span&gt;
+&lt;/span&gt;{
+    &lt;span dir="ltr"&gt;struct&lt;/span&gt; file_state *state = filp-&amp;gt;private_data;
+    &lt;span dir="ltr"&gt;char&lt;/span&gt; c = &lt;span dir="ltr"&gt;0&lt;/span&gt;;
+    &lt;span dir="ltr"&gt;int&lt;/span&gt; ret;
+ 
+    &lt;span dir="ltr"&gt;if&lt;/span&gt; (count == &lt;span dir="ltr"&gt;0&lt;/span&gt; || *ppos &amp;gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;)
+        &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;;
+ 
+    ret = semaphore_consume(state-&amp;gt;shared);
+    &lt;span dir="ltr"&gt;if&lt;/span&gt; (ret)
+        &lt;span dir="ltr"&gt;return&lt;/span&gt; ret;
+ 
+    &lt;span dir="ltr"&gt;if&lt;/span&gt; (copy_to_user(buffer, &amp;amp;c, &lt;span dir="ltr"&gt;sizeof&lt;/span&gt;(c)))
+        &lt;span dir="ltr"&gt;return&lt;/span&gt; -EFAULT;
+ 
+    atomic64_add(&lt;span dir="ltr"&gt;1&lt;/span&gt;, &amp;amp;state-&amp;gt;read_count);
+    *ppos += &lt;span dir="ltr"&gt;1&lt;/span&gt;;
+    &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;1&lt;/span&gt;;
+}&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;write&lt;/span&gt;&lt;/span&gt;(
+    &amp;amp;&lt;span dir="ltr"&gt;self&lt;/span&gt;,
+    data: &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; UserSlicePtrReader,
+    _offset: &lt;span dir="ltr"&gt;u64&lt;/span&gt;
+) -&amp;gt; KernelResult&amp;lt;&lt;span dir="ltr"&gt;usize&lt;/span&gt;&amp;gt; {
+   {
+        &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; inner = &lt;span dir="ltr"&gt;self&lt;/span&gt;.shared.inner.lock();
+        inner.count = inner.count.saturating_add(data.len());
+        &lt;span dir="ltr"&gt;if&lt;/span&gt; inner.count &amp;gt; inner.max_seen {
+            inner.max_seen = inner.count;
+        }
+    }
+ 
+    &lt;span dir="ltr"&gt;self&lt;/span&gt;.shared.changed.notify_all();
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(data.len())
+}&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt;
+ssize_t &lt;span dir="ltr"&gt;semaphore_write&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;struct&lt;/span&gt; file *filp,
+                        &lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;char&lt;/span&gt; __user *buffer,
+                        &lt;span dir="ltr"&gt;size_t&lt;/span&gt; count, &lt;span dir="ltr"&gt;loff_t&lt;/span&gt; *ppos)&lt;/span&gt;
+&lt;/span&gt;{
+    &lt;span dir="ltr"&gt;struct&lt;/span&gt; file_state *state = filp-&amp;gt;private_data;
+    &lt;span dir="ltr"&gt;struct&lt;/span&gt; semaphore_state *shared = state-&amp;gt;shared;
+ 
+    mutex_lock(&amp;amp;shared-&amp;gt;mutex);
+    shared-&amp;gt;count += count;
+    &lt;span dir="ltr"&gt;if&lt;/span&gt; (shared-&amp;gt;count &amp;lt; count)
+        shared-&amp;gt;count = SIZE_MAX;
+ 
+    &lt;span dir="ltr"&gt;if&lt;/span&gt; (shared-&amp;gt;count &amp;gt; shared-&amp;gt;max_seen)
+        shared-&amp;gt;max_seen = shared-&amp;gt;count;
+ 
+    mutex_unlock(&amp;amp;shared-&amp;gt;mutex);
+ 
+    wake_up_all(&amp;amp;shared-&amp;gt;changed);
+    &lt;span dir="ltr"&gt;return&lt;/span&gt; count;
+}&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;open&lt;/span&gt;&lt;/span&gt;(
+    shared: &amp;amp;Arc&amp;lt;Semaphore&amp;gt;
+) -&amp;gt; KernelResult&amp;lt;&lt;span dir="ltr"&gt;Box&lt;/span&gt;&amp;lt;&lt;span dir="ltr"&gt;Self&lt;/span&gt;&amp;gt;&amp;gt; {
+    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(&lt;span dir="ltr"&gt;Box&lt;/span&gt;::try_new(&lt;span dir="ltr"&gt;Self&lt;/span&gt; {
+        read_count: AtomicU64::new(&lt;span dir="ltr"&gt;0&lt;/span&gt;),
+        shared: shared.clone(),
+    })?)
+}&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt; 
+&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;semaphore_open&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;struct&lt;/span&gt; inode *nodp,
+                   &lt;span dir="ltr"&gt;struct&lt;/span&gt; file *filp)&lt;/span&gt;
+&lt;/span&gt;{
+    &lt;span dir="ltr"&gt;struct&lt;/span&gt; semaphore_state *shared =
+        container_of(filp-&amp;gt;private_data,
+                     &lt;span dir="ltr"&gt;struct&lt;/span&gt; semaphore_state,
+                     miscdev);
+    &lt;span dir="ltr"&gt;struct&lt;/span&gt; file_state *state;
+ 
+    state = kzalloc(&lt;span dir="ltr"&gt;sizeof&lt;/span&gt;(*state), GFP_KERNEL);
+    &lt;span dir="ltr"&gt;if&lt;/span&gt; (!state)
+        &lt;span dir="ltr"&gt;return&lt;/span&gt; -ENOMEM;
+ 
+    kref_get(&amp;amp;shared-&amp;gt;ref);
+    state-&amp;gt;shared = shared;
+    atomic64_set(&amp;amp;state-&amp;gt;read_count, &lt;span dir="ltr"&gt;0&lt;/span&gt;);
+ 
+    filp-&amp;gt;private_data = state;
+ 
+    &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;;
+}&lt;/PRE&gt;&lt;p&gt;
+They illustrate other benefits brought by Rust:
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The &lt;span dir="ltr"&gt;?&lt;/span&gt; operator: it is used by the Rust &lt;span dir="ltr"&gt;open&lt;/span&gt; and &lt;span dir="ltr"&gt;read&lt;/span&gt; implementations to do error handling implicitly; the developer can focus on the semaphore logic, the resulting code being quite small and readable. The C versions have error-handling noise that can make them less readable.
+&lt;/LI&gt;&lt;LI&gt;Required initialization: Rust requires all fields of a struct to be initialized on construction, so the developer can never accidentally fail to initialize a field; C offers no such facility. In our &lt;span dir="ltr"&gt;open&lt;/span&gt; example above, the developer of the C version could easily fail to call &lt;span dir="ltr"&gt;kref_get&lt;/span&gt; (even though all fields would have been initialized); in Rust, the user is required to call &lt;span dir="ltr"&gt;clone&lt;/span&gt; (which increments the ref count), otherwise they get a compilation error.
+&lt;/LI&gt;&lt;LI&gt;RAII scoping: the Rust write implementation uses a statement block to control when &lt;span dir="ltr"&gt;inner&lt;/span&gt; goes out of scope and therefore the lock is released.
+&lt;/LI&gt;&lt;LI&gt;Integer overflow behavior: Rust encourages developers to always consider how overflows should be handled. In our &lt;span dir="ltr"&gt;write&lt;/span&gt; example, we want a saturating one so that we don't end up with a zero value when adding to our semaphore. In C, we need to manually check for overflows, there is no additional support from the compiler.
+&lt;/LI&gt;&lt;/UL&gt;&lt;h1&gt;What's next&lt;/h1&gt;&lt;p dir="ltr"&gt;
+The examples above are only a small part of the whole project. We hope it gives readers a glimpse of the kinds of benefits that Rust brings. At the moment we have nearly all generic kernel functionality needed by Binder neatly wrapped in safe Rust abstractions, so we are in the process of &lt;a href="https://lore.kernel.org/lkml/20210414184604.23473-1-ojeda@kernel.org/T/#mb5e524dae9d5a5815c6e68eb36b9bde4e87c861d" dir="ltr"&gt;gathering feedback from the broader Linux kernel community&lt;/a&gt; with the intent of upstreaming the existing Rust support.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+We also continue to make progress on our Binder prototype, implement additional abstractions, and smooth out some rough edges. This is an exciting time and a rare opportunity to potentially influence how the Linux kernel is developed, as well as inform the evolution of the Rust language. We invite those interested to join us in &lt;a href="https://github.com/Rust-for-Linux/linux" dir="ltr"&gt;Rust for Linux&lt;/a&gt; and attend our planned talk at &lt;a href="https://linuxplumbersconf.org/" dir="ltr"&gt;Linux Plumbers Conference 2021&lt;/a&gt;!
+&lt;/p&gt;&lt;p&gt;&lt;i&gt;
+Thanks Nick Desaulniers, Kees Cook, and Adrian Taylor for contributions to this post. Special thanks to Jeff Vander Stoep for contributions and editing, and to Greg Kroah-Hartman for reviewing and contributing to the code examples.
+&lt;/i&gt;&lt;/p&gt;&lt;img alt="Share on Twitter" height="24" src="https://www.gstatic.com/images/icons/material/system/2x/post_twitter_black_24dp.png" width="24"&gt;&lt;img alt="Share on Facebook" height="24" src="https://www.gstatic.com/images/icons/material/system/2x/post_facebook_black_24dp.png" width="24"&gt;</description><pubDate>Wed, 14 Apr 2021 19:45:42 -0500</pubDate></item><item><title>Reproducible Builds: Increasing the Integrity of Software Supply Chains</title><link>https://lobste.rs/s/zhorms</link><description>&lt;div&gt;
   
   
   
@@ -2254,421 +2668,7 @@ qxWVaSd5FYdJNXiFy9I5AkqZOFB/pE4xBIwlEc7baRF/VFR5GISfXWsPtW4m+HWD
 aV0cAi81EnAYEk7Tdt5Vtakcc3L5dhbGCTNo11G0uxOiPv00JV8=
 =JjU2
 -----END PGP SIGNATURE-----
-&lt;/PRE&gt;</description><pubDate>Tue, 13 Apr 2021 13:53:30 -0500</pubDate></item><item><title>Solving Connect 4: how to build a perfect AI (2019)</title><link>http://blog.gamesolver.org/</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/cm9k0p/solving_connect_4_how_build_perfect_ai"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Wed, 14 Apr 2021 11:08:55 -0500</pubDate></item><item><title>Rust in the Linux kernel</title><link>https://lobste.rs/s/1mgsip</link><description>&lt;div itemprop="articleBody"&gt;&lt;span&gt;Posted by Wedson Almeida Filho, Android Team&lt;/span&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;
-In our &lt;a href="https://security.googleblog.com/2021/04/rust-in-android-platform.html" dir="ltr"&gt;previous post&lt;/a&gt;, we announced that Android now supports the &lt;a href="https://www.rust-lang.org/" dir="ltr"&gt;Rust&lt;/a&gt; programming language for developing the OS itself. Related to this, we are also participating in the effort to evaluate the use of Rust as a supported language for developing the Linux kernel. In this post, we discuss some technical aspects of this work using a few simple examples.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-C has been the language of choice for writing kernels for almost half a century because it offers the level of control and predictable performance required by such a critical component. Density of memory safety bugs in the Linux kernel is generally quite low due to high code quality, high standards of code review, and carefully implemented safeguards. However, &lt;a href="https://events19.linuxfoundation.org/wp-content/uploads/2017/11/Syzbot-and-the-Tale-of-Thousand-Kernel-Bugs-Dmitry-Vyukov-Google.pdf" dir="ltr"&gt;memory safety bugs do still regularly occur&lt;/a&gt;. On Android, vulnerabilities in the kernel are generally considered high-severity because they can result in a security model bypass due to the privileged mode that the kernel runs in.
-&lt;/p&gt;&lt;p&gt;
-We feel that Rust is now ready to join C as a practical language for implementing the kernel. It can help us reduce the number of potential bugs and security vulnerabilities in privileged code while playing nicely with the core kernel and preserving its performance characteristics.
-&lt;/p&gt;&lt;h1&gt;Supporting Rust&lt;/h1&gt;&lt;p dir="ltr"&gt;
-We developed an &lt;a href="https://github.com/Rust-for-Linux/linux/commit/d8dcaf80c9535056ea541d8dd876edad52c538a9#diff-8aa818b39daaf6497eaab2ec0b404bcabf43616362fe9551ed7dd2278682af08" dir="ltr"&gt;initial prototype&lt;/a&gt; of the Binder driver to allow us to make meaningful comparisons between the safety and performance characteristics of the existing C version and its Rust counterpart. The Linux kernel has over 30 million lines of code, so naturally our goal is not to convert it all to Rust but rather to allow new code to be written in Rust. We believe this incremental approach allows us to benefit from the kernel’s existing high-performance implementation while providing kernel developers with new tools to improve memory safety and maintain performance going forward.
-&lt;/p&gt;&lt;p dir="ltr"&gt;We joined the &lt;a href="https://github.com/Rust-for-Linux" dir="ltr"&gt;Rust for Linux&lt;/a&gt; organization, where the community had already done and continues to do great work toward adding Rust support to the Linux kernel build system. We also need designs that allow code in the two languages to interact with each other: we're particularly interested in safe, zero-cost abstractions that allow Rust code to use kernel functionality written in C, and how to implement functionality in idiomatic Rust that can be called seamlessly from the C portions of the kernel.&lt;/p&gt;&lt;p&gt;
-Since Rust is a new language for the kernel, we also have the opportunity to enforce best practices in terms of documentation and uniformity. For example, we have specific machine-checked requirements around the usage of unsafe code: for every unsafe function, the developer must document the requirements that need to be satisfied by callers to ensure that its usage is safe; additionally, for every call to unsafe functions (or usage of unsafe constructs like dereferencing a raw pointer), the developer must document the justification for why it is safe to do so.
-&lt;/p&gt;&lt;p&gt;
-Just as important as safety, Rust support needs to be convenient and helpful for developers to use. Let’s get into a few examples of how Rust can assist kernel developers in writing drivers that are safe and correct.
-&lt;/p&gt;&lt;h1&gt;Example driver&lt;/h1&gt;&lt;p dir="ltr"&gt;
-We'll use an implementation of a &lt;b dir="ltr"&gt;semaphore&lt;/b&gt; character device. Each device has a current value; writes of &lt;i dir="ltr"&gt;n&lt;/i&gt; bytes result in the device value being incremented by &lt;i dir="ltr"&gt;n&lt;/i&gt;; reads decrement the value by 1 unless the value is 0, in which case they will block until they can decrement the count without going below 0.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-  Suppose &lt;span dir="ltr"&gt;semaphore&lt;/span&gt; is a file representing our device. We can interact with it from the shell as follows:
-&lt;/p&gt;&lt;p&gt; &amp;gt; cat semaphore &lt;/p&gt;&lt;p dir="ltr"&gt;
-  When &lt;span dir="ltr"&gt;semaphore&lt;/span&gt; is a newly initialized device, the command above will block because the device's current value is 0. It will be unblocked if we run the following command from another shell because it increments the value by 1, which allows the original read to complete:
-&lt;/p&gt;&lt;p&gt;
-&amp;gt; echo -n a &amp;gt; semaphore
-&lt;/p&gt;&lt;p&gt;We could also increment the count by more than 1 if we write more data, for example:
-&lt;/p&gt;&lt;p&gt;
-&amp;gt; echo -n abc &amp;gt; semaphore
-&lt;/p&gt;&lt;p&gt;
-increments the count by 3, so the next 3 reads won't block.
-&lt;/p&gt;&lt;p&gt;
-To allow us to show a few more aspects of Rust, we'll add the following features to our driver: remember what the maximum value was throughout the lifetime of a device, and remember how many reads each file issued on the device.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-We'll now show how such a driver would be &lt;a href="https://github.com/Rust-for-Linux/linux/blob/e2382072517dd0b6b65d4e179e322f392efb9676/samples/rust/rust_semaphore.rs" dir="ltr"&gt;implemented in Rust&lt;/a&gt;, contrasting it with a &lt;a href="https://github.com/Rust-for-Linux/linux/blob/e2382072517dd0b6b65d4e179e322f392efb9676/samples/rust/rust_semaphore_c.c" dir="ltr"&gt;C implementation&lt;/a&gt;. We note, however, we are still early on so this is all subject to change in the future. How Rust can assist the developer is the aspect that we'd like to emphasize. For example, at compile time it allows us to eliminate or greatly reduce the chances of introducing classes of bugs, while at the same time remaining flexible and having minimal overhead.
-&lt;/p&gt;&lt;h2&gt;Character devices&lt;/h2&gt;&lt;p&gt;
-A developer needs to do the following to implement a driver for a new character device in Rust:
-&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Implement the &lt;a href="https://github.com/Rust-for-Linux/linux/blob/150939383ef391e3cab72aec1beaa6d65fe80c5b/rust/kernel/file_operations.rs#L448" dir="ltr"&gt;&lt;span dir="ltr"&gt;FileOperations&lt;/span&gt;&lt;/a&gt; trait: all associated functions are optional, so the developer only needs to implement the relevant ones for   their scenario. They relate to the fields in C's &lt;a href="https://elixir.bootlin.com/linux/v5.11.11/source/include/linux/fs.h#L1820" dir="ltr"&gt;&lt;span dir="ltr"&gt;struct file_operations&lt;/span&gt;&lt;/a&gt;.
-  &lt;/LI&gt;&lt;LI&gt;Implement the &lt;a href="https://github.com/Rust-for-Linux/linux/blob/150939383ef391e3cab72aec1beaa6d65fe80c5b/rust/kernel/file_operations.rs#L434" dir="ltr"&gt;&lt;span dir="ltr"&gt;FileOpener&lt;/span&gt;&lt;/a&gt; trait: it is a type-safe equivalent to C's &lt;span dir="ltr"&gt;open&lt;/span&gt; field of &lt;span dir="ltr"&gt;struct file_operations&lt;/span&gt;.&lt;/LI&gt;&lt;LI&gt;Register the new device type with the kernel: this lets the kernel know what functions need to be called in response to files of this new type being operated on.&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;
-The following outlines how the first two steps of our example compare in Rust and C:
-&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;impl&lt;/span&gt; FileOpener&amp;lt;Arc&amp;lt;Semaphore&amp;gt;&amp;gt; &lt;span dir="ltr"&gt;for&lt;/span&gt; FileState {
-    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;open&lt;/span&gt;&lt;/span&gt;(
-        shared: &amp;amp;Arc&amp;lt;Semaphore&amp;gt;
-    ) -&amp;gt; KernelResult&amp;lt;&lt;span dir="ltr"&gt;Box&lt;/span&gt;&amp;lt;&lt;span dir="ltr"&gt;Self&lt;/span&gt;&amp;gt;&amp;gt; {
-        [...]
-    }
-}
- 
-&lt;span dir="ltr"&gt;impl&lt;/span&gt; FileOperations &lt;span dir="ltr"&gt;for&lt;/span&gt; FileState {
-    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt; &lt;span dir="ltr"&gt;Wrapper&lt;/span&gt;&lt;/span&gt; = &lt;span dir="ltr"&gt;Box&lt;/span&gt;&amp;lt;&lt;span dir="ltr"&gt;Self&lt;/span&gt;&amp;gt;;
- 
-    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;read&lt;/span&gt;&lt;/span&gt;(
-        &amp;amp;&lt;span dir="ltr"&gt;self&lt;/span&gt;,
-        _: &amp;amp;File,
-        data: &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; UserSlicePtrWriter,
-        offset: &lt;span dir="ltr"&gt;u64&lt;/span&gt;
-    ) -&amp;gt; KernelResult&amp;lt;&lt;span dir="ltr"&gt;usize&lt;/span&gt;&amp;gt; {
-        [...]
-    }
- 
-    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;write&lt;/span&gt;&lt;/span&gt;(
-        &amp;amp;&lt;span dir="ltr"&gt;self&lt;/span&gt;,
-        data: &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; UserSlicePtrReader,
-        _offset: &lt;span dir="ltr"&gt;u64&lt;/span&gt;
-    ) -&amp;gt; KernelResult&amp;lt;&lt;span dir="ltr"&gt;usize&lt;/span&gt;&amp;gt; {
-        [...]
-    }
- 
-    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;ioctl&lt;/span&gt;&lt;/span&gt;(
-        &amp;amp;&lt;span dir="ltr"&gt;self&lt;/span&gt;,
-        file: &amp;amp;File,
-        cmd: &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; IoctlCommand
-    ) -&amp;gt; KernelResult&amp;lt;&lt;span dir="ltr"&gt;i32&lt;/span&gt;&amp;gt; {
-        [...]
-    }
- 
-    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;release&lt;/span&gt;&lt;/span&gt;(_obj: &lt;span dir="ltr"&gt;Box&lt;/span&gt;&amp;lt;&lt;span dir="ltr"&gt;Self&lt;/span&gt;&amp;gt;, _file: &amp;amp;File) {
-        [...]
-    }
- 
-    declare_file_operations!(read, write, ioctl);
-}&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt; 
-&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;semaphore_open&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;struct&lt;/span&gt; inode *nodp,
-                   &lt;span dir="ltr"&gt;struct&lt;/span&gt; file *filp)&lt;/span&gt;
-&lt;/span&gt;{
-    &lt;span dir="ltr"&gt;struct&lt;/span&gt; semaphore_state *shared =
-        container_of(filp-&amp;gt;private_data,
-                     &lt;span dir="ltr"&gt;struct&lt;/span&gt; semaphore_state,
-                     miscdev);
-    [...]
-}
- 
-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt;
-ssize_t &lt;span dir="ltr"&gt;semaphore_write&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;struct&lt;/span&gt; file *filp,
-                        &lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;char&lt;/span&gt; __user *buffer,
-                        &lt;span dir="ltr"&gt;size_t&lt;/span&gt; count, &lt;span dir="ltr"&gt;loff_t&lt;/span&gt; *ppos)&lt;/span&gt;
-&lt;/span&gt;{
-    &lt;span dir="ltr"&gt;struct&lt;/span&gt; file_state *state = filp-&amp;gt;private_data;
-    [...]
-}
- 
-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt;
-ssize_t &lt;span dir="ltr"&gt;semaphore_read&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;struct&lt;/span&gt; file *filp,
-                       &lt;span dir="ltr"&gt;char&lt;/span&gt; __user *buffer,
-                       &lt;span dir="ltr"&gt;size_t&lt;/span&gt; count, &lt;span dir="ltr"&gt;loff_t&lt;/span&gt; *ppos)&lt;/span&gt;
-&lt;/span&gt;{
-    &lt;span dir="ltr"&gt;struct&lt;/span&gt; file_state *state = filp-&amp;gt;private_data;
-    [...]
-}
- 
-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt;
-&lt;span dir="ltr"&gt;long&lt;/span&gt; &lt;span dir="ltr"&gt;semaphore_ioctl&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;struct&lt;/span&gt; file *filp,
-                     &lt;span dir="ltr"&gt;unsigned&lt;/span&gt; &lt;span dir="ltr"&gt;int&lt;/span&gt; cmd,
-                     &lt;span dir="ltr"&gt;unsigned&lt;/span&gt; &lt;span dir="ltr"&gt;long&lt;/span&gt; arg)&lt;/span&gt;
-&lt;/span&gt;{
-    &lt;span dir="ltr"&gt;struct&lt;/span&gt; file_state *state = filp-&amp;gt;private_data;
-    [...]
-}
- 
-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt;
-&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;semaphore_release&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;struct&lt;/span&gt; inode *nodp,
-                      &lt;span dir="ltr"&gt;struct&lt;/span&gt; file *filp)&lt;/span&gt;
-&lt;/span&gt;{
-    &lt;span dir="ltr"&gt;struct&lt;/span&gt; file_state *state = filp-&amp;gt;private_data;
-    [...]
-}
- 
-&lt;span dir="ltr"&gt;static&lt;/span&gt; &lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;struct&lt;/span&gt; file_operations semaphore_fops = {
-        .owner = THIS_MODULE,
-        .open = semaphore_open,
-        .read = semaphore_read,
-        .write = semaphore_write,
-        .compat_ioctl = semaphore_ioctl,
-        .release = semaphore_release,
-};&lt;/PRE&gt;&lt;p&gt;
-Character devices in Rust benefit from a number of safety features:
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Per-file state lifetime management: &lt;span dir="ltr"&gt;FileOpener::open&lt;/span&gt; returns an object whose lifetime is owned by the caller from then on. Any object that implements the &lt;span dir="ltr"&gt;&lt;a href="https://github.com/Rust-for-Linux/linux/blob/150939383ef391e3cab72aec1beaa6d65fe80c5b/rust/kernel/file_operations.rs#L516" dir="ltr"&gt;PointerWrapper&lt;/a&gt;&lt;/span&gt; trait can be returned, and we provide implementations for &lt;span dir="ltr"&gt;&lt;a href="https://doc.rust-lang.org/std/boxed/struct.Box.html" dir="ltr"&gt;Box&amp;lt;T&amp;gt;&lt;/a&gt;&lt;/span&gt; and &lt;span dir="ltr"&gt;&lt;a href="https://doc.rust-lang.org/std/sync/struct.Arc.html" dir="ltr"&gt;Arc&amp;lt;T&amp;gt;&lt;/a&gt;&lt;/span&gt;, so developers that use Rust's idiomatic heap-allocated or reference-counted pointers have no additional requirements.
-&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;
-All associated functions in &lt;span dir="ltr"&gt;FileOperations&lt;/span&gt; receive non-mutable references to &lt;span dir="ltr"&gt;self&lt;/span&gt; (more about this below), except the &lt;span dir="ltr"&gt;release&lt;/span&gt; function, which is the last function to be called and receives the plain object back (and its ownership with it). The &lt;span dir="ltr"&gt;release&lt;/span&gt; implementation can then defer the object destruction by transferring its ownership elsewhere, or destroy it then; in the case of a reference-counted object, 'destruction' means decrementing the reference count (and actual object destruction if the count goes to zero).
-&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;
-That is, we use Rust's ownership discipline when interacting with C code by handing the C portion ownership of a Rust object, allowing it to call functions implemented in Rust, then eventually giving ownership back. So as long as the C code is correct, the lifetime of Rust file objects work seamlessly as well, with the compiler enforcing correct lifetime management on the Rust side, for example: open cannot return stack-allocated pointers or heap-allocated objects containing pointers to the stack, &lt;span dir="ltr"&gt;ioctl&lt;/span&gt;/&lt;span dir="ltr"&gt;read&lt;/span&gt;/&lt;span dir="ltr"&gt;write&lt;/span&gt; cannot free (or modify without synchronization) the contents of the object stored in &lt;span dir="ltr"&gt;filp-&amp;gt;private_data&lt;/span&gt;, etc.
-  &lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;  &lt;/LI&gt;&lt;LI&gt;Non-mutable references: the associated functions called between &lt;span dir="ltr"&gt;open&lt;/span&gt; and &lt;span dir="ltr"&gt;release&lt;/span&gt; all receive non-mutable references to &lt;span dir="ltr"&gt;self&lt;/span&gt; because they can be called concurrently by multiple threads and Rust aliasing rules prohibit more than one mutable reference to an object at any given time.
-&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;
-If a developer needs to modify some state (and they generally do), they can do so via &lt;i dir="ltr"&gt;&lt;a href="https://doc.rust-lang.org/reference/interior-mutability.html" dir="ltr"&gt;interior mutability&lt;/a&gt;&lt;/i&gt;: mutable state can be wrapped in a &lt;span dir="ltr"&gt;&lt;a href="https://github.com/Rust-for-Linux/linux/blob/150939383ef391e3cab72aec1beaa6d65fe80c5b/rust/kernel/sync/mutex.rs#L29" dir="ltr"&gt;Mutex&amp;lt;T&amp;gt;&lt;/a&gt;&lt;/span&gt; or &lt;span dir="ltr"&gt;&lt;a href="https://github.com/Rust-for-Linux/linux/blob/150939383ef391e3cab72aec1beaa6d65fe80c5b/rust/kernel/sync/spinlock.rs#L45" dir="ltr"&gt;SpinLock&amp;lt;T&amp;gt;&lt;/a&gt;&lt;/span&gt; (or &lt;a href="https://doc.rust-lang.org/core/sync/atomic/" dir="ltr"&gt;atomics&lt;/a&gt;) and safely modified through them.
-&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;
-This prevents, at compile-time, bugs where a developer fails to acquire the appropriate lock when accessing a field (the field is inaccessible), or when a developer fails to wrap a field with a lock (the field is read-only).
-&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;&lt;/LI&gt;&lt;LI&gt;Per-device state: when file instances need to share per-device state, which is a very common occurrence in drivers, they can do so safely in Rust. When a device is registered, a typed object can be provided and a non-mutable reference to it is provided when &lt;span dir="ltr"&gt;FileOperation::open&lt;/span&gt; is called. In our example, the shared object is wrapped in &lt;span dir="ltr"&gt;Arc&amp;lt;T&amp;gt;&lt;/span&gt;, so files can safely clone and hold on to a reference to them.
-&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;
-The reason &lt;span dir="ltr"&gt;FileOperation&lt;/span&gt; is its own trait (as opposed to, for example, &lt;span dir="ltr"&gt;open&lt;/span&gt; being part of the &lt;span dir="ltr"&gt;FileOperations&lt;/span&gt; trait) is to allow a single file implementation to be registered in different ways.
-&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;
-This eliminates opportunities for developers to get the wrong data when trying to retrieve shared state. For example, in C when a &lt;span dir="ltr"&gt;&lt;a href="https://elixir.bootlin.com/linux/v5.11.11/source/include/linux/miscdevice.h#L79" dir="ltr"&gt;miscdevice&lt;/a&gt;&lt;/span&gt; is registered, a pointer to it is available in &lt;span dir="ltr"&gt;filp-&amp;gt;private_data&lt;/span&gt;; when a &lt;a href="https://elixir.bootlin.com/linux/v5.11.11/source/include/linux/cdev.h#L14" dir="ltr"&gt;&lt;span dir="ltr"&gt;cdev&lt;/span&gt;&lt;/a&gt; is registered, a pointer to it is available in &lt;span dir="ltr"&gt;inode-&amp;gt;i_cdev&lt;/span&gt;. These structs are usually embedded in an outer struct that contains the shared state, so developers usually use the &lt;a href="https://elixir.bootlin.com/linux/v5.11.11/source/include/linux/kernel.h#L685" dir="ltr"&gt;&lt;span dir="ltr"&gt;container_of&lt;/span&gt;&lt;/a&gt; macro to recover the shared state. Rust encapsulates all of this and the potentially troublesome pointer casts in a safe abstraction.
-      &lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;&lt;/LI&gt;&lt;LI&gt;
-    Static typing: we take advantage of Rust's support for generics to implement all of the above functions and types with static types. So there are no opportunities for a developer to convert an untyped variable or field to the wrong type. The C code in the table above has casts from an essentially untyped (&lt;span dir="ltr"&gt;void&lt;/span&gt; *) pointer to the desired type at the start of each function: this is likely to work fine when first written, but may lead to bugs as the code evolves and assumptions change. Rust would catch any such mistakes at compile time.&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;
-  &lt;/LI&gt;&lt;LI&gt;
-    File operations: as we mentioned before, a developer needs to implement the &lt;span dir="ltr"&gt;FileOperations&lt;/span&gt; trait to customize the behavior of their device. They do this with a block starting with &lt;span dir="ltr"&gt;impl FileOperations for Device&lt;/span&gt;, where &lt;span dir="ltr"&gt;Device&lt;/span&gt; is the type implementing the file behavior (&lt;span dir="ltr"&gt;FileState&lt;/span&gt; in our example). Once inside this block, tools know that only a limited number of functions can be defined, so they can automatically insert the prototypes. (Personally, I use &lt;span dir="ltr"&gt;&lt;a href="https://github.com/neovim/nvim-lspconfig" dir="ltr"&gt;neovim&lt;/a&gt;&lt;/span&gt; and the &lt;a href="https://rust-analyzer.github.io/" dir="ltr"&gt;&lt;span dir="ltr"&gt;rust-analyzer&lt;/span&gt;&lt;/a&gt; LSP server.)
-&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;While we use this trait in Rust, the C portion of the kernel still requires an instance of &lt;span dir="ltr"&gt;struct file_operations&lt;/span&gt;. The kernel crate automatically generates one from the trait implementation (and optionally the &lt;span dir="ltr"&gt;&lt;a href="https://github.com/Rust-for-Linux/linux/blob/150939383ef391e3cab72aec1beaa6d65fe80c5b/rust/kernel/file_operations.rs#L309" dir="ltr"&gt;declare_file_operations&lt;/a&gt;&lt;/span&gt; macro): although it has code to generate the correct struct, it is all &lt;span dir="ltr"&gt;const&lt;/span&gt;, so evaluated at compile-time with zero runtime cost.
-  &lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Ioctl handling&lt;/h2&gt;&lt;p dir="ltr"&gt;
-For a driver to provide a custom &lt;a href="https://man7.org/linux/man-pages/man2/ioctl.2.html" dir="ltr"&gt;ioctl&lt;/a&gt; handler, it needs to implement the&amp;nbsp;&lt;span dir="ltr"&gt;ioctl&lt;/span&gt; function that is part of the &lt;span dir="ltr"&gt;FileOperations&lt;/span&gt; trait, as exemplified in the table below.
-&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;ioctl&lt;/span&gt;&lt;/span&gt;(
-    &amp;amp;&lt;span dir="ltr"&gt;self&lt;/span&gt;,
-    file: &amp;amp;File,
-    cmd: &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; IoctlCommand
-) -&amp;gt; KernelResult&amp;lt;&lt;span dir="ltr"&gt;i32&lt;/span&gt;&amp;gt; {
-    cmd.dispatch(&lt;span dir="ltr"&gt;self&lt;/span&gt;, file)
-}
- 
-&lt;span dir="ltr"&gt;impl&lt;/span&gt; IoctlHandler &lt;span dir="ltr"&gt;for&lt;/span&gt; FileState {
-    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;read&lt;/span&gt;&lt;/span&gt;(
-        &amp;amp;&lt;span dir="ltr"&gt;self&lt;/span&gt;,
-        _file: &amp;amp;File,
-        cmd: &lt;span dir="ltr"&gt;u32&lt;/span&gt;,
-        writer: &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; UserSlicePtrWriter
-    ) -&amp;gt; KernelResult&amp;lt;&lt;span dir="ltr"&gt;i32&lt;/span&gt;&amp;gt; {
-        &lt;span dir="ltr"&gt;match&lt;/span&gt; cmd {
-            IOCTL_GET_READ_COUNT =&amp;gt; {
-                writer.write(
-                    &amp;amp;&lt;span dir="ltr"&gt;self&lt;/span&gt;
-                    .read_count
-                    .load(Ordering::Relaxed))?;
-                &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(&lt;span dir="ltr"&gt;0&lt;/span&gt;)
-            }
-            _ =&amp;gt; &lt;span dir="ltr"&gt;Err&lt;/span&gt;(Error::EINVAL),
-        }
-    }
- 
-    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;write&lt;/span&gt;&lt;/span&gt;(
-        &amp;amp;&lt;span dir="ltr"&gt;self&lt;/span&gt;,
-        _file: &amp;amp;File,
-        cmd: &lt;span dir="ltr"&gt;u32&lt;/span&gt;,
-        reader: &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; UserSlicePtrReader
-    ) -&amp;gt; KernelResult&amp;lt;&lt;span dir="ltr"&gt;i32&lt;/span&gt;&amp;gt; {
-        &lt;span dir="ltr"&gt;match&lt;/span&gt; cmd {
-            IOCTL_SET_READ_COUNT =&amp;gt; {
-                &lt;span dir="ltr"&gt;self&lt;/span&gt;
-                .read_count
-                .store(reader.read()?,
-                       Ordering::Relaxed);
-                &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(&lt;span dir="ltr"&gt;0&lt;/span&gt;)
-            }
-            _ =&amp;gt; &lt;span dir="ltr"&gt;Err&lt;/span&gt;(Error::EINVAL),
-        }
-    }
-}&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;define&lt;/span&gt; IOCTL_GET_READ_COUNT _IOR(&lt;span dir="ltr"&gt;'c'&lt;/span&gt;, 1, u64)&lt;/span&gt;
-&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;define&lt;/span&gt; IOCTL_SET_READ_COUNT _IOW(&lt;span dir="ltr"&gt;'c'&lt;/span&gt;, 1, u64)&lt;/span&gt;
- 
-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt;
-&lt;span dir="ltr"&gt;long&lt;/span&gt; &lt;span dir="ltr"&gt;semaphore_ioctl&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;struct&lt;/span&gt; file *filp,
-                     &lt;span dir="ltr"&gt;unsigned&lt;/span&gt; &lt;span dir="ltr"&gt;int&lt;/span&gt; cmd,
-                     &lt;span dir="ltr"&gt;unsigned&lt;/span&gt; &lt;span dir="ltr"&gt;long&lt;/span&gt; arg)&lt;/span&gt;
-&lt;/span&gt;{
-    &lt;span dir="ltr"&gt;struct&lt;/span&gt; file_state *state = filp-&amp;gt;private_data;
-    &lt;span dir="ltr"&gt;void&lt;/span&gt; __user *buffer = (&lt;span dir="ltr"&gt;void&lt;/span&gt; __user *)arg;
-    u64 value;
- 
-    &lt;span dir="ltr"&gt;switch&lt;/span&gt; (cmd) {
-    &lt;span dir="ltr"&gt;case&lt;/span&gt; IOCTL_GET_READ_COUNT:
-        value = atomic64_read(&amp;amp;state-&amp;gt;read_count);
-        &lt;span dir="ltr"&gt;if&lt;/span&gt; (copy_to_user(buffer, &amp;amp;value, &lt;span dir="ltr"&gt;sizeof&lt;/span&gt;(value)))
-            &lt;span dir="ltr"&gt;return&lt;/span&gt; -EFAULT;
-        &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;;
-    &lt;span dir="ltr"&gt;case&lt;/span&gt; IOCTL_SET_READ_COUNT:
-        &lt;span dir="ltr"&gt;if&lt;/span&gt; (copy_from_user(&amp;amp;value, buffer, &lt;span dir="ltr"&gt;sizeof&lt;/span&gt;(value)))
-            &lt;span dir="ltr"&gt;return&lt;/span&gt; -EFAULT;
-        atomic64_set(&amp;amp;state-&amp;gt;read_count, value);
-        &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;;
-    &lt;span dir="ltr"&gt;default&lt;/span&gt;:
-        &lt;span dir="ltr"&gt;return&lt;/span&gt; -EINVAL;
-    }
-}&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-Ioctl commands are standardized such that, given a command, we know whether a user buffer is provided, its intended use (read, write, both, none), and its size. In Rust, we provide a &lt;a href="https://github.com/Rust-for-Linux/linux/blob/150939383ef391e3cab72aec1beaa6d65fe80c5b/rust/kernel/file_operations.rs#L386" dir="ltr"&gt;dispatcher&lt;/a&gt; (accessible by calling &lt;span dir="ltr"&gt;cmd.dispatch&lt;/span&gt;) that uses this information to automatically create user memory access helpers and pass them to the caller.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-A driver is not &lt;i dir="ltr"&gt;required&lt;/i&gt; to use this though. If, for example, it doesn't use the standard ioctl encoding, Rust offers the flexibility of simply calling &lt;span dir="ltr"&gt;cmd.raw&lt;/span&gt; to extract the raw arguments and using them to handle the ioctl (potentially with unsafe code, which will need to be justified).
-&lt;/p&gt;&lt;p&gt;
-However, if a driver implementation does use the standard dispatcher, it will benefit from not having to implement any unsafe code, and:
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The pointer to user memory is never a native pointer, so the developer cannot accidentally dereference it.
-&lt;/LI&gt;&lt;LI&gt;The types that allow the driver to read from user space only allow data to be read once, so we eliminate the risk of time-of-check to time-of-use (TOCTOU) bugs because when a driver needs to access data twice, it needs to copy it to kernel memory, where an attacker is not allowed to modify it. Excluding unsafe blocks, there is no way to introduce this class of bugs in Rust.
-&lt;/LI&gt;&lt;LI&gt;No accidental overflow of the user buffer: we'll never read or write past the end of the user buffer because this is enforced automatically based on the size encoded in the ioctl command. In our example above, the implementation of &lt;span dir="ltr"&gt;IOCTL_GET_READ_COUNT&lt;/span&gt; only has access to an instance of &lt;a href="https://github.com/Rust-for-Linux/linux/blob/150939383ef391e3cab72aec1beaa6d65fe80c5b/rust/kernel/user_ptr.rs#L230" dir="ltr"&gt;&lt;span dir="ltr"&gt;UserSlicePtrWriter&lt;/span&gt;&lt;/a&gt;, which limits the number of writable bytes to &lt;span dir="ltr"&gt;sizeof(u64)&lt;/span&gt; as encoded in the ioctl command.
-&lt;/LI&gt;&lt;LI&gt;No mixing of reads and writes: we'll never write buffers for ioctls that are only meant to read and never read buffers for ioctls that are only meant to write. This is enforced by read and write handlers only getting instances of &lt;a href="https://github.com/Rust-for-Linux/linux/blob/150939383ef391e3cab72aec1beaa6d65fe80c5b/rust/kernel/user_ptr.rs#L230" dir="ltr"&gt;&lt;span dir="ltr"&gt;UserSlicePtrWriter&lt;/span&gt;&lt;/a&gt; and &lt;a href="https://github.com/Rust-for-Linux/linux/blob/150939383ef391e3cab72aec1beaa6d65fe80c5b/rust/kernel/user_ptr.rs#L158" dir="ltr"&gt;&lt;span dir="ltr"&gt;UserSlicePtrReader&lt;/span&gt;&lt;/a&gt; respectively.
-&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
-All of the above could potentially also be done in C, but it's very easy for developers to (likely unintentionally) break contracts that lead to unsafety; Rust requires &lt;span dir="ltr"&gt;unsafe&lt;/span&gt; blocks for this, which should only be used in rare cases and brings additional scrutiny. Additionally, Rust offers the following:
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The types used to read and write user memory do not implement the &lt;span dir="ltr"&gt;&lt;a href="https://doc.rust-lang.org/std/marker/trait.Send.html" dir="ltr"&gt;Send&lt;/a&gt;&lt;/span&gt; and &lt;span dir="ltr"&gt;&lt;a href="https://doc.rust-lang.org/std/marker/trait.Sync.html" dir="ltr"&gt;Sync&lt;/a&gt;&lt;/span&gt; traits, which means that they (and pointers to them) are not safe to be used in another thread context. In Rust, if a driver developer attempted to write code that passed one of these objects to another thread (where it wouldn't be safe to use them because it isn't necessarily in the right memory manager context), they would get a compilation error.&lt;/LI&gt;&lt;LI&gt;When calling &lt;span dir="ltr"&gt;IoctlCommand::dispatch&lt;/span&gt;, one might understandably think that we need dynamic dispatching to reach the actual handler implementation (which would incur additional cost in comparison to C), but we don't. Our usage of generics will lead the compiler to monomorphize the function, which will result in static function calls that can even be inlined if the optimizer so chooses.
-&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Locking and condition variables&lt;/h2&gt;&lt;p&gt;We allow developers to use mutexes and spinlocks to provide interior mutability. In our example, we use a mutex to protect mutable data; in the tables below we show the data structures we use in C and Rust, and how we implement a wait until the count is nonzero so that we can satisfy a read:
-  &lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;SemaphoreInner&lt;/span&gt;&lt;/span&gt; {
-    count: &lt;span dir="ltr"&gt;usize&lt;/span&gt;,
-    max_seen: &lt;span dir="ltr"&gt;usize&lt;/span&gt;,
-}
- 
-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;Semaphore&lt;/span&gt;&lt;/span&gt; {
-    changed: CondVar,
-    inner: Mutex&amp;lt;SemaphoreInner&amp;gt;,
-}
- 
-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;FileState&lt;/span&gt;&lt;/span&gt; {
-    read_count: AtomicU64,
-    shared: Arc&amp;lt;Semaphore&amp;gt;,
-}&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; semaphore_state {
-    &lt;span dir="ltr"&gt;struct&lt;/span&gt; kref ref;
-    &lt;span dir="ltr"&gt;struct&lt;/span&gt; miscdevice miscdev;
-    &lt;span dir="ltr"&gt;wait_queue_head_t&lt;/span&gt; changed;
-    &lt;span dir="ltr"&gt;struct&lt;/span&gt; mutex mutex;
-    &lt;span dir="ltr"&gt;size_t&lt;/span&gt; count;
-    &lt;span dir="ltr"&gt;size_t&lt;/span&gt; max_seen;
-};
- 
-&lt;span dir="ltr"&gt;struct&lt;/span&gt; file_state {
-    &lt;span dir="ltr"&gt;atomic64_t&lt;/span&gt; read_count;
-    &lt;span dir="ltr"&gt;struct&lt;/span&gt; semaphore_state *shared;
-};&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;consume&lt;/span&gt;&lt;/span&gt;(&amp;amp;&lt;span dir="ltr"&gt;self&lt;/span&gt;) -&amp;gt; KernelResult {
-    &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; inner = &lt;span dir="ltr"&gt;self&lt;/span&gt;.shared.inner.lock();
-    &lt;span dir="ltr"&gt;while&lt;/span&gt; inner.count == &lt;span dir="ltr"&gt;0&lt;/span&gt; {
-        &lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;self&lt;/span&gt;.shared.changed.wait(&amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; inner) {
-            &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;Err&lt;/span&gt;(Error::EINTR);
-        }
-    }
-    inner.count -= &lt;span dir="ltr"&gt;1&lt;/span&gt;;
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(())
-}&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt; &lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;semaphore_consume&lt;/span&gt;&lt;span dir="ltr"&gt;(
-    &lt;span dir="ltr"&gt;struct&lt;/span&gt; semaphore_state *state)&lt;/span&gt;
-&lt;/span&gt;{
-    DEFINE_WAIT(wait);
- 
-    mutex_lock(&amp;amp;state-&amp;gt;mutex);
-    &lt;span dir="ltr"&gt;while&lt;/span&gt; (state-&amp;gt;count == &lt;span dir="ltr"&gt;0&lt;/span&gt;) {
-        prepare_to_wait(&amp;amp;state-&amp;gt;changed, &amp;amp;wait,
-                        TASK_INTERRUPTIBLE);
-        mutex_unlock(&amp;amp;state-&amp;gt;mutex);
-        schedule();
-        finish_wait(&amp;amp;state-&amp;gt;changed, &amp;amp;wait);
-        &lt;span dir="ltr"&gt;if&lt;/span&gt; (signal_pending(current))
-            &lt;span dir="ltr"&gt;return&lt;/span&gt; -EINTR;
-        mutex_lock(&amp;amp;state-&amp;gt;mutex);
-    }
- 
-    state-&amp;gt;count--;
-    mutex_unlock(&amp;amp;state-&amp;gt;mutex);
- 
-    &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;;
-}&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-We note that such waits are not uncommon in the existing C code, for example, a &lt;a href="https://elixir.bootlin.com/linux/v5.12-rc6/source/fs/pipe.c#L1053" dir="ltr"&gt;pipe waiting&lt;/a&gt; for a "partner" to write, a &lt;a href="https://elixir.bootlin.com/linux/v5.12-rc6/source/net/unix/af_unix.c#L2189" dir="ltr"&gt;unix-domain socket waiting&lt;/a&gt; for data, an &lt;a href="https://elixir.bootlin.com/linux/v5.12-rc6/source/fs/inode.c#L829" dir="ltr"&gt;inode search waiting&lt;/a&gt; for completion of a delete, or a &lt;a href="https://elixir.bootlin.com/linux/v5.12-rc6/source/kernel/umh.c#L249" dir="ltr"&gt;user-mode helper waiting&lt;/a&gt; for state change.&lt;/p&gt;&lt;p&gt;
-The following are benefits from the Rust implementation:
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The &lt;span dir="ltr"&gt;Semaphore::inner&lt;/span&gt; field is only accessible when the lock is held, through the guard returned by the &lt;span dir="ltr"&gt;lock&lt;/span&gt; function. So developers cannot accidentally read or write protected data without locking it first. In the C example above, &lt;span dir="ltr"&gt;count&lt;/span&gt; and &lt;span dir="ltr"&gt;max_seen&lt;/span&gt; in &lt;span dir="ltr"&gt;semaphore_state&lt;/span&gt; are protected by &lt;span dir="ltr"&gt;mutex&lt;/span&gt;, but there is no enforcement that the lock is held while they're accessed.
-&lt;/LI&gt;&lt;LI&gt;Resource Acquisition Is Initialization (RAII): the lock is unlocked automatically when the guard (&lt;span dir="ltr"&gt;inner&lt;/span&gt; in this case) goes out of scope. This ensures that locks are always unlocked: if the developer needs to keep a lock locked, they can keep the guard alive, for example, by returning the guard itself; conversely, if they need to unlock before the end of the scope, they can explicitly do it by calling the &lt;span dir="ltr"&gt;drop&lt;/span&gt; function.
-&lt;/LI&gt;&lt;LI&gt;Developers can use any lock that implements the &lt;span dir="ltr"&gt;Lock&lt;/span&gt; trait, which includes &lt;span dir="ltr"&gt;Mutex&lt;/span&gt; and &lt;span dir="ltr"&gt;SpinLock&lt;/span&gt;, at no additional runtime cost when compared to a C implementation. Other synchronization constructs, including condition variables, also work transparently and with zero additional run-time cost.
-&lt;/LI&gt;&lt;LI&gt;Rust implements condition variables using kernel wait queues. This allows developers to benefit from atomic release of the lock and putting the thread to sleep without having to reason about low-level kernel scheduler functions. In the C example above, &lt;span dir="ltr"&gt;semaphore_consume&lt;/span&gt; is a mix of semaphore logic and subtle Linux scheduling: for example, the code is incorrect if &lt;span dir="ltr"&gt;mutex_unlock&lt;/span&gt; is called before &lt;span dir="ltr"&gt;prepare_to_wait&lt;/span&gt; because it may result in a wake up being missed.
-&lt;/LI&gt;&lt;LI&gt;No unsynchronized access: as we mentioned before, variables shared by multiple threads/CPUs must be read-only, with interior mutability being the solution for cases when mutability is needed. In addition to the example with locks above, the ioctl example in the previous section also has an example of using an atomic variable; Rust also requires developers to specify how memory is to &lt;a href="https://doc.rust-lang.org/core/sync/atomic/enum.Ordering.html" dir="ltr"&gt;be synchronized&lt;/a&gt; by atomic accesses. In the C part of the example, we happen to use &lt;span dir="ltr"&gt;atomic64_t&lt;/span&gt;, but the compiler won't alert a developer to this need.
-&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Error handling and control flow&lt;/h2&gt;&lt;p dir="ltr"&gt;
-In the tables below, we show how &lt;span dir="ltr"&gt;open&lt;/span&gt;, &lt;span dir="ltr"&gt;read&lt;/span&gt;, and &lt;span dir="ltr"&gt;write&lt;/span&gt; are implemented in our example driver:
-&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;read&lt;/span&gt;&lt;/span&gt;(
-    &amp;amp;&lt;span dir="ltr"&gt;self&lt;/span&gt;,
-    _: &amp;amp;File,
-    data: &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; UserSlicePtrWriter,
-    offset: &lt;span dir="ltr"&gt;u64&lt;/span&gt;
-) -&amp;gt; KernelResult&amp;lt;&lt;span dir="ltr"&gt;usize&lt;/span&gt;&amp;gt; {
-   &lt;span dir="ltr"&gt;if&lt;/span&gt; data.is_empty() &lt;span dir="ltr"&gt;||&lt;/span&gt; offset &amp;gt; &lt;span dir="ltr"&gt;0&lt;/span&gt; {
-        &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(&lt;span dir="ltr"&gt;0&lt;/span&gt;);
-    }
- 
-    &lt;span dir="ltr"&gt;self&lt;/span&gt;.consume()?;
-    data.write_slice(&amp;amp;[&lt;span dir="ltr"&gt;0u8&lt;/span&gt;; &lt;span dir="ltr"&gt;1&lt;/span&gt;])?;
-    &lt;span dir="ltr"&gt;self&lt;/span&gt;.read_count.fetch_add(&lt;span dir="ltr"&gt;1&lt;/span&gt;, Ordering::Relaxed);
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(&lt;span dir="ltr"&gt;1&lt;/span&gt;)
-}
- 
-&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt;
-ssize_t &lt;span dir="ltr"&gt;semaphore_read&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;struct&lt;/span&gt; file *filp,
-                       &lt;span dir="ltr"&gt;char&lt;/span&gt; __user *buffer,
-                       &lt;span dir="ltr"&gt;size_t&lt;/span&gt; count, &lt;span dir="ltr"&gt;loff_t&lt;/span&gt; *ppos)&lt;/span&gt;
-&lt;/span&gt;{
-    &lt;span dir="ltr"&gt;struct&lt;/span&gt; file_state *state = filp-&amp;gt;private_data;
-    &lt;span dir="ltr"&gt;char&lt;/span&gt; c = &lt;span dir="ltr"&gt;0&lt;/span&gt;;
-    &lt;span dir="ltr"&gt;int&lt;/span&gt; ret;
- 
-    &lt;span dir="ltr"&gt;if&lt;/span&gt; (count == &lt;span dir="ltr"&gt;0&lt;/span&gt; || *ppos &amp;gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;)
-        &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;;
- 
-    ret = semaphore_consume(state-&amp;gt;shared);
-    &lt;span dir="ltr"&gt;if&lt;/span&gt; (ret)
-        &lt;span dir="ltr"&gt;return&lt;/span&gt; ret;
- 
-    &lt;span dir="ltr"&gt;if&lt;/span&gt; (copy_to_user(buffer, &amp;amp;c, &lt;span dir="ltr"&gt;sizeof&lt;/span&gt;(c)))
-        &lt;span dir="ltr"&gt;return&lt;/span&gt; -EFAULT;
- 
-    atomic64_add(&lt;span dir="ltr"&gt;1&lt;/span&gt;, &amp;amp;state-&amp;gt;read_count);
-    *ppos += &lt;span dir="ltr"&gt;1&lt;/span&gt;;
-    &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;1&lt;/span&gt;;
-}&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;write&lt;/span&gt;&lt;/span&gt;(
-    &amp;amp;&lt;span dir="ltr"&gt;self&lt;/span&gt;,
-    data: &amp;amp;&lt;span dir="ltr"&gt;mut&lt;/span&gt; UserSlicePtrReader,
-    _offset: &lt;span dir="ltr"&gt;u64&lt;/span&gt;
-) -&amp;gt; KernelResult&amp;lt;&lt;span dir="ltr"&gt;usize&lt;/span&gt;&amp;gt; {
-   {
-        &lt;span dir="ltr"&gt;let&lt;/span&gt; &lt;span dir="ltr"&gt;mut&lt;/span&gt; inner = &lt;span dir="ltr"&gt;self&lt;/span&gt;.shared.inner.lock();
-        inner.count = inner.count.saturating_add(data.len());
-        &lt;span dir="ltr"&gt;if&lt;/span&gt; inner.count &amp;gt; inner.max_seen {
-            inner.max_seen = inner.count;
-        }
-    }
- 
-    &lt;span dir="ltr"&gt;self&lt;/span&gt;.shared.changed.notify_all();
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(data.len())
-}&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt;
-ssize_t &lt;span dir="ltr"&gt;semaphore_write&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;struct&lt;/span&gt; file *filp,
-                        &lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;char&lt;/span&gt; __user *buffer,
-                        &lt;span dir="ltr"&gt;size_t&lt;/span&gt; count, &lt;span dir="ltr"&gt;loff_t&lt;/span&gt; *ppos)&lt;/span&gt;
-&lt;/span&gt;{
-    &lt;span dir="ltr"&gt;struct&lt;/span&gt; file_state *state = filp-&amp;gt;private_data;
-    &lt;span dir="ltr"&gt;struct&lt;/span&gt; semaphore_state *shared = state-&amp;gt;shared;
- 
-    mutex_lock(&amp;amp;shared-&amp;gt;mutex);
-    shared-&amp;gt;count += count;
-    &lt;span dir="ltr"&gt;if&lt;/span&gt; (shared-&amp;gt;count &amp;lt; count)
-        shared-&amp;gt;count = SIZE_MAX;
- 
-    &lt;span dir="ltr"&gt;if&lt;/span&gt; (shared-&amp;gt;count &amp;gt; shared-&amp;gt;max_seen)
-        shared-&amp;gt;max_seen = shared-&amp;gt;count;
- 
-    mutex_unlock(&amp;amp;shared-&amp;gt;mutex);
- 
-    wake_up_all(&amp;amp;shared-&amp;gt;changed);
-    &lt;span dir="ltr"&gt;return&lt;/span&gt; count;
-}&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fn&lt;/span&gt; &lt;span dir="ltr"&gt;open&lt;/span&gt;&lt;/span&gt;(
-    shared: &amp;amp;Arc&amp;lt;Semaphore&amp;gt;
-) -&amp;gt; KernelResult&amp;lt;&lt;span dir="ltr"&gt;Box&lt;/span&gt;&amp;lt;&lt;span dir="ltr"&gt;Self&lt;/span&gt;&amp;gt;&amp;gt; {
-    &lt;span dir="ltr"&gt;Ok&lt;/span&gt;(&lt;span dir="ltr"&gt;Box&lt;/span&gt;::try_new(&lt;span dir="ltr"&gt;Self&lt;/span&gt; {
-        read_count: AtomicU64::new(&lt;span dir="ltr"&gt;0&lt;/span&gt;),
-        shared: shared.clone(),
-    })?)
-}&lt;/PRE&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt; 
-&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;semaphore_open&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;struct&lt;/span&gt; inode *nodp,
-                   &lt;span dir="ltr"&gt;struct&lt;/span&gt; file *filp)&lt;/span&gt;
-&lt;/span&gt;{
-    &lt;span dir="ltr"&gt;struct&lt;/span&gt; semaphore_state *shared =
-        container_of(filp-&amp;gt;private_data,
-                     &lt;span dir="ltr"&gt;struct&lt;/span&gt; semaphore_state,
-                     miscdev);
-    &lt;span dir="ltr"&gt;struct&lt;/span&gt; file_state *state;
- 
-    state = kzalloc(&lt;span dir="ltr"&gt;sizeof&lt;/span&gt;(*state), GFP_KERNEL);
-    &lt;span dir="ltr"&gt;if&lt;/span&gt; (!state)
-        &lt;span dir="ltr"&gt;return&lt;/span&gt; -ENOMEM;
- 
-    kref_get(&amp;amp;shared-&amp;gt;ref);
-    state-&amp;gt;shared = shared;
-    atomic64_set(&amp;amp;state-&amp;gt;read_count, &lt;span dir="ltr"&gt;0&lt;/span&gt;);
- 
-    filp-&amp;gt;private_data = state;
- 
-    &lt;span dir="ltr"&gt;return&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;;
-}&lt;/PRE&gt;&lt;p&gt;
-They illustrate other benefits brought by Rust:
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The &lt;span dir="ltr"&gt;?&lt;/span&gt; operator: it is used by the Rust &lt;span dir="ltr"&gt;open&lt;/span&gt; and &lt;span dir="ltr"&gt;read&lt;/span&gt; implementations to do error handling implicitly; the developer can focus on the semaphore logic, the resulting code being quite small and readable. The C versions have error-handling noise that can make them less readable.
-&lt;/LI&gt;&lt;LI&gt;Required initialization: Rust requires all fields of a struct to be initialized on construction, so the developer can never accidentally fail to initialize a field; C offers no such facility. In our &lt;span dir="ltr"&gt;open&lt;/span&gt; example above, the developer of the C version could easily fail to call &lt;span dir="ltr"&gt;kref_get&lt;/span&gt; (even though all fields would have been initialized); in Rust, the user is required to call &lt;span dir="ltr"&gt;clone&lt;/span&gt; (which increments the ref count), otherwise they get a compilation error.
-&lt;/LI&gt;&lt;LI&gt;RAII scoping: the Rust write implementation uses a statement block to control when &lt;span dir="ltr"&gt;inner&lt;/span&gt; goes out of scope and therefore the lock is released.
-&lt;/LI&gt;&lt;LI&gt;Integer overflow behavior: Rust encourages developers to always consider how overflows should be handled. In our &lt;span dir="ltr"&gt;write&lt;/span&gt; example, we want a saturating one so that we don't end up with a zero value when adding to our semaphore. In C, we need to manually check for overflows, there is no additional support from the compiler.
-&lt;/LI&gt;&lt;/UL&gt;&lt;h1&gt;What's next&lt;/h1&gt;&lt;p dir="ltr"&gt;
-The examples above are only a small part of the whole project. We hope it gives readers a glimpse of the kinds of benefits that Rust brings. At the moment we have nearly all generic kernel functionality needed by Binder neatly wrapped in safe Rust abstractions, so we are in the process of &lt;a href="https://lore.kernel.org/lkml/20210414184604.23473-1-ojeda@kernel.org/T/#mb5e524dae9d5a5815c6e68eb36b9bde4e87c861d" dir="ltr"&gt;gathering feedback from the broader Linux kernel community&lt;/a&gt; with the intent of upstreaming the existing Rust support.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-We also continue to make progress on our Binder prototype, implement additional abstractions, and smooth out some rough edges. This is an exciting time and a rare opportunity to potentially influence how the Linux kernel is developed, as well as inform the evolution of the Rust language. We invite those interested to join us in &lt;a href="https://github.com/Rust-for-Linux/linux" dir="ltr"&gt;Rust for Linux&lt;/a&gt; and attend our planned talk at &lt;a href="https://linuxplumbersconf.org/" dir="ltr"&gt;Linux Plumbers Conference 2021&lt;/a&gt;!
-&lt;/p&gt;&lt;p&gt;&lt;i&gt;
-Thanks Nick Desaulniers, Kees Cook, and Adrian Taylor for contributions to this post. Special thanks to Jeff Vander Stoep for contributions and editing, and to Greg Kroah-Hartman for reviewing and contributing to the code examples.
-&lt;/i&gt;&lt;/p&gt;&lt;img alt="Share on Twitter" height="24" src="https://www.gstatic.com/images/icons/material/system/2x/post_twitter_black_24dp.png" width="24"&gt;&lt;img alt="Share on Facebook" height="24" src="https://www.gstatic.com/images/icons/material/system/2x/post_facebook_black_24dp.png" width="24"&gt;</description><pubDate>Wed, 14 Apr 2021 19:45:42 -0500</pubDate></item><item><title>ocaml-wayland (pure OCaml wayland protocol library)</title><link>https://lobste.rs/s/8nli6z</link><description>&lt;p dir="ltr"&gt;I’ve just released &lt;a href="https://github.com/talex5/ocaml-wayland" dir="ltr"&gt;ocaml-wayland &lt;span title="18 clicks" dir="ltr"&gt;18&lt;/span&gt;&lt;/a&gt;, a pure OCaml Wayland implementation. You can get it with:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;opam install wayland
+&lt;/PRE&gt;</description><pubDate>Tue, 13 Apr 2021 13:53:30 -0500</pubDate></item><item><title>Solving Connect 4: how to build a perfect AI (2019)</title><link>http://blog.gamesolver.org/</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/cm9k0p/solving_connect_4_how_build_perfect_ai"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Wed, 14 Apr 2021 11:08:55 -0500</pubDate></item><item><title>ocaml-wayland (pure OCaml wayland protocol library)</title><link>https://lobste.rs/s/8nli6z</link><description>&lt;p dir="ltr"&gt;I’ve just released &lt;a href="https://github.com/talex5/ocaml-wayland" dir="ltr"&gt;ocaml-wayland &lt;span title="18 clicks" dir="ltr"&gt;18&lt;/span&gt;&lt;/a&gt;, a pure OCaml Wayland implementation. You can get it with:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;opam install wayland
 &lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Wayland is a communications system intended for use between processes on a single computer. It is mainly used by graphical applications (clients) to talk to display servers, but nothing about it is specific to graphics and it could be used for other things.&lt;/p&gt;&lt;p&gt;A Wayland protocol is defined by writing a schema file. Typed bindings can then be created automatically from that for various languages. Wayland’s main interesting feature is that you can pass file descriptors as message arguments. For example, to send a frame of video you can get a file descriptor to some shared memory, draw the image to it, and then pass the FD to the server for rendering, with no need to copy the data.&lt;/p&gt;&lt;p dir="ltr"&gt;The ocaml-wayland library can be used to write applications, display servers, or proxies. The &lt;a href="https://github.com/talex5/ocaml-wayland/blob/master/example/test.ml" dir="ltr"&gt;example &lt;span title="13 clicks" dir="ltr"&gt;13&lt;/span&gt;&lt;/a&gt; in the repository opens a window showing some scrolling squares. Clicking reverses the direction and pressing keys changes the colours.&lt;/p&gt;&lt;p dir="ltr"&gt;I used the library to write &lt;a href="https://github.com/talex5/wayland-virtwl-proxy" dir="ltr"&gt;wayland-virtwl-proxy &lt;span title="3 clicks" dir="ltr"&gt;3&lt;/span&gt;&lt;/a&gt;, which allows applications running in VMs to open windows directly on the host desktop, as described in my recent blog post “&lt;a href="https://roscidus.com/blog/blog/2021/03/07/qubes-lite-with-kvm-and-wayland/" dir="ltr"&gt;Qubes-lite with KVM and Wayland &lt;span title="12 clicks" dir="ltr"&gt;12&lt;/span&gt;&lt;/a&gt;”.&lt;/p&gt;&lt;p&gt;Note that, unlike the older X11 protocol, Wayland doesn’t provide any graphics primitives (such as drawing rectangles or text). Instead, applications render the window contents however they please and then simply share the buffer with the compositor. So if you want to write a normal application using it, you’ll need to find or write a separate GUI toolkit too.&lt;/p&gt;</description><pubDate>Wed, 14 Apr 2021 03:54:30 -0500</pubDate></item><item><title>Making PL Ideas Accessible: An Open-Source, Open-Access, Interactive Journal</title><link>https://lobste.rs/s/128jzy</link><description>&lt;img src="https://blog.sigplan.org/wp-content/uploads/2021/03/MANNapoli_124545_platos_academy_mosaic-800x675.jpg" alt="Making PL Ideas Accessible: An Open-Source, Open-Access, Interactive Journal" width="393" height="331" srcset="https://blog.sigplan.org/wp-content/uploads/2021/03/MANNapoli_124545_platos_academy_mosaic-800x675.jpg 1080w, https://blog.sigplan.org/wp-content/uploads/2021/03/MANNapoli_124545_platos_academy_mosaic-480x490.jpg 480w"&gt;&lt;p dir="ltr"&gt;Two textbooks defined a generation of PL instruction: &lt;a href="https://www.cis.upenn.edu/~bcpierce/tapl/" dir="ltr"&gt;&lt;i dir="ltr"&gt;Types and Programming Languages&lt;/i&gt;&lt;/a&gt; and &lt;a href="https://www.cis.upenn.edu/~bcpierce/attapl/" dir="ltr"&gt;&lt;i dir="ltr"&gt;Advanced Topics in Types and Programming Languages&lt;/i&gt;&lt;/a&gt;&lt;i dir="ltr"&gt;. &lt;/i&gt;Since then, we’ve seen a new generation of resources that set new standards for presentation—&lt;a href="http://cs.brown.edu/courses/cs173/2012/book/" dir="ltr"&gt;Programming Languages: Application and Interpretation&lt;/a&gt;, the &lt;a href="https://homotopytypetheory.org/book/" dir="ltr"&gt;Homotopy Type Theory&lt;/a&gt; book, &lt;a href="https://softwarefoundations.cis.upenn.edu/" dir="ltr"&gt;Software Foundations&lt;/a&gt;, &lt;a href="http://adam.chlipala.net/cpdt/" dir="ltr"&gt;Certified Programming with Dependent Types&lt;/a&gt;—but these “books” also have another interesting characteristic: they’re freely available, or even &lt;a href="https://github.com/HoTT/book/" dir="ltr"&gt;open source&lt;/a&gt;. Some of them don’t even have physical versions!&lt;/p&gt;&lt;p dir="ltr"&gt;These books are a tremendous resource. I believe we can do more. &lt;b dir="ltr"&gt;The PL community can develop an &lt;/b&gt;&lt;b dir="ltr"&gt;&lt;i dir="ltr"&gt;open-source&lt;/i&gt;&lt;/b&gt;&lt;b dir="ltr"&gt;, &lt;/b&gt;&lt;b dir="ltr"&gt;&lt;i dir="ltr"&gt;open-access,&lt;/i&gt;&lt;/b&gt;&lt;b dir="ltr"&gt; and &lt;/b&gt;&lt;b dir="ltr"&gt;&lt;i dir="ltr"&gt;interactive&lt;/i&gt;&lt;/b&gt;&lt;b dir="ltr"&gt; journal for &lt;/b&gt;&lt;b dir="ltr"&gt;&lt;i dir="ltr"&gt;excellent explanations&lt;/i&gt;&lt;/b&gt;&lt;b dir="ltr"&gt; of &lt;/b&gt;&lt;b dir="ltr"&gt;&lt;i dir="ltr"&gt;important ideas.&lt;/i&gt;&lt;/b&gt; There’s precedent in the ML community: &lt;a href="https://distill.pub/" dir="ltr"&gt;Distill&lt;/a&gt;. Distill offers beautiful and well explained examples of machine learning research, with more than a million unique readers in its &lt;a href="https://distill.pub/2018/editorial-update/" dir="ltr"&gt;first year&lt;/a&gt;! Many Distill articles link to computational notebooks, which allows readers to quickly work with state-of-the-art implementations and demonstrations. What’s more, managing accessibility to, e.g., screen readers, is much more tractable in HTML than in LaTeX-generated PDF.&lt;/p&gt;&lt;p dir="ltr"&gt;Such a journal—let’s call it &lt;em dir="ltr"&gt;exPLain&lt;/em&gt;&amp;nbsp;just to give it a name—would increase the reach and impact of PL research, help train new students, and foster a culture of reproducible public artifacts. Clear explanations of new or big ideas will help develop the field by expanding the use and understanding of those ideas, just as TAPL and ATTAPL did for the use of syntactic methods in type systems and semantics.&lt;/p&gt;&lt;p dir="ltr"&gt;Changes in publishing are afoot in &lt;a href="http://www.sigplan.org/PACMPL/" dir="ltr"&gt;SIGPLAN&lt;/a&gt; and beyond. Some of these changes are happening whether we want them or not! Moshe Vardi seems optimistic about how &lt;a href="https://cacm.acm.org/magazines/2021/1/249441-reboot-the-computing-research-publication-systems/fulltext" dir="ltr"&gt;“ACM is launching a Presidential Task force on Future Formats for ACM Conferences”&lt;/a&gt;. I’m not so optimistic. If we don’t have our own approaches to future formats, we’ll end up with something like &lt;a href="https://www.acm.org/publications/taps/taps-best-practices" dir="ltr"&gt;TAPS&lt;/a&gt;, with its &lt;a href="https://www.acm.org/publications/taps/accepted-latex-packages" dir="ltr"&gt;approved list&lt;/a&gt; of packages and &lt;a href="https://www.acm.org/publications/taps/latex-best-practices" dir="ltr"&gt;restrictions on custom macros&lt;/a&gt;…&lt;/p&gt;&lt;h2&gt;Desiderata&lt;/h2&gt;&lt;p dir="ltr"&gt;What would we want out of a exPLain journal? It should be: &lt;i dir="ltr"&gt;open access&lt;/i&gt; (i.e., free to read), &lt;i dir="ltr"&gt;stable&lt;/i&gt; (i.e., can be archived and cited), &lt;i dir="ltr"&gt;accessible&lt;/i&gt; (both in the sense of easy to access but also in the sense of universal design), &lt;i dir="ltr"&gt;interactive&lt;/i&gt;, and &lt;i dir="ltr"&gt;open source.&lt;/i&gt; A website with a static server and client-side interactivity is a natural fit.&lt;/p&gt;&lt;p dir="ltr"&gt;Articles should be targeted at a deeper level than existing textbook and course materials. They should be high-quality, clear, up-to-date explanations of contemporary concepts in PL. Ideally, articles should be understandable to anyone with an undergraduate education in computer science, i.e., starting PhDs, while also containing material useful for PL experts who are new to the article’s area. Articles could reference appropriate chapters in TAPL (or whatever other textbook), but eventually exPLain could have its own background material, in the same consistent, interactive style. Articles should cover both theoretical and practical aspects. Articles should be &lt;i dir="ltr"&gt;peer reviewed&lt;/i&gt; both for accuracy and for quality.&lt;/p&gt;&lt;p dir="ltr"&gt;Lastly, the journal will be a stronger resource if it is &lt;i dir="ltr"&gt;coherent&lt;/i&gt;. That is, articles should share notational and editorial conventions. &lt;a href="https://blog.sigplan.org/2020/09/29/pl-notation-is-a-barrier-to-entry/" dir="ltr"&gt;PL notation is a barrier to entry&lt;/a&gt;, and we should include a broad audience.&lt;/p&gt;&lt;h2&gt;Challenges&lt;/h2&gt;&lt;p dir="ltr"&gt;There is no good, single toolchain for web publishing. The &lt;a href="https://github.com/distillpub/template" dir="ltr"&gt;Distill template&lt;/a&gt; is a wonderful start, but LaTeX practices in PL mean we probably need something better than just &lt;a href="https://www.mathjax.org/" dir="ltr"&gt;Mathjax&lt;/a&gt;. Visualization and interactivity are key components: they bring the reader along and invite exploration. PDF papers often have “stop-motion animation” figures… how much better to have real animation! An &lt;a href="https://distill.pub/2020/communicating-with-interactive-articles/" dir="ltr"&gt;article on Distill&lt;/a&gt; makes the argument well. Backing up theory with running code to demonstrate the idea and explaining complex code with elegant theory gives people more ways to get at the material. Many Distill articles come with computational notebooks, which can be easily remixed and experimented with.&lt;/p&gt;&lt;p dir="ltr"&gt;Interactivity is generally a challenge: web programming is hard! While we’re experts in our research areas, we’re not all experts at interactive web programming or visualization. Keeping server-side demands low is critical, and many PL tools demand heavyweight support. But, say, &lt;a href="https://github.com/Z3Prover/z3/wiki" dir="ltr"&gt;Z3&lt;/a&gt; runs in &lt;a href="https://github.com/cpitclaudel/z3.wasm" dir="ltr"&gt;WASM&lt;/a&gt; &lt;a href="https://github.com/bramvdbogaerde/z3-wasm" dir="ltr"&gt;pretty well&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Archiving of papers is already hard, and we’ll have to think carefully about what and how we archive (and how an archived paper is cited). &lt;a href="https://zenodo.org/" dir="ltr"&gt;Zenodo&lt;/a&gt; and &lt;a href="https://www.softwareheritage.org/" dir="ltr"&gt;Software Heritage&lt;/a&gt; can help.&lt;/p&gt;&lt;p dir="ltr"&gt;Coming up with and enforcing notational standards is hard… the PL community has some &lt;i dir="ltr"&gt;very&lt;/i&gt; strong feelings about notation! We would need an editorial board to come up with and enforce these standards, knowing that there’s no way to satisfy everyone. Meeting these standards will be a challenge, too! Distill uses a Slack to “mentor” would-be article writers. How should we foster the exPLain community?&lt;/p&gt;&lt;p dir="ltr"&gt;Editorial curation is also important, especially at the outset, to ensure that the chosen articles are meeting a need, and can build momentum. There is a wide variety of possible topics, e.g, an omnibus on program synthesis (perhaps expanding &lt;a href="https://blog.sigplan.org/2019/07/31/program-synthesis-in-2019/" dir="ltr"&gt;James Bornholt’s overview&lt;/a&gt;), an omnibus on refinement types (perhaps a derivation of &lt;a href="https://arxiv.org/pdf/2010.07763.pdf" dir="ltr"&gt;Jhala and Vazou’s tutorial&lt;/a&gt;), an overview of the theory and practice of random testing (e.g., &lt;a href="https://en.wikipedia.org/wiki/QuickCheck" dir="ltr"&gt;Quickcheck&lt;/a&gt;-style, or &lt;a href="https://en.wikipedia.org/wiki/Fuzzing" dir="ltr"&gt;fuzzing&lt;/a&gt;-style), an explainer on architectural memory models, … and many more!&lt;/p&gt;&lt;p dir="ltr"&gt;Reviewing and revising will be a lot of work. Distill has &lt;a href="https://distill.pub/about/" dir="ltr"&gt;&lt;i dir="ltr"&gt;three&lt;/i&gt; staff members&lt;/a&gt;. In all likelihood, exPLain would start with &lt;i dir="ltr"&gt;zero&lt;/i&gt; staff members. How can we make the work sustainable?&lt;/p&gt;&lt;p dir="ltr"&gt;A domain name and hosting cost money. Distill also offers a &lt;a href="http://distill.pub/prize" dir="ltr"&gt;prize&lt;/a&gt; (though it’s not clear if it’s ever actually been awarded). How should the journal be funded?&lt;/p&gt;&lt;p dir="ltr"&gt;Finally, the hardest part of &lt;i dir="ltr"&gt;any&lt;/i&gt; software project is coming up with a name; exPLain is just one thing that came to mind (which blog editor Mike Hicks particularly liked!), so here are a few more: Re:PL, PLaybook, simPLify.&lt;/p&gt;&lt;h2&gt;What’s next?&lt;/h2&gt;&lt;p&gt;To make this happen, we need a group of people to help drive it: a group with diverse viewpoints; a group whose work covers a broad swath of PL research. That small group can hash out the initial details. Then we need… some articles!&lt;/p&gt;&lt;p dir="ltr"&gt;If you’re excited about this idea and willing to dedicate your time to making it happen, please &lt;a href="mailto:michael.greenberg@pomona.edu" dir="ltr"&gt;be in touch&lt;/a&gt;. A journal like this would do good things for the PL community—let’s make it happen.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;&lt;i dir="ltr"&gt;Acknowledgments&lt;/i&gt;&lt;/b&gt;&lt;i dir="ltr"&gt;: As usual, Mike Hicks provided valuable editing advice and thoughts on the proposal.&lt;br dir="ltr"&gt;
 &lt;/i&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;&lt;i dir="ltr"&gt;Bio&lt;/i&gt;&lt;/b&gt;&lt;i dir="ltr"&gt;: &lt;a href="https://cs.pomona.edu/~michael/" dir="ltr"&gt;Michael Greenberg&lt;/a&gt; is an assistant professor at Pomona College. He received BAs in Computer Science and Egyptology from Brown University (2007) and his PhD in Computer Science from the University of Pennsylvania (2013). His work has ranged from functional-reactive JavaScript to runtime verification of higher-order programs to software-defined networking to present activities focused on Kleene algebra with tests, Datalog, and the POSIX shell.&lt;/i&gt;&lt;/p&gt;&lt;p&gt;&lt;em dir="ltr"&gt;&lt;strong dir="ltr"&gt;Photo credit&lt;/strong&gt;: &lt;a href="https://en.wikipedia.org/wiki/The_School_of_Athens#/media/File:MANNapoli_124545_plato's_academy_mosaic.jpg" data-et-has-event-already="true" dir="ltr"&gt;Wikipedia&lt;/a&gt;.&lt;/em&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Disclaimer:&lt;/strong&gt; &lt;em dir="ltr"&gt;These posts are written by individual contributors to share their thoughts on the SIGPLAN blog for the benefit of the community. Any views or opinions represented in this blog are personal, belong solely to the blog author and do not represent those of ACM SIGPLAN or its parent organization, ACM.&lt;/em&gt;&lt;/p&gt;</description><pubDate>Wed, 14 Apr 2021 14:21:37 -0500</pubDate></item><item><title>Remote exploitation of a man-in-the-disk vulnerability in WhatsApp (CVE-2021-24027)</title><link>https://lobste.rs/s/p0w3sd</link><description>&lt;h1&gt;&lt;a href="https://census-labs.com/news/2021/04/14/whatsapp-mitd-remote-exploitation-CVE-2021-24027/#"&gt;Remote exploitation of a man-in-the-disk vulnerability in WhatsApp (CVE-2021-24027)&lt;/a&gt;&lt;/h1&gt;&lt;p dir="ltr"&gt;
 CENSUS has been investigating for some time now the exploitation potential of &lt;em dir="ltr"&gt;Man-in-the-Disk&lt;/em&gt; (MitD) [&lt;a href="https://blog.checkpoint.com/2018/08/12/man-in-the-disk-a-new-attack-surface-for-android-apps/" dir="ltr"&gt;01&lt;/a&gt;] vulnerabilities in Android. Recently, CENSUS identified two such vulnerabilities in the popular WhatsApp messenger app for Android [&lt;a href="https://play.google.com/store/apps/details?id=com.whatsapp&amp;amp;hl=en&amp;amp;gl=US" dir="ltr"&gt;34&lt;/a&gt;]. The first of these was possibly independently reported to Facebook and was found to be patched in recent versions, while the second one was communicated by CENSUS to Facebook and was tracked as CVE-2021-24027 [&lt;a href="https://census-labs.com/news/2021/04/14/whatsapp-exposure-of-cryptographic-material-to-third-party-apps/" dir="ltr"&gt;33&lt;/a&gt;]. As both vulnerabilities have now been patched, we would like to share our discoveries regarding the exploitation potential of such vulnerabilities with the rest of the community.&lt;/p&gt;&lt;p dir="ltr"&gt;In this article we will have a look at how a simple phishing attack through an Android messaging application could result in the direct leakage of data found in External Storage (&lt;strong dir="ltr"&gt;/sdcard&lt;/strong&gt;). Then we will show how the two aforementioned WhatsApp vulnerabilities would have made it possible for attackers to remotely collect TLS cryptographic material for TLS 1.3 and TLS 1.2 sessions. With the TLS secrets at hand, we will demonstrate how a man-in-the-middle (MitM) attack can lead to the compromise of WhatsApp communications, to remote code execution on the victim device and to the extraction of Noise [&lt;a href="http://www.noiseprotocol.org/" dir="ltr"&gt;05&lt;/a&gt;] protocol keys used for end-to-end encryption in user communications.&lt;/p&gt;&lt;p dir="ltr"&gt;Android 10 introduced the &lt;em dir="ltr"&gt;scoped storage&lt;/em&gt; feature [&lt;a href="https://developer.android.com/about/versions/10/privacy/changes#scoped-storage" dir="ltr"&gt;13&lt;/a&gt;], as a proactive defense against these types of attacks. 
@@ -3284,7 +3284,108 @@ To make testing and demonstration easier, instead of carrying out the informatio
     }
 }
 &lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Sending an arbitrarily large response to the client will eventually trigger an Out-Of-Memory (OOM) condition. Furthermore, to avoid sending large amounts of data, and trigger the OOM faster, an attacker can use GZip encoding. Once an &lt;code dir="ltr"&gt;OutOfMemoryError&lt;/code&gt; is thrown, WhatsApp's custom exception handler will be called to handle the situation. System information will be collected, and the upload process will be triggered. Intercepting the connection will disclose all the sensitive information that was intended to be sent to WhatsApp's internal infrastructure.&lt;/p&gt;&lt;p&gt;The following image shows how a successful attack looks like:
-&lt;/p&gt;&lt;img alt="Memory dump man-in-the-middle" src="https://census-labs.com/media/05-whatsapp-mitm-noize.png" width="430" height="212"&gt;&lt;p dir="ltr"&gt;The screenshot above shows a &lt;strong dir="ltr"&gt;tmux&lt;/strong&gt; session. The window on the left shows the output of &lt;strong dir="ltr"&gt;openssl_http_pipe.py&lt;/strong&gt; (found under &lt;strong dir="ltr"&gt;tls12_psk_extract/&lt;/strong&gt;), a tool that forks a modified OpenSSL &lt;code dir="ltr"&gt;s_server&lt;/code&gt; instance and communicates with it over a pipe, in order to allow a user to handle HTTP requests manually. The lines at the very bottom, show the POST request that WhatsApp issues in order to upload the heap data. In our case, around 4Mb of data have been grabbed. The window on the right shows a brief overview of this data. It can be seen that it's actually a part of a multipart request, corresponding to a file named &lt;strong dir="ltr"&gt;dump.gz&lt;/strong&gt;. The latter's contents are not shown here in full, as they contain cryptographic material of an actual WhatsApp account.&lt;/p&gt;&lt;p dir="ltr"&gt;The tooling required for this attack can be found in the PoC's &lt;strong dir="ltr"&gt;tls12_psk_extract/&lt;/strong&gt; directory. Detailed instructions for setting up the MitM environment can be found in &lt;strong dir="ltr"&gt;README.md&lt;/strong&gt; in the same directory.&lt;/p&gt;&lt;h2&gt;Conclusion and future work&lt;/h2&gt;&lt;p&gt;This blog post demonstrated the potential of exploiting man-in-the-disk (MitD) vulnerabilities using remote vectors. More specifically, TLS session secrets of WhatsApp were found to be stored erroneously in an unprotected directory. These were collected remotely through the exploitation of a vulnerability in an Android component (CVE-2020-6516, a Same-Origin-Policy bypass bug of Chrome). Of course, the collection of secrets could have also been achieved through the introduction of a malicious application on the victim's device. Once the TLS session secrets were collected it was possible to perform a man-in-the-middle attack to WhatsApp communications. The man-in-the-middle attack allowed the attacker to execute arbitrary code on the victim's device. Moreover, the man-in-the-middle attack allowed for the collection of the victim user's Noise protocol cryptographic material, which could later be used for the decryption of user communications.&lt;/p&gt;&lt;p&gt;The introduction of Scoped Storage in Android greatly limits the impact of man-in-the-disk vulnerabilities. Android 11 is the first version of Android to fully enforce scoped storage, allowing apps to access by default only their own resources on external storage.&lt;/p&gt;&lt;p dir="ltr"&gt;CENSUS strongly recommends to users to make sure they are using WhatsApp version 2.21.4.18 or greater on the Android platform, as previous versions are vulnerable to the aforementioned bugs and may allow for remote user surveillance. CENSUS has tracked the TLS 1.2 man-in-the-disk vulnerability under CVE-2021-24027 [&lt;a href="https://census-labs.com/news/2021/04/14/whatsapp-exposure-of-cryptographic-material-to-third-party-apps/" dir="ltr"&gt;33&lt;/a&gt;].&lt;/p&gt;&lt;p&gt;There are many more subsystems in WhatsApp which might be of great interest to an attacker. The communication with upstream servers and the E2E encryption implementation are two notable ones. Additionally, despite the fact that this work focused on WhatsApp, other popular Android messaging applications (e.g. Viber, Facebook Messenger), or even mobile games might be unwillingly exposing a similar attack surface to remote adversaries.&lt;/p&gt;&lt;h2&gt;References&lt;/h2&gt;&lt;p dir="ltr"&gt;[01] &lt;a href="https://blog.checkpoint.com/2018/08/12/man-in-the-disk-a-new-attack-surface-for-android-apps/" dir="ltr"&gt;https://blog.checkpoint.com/2018/08/12/man-in-the-disk-a-new-attack-surface-for-android-apps/&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[02] &lt;a href="https://bugs.chromium.org/p/chromium/issues/detail?id=1092449" dir="ltr"&gt;https://bugs.chromium.org/p/chromium/issues/detail?id=1092449&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[03] &lt;a href="https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2020-6516" dir="ltr"&gt;https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2020-6516&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[04] &lt;a href="https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2021-24027" dir="ltr"&gt;https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2021-24027&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[05] &lt;a href="http://www.noiseprotocol.org/" dir="ltr"&gt;http://www.noiseprotocol.org/&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[06] &lt;a href="https://citizenlab.ca/2019/09/poison-carp-tibetan-groups-targeted-with-1-click-mobile-exploits/" dir="ltr"&gt;https://citizenlab.ca/2019/09/poison-carp-tibetan-groups-targeted-with-1-click-mobile-exploits/&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[07] &lt;a href="https://www.washingtonpost.com/technology/2019/10/29/whatsapp-accuses-israeli-firm-helping-governments-hack-phones-journalists-human-rights-workers/" dir="ltr"&gt;https://www.washingtonpost.com/technology/2019/10/29/whatsapp-accuses-israeli-firm-helping-governments-hack-phones-journalists-human-rights-workers/&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[08] &lt;a href="https://github.com/skylot/jadx" dir="ltr"&gt;https://github.com/skylot/jadx&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[09] &lt;a href="https://developer.android.com/guide/topics/providers/content-providers" dir="ltr"&gt;https://developer.android.com/guide/topics/providers/content-providers&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[10] &lt;a href="https://developer.android.com/guide/topics/manifest/provider-element" dir="ltr"&gt;https://developer.android.com/guide/topics/manifest/provider-element&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[11] &lt;a href="https://android.googlesource.com/platform/frameworks/base/+/962fb40991f15be4f688d960aa00073683ebdd20%5E%21/#F0" dir="ltr"&gt;https://android.googlesource.com/platform/frameworks/base/+/962fb40991f15be4f688d960aa00073683ebdd20%5E%21/#F0&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[12] &lt;a href="https://developer.mozilla.org/en-US/docs/Web/Security/Same-origin_policy" dir="ltr"&gt;https://developer.mozilla.org/en-US/docs/Web/Security/Same-origin_policy&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[13] &lt;a href="https://developer.android.com/about/versions/10/privacy/changes#scoped-storage" dir="ltr"&gt;https://developer.android.com/about/versions/10/privacy/changes#scoped-storage&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[14] &lt;a href="https://chromium.googlesource.com/chromium/src/+/c6e232163d52e4334f7227ef30634b707e44a903%5E%21/#F4" dir="ltr"&gt;https://chromium.googlesource.com/chromium/src/+/c6e232163d52e4334f7227ef30634b707e44a903%5E%21/#F4&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[15] &lt;a href="https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API" dir="ltr"&gt;https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[16] &lt;a href="http://phrack.org/issues/69/13.html" dir="ltr"&gt;http://phrack.org/issues/69/13.html&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[17] &lt;a href="https://tools.ietf.org/html/rfc8446" dir="ltr"&gt;https://tools.ietf.org/html/rfc8446&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[18] &lt;a href="https://developer.android.com/reference/javax/net/ssl/X509TrustManager" dir="ltr"&gt;https://developer.android.com/reference/javax/net/ssl/X509TrustManager&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[19] &lt;a href="https://tools.ietf.org/html/rfc5077" dir="ltr"&gt;https://tools.ietf.org/html/rfc5077&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[20] &lt;a href="https://www.openssl.org/docs/man1.1.1/man3/SSL_set_psk_find_session_callback.html" dir="ltr"&gt;https://www.openssl.org/docs/man1.1.1/man3/SSL_set_psk_find_session_callback.html&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[21] &lt;a href="https://tools.ietf.org/html/rfc5246" dir="ltr"&gt;https://tools.ietf.org/html/rfc5246&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[22] &lt;a href="https://tools.ietf.org/html/rfc7627" dir="ltr"&gt;https://tools.ietf.org/html/rfc7627&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[23] &lt;a href="https://www.whatsapp.com/security/WhatsApp-Security-Whitepaper.pdf" dir="ltr"&gt;https://www.whatsapp.com/security/WhatsApp-Security-Whitepaper.pdf&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[24] &lt;a href="https://threatpost.com/researchers-find-ssl-problems-in-whatsapp/104411/" dir="ltr"&gt;https://threatpost.com/researchers-find-ssl-problems-in-whatsapp/104411/&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[25] &lt;a href="http://aosp.opersys.com/xref/android-10.0.0_r47/xref/external/conscrypt/repackaged/common/src/main/java/com/android/org/conscrypt/FileClientSessionCache.java#44" dir="ltr"&gt;http://aosp.opersys.com/xref/android-10.0.0_r47/xref/external/conscrypt/repackaged/common/src/main/java/com/android/org/conscrypt/FileClientSessionCache.java#44&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[26] &lt;a href="https://docs.oracle.com/javase/7/docs/api/javax/net/ssl/SSLSocket.html#startHandshake()" dir="ltr"&gt;https://docs.oracle.com/javase/7/docs/api/javax/net/ssl/SSLSocket.html#startHandshake()&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[27] &lt;a href="https://docs.oracle.com/javase/7/docs/api/javax/net/ssl/SSLSessionContext.html#getSession(byte[])" dir="ltr"&gt;https://docs.oracle.com/javase/7/docs/api/javax/net/ssl/SSLSessionContext.html#getSession(byte[])&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[28] &lt;a href="https://developer.android.com/reference/android/net/SSLSessionCache" dir="ltr"&gt;https://developer.android.com/reference/android/net/SSLSessionCache&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[29] &lt;a href="https://krebsonsecurity.com/2019/02/a-deep-dive-on-the-recent-widespread-dns-hijacking-attacks/" dir="ltr"&gt;https://krebsonsecurity.com/2019/02/a-deep-dive-on-the-recent-widespread-dns-hijacking-attacks/&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[30] &lt;a href="https://blog.talosintelligence.com/2019/04/seaturtle.html" dir="ltr"&gt;https://blog.talosintelligence.com/2019/04/seaturtle.html&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[31] &lt;a href="https://github.com/facebook/SoLoader" dir="ltr"&gt;https://github.com/facebook/SoLoader&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[32] &lt;a href="https://twitter.com/Shiftreduce/status/1347546599384346624/photo/1" dir="ltr"&gt;https://twitter.com/Shiftreduce/status/1347546599384346624/photo/1&lt;/a&gt;&lt;/p&gt;</description><pubDate>Wed, 14 Apr 2021 10:14:47 -0500</pubDate></item><item><title>Can continuation passing style code perform well?</title><link>https://lobste.rs/s/ossum2</link><description>&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Continuation passing style&lt;/em&gt; is a powerful technique that
+&lt;/p&gt;&lt;img alt="Memory dump man-in-the-middle" src="https://census-labs.com/media/05-whatsapp-mitm-noize.png" width="430" height="212"&gt;&lt;p dir="ltr"&gt;The screenshot above shows a &lt;strong dir="ltr"&gt;tmux&lt;/strong&gt; session. The window on the left shows the output of &lt;strong dir="ltr"&gt;openssl_http_pipe.py&lt;/strong&gt; (found under &lt;strong dir="ltr"&gt;tls12_psk_extract/&lt;/strong&gt;), a tool that forks a modified OpenSSL &lt;code dir="ltr"&gt;s_server&lt;/code&gt; instance and communicates with it over a pipe, in order to allow a user to handle HTTP requests manually. The lines at the very bottom, show the POST request that WhatsApp issues in order to upload the heap data. In our case, around 4Mb of data have been grabbed. The window on the right shows a brief overview of this data. It can be seen that it's actually a part of a multipart request, corresponding to a file named &lt;strong dir="ltr"&gt;dump.gz&lt;/strong&gt;. The latter's contents are not shown here in full, as they contain cryptographic material of an actual WhatsApp account.&lt;/p&gt;&lt;p dir="ltr"&gt;The tooling required for this attack can be found in the PoC's &lt;strong dir="ltr"&gt;tls12_psk_extract/&lt;/strong&gt; directory. Detailed instructions for setting up the MitM environment can be found in &lt;strong dir="ltr"&gt;README.md&lt;/strong&gt; in the same directory.&lt;/p&gt;&lt;h2&gt;Conclusion and future work&lt;/h2&gt;&lt;p&gt;This blog post demonstrated the potential of exploiting man-in-the-disk (MitD) vulnerabilities using remote vectors. More specifically, TLS session secrets of WhatsApp were found to be stored erroneously in an unprotected directory. These were collected remotely through the exploitation of a vulnerability in an Android component (CVE-2020-6516, a Same-Origin-Policy bypass bug of Chrome). Of course, the collection of secrets could have also been achieved through the introduction of a malicious application on the victim's device. Once the TLS session secrets were collected it was possible to perform a man-in-the-middle attack to WhatsApp communications. The man-in-the-middle attack allowed the attacker to execute arbitrary code on the victim's device. Moreover, the man-in-the-middle attack allowed for the collection of the victim user's Noise protocol cryptographic material, which could later be used for the decryption of user communications.&lt;/p&gt;&lt;p&gt;The introduction of Scoped Storage in Android greatly limits the impact of man-in-the-disk vulnerabilities. Android 11 is the first version of Android to fully enforce scoped storage, allowing apps to access by default only their own resources on external storage.&lt;/p&gt;&lt;p dir="ltr"&gt;CENSUS strongly recommends to users to make sure they are using WhatsApp version 2.21.4.18 or greater on the Android platform, as previous versions are vulnerable to the aforementioned bugs and may allow for remote user surveillance. CENSUS has tracked the TLS 1.2 man-in-the-disk vulnerability under CVE-2021-24027 [&lt;a href="https://census-labs.com/news/2021/04/14/whatsapp-exposure-of-cryptographic-material-to-third-party-apps/" dir="ltr"&gt;33&lt;/a&gt;].&lt;/p&gt;&lt;p&gt;There are many more subsystems in WhatsApp which might be of great interest to an attacker. The communication with upstream servers and the E2E encryption implementation are two notable ones. Additionally, despite the fact that this work focused on WhatsApp, other popular Android messaging applications (e.g. Viber, Facebook Messenger), or even mobile games might be unwillingly exposing a similar attack surface to remote adversaries.&lt;/p&gt;&lt;h2&gt;References&lt;/h2&gt;&lt;p dir="ltr"&gt;[01] &lt;a href="https://blog.checkpoint.com/2018/08/12/man-in-the-disk-a-new-attack-surface-for-android-apps/" dir="ltr"&gt;https://blog.checkpoint.com/2018/08/12/man-in-the-disk-a-new-attack-surface-for-android-apps/&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[02] &lt;a href="https://bugs.chromium.org/p/chromium/issues/detail?id=1092449" dir="ltr"&gt;https://bugs.chromium.org/p/chromium/issues/detail?id=1092449&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[03] &lt;a href="https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2020-6516" dir="ltr"&gt;https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2020-6516&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[04] &lt;a href="https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2021-24027" dir="ltr"&gt;https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2021-24027&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[05] &lt;a href="http://www.noiseprotocol.org/" dir="ltr"&gt;http://www.noiseprotocol.org/&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[06] &lt;a href="https://citizenlab.ca/2019/09/poison-carp-tibetan-groups-targeted-with-1-click-mobile-exploits/" dir="ltr"&gt;https://citizenlab.ca/2019/09/poison-carp-tibetan-groups-targeted-with-1-click-mobile-exploits/&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[07] &lt;a href="https://www.washingtonpost.com/technology/2019/10/29/whatsapp-accuses-israeli-firm-helping-governments-hack-phones-journalists-human-rights-workers/" dir="ltr"&gt;https://www.washingtonpost.com/technology/2019/10/29/whatsapp-accuses-israeli-firm-helping-governments-hack-phones-journalists-human-rights-workers/&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[08] &lt;a href="https://github.com/skylot/jadx" dir="ltr"&gt;https://github.com/skylot/jadx&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[09] &lt;a href="https://developer.android.com/guide/topics/providers/content-providers" dir="ltr"&gt;https://developer.android.com/guide/topics/providers/content-providers&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[10] &lt;a href="https://developer.android.com/guide/topics/manifest/provider-element" dir="ltr"&gt;https://developer.android.com/guide/topics/manifest/provider-element&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[11] &lt;a href="https://android.googlesource.com/platform/frameworks/base/+/962fb40991f15be4f688d960aa00073683ebdd20%5E%21/#F0" dir="ltr"&gt;https://android.googlesource.com/platform/frameworks/base/+/962fb40991f15be4f688d960aa00073683ebdd20%5E%21/#F0&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[12] &lt;a href="https://developer.mozilla.org/en-US/docs/Web/Security/Same-origin_policy" dir="ltr"&gt;https://developer.mozilla.org/en-US/docs/Web/Security/Same-origin_policy&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[13] &lt;a href="https://developer.android.com/about/versions/10/privacy/changes#scoped-storage" dir="ltr"&gt;https://developer.android.com/about/versions/10/privacy/changes#scoped-storage&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[14] &lt;a href="https://chromium.googlesource.com/chromium/src/+/c6e232163d52e4334f7227ef30634b707e44a903%5E%21/#F4" dir="ltr"&gt;https://chromium.googlesource.com/chromium/src/+/c6e232163d52e4334f7227ef30634b707e44a903%5E%21/#F4&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[15] &lt;a href="https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API" dir="ltr"&gt;https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[16] &lt;a href="http://phrack.org/issues/69/13.html" dir="ltr"&gt;http://phrack.org/issues/69/13.html&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[17] &lt;a href="https://tools.ietf.org/html/rfc8446" dir="ltr"&gt;https://tools.ietf.org/html/rfc8446&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[18] &lt;a href="https://developer.android.com/reference/javax/net/ssl/X509TrustManager" dir="ltr"&gt;https://developer.android.com/reference/javax/net/ssl/X509TrustManager&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[19] &lt;a href="https://tools.ietf.org/html/rfc5077" dir="ltr"&gt;https://tools.ietf.org/html/rfc5077&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[20] &lt;a href="https://www.openssl.org/docs/man1.1.1/man3/SSL_set_psk_find_session_callback.html" dir="ltr"&gt;https://www.openssl.org/docs/man1.1.1/man3/SSL_set_psk_find_session_callback.html&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[21] &lt;a href="https://tools.ietf.org/html/rfc5246" dir="ltr"&gt;https://tools.ietf.org/html/rfc5246&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[22] &lt;a href="https://tools.ietf.org/html/rfc7627" dir="ltr"&gt;https://tools.ietf.org/html/rfc7627&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[23] &lt;a href="https://www.whatsapp.com/security/WhatsApp-Security-Whitepaper.pdf" dir="ltr"&gt;https://www.whatsapp.com/security/WhatsApp-Security-Whitepaper.pdf&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[24] &lt;a href="https://threatpost.com/researchers-find-ssl-problems-in-whatsapp/104411/" dir="ltr"&gt;https://threatpost.com/researchers-find-ssl-problems-in-whatsapp/104411/&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[25] &lt;a href="http://aosp.opersys.com/xref/android-10.0.0_r47/xref/external/conscrypt/repackaged/common/src/main/java/com/android/org/conscrypt/FileClientSessionCache.java#44" dir="ltr"&gt;http://aosp.opersys.com/xref/android-10.0.0_r47/xref/external/conscrypt/repackaged/common/src/main/java/com/android/org/conscrypt/FileClientSessionCache.java#44&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[26] &lt;a href="https://docs.oracle.com/javase/7/docs/api/javax/net/ssl/SSLSocket.html#startHandshake()" dir="ltr"&gt;https://docs.oracle.com/javase/7/docs/api/javax/net/ssl/SSLSocket.html#startHandshake()&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[27] &lt;a href="https://docs.oracle.com/javase/7/docs/api/javax/net/ssl/SSLSessionContext.html#getSession(byte[])" dir="ltr"&gt;https://docs.oracle.com/javase/7/docs/api/javax/net/ssl/SSLSessionContext.html#getSession(byte[])&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[28] &lt;a href="https://developer.android.com/reference/android/net/SSLSessionCache" dir="ltr"&gt;https://developer.android.com/reference/android/net/SSLSessionCache&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[29] &lt;a href="https://krebsonsecurity.com/2019/02/a-deep-dive-on-the-recent-widespread-dns-hijacking-attacks/" dir="ltr"&gt;https://krebsonsecurity.com/2019/02/a-deep-dive-on-the-recent-widespread-dns-hijacking-attacks/&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[30] &lt;a href="https://blog.talosintelligence.com/2019/04/seaturtle.html" dir="ltr"&gt;https://blog.talosintelligence.com/2019/04/seaturtle.html&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[31] &lt;a href="https://github.com/facebook/SoLoader" dir="ltr"&gt;https://github.com/facebook/SoLoader&lt;/a&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;[32] &lt;a href="https://twitter.com/Shiftreduce/status/1347546599384346624/photo/1" dir="ltr"&gt;https://twitter.com/Shiftreduce/status/1347546599384346624/photo/1&lt;/a&gt;&lt;/p&gt;</description><pubDate>Wed, 14 Apr 2021 10:14:47 -0500</pubDate></item><item><title>Learn by reading code: Python standard library design decisions explained (for advanced beginners)</title><link>https://lobste.rs/s/jcmjdj</link><description>&lt;p&gt;&lt;small dir="ltr"&gt;
+&lt;span dir="ltr"&gt;2021-04-12&lt;/span&gt;
+
+
+
+∙ five minute read
+
+
+&lt;/small&gt;&lt;/p&gt;&lt;p&gt;So, you're an advanced beginner
+– you've learned your way past Python basics and can solve real problems.&lt;/p&gt;&lt;p dir="ltr"&gt;You've now moved past tutorials and blog posts;
+maybe you feel they offer one-dimensional solutions to simple, made-up problems;
+maybe instead of solving &lt;em dir="ltr"&gt;this specific problem&lt;/em&gt;,
+you want to get better at solving problems &lt;em dir="ltr"&gt;in general&lt;/em&gt;.&lt;/p&gt;&lt;p&gt;Maybe you heard you should develop an eye by reading and writing a lot of code.&lt;/p&gt;&lt;p&gt;It's true.&lt;/p&gt;&lt;p dir="ltr"&gt;So, &lt;em dir="ltr"&gt;what code should you read?&lt;/em&gt;&lt;/p&gt;&lt;p&gt;"Just read what you like."&lt;/p&gt;&lt;p&gt;What if you don't know what you like?&lt;/p&gt;&lt;p dir="ltr"&gt;What if you don't like the right thing?
+Or worse, what if you like the &lt;em dir="ltr"&gt;wrong&lt;/em&gt; thing,
+and get stuck with bad habits because of it?&lt;/p&gt;&lt;p&gt;After all, you have to have an eye for that...&lt;/p&gt;&lt;p&gt;...but that's what you're trying to develop in the first place.&lt;/p&gt;&lt;p&gt;"There are so many projects on GitHub – pick one you like and see how they did it."&lt;/p&gt;&lt;p&gt;But most successful projects are quite large; where do you start from?&lt;/p&gt;&lt;p dir="ltr"&gt;And even if you knew where to start,
+&lt;em dir="ltr"&gt;how they did it&lt;/em&gt; isn't always obvious.
+Yes, the code is right there, but it doesn't really tell you
+&lt;em dir="ltr"&gt;why&lt;/em&gt; they did it,
+what they &lt;em dir="ltr"&gt;didn't&lt;/em&gt; do,
+nor &lt;em dir="ltr"&gt;how they thought&lt;/em&gt; about the whole thing.&lt;/p&gt;&lt;p&gt;In other words, it is not obvious from the code itself
+what the design philosophy was
+and what choices were considered before settling on an implementation.&lt;/p&gt;&lt;p dir="ltr"&gt;In this article, we'll look at &lt;strong dir="ltr"&gt;some Python standard library modules where it is&lt;/strong&gt;.&lt;/p&gt;&lt;h2&gt;A note about the standard library&lt;/h2&gt;&lt;p dir="ltr"&gt;As a whole, the Python standard library isn't &lt;em dir="ltr"&gt;great&lt;/em&gt; for learning "good" style.&lt;/p&gt;&lt;p dir="ltr"&gt;While all the modules are &lt;em dir="ltr"&gt;useful&lt;/em&gt;, they're not very uniform:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;they have different authors;&lt;/LI&gt;&lt;LI&gt;some of them are old
+(pythonic was different 10-20 years ago); and&lt;/LI&gt;&lt;LI&gt;they have to preserve backwards compatibility
+(refactoring risks introducing bugs,
+and major API changes are out of the question).&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;On the other hand, the newer modules &lt;em dir="ltr"&gt;are more consistent&lt;/em&gt;,
+have detailed PEPs &lt;em dir="ltr"&gt;explaining the design tradeoffs&lt;/em&gt;,
+and some took inspiration from already mature third party libraries.&lt;/p&gt;&lt;p&gt;It's a few of the latter ones we'll look at.&lt;/p&gt;&lt;p&gt;Style aside, there's a lot to learn from the standard library,
+ since it solves real problems for a diverse population of developers.&lt;/p&gt;&lt;p&gt;It's interesting/educative to look at the differences between stdlib stuff
+ and newer external alternatives
+ – the shows a perceived deficiency in the standard library
+ (otherwise they wouldn't have bothered with the new thing);
+ an example of this is urllib vs. requests.&lt;/p&gt;&lt;h2&gt;How to read these&lt;/h2&gt;&lt;p&gt;Roughly in this order:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Get familiar with them as a user:
+read the documentation, maybe play with the examples a bit.&lt;/LI&gt;&lt;LI&gt;Read the corresponding Python Enhancement Proposal (PEP).
+The interesting sections usually are the
+Abstract, Rationale, Design Decisions, Discussion, and Rejected Ideas.&lt;/LI&gt;&lt;LI&gt;Read the code; it's linked at the top of each documentation page.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;dataclasses&lt;/h2&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://docs.python.org/3/library/dataclasses.html" dir="ltr"&gt;dataclasses&lt;/a&gt; module reduces the boilerplate of writing classes
+by generating special methods like &lt;code dir="ltr"&gt;__init__&lt;/code&gt; and &lt;code dir="ltr"&gt;__repr__&lt;/code&gt;.
+(See &lt;a href="https://realpython.com/python-data-classes/" dir="ltr"&gt;this tutorial&lt;/a&gt; for an introduction that has
+more concrete examples than the official documentation.)&lt;/p&gt;&lt;p dir="ltr"&gt;It was introduced in &lt;a href="https://www.python.org/dev/peps/pep-0557/" dir="ltr"&gt;PEP 557&lt;/a&gt;, as a simpler version of &lt;a href="https://www.attrs.org/en/stable/why.html#data-classes" dir="ltr"&gt;attrs&lt;/a&gt;.
+The Specification section is similar to the documentation;
+the good stuff is in Rationale, Discussion, and Rejected Ideas.&lt;/p&gt;&lt;p dir="ltr"&gt;The code is extremely well commented;
+particularly interesting is &lt;a href="https://github.com/python/cpython/blob/3.9/Lib/dataclasses.py#L779" dir="ltr"&gt;this use&lt;/a&gt; of &lt;a href="https://www.hillelwayne.com/decision-tables/" dir="ltr"&gt;decision tables&lt;/a&gt;
+(&lt;a href="https://github.com/python/cpython/blob/3.9/Lib/dataclasses.py#L119" dir="ltr"&gt;ASCII version&lt;/a&gt;, &lt;a href="https://bugs.python.org/issue32929#msg312829" dir="ltr"&gt;nested if version&lt;/a&gt;).&lt;/p&gt;&lt;p dir="ltr"&gt;It is also a good example of metaprogramming.
+Raymond Hettinger's
+&lt;a href="https://www.youtube.com/watch?v=T-TwcmT6Rcw" dir="ltr"&gt;Dataclasses: The code generator to end all code generators&lt;/a&gt; talk
+looks at dataclasses with a focus on the code generation aspects
+(&lt;a href="https://www.dropbox.com/s/te4q0xf46zkuu21/hettinger_dataclasses_pycon_2018.zip" dir="ltr"&gt;HTML slides&lt;/a&gt;, &lt;a href="https://www.dropbox.com/s/m8pwkkz43qz5pgt/HettingerPycon2018.pdf" dir="ltr"&gt;PDF slides&lt;/a&gt;).&lt;/p&gt;&lt;h2&gt;pathlib&lt;/h2&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://docs.python.org/3/library/pathlib.html" dir="ltr"&gt;pathlib&lt;/a&gt; module provides a simple hierarchy of classes
+to handle filesystem paths;
+it is a higher level alternative to &lt;a href="https://docs.python.org/3/library/os.path.html" dir="ltr"&gt;os.path&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;It was introduced in &lt;a href="https://www.python.org/dev/peps/pep-0428/" dir="ltr"&gt;PEP 428&lt;/a&gt;.
+Most of the examples serve to illustrate the underlying philosophy,
+with the code left as specification.&lt;/p&gt;&lt;p&gt;The code is a good read for a few reasons:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;You're likely &lt;em dir="ltr"&gt;already familiar&lt;/em&gt; with the subject matter;
+even if you didn't use it before,
+you may have used os.path,
+or a similar library in some other language.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;It is a good &lt;em dir="ltr"&gt;object-oriented solution&lt;/em&gt;.
+It uses object oriented programming with abstract (read: invented) concepts
+to achieve better code structure and reuse.
+It's probably a much better example
+than the traditional
+Animal​–​Dog​–​Cat​–​Duck.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;It is a good &lt;em dir="ltr"&gt;comparative study&lt;/em&gt; subject:
+both pathlib and os.path offer the same functionality
+with vastly different programming styles.
+Also, there was &lt;a href="https://www.python.org/dev/peps/pep-0355/" dir="ltr"&gt;another proposal&lt;/a&gt; all the way back in 2006 that was rejected,
+and there are at least five other object oriented filesystem path libraries out there.
+pathlib learns from all of them.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;statistics&lt;/h2&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://docs.python.org/3/library/statistics.html" dir="ltr"&gt;statistics&lt;/a&gt; module adds statistical functions to the standard library;
+it's not intended to be a competitor libraries like NumPy,
+but is rather "aimed at the level of graphing and scientific calculators".&lt;/p&gt;&lt;p dir="ltr"&gt;It was introduced in &lt;a href="https://www.python.org/dev/peps/pep-0450/" dir="ltr"&gt;PEP 450&lt;/a&gt;.
+Even if you are not familiar with the subject matter,
+it is a very interesting read:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The Rationale section compares the proposal with NumPy
+or do-it-yourself solutions;
+it's particularly good at showing &lt;em dir="ltr"&gt;what&lt;/em&gt; and &lt;em dir="ltr"&gt;why&lt;/em&gt;
+something is added to the standard library.&lt;/LI&gt;&lt;LI&gt;There's also a Design Decision section,
+which makes explicit what the general design philosophy was.
+The Discussion and FAQ sections also have some interesting details.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;The documentation is also very nice.
+This is by design; as the proposal says:
+"Plenty of documentation,
+aimed at readers who understand the basic concepts but may not know
+(for example) which variance they should use [...]
+But avoid going into tedious mathematical detail."&lt;/p&gt;&lt;p dir="ltr"&gt;The code is relatively simple, and when it's not,
+there are comments and links to detailed explanations or papers.
+You &lt;em dir="ltr"&gt;may&lt;/em&gt; find this useful
+if you're just learning about this stuff and
+find it easier to read code than maths notation.&lt;/p&gt;&lt;h2&gt;Bonus: graphlib&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;a href="https://docs.python.org/3/library/graphlib.html" dir="ltr"&gt;graphlib&lt;/a&gt; was added in Python 3.9,
+and at the moment contains just one thing:
+an implementation of a topological sort algorithm
+(here's a &lt;a href="https://runestone.academy/runestone/books/published/pythonds3/Graphs/TopologicalSorting.html" dir="ltr"&gt;refresher&lt;/a&gt; on what it is and how it's useful).&lt;/p&gt;&lt;p dir="ltr"&gt;This doesn't come with a PEP;
+it does however have an &lt;a href="https://bugs.python.org/issue17005" dir="ltr"&gt;issue&lt;/a&gt;
+with lots of comments from various core developers,
+including Raymond Hettinger and Tim Peters
+(of Zen of Python fame).&lt;/p&gt;&lt;p&gt;Since this is essentially a solved problem,
+most of the discussion focuses on the API instead:
+where to put it, what to call it,
+how to represent the input and the output,
+how to make it easy to use and flexible at the same time.&lt;/p&gt;&lt;p&gt;One thing they're trying to do is reconcile two diferent use cases:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;em&gt;Here's a graph, give me all the nodes in topological order.&lt;/em&gt;&lt;/LI&gt;&lt;LI&gt;&lt;em dir="ltr"&gt;Here's a graph, give me the nodes that can be processed right now&lt;/em&gt;
+(either because they don't have dependencies,
+or because their dependencies have already been processed).
+This is useful to parallelize work,
+for example downloading and installing packages
+that depend on other packages.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Unlike with PEPs, you can see the solution evolving as you read.
+Most enhancement proposals summarize the main other choices as well,
+but if you don't follow the mailing list links
+it's easy to get the impression they just &lt;em dir="ltr"&gt;appear&lt;/em&gt;, fully formed.&lt;/p&gt;&lt;p&gt;Compared to the discussion, the code itself is tiny
+– just under 250 lines, mostly comments and documentation.&lt;/p&gt;&lt;p&gt;That's it for now.&lt;/p&gt;&lt;p dir="ltr"&gt;If you found this useful,
+please consider sharing it &lt;a href="https://www.reddit.com/r/Python/submit?title=Learn%20by%20reading%20code:%20Python%20standard%20library%20design%20decisions%20explained%20(for%20advanced%20beginners)&amp;amp;url=https://death.andgravity.com/stdlib" dir="ltr"&gt;on Reddit&lt;/a&gt; or anywhere else :)&lt;/p&gt;&lt;p&gt;This is part of a series:&lt;/p&gt;</description><pubDate>Wed, 14 Apr 2021 17:13:52 -0500</pubDate></item><item><title>Can continuation passing style code perform well?</title><link>https://lobste.rs/s/ossum2</link><description>&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Continuation passing style&lt;/em&gt; is a powerful technique that
   allows you to abstract over control flow in your program.  Here is a
   simple example:  We want to look things up in a table, but sometimes
   the key we use is not associated with any value.  In that case, we
@@ -3598,108 +3699,7 @@ bug, even though the BDFL of Vim &lt;a href="https://groups.google.com/d/msg/vim
 willing&lt;/a&gt;
 to acknowledge it as such.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;This may not be the best term. A register can have the semantic &lt;a href="https://glts.github.io/2013/04/28/vim-normal-mode-grammar.html#fnref:1" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;As a matter of fact, adverb and object quantifier can be &lt;a href="https://glts.github.io/2013/04/28/vim-normal-mode-grammar.html#fnref:2" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;img alt="Creative Commons License" src="http://i.creativecommons.org/l/by-sa/3.0/88x31.png" width="88" height="31"&gt;</description><pubDate>Wed, 14 Apr 2021 05:14:46 -0500</pubDate></item><item><title>Logica: organizing your data queries, making them universally reusable and fun</title><link>https://lobste.rs/s/pielgk</link><description>&lt;h4&gt;&lt;span&gt;Monday, April 12, 2021&lt;/span&gt;&lt;/h4&gt;&lt;div itemprop="articleBody" dir="ltr"&gt;
 We present &lt;a href="http://logica.dev/" dir="ltr"&gt;Logica,&lt;/a&gt; a novel &lt;a href="https://github.com/EvgSkv/logica" dir="ltr"&gt;open source&lt;/a&gt; Logic Programming language. A successor to &lt;a href="https://research.google/pubs/pub43462/" dir="ltr"&gt;Yedalog&lt;/a&gt; (a language developed at Google earlier) it is a Datalog-like logic programming language. Logica code compiles to SQL and runs on Google BigQuery (with experimental support for PostgreSQL and SQLite), but it is much more concise and supports the clean and reusable abstraction mechanisms that SQL lacks. It supports modules and imports, it can be used from an interactive Python notebook and it even makes&lt;i dir="ltr"&gt; testing&lt;/i&gt; your queries natural and easy. &lt;/div&gt;&lt;div itemprop="articleBody" dir="ltr"&gt;“Data is the new oil”, they say, and SQL is so far the &lt;i dir="ltr"&gt;lingua franca&lt;/i&gt; for working with data. When SQL (or “Structured English Query Language”, as it was first named) was invented in the 1970s, its authors might not have imagined the popularity that it would reach half a century later. Today, systems ranging from tiny smart watch applications to enterprise IT solutions, read and write their data using SQL. Even the browser that you are using to read this post now might &lt;a href="https://developers.google.com/web/tools/chrome-devtools/storage/websql#run" dir="ltr"&gt;have a working built-in SQL database&lt;/a&gt; in it.&lt;/div&gt;&lt;div itemprop="articleBody" dir="ltr"&gt;Despite the widespread adoption, SQL is not flawless. Constructing statements from long chains of English words (which are often capitalized to keep the old-fashioned COBOL spirit of the 70s alive!) can be very verbose—a single query spanning hundreds of lines is a routine occurrence. The main flaw of SQL, however, lies in its very limited &lt;i dir="ltr"&gt;support for abstraction&lt;/i&gt;.&lt;/div&gt;&lt;div itemprop="articleBody" dir="ltr"&gt;Good programming is about creating small, understandable, reusable pieces of logic that can be tested, given names, and organized into packages which can later be used to construct more useful pieces of logic. SQL resists this workflow. Although you can encapsulate certain repeated computations into &lt;i dir="ltr"&gt;views&lt;/i&gt; and &lt;i dir="ltr"&gt;functions&lt;/i&gt;, the syntax and support for these can vary among implementations, the notions of &lt;i dir="ltr"&gt;packages&lt;/i&gt; and &lt;i dir="ltr"&gt;imports&lt;/i&gt; are generally nonexistent, and higher-level constructions (e.g. passing a function to a function) are impossible.&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;This inherent resistance to decomposition of logic into bite-sized pieces is what leads into the contrived, lengthy queries, the copy-pasted chunks of code and, eventually, unmaintainable, un&lt;i dir="ltr"&gt;structured&lt;/i&gt; (note the irony) SQL codebases. To make things worse, SQL code is rarely tested, because “&lt;i dir="ltr"&gt;testing SQL queries&lt;/i&gt;” sounds rather esoteric to most engineers, at best. Because of that, a number of &lt;a href="https://wiki.c2.com/?QueryLanguageComparison" dir="ltr"&gt;alternative query languages&lt;/a&gt; and &lt;a href="https://en.wikipedia.org/wiki/List_of_object-relational_mapping_software" dir="ltr"&gt;libraries&lt;/a&gt; have been developed. Of those, &lt;a href="https://en.wikipedia.org/wiki/Datalog" dir="ltr"&gt;systems based on logic programming&lt;/a&gt; perhaps come the closest to addressing SQL’s limitations.&lt;/div&gt;&lt;div itemprop="articleBody" dir="ltr"&gt;Logic programming languages solve problems of SQL by using syntax of mathematical propositional logic rather than natural English language. The language of formal logic was designed by mathematicians specifically to make expression of complex statements easier and suits this purpose much better than natural language. Logica extends classical Logic programming syntax further, most notably with aggregation, hence the name, which stands for&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;&lt;/div&gt;&lt;div&gt;Logica = Logic + Aggregation.&lt;/div&gt;&lt;div itemprop="articleBody" dir="ltr"&gt;Let us see how it all works. SQL operates with &lt;i dir="ltr"&gt;relations&lt;/i&gt;, which are sets of &lt;i dir="ltr"&gt;rows&lt;/i&gt;. In logic programming the analog of a &lt;i dir="ltr"&gt;relation&lt;/i&gt; is a &lt;i dir="ltr"&gt;predicate&lt;/i&gt;. While a predicate is a set of rows, we &lt;i dir="ltr"&gt;think&lt;/i&gt; of it  as a &lt;i dir="ltr"&gt;logical&lt;/i&gt; &lt;i dir="ltr"&gt;condition&lt;/i&gt;, which describes the rows of a relation. Here is, for example, the definition of a simple predicate:&lt;/div&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;MagicNumber&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;(&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;x&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;2&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;);&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;MagicNumber&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;(&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;x&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;3&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;);&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;MagicNumber&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;(&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;x&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;5&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;);&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;div&gt;&lt;span dir="ltr"&gt;The definition claims that the condition &lt;span dir="ltr"&gt;MagicNumber(x)&lt;/span&gt; must hold when X is precisely either 2, 3, or 5. That means, if we were to &lt;i dir="ltr"&gt;query&lt;/i&gt; this predicate (i.e. request all values of X that satisfy it), the output should be a “relation” with a single column X and rows 2, 3, and 5. The SQL equivalent would be:&lt;/span&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;SELECT &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;2&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; AS x&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span&gt;UNION ALL&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;SELECT &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;3&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; AS x&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span&gt;UNION ALL&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;SELECT &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;5&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; AS x&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;;&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;div&gt;&lt;span&gt;Rather than listing the individual values, we could have defined the predicate by encoding a logical condition upon X as follows:&lt;/span&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;MagicNumber&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;(&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;x&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:)&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:-&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;x &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;in&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;[&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;2&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;,&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;3&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;,&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;5&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;];&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;div&gt;&lt;span&gt;Now, here is where the magic starts. Firstly, any table in your database is itself already a predicate, so the following definition:&lt;/span&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;MagicComment&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;(&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;comment_text&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:)&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:-&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;&amp;nbsp;&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;`comments`&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;(&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;user_id&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:,&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; comment_text&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:),&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;&amp;nbsp;user_id &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;==&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;5&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;;&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;div&gt;&lt;span dir="ltr"&gt;Defines a predicate &lt;span dir="ltr"&gt;MagicComment&lt;/span&gt;, which includes precisely those &lt;span dir="ltr"&gt;comment_text&lt;/span&gt; values, which are present in the &lt;span dir="ltr"&gt;comments&lt;/span&gt; table where &lt;span dir="ltr"&gt;user_id == 5&lt;/span&gt;. In SQL this would read:&lt;/span&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;SELECT comment_text FROM comments WHERE user_id &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;=&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;5&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;;&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;div&gt;&lt;span dir="ltr"&gt;Observe what happens if we replace the condition “&lt;span dir="ltr"&gt;user_id == 5&lt;/span&gt;” in our predicate with &lt;span dir="ltr"&gt;MagicNumber(x: user_id)&lt;/span&gt;:&lt;/span&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;MagicComment&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;(&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;comment_text&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:)&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:-&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;&amp;nbsp;&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;`comments`&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;(&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;user_id&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:,&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; comment_text&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:),&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;&amp;nbsp;&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;MagicNumber&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;(&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;x&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; user_id&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;);&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;div&gt;&lt;span dir="ltr"&gt;Here, we are querying for comments of users whose ID is one of the “magic numbers” we just defined above. Note how easily we could &lt;i dir="ltr"&gt;reuse&lt;/i&gt; a previously defined piece of code without having to copy anything around. We could now even extract the &lt;span dir="ltr"&gt;MagicNumber&lt;/span&gt; to a common module and &lt;i dir="ltr"&gt;import&lt;/i&gt; it in wherever it is needed:&lt;/span&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;import&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; my_project&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;.&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;magic&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;.&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;MagicNumber&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;;&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;div&gt;&lt;span dir="ltr"&gt;As a final example, let us &lt;i dir="ltr"&gt;mock&lt;/i&gt; the comments table, in a unittest of a query.&lt;/span&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;import&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; my_project&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;.&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;magic&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;.&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;MagicComment&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;;&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;MockComments&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;(&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;user_id&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;1&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;,&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; comment_text&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;"Hello"&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;);&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;MockComments&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;(&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;user_id&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;2&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;,&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; comment_text&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;"Logic"&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;);&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;MockComments&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;(&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;user_id&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;3&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;,&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; comment_text&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;"Programming"&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;);&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;MagicCommentTest&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:=&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;MagicComment&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;(&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;`comments`&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;:&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt; &lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;MockComments&lt;/span&gt;&lt;span face="Consolas, sans-serif" dir="ltr"&gt;);&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;&lt;div&gt;&lt;span dir="ltr"&gt;If we query the &lt;span dir="ltr"&gt;MagicComment&lt;/span&gt; predicate here, it will not try to read the &lt;span dir="ltr"&gt;comments&lt;/span&gt; table in the database. Instead, it will use the predicate we just defined, thus letting us &lt;i dir="ltr"&gt;verify&lt;/i&gt; its correctness by testing the output (it must include two rows “Logic” and “Programming”). Observe how natural and frictionless many of the good programming practices become with Logica, and compare that to what you would have to do to achieve the same using bare SQL.&lt;/span&gt;&lt;/div&gt;&lt;div itemprop="articleBody" dir="ltr"&gt;There is much more to Logica, so make sure you give it a try—chances are, you will love it! Start with &lt;a href="https://colab.sandbox.google.com/github/EvgSkv/logica/blob/main/tutorial/Logica_tutorial.ipynb" dir="ltr"&gt;this tutorial&lt;/a&gt; to learn Logica. Even if you do not end up using it in your next project, learning a new powerful language may open your mind to new ideas and perspectives on data processing and computing in general.&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;The simple examples above are only a small sample of how concise Logica code can be over SQL for complex queries. In particular, we did not even touch the topic of aggregations in this article. For all of this see &lt;a href="https://github.com/EvgSkv/logica" dir="ltr"&gt;examples section&lt;/a&gt; of the Logica &lt;a href="https://github.com/EvgSkv/logica" dir="ltr"&gt;open source repository&lt;/a&gt;. &lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;We also hope that some of the readers consider contributing to Logica development. That’s what open source is all about!&lt;br dir="ltr"&gt;&lt;br dir="ltr"&gt;&lt;i dir="ltr"&gt;By Konstantin Tretyakov and Evgeny Skvortsov – Logica Open Source Project&lt;/i&gt;
-&lt;/div&gt;</description><pubDate>Wed, 14 Apr 2021 06:07:31 -0500</pubDate></item><item><title>Learn by reading code: Python standard library design decisions explained (for advanced beginners)</title><link>https://lobste.rs/s/jcmjdj</link><description>&lt;p&gt;&lt;small dir="ltr"&gt;
-&lt;span dir="ltr"&gt;2021-04-12&lt;/span&gt;
-
-
-
-∙ five minute read
-
-
-&lt;/small&gt;&lt;/p&gt;&lt;p&gt;So, you're an advanced beginner
-– you've learned your way past Python basics and can solve real problems.&lt;/p&gt;&lt;p dir="ltr"&gt;You've now moved past tutorials and blog posts;
-maybe you feel they offer one-dimensional solutions to simple, made-up problems;
-maybe instead of solving &lt;em dir="ltr"&gt;this specific problem&lt;/em&gt;,
-you want to get better at solving problems &lt;em dir="ltr"&gt;in general&lt;/em&gt;.&lt;/p&gt;&lt;p&gt;Maybe you heard you should develop an eye by reading and writing a lot of code.&lt;/p&gt;&lt;p&gt;It's true.&lt;/p&gt;&lt;p dir="ltr"&gt;So, &lt;em dir="ltr"&gt;what code should you read?&lt;/em&gt;&lt;/p&gt;&lt;p&gt;"Just read what you like."&lt;/p&gt;&lt;p&gt;What if you don't know what you like?&lt;/p&gt;&lt;p dir="ltr"&gt;What if you don't like the right thing?
-Or worse, what if you like the &lt;em dir="ltr"&gt;wrong&lt;/em&gt; thing,
-and get stuck with bad habits because of it?&lt;/p&gt;&lt;p&gt;After all, you have to have an eye for that...&lt;/p&gt;&lt;p&gt;...but that's what you're trying to develop in the first place.&lt;/p&gt;&lt;p&gt;"There are so many projects on GitHub – pick one you like and see how they did it."&lt;/p&gt;&lt;p&gt;But most successful projects are quite large; where do you start from?&lt;/p&gt;&lt;p dir="ltr"&gt;And even if you knew where to start,
-&lt;em dir="ltr"&gt;how they did it&lt;/em&gt; isn't always obvious.
-Yes, the code is right there, but it doesn't really tell you
-&lt;em dir="ltr"&gt;why&lt;/em&gt; they did it,
-what they &lt;em dir="ltr"&gt;didn't&lt;/em&gt; do,
-nor &lt;em dir="ltr"&gt;how they thought&lt;/em&gt; about the whole thing.&lt;/p&gt;&lt;p&gt;In other words, it is not obvious from the code itself
-what the design philosophy was
-and what choices were considered before settling on an implementation.&lt;/p&gt;&lt;p dir="ltr"&gt;In this article, we'll look at &lt;strong dir="ltr"&gt;some Python standard library modules where it is&lt;/strong&gt;.&lt;/p&gt;&lt;h2&gt;A note about the standard library&lt;/h2&gt;&lt;p dir="ltr"&gt;As a whole, the Python standard library isn't &lt;em dir="ltr"&gt;great&lt;/em&gt; for learning "good" style.&lt;/p&gt;&lt;p dir="ltr"&gt;While all the modules are &lt;em dir="ltr"&gt;useful&lt;/em&gt;, they're not very uniform:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;they have different authors;&lt;/LI&gt;&lt;LI&gt;some of them are old
-(pythonic was different 10-20 years ago); and&lt;/LI&gt;&lt;LI&gt;they have to preserve backwards compatibility
-(refactoring risks introducing bugs,
-and major API changes are out of the question).&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;On the other hand, the newer modules &lt;em dir="ltr"&gt;are more consistent&lt;/em&gt;,
-have detailed PEPs &lt;em dir="ltr"&gt;explaining the design tradeoffs&lt;/em&gt;,
-and some took inspiration from already mature third party libraries.&lt;/p&gt;&lt;p&gt;It's a few of the latter ones we'll look at.&lt;/p&gt;&lt;p&gt;Style aside, there's a lot to learn from the standard library,
- since it solves real problems for a diverse population of developers.&lt;/p&gt;&lt;p&gt;It's interesting/educative to look at the differences between stdlib stuff
- and newer external alternatives
- – the shows a perceived deficiency in the standard library
- (otherwise they wouldn't have bothered with the new thing);
- an example of this is urllib vs. requests.&lt;/p&gt;&lt;h2&gt;How to read these&lt;/h2&gt;&lt;p&gt;Roughly in this order:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Get familiar with them as a user:
-read the documentation, maybe play with the examples a bit.&lt;/LI&gt;&lt;LI&gt;Read the corresponding Python Enhancement Proposal (PEP).
-The interesting sections usually are the
-Abstract, Rationale, Design Decisions, Discussion, and Rejected Ideas.&lt;/LI&gt;&lt;LI&gt;Read the code; it's linked at the top of each documentation page.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;dataclasses&lt;/h2&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://docs.python.org/3/library/dataclasses.html" dir="ltr"&gt;dataclasses&lt;/a&gt; module reduces the boilerplate of writing classes
-by generating special methods like &lt;code dir="ltr"&gt;__init__&lt;/code&gt; and &lt;code dir="ltr"&gt;__repr__&lt;/code&gt;.
-(See &lt;a href="https://realpython.com/python-data-classes/" dir="ltr"&gt;this tutorial&lt;/a&gt; for an introduction that has
-more concrete examples than the official documentation.)&lt;/p&gt;&lt;p dir="ltr"&gt;It was introduced in &lt;a href="https://www.python.org/dev/peps/pep-0557/" dir="ltr"&gt;PEP 557&lt;/a&gt;, as a simpler version of &lt;a href="https://www.attrs.org/en/stable/why.html#data-classes" dir="ltr"&gt;attrs&lt;/a&gt;.
-The Specification section is similar to the documentation;
-the good stuff is in Rationale, Discussion, and Rejected Ideas.&lt;/p&gt;&lt;p dir="ltr"&gt;The code is extremely well commented;
-particularly interesting is &lt;a href="https://github.com/python/cpython/blob/3.9/Lib/dataclasses.py#L779" dir="ltr"&gt;this use&lt;/a&gt; of &lt;a href="https://www.hillelwayne.com/decision-tables/" dir="ltr"&gt;decision tables&lt;/a&gt;
-(&lt;a href="https://github.com/python/cpython/blob/3.9/Lib/dataclasses.py#L119" dir="ltr"&gt;ASCII version&lt;/a&gt;, &lt;a href="https://bugs.python.org/issue32929#msg312829" dir="ltr"&gt;nested if version&lt;/a&gt;).&lt;/p&gt;&lt;p dir="ltr"&gt;It is also a good example of metaprogramming.
-Raymond Hettinger's
-&lt;a href="https://www.youtube.com/watch?v=T-TwcmT6Rcw" dir="ltr"&gt;Dataclasses: The code generator to end all code generators&lt;/a&gt; talk
-looks at dataclasses with a focus on the code generation aspects
-(&lt;a href="https://www.dropbox.com/s/te4q0xf46zkuu21/hettinger_dataclasses_pycon_2018.zip" dir="ltr"&gt;HTML slides&lt;/a&gt;, &lt;a href="https://www.dropbox.com/s/m8pwkkz43qz5pgt/HettingerPycon2018.pdf" dir="ltr"&gt;PDF slides&lt;/a&gt;).&lt;/p&gt;&lt;h2&gt;pathlib&lt;/h2&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://docs.python.org/3/library/pathlib.html" dir="ltr"&gt;pathlib&lt;/a&gt; module provides a simple hierarchy of classes
-to handle filesystem paths;
-it is a higher level alternative to &lt;a href="https://docs.python.org/3/library/os.path.html" dir="ltr"&gt;os.path&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;It was introduced in &lt;a href="https://www.python.org/dev/peps/pep-0428/" dir="ltr"&gt;PEP 428&lt;/a&gt;.
-Most of the examples serve to illustrate the underlying philosophy,
-with the code left as specification.&lt;/p&gt;&lt;p&gt;The code is a good read for a few reasons:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;You're likely &lt;em dir="ltr"&gt;already familiar&lt;/em&gt; with the subject matter;
-even if you didn't use it before,
-you may have used os.path,
-or a similar library in some other language.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;It is a good &lt;em dir="ltr"&gt;object-oriented solution&lt;/em&gt;.
-It uses object oriented programming with abstract (read: invented) concepts
-to achieve better code structure and reuse.
-It's probably a much better example
-than the traditional
-Animal​–​Dog​–​Cat​–​Duck.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;It is a good &lt;em dir="ltr"&gt;comparative study&lt;/em&gt; subject:
-both pathlib and os.path offer the same functionality
-with vastly different programming styles.
-Also, there was &lt;a href="https://www.python.org/dev/peps/pep-0355/" dir="ltr"&gt;another proposal&lt;/a&gt; all the way back in 2006 that was rejected,
-and there are at least five other object oriented filesystem path libraries out there.
-pathlib learns from all of them.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;statistics&lt;/h2&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://docs.python.org/3/library/statistics.html" dir="ltr"&gt;statistics&lt;/a&gt; module adds statistical functions to the standard library;
-it's not intended to be a competitor libraries like NumPy,
-but is rather "aimed at the level of graphing and scientific calculators".&lt;/p&gt;&lt;p dir="ltr"&gt;It was introduced in &lt;a href="https://www.python.org/dev/peps/pep-0450/" dir="ltr"&gt;PEP 450&lt;/a&gt;.
-Even if you are not familiar with the subject matter,
-it is a very interesting read:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The Rationale section compares the proposal with NumPy
-or do-it-yourself solutions;
-it's particularly good at showing &lt;em dir="ltr"&gt;what&lt;/em&gt; and &lt;em dir="ltr"&gt;why&lt;/em&gt;
-something is added to the standard library.&lt;/LI&gt;&lt;LI&gt;There's also a Design Decision section,
-which makes explicit what the general design philosophy was.
-The Discussion and FAQ sections also have some interesting details.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;The documentation is also very nice.
-This is by design; as the proposal says:
-"Plenty of documentation,
-aimed at readers who understand the basic concepts but may not know
-(for example) which variance they should use [...]
-But avoid going into tedious mathematical detail."&lt;/p&gt;&lt;p dir="ltr"&gt;The code is relatively simple, and when it's not,
-there are comments and links to detailed explanations or papers.
-You &lt;em dir="ltr"&gt;may&lt;/em&gt; find this useful
-if you're just learning about this stuff and
-find it easier to read code than maths notation.&lt;/p&gt;&lt;h2&gt;Bonus: graphlib&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;a href="https://docs.python.org/3/library/graphlib.html" dir="ltr"&gt;graphlib&lt;/a&gt; was added in Python 3.9,
-and at the moment contains just one thing:
-an implementation of a topological sort algorithm
-(here's a &lt;a href="https://runestone.academy/runestone/books/published/pythonds3/Graphs/TopologicalSorting.html" dir="ltr"&gt;refresher&lt;/a&gt; on what it is and how it's useful).&lt;/p&gt;&lt;p dir="ltr"&gt;This doesn't come with a PEP;
-it does however have an &lt;a href="https://bugs.python.org/issue17005" dir="ltr"&gt;issue&lt;/a&gt;
-with lots of comments from various core developers,
-including Raymond Hettinger and Tim Peters
-(of Zen of Python fame).&lt;/p&gt;&lt;p&gt;Since this is essentially a solved problem,
-most of the discussion focuses on the API instead:
-where to put it, what to call it,
-how to represent the input and the output,
-how to make it easy to use and flexible at the same time.&lt;/p&gt;&lt;p&gt;One thing they're trying to do is reconcile two diferent use cases:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;em&gt;Here's a graph, give me all the nodes in topological order.&lt;/em&gt;&lt;/LI&gt;&lt;LI&gt;&lt;em dir="ltr"&gt;Here's a graph, give me the nodes that can be processed right now&lt;/em&gt;
-(either because they don't have dependencies,
-or because their dependencies have already been processed).
-This is useful to parallelize work,
-for example downloading and installing packages
-that depend on other packages.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Unlike with PEPs, you can see the solution evolving as you read.
-Most enhancement proposals summarize the main other choices as well,
-but if you don't follow the mailing list links
-it's easy to get the impression they just &lt;em dir="ltr"&gt;appear&lt;/em&gt;, fully formed.&lt;/p&gt;&lt;p&gt;Compared to the discussion, the code itself is tiny
-– just under 250 lines, mostly comments and documentation.&lt;/p&gt;&lt;p&gt;That's it for now.&lt;/p&gt;&lt;p dir="ltr"&gt;If you found this useful,
-please consider sharing it &lt;a href="https://www.reddit.com/r/Python/submit?title=Learn%20by%20reading%20code:%20Python%20standard%20library%20design%20decisions%20explained%20(for%20advanced%20beginners)&amp;amp;url=https://death.andgravity.com/stdlib" dir="ltr"&gt;on Reddit&lt;/a&gt; or anywhere else :)&lt;/p&gt;&lt;p&gt;This is part of a series:&lt;/p&gt;</description><pubDate>Wed, 14 Apr 2021 17:13:52 -0500</pubDate></item><item><title>Livebook - interactive notepad for Elixir and Nx</title><link>https://lobste.rs/s/f2nmt1</link><description>&lt;p&gt;Livebook is a web application for writing interactive and collaborative code notebooks. It features:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;A deployable web app built with &lt;a href="https://github.com/phoenixframework/phoenix_live_view" dir="ltr"&gt;Phoenix LiveView&lt;/a&gt;
+&lt;/div&gt;</description><pubDate>Wed, 14 Apr 2021 06:07:31 -0500</pubDate></item><item><title>Livebook - interactive notepad for Elixir and Nx</title><link>https://lobste.rs/s/f2nmt1</link><description>&lt;p&gt;Livebook is a web application for writing interactive and collaborative code notebooks. It features:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;A deployable web app built with &lt;a href="https://github.com/phoenixframework/phoenix_live_view" dir="ltr"&gt;Phoenix LiveView&lt;/a&gt;
 where users can create, fork, and run multiple notebooks.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Each notebook is made of multiple sections: each section is made of Markdown and Elixir
 cells. Code in Elixir cells can be evaluated on demand. Mathematical formulas are also
 supported via &lt;a href="https://katex.org/" rel="nofollow" dir="ltr"&gt;KaTeX&lt;/a&gt;.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Persistence: notebooks can be persisted to disk through the &lt;code dir="ltr"&gt;.livemd&lt;/code&gt; format, which is a
