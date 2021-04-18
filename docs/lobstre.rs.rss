@@ -1019,7 +1019,237 @@ language theory. This blog post only scratches the surface, but much
 of the additional notation that you'll need is variations on what's
 covered here. Happy reading! And P.S., feel free to ask questions in
 the form of comments to this blog.
-&lt;/div&gt;</description><pubDate>Sat, 17 Apr 2021 10:17:55 -0500</pubDate></item><item><title>Why fnm was rewritten in Rust</title><link>https://lobste.rs/s/8yzojj</link><description>&lt;p&gt;This blog post was in the “drawer” for a long time, so I thought it would be nice to just publish it.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://gal.hagever.com/posts/windows-long-paths-in-rust" dir="ltr"&gt;It wasn’t very long ago&lt;/a&gt;, when I mentioned I’m rewriting &lt;a href="https://github.com/Schniz/fnm" dir="ltr"&gt;fnm&lt;/a&gt; in Rust. At first, I was just experimenting in order to learn the language: fnm is kinda wide in its scope — works with the file system, network and user input, and I know exactly what to test. After a couple of days experimenting with Rust I had some insights, comparing it to Reason.&lt;/p&gt;&lt;p&gt;Reason and Rust feel very close, as if they were family. I guess that most of it comes from having ML-style type system with C-style syntax. Rust is usually treated as a lower-level language (it is), and as a very verbose one, because if you compare it to higher-level languages like Reason, you find yourself much more explicit about what you want, like passing references and static strings, etc. But seems that while you still think about memory more, Rust provides great ways to abstract knowledge and build higher-level components to your system.&lt;/p&gt;&lt;h2&gt;The Trait System&lt;/h2&gt;&lt;p&gt;I think one of Rust’s biggest strengths is its trait system. AFAIK, it is very similar to Haskell’s typeclass, Swift’s protocol extensions, and they’re very similar to Java’s interfaces, with a unique superpower: You can implement your trait on 3rd party struct — including the standard library.&lt;/p&gt;&lt;p dir="ltr"&gt;That means you can implement a custom trait on &lt;code dir="ltr"&gt;std::fs::File&lt;/code&gt;, or implement a standard library trait to your type, like &lt;code dir="ltr"&gt;std::default::Default&lt;/code&gt; or &lt;code dir="ltr"&gt;std::fmt::Debug&lt;/code&gt; (both can be simply derived, more on that in a bit).&lt;/p&gt;&lt;p&gt;Reason and OCaml do not have anything like traits. You can use functors and almost get with it, but it’s not 100% there.&lt;/p&gt;&lt;p dir="ltr"&gt;Seems that using traits can get you very far and provide great higher-level APIs that preserve type safety. Check out &lt;a href="https://docs.rs/structopt" dir="ltr"&gt;&lt;code dir="ltr"&gt;structopt&lt;/code&gt;&lt;/a&gt;, a derive macro that allows you to use the &lt;a href="https://doc.rust-lang.org/std/str/trait.FromStr.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;FromStr&lt;/code&gt;&lt;/a&gt; trait on any type and parse command line information from it. That means that you can declare ANY TYPE you want and use it as a CLI argument, parsing it from the user input. Do you want to use a URL? Luckily, &lt;code dir="ltr"&gt;reqwest::Url&lt;/code&gt; is implementing &lt;code dir="ltr"&gt;FromStr&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;In fnm, we also get &lt;code dir="ltr"&gt;UserVersion&lt;/code&gt; which is some kind of a version requirement: it can be the system version (literal &lt;code dir="ltr"&gt;system&lt;/code&gt;), it can be an alias or a semantic version &lt;code dir="ltr"&gt;MAJOR.MINOR.PATCH&lt;/code&gt; optionally prefixed with &lt;code dir="ltr"&gt;v&lt;/code&gt;, where MINOR and PATCH are optional too. In fnm, we implement &lt;code dir="ltr"&gt;FromStr&lt;/code&gt; to &lt;code dir="ltr"&gt;UserVersion&lt;/code&gt; and let &lt;code dir="ltr"&gt;structopt&lt;/code&gt; to handle the parsing errors and print a nice message to the user.&lt;/p&gt;&lt;p dir="ltr"&gt;This is one of the ways the trait system allows to build better software simpler, comparing to &lt;a href="https://github.com/dbuenzli/cmdliner" dir="ltr"&gt;Cmdliner&lt;/a&gt; which is a great utility but was VERY hard for me to use and reason about.&lt;/p&gt;&lt;h2&gt;Deriving&lt;/h2&gt;&lt;p dir="ltr"&gt;Another great Rust feature is the &lt;code dir="ltr"&gt;#[derive()]&lt;/code&gt; annotation. Similar to some Reason/OCaml PPX extensions, when put on top of a data structure, it can generate code for you in compile time, &lt;em dir="ltr"&gt;that will be type-checked&lt;/em&gt;. Rust comes with some deriving macros out of the box, like &lt;code dir="ltr"&gt;Debug&lt;/code&gt; (which allows you to pretty-print with the &lt;code dir="ltr"&gt;{:?}&lt;/code&gt; format string or &lt;code dir="ltr"&gt;dbg!&lt;/code&gt; macro), &lt;code dir="ltr"&gt;PartialEq&lt;/code&gt; and &lt;code dir="ltr"&gt;Eq&lt;/code&gt; for equality checks, etc.&lt;/p&gt;&lt;p&gt;The Rust crates embrace this type of macros, and awesome libraries use it to create higher-level abstractions:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;a href="https://docs.rs/serde" dir="ltr"&gt;Serde&lt;/a&gt; allows you to derive a Serializer and Deserializer for your &lt;code dir="ltr"&gt;struct&lt;/code&gt; or &lt;code dir="ltr"&gt;enum&lt;/code&gt;, allowing you to serialize or de-serialize these data structures &lt;em dir="ltr"&gt;safely&lt;/em&gt; into various formats, like JSON, YAML, TOML, RON…&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://docs.rs/structopt" dir="ltr"&gt;StructOpt&lt;/a&gt; allows you to derive a &lt;a href="https://docs.rs/" dir="ltr"&gt;Clap&lt;/a&gt; configuration from your data structures. This is amazing, because it removes so much boilerplate, and co-locate the CLI definition with the data structures.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://docs.rs/snafu" dir="ltr"&gt;Snafu&lt;/a&gt; allows you to get a great developer experience for error handling, by allowing you to create error &lt;code dir="ltr"&gt;enum&lt;/code&gt;s and define the error messages next to their declaration. It also provides some nice macros to &lt;code dir="ltr"&gt;ensure!&lt;/code&gt; that something works, and some extensions to data structures like &lt;code dir="ltr"&gt;Option&lt;/code&gt; and &lt;code dir="ltr"&gt;Result&lt;/code&gt; for converting them into the meaningful errors you have defined.&lt;/LI&gt;&lt;/OL&gt;&lt;h2&gt;The Community&lt;/h2&gt;&lt;p dir="ltr"&gt;Last year I visited Chicago to attend ReasonConf US. I talked there to great people like &lt;a href="https://twitter.com/jordwalke" dir="ltr"&gt;Jordan&lt;/a&gt;, &lt;a href="https://twitter.com/sander_spies" dir="ltr"&gt;Sander&lt;/a&gt;, &lt;a href="https://twitter.com/peterpme" dir="ltr"&gt;Peter&lt;/a&gt; and &lt;a href="https://twitter.com/ryyppy" dir="ltr"&gt;Patrick&lt;/a&gt;. It was tons of fun, but also made me realize something I didn’t understand before.&lt;/p&gt;&lt;p dir="ltr"&gt;The Reason community was divided — OCaml vs Reason, Native vs BuckleScript vs Js&lt;em dir="ltr"&gt;of&lt;/em&gt;ocaml. Being a small community, we should invest in providing the best tools and experience, and when we can’t provide the best experience if we’re not focused.&lt;/p&gt;&lt;p&gt;When writing an HTTP server in native Reason you might lack a library for New Relic, or Bugsnag, or Sentry. Stack traces are not really a thing. Using Node as a mature VM is very appealing — and if you need something that performs better — you can write it in a different language. Realistically, people ship Node apps all the time, so the performance and safety guarantees Reason provides should be enough.&lt;/p&gt;&lt;p dir="ltr"&gt;In fnm, I couldn’t really understand how to use the &lt;code dir="ltr"&gt;tar&lt;/code&gt; opam package. This is why fnm used to shell out to &lt;code dir="ltr"&gt;tar&lt;/code&gt;, to extract the Node versions. This would obviously fail on Windows, but fnm didn’t work on Windows anyway, and I had no idea how to make it work in OCaml. In Rust, it is very easy to do conditional compilation for a specific configuration, so there are some differences in the Windows vs *nix versions of fnm now — especially regarding:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The installation files: Node.js is distributed in &lt;code dir="ltr"&gt;.tar.xz&lt;/code&gt; for *nix binaries, and &lt;code dir="ltr"&gt;.zip&lt;/code&gt; for Windows binaries.&lt;/LI&gt;&lt;LI&gt;The simple “shell inference” fnm has, to know on what shell type you’re using, is using &lt;code dir="ltr"&gt;ps&lt;/code&gt; on *nix, and &lt;code dir="ltr"&gt;wmic&lt;/code&gt; on Windows. Both share the same return types so the module abstracts away the differences.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Documentation&lt;/h2&gt;&lt;p dir="ltr"&gt;Rust, being a newer language, has some niceities to it, like centralized documentation on &lt;a href="https://docs.rs/" dir="ltr"&gt;https://docs.rs&lt;/a&gt;. It’s an amazing experience, having all the documentation for every crate on one site with a familiar theme. I know both &lt;a href="https://twitter.com/ulrikstrid" dir="ltr"&gt;Ulrik&lt;/a&gt; and Patrick are very into it and I hope they’ll succeed doing so.&lt;/p&gt;&lt;p dir="ltr"&gt;Another cool feature is the doctests which is something that I knew from Elixir and Rust supports it natively too. When you write code in your docs, &lt;code dir="ltr"&gt;cargo test&lt;/code&gt; will test it. It’s that easy. No more unmaintained README or other documentation. This is the future.&lt;/p&gt;&lt;p&gt;These are two things most languages should learn from.&lt;/p&gt;&lt;p&gt;Overall, feels that since the (big) Rust community is focused around the native toolchains (and not compile-to-JS), makes it easier to build native, performant CLIs in Rust compared to Reason. I no longer have to find out environment variables to compile C libraries with specific flags, because Cargo has feature toggles and I use it instead. I build an ARM-compatible binary to distribute for those running fnm in their Raspberry Pi’s. We now fully support Windows, so no more gatekeeping for people with different OS choices.&lt;/p&gt;&lt;p&gt;All without pounding my head against the wall.&lt;/p&gt;&lt;p&gt;Except from the build time, which is much faster in Reason.&lt;/p&gt;</description><pubDate>Sat, 17 Apr 2021 10:01:09 -0500</pubDate></item><item><title>Preface - an opinionated functional programming library for OCaml</title><link>https://lobste.rs/s/75rh8q</link><description>&lt;h1&gt;Preface&lt;/h1&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Preface is an opinionated library designed to facilitate the
+&lt;/div&gt;</description><pubDate>Sat, 17 Apr 2021 10:17:55 -0500</pubDate></item><item><title>Why fnm was rewritten in Rust</title><link>https://lobste.rs/s/8yzojj</link><description>&lt;p&gt;This blog post was in the “drawer” for a long time, so I thought it would be nice to just publish it.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://gal.hagever.com/posts/windows-long-paths-in-rust" dir="ltr"&gt;It wasn’t very long ago&lt;/a&gt;, when I mentioned I’m rewriting &lt;a href="https://github.com/Schniz/fnm" dir="ltr"&gt;fnm&lt;/a&gt; in Rust. At first, I was just experimenting in order to learn the language: fnm is kinda wide in its scope — works with the file system, network and user input, and I know exactly what to test. After a couple of days experimenting with Rust I had some insights, comparing it to Reason.&lt;/p&gt;&lt;p&gt;Reason and Rust feel very close, as if they were family. I guess that most of it comes from having ML-style type system with C-style syntax. Rust is usually treated as a lower-level language (it is), and as a very verbose one, because if you compare it to higher-level languages like Reason, you find yourself much more explicit about what you want, like passing references and static strings, etc. But seems that while you still think about memory more, Rust provides great ways to abstract knowledge and build higher-level components to your system.&lt;/p&gt;&lt;h2&gt;The Trait System&lt;/h2&gt;&lt;p&gt;I think one of Rust’s biggest strengths is its trait system. AFAIK, it is very similar to Haskell’s typeclass, Swift’s protocol extensions, and they’re very similar to Java’s interfaces, with a unique superpower: You can implement your trait on 3rd party struct — including the standard library.&lt;/p&gt;&lt;p dir="ltr"&gt;That means you can implement a custom trait on &lt;code dir="ltr"&gt;std::fs::File&lt;/code&gt;, or implement a standard library trait to your type, like &lt;code dir="ltr"&gt;std::default::Default&lt;/code&gt; or &lt;code dir="ltr"&gt;std::fmt::Debug&lt;/code&gt; (both can be simply derived, more on that in a bit).&lt;/p&gt;&lt;p&gt;Reason and OCaml do not have anything like traits. You can use functors and almost get with it, but it’s not 100% there.&lt;/p&gt;&lt;p dir="ltr"&gt;Seems that using traits can get you very far and provide great higher-level APIs that preserve type safety. Check out &lt;a href="https://docs.rs/structopt" dir="ltr"&gt;&lt;code dir="ltr"&gt;structopt&lt;/code&gt;&lt;/a&gt;, a derive macro that allows you to use the &lt;a href="https://doc.rust-lang.org/std/str/trait.FromStr.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;FromStr&lt;/code&gt;&lt;/a&gt; trait on any type and parse command line information from it. That means that you can declare ANY TYPE you want and use it as a CLI argument, parsing it from the user input. Do you want to use a URL? Luckily, &lt;code dir="ltr"&gt;reqwest::Url&lt;/code&gt; is implementing &lt;code dir="ltr"&gt;FromStr&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;In fnm, we also get &lt;code dir="ltr"&gt;UserVersion&lt;/code&gt; which is some kind of a version requirement: it can be the system version (literal &lt;code dir="ltr"&gt;system&lt;/code&gt;), it can be an alias or a semantic version &lt;code dir="ltr"&gt;MAJOR.MINOR.PATCH&lt;/code&gt; optionally prefixed with &lt;code dir="ltr"&gt;v&lt;/code&gt;, where MINOR and PATCH are optional too. In fnm, we implement &lt;code dir="ltr"&gt;FromStr&lt;/code&gt; to &lt;code dir="ltr"&gt;UserVersion&lt;/code&gt; and let &lt;code dir="ltr"&gt;structopt&lt;/code&gt; to handle the parsing errors and print a nice message to the user.&lt;/p&gt;&lt;p dir="ltr"&gt;This is one of the ways the trait system allows to build better software simpler, comparing to &lt;a href="https://github.com/dbuenzli/cmdliner" dir="ltr"&gt;Cmdliner&lt;/a&gt; which is a great utility but was VERY hard for me to use and reason about.&lt;/p&gt;&lt;h2&gt;Deriving&lt;/h2&gt;&lt;p dir="ltr"&gt;Another great Rust feature is the &lt;code dir="ltr"&gt;#[derive()]&lt;/code&gt; annotation. Similar to some Reason/OCaml PPX extensions, when put on top of a data structure, it can generate code for you in compile time, &lt;em dir="ltr"&gt;that will be type-checked&lt;/em&gt;. Rust comes with some deriving macros out of the box, like &lt;code dir="ltr"&gt;Debug&lt;/code&gt; (which allows you to pretty-print with the &lt;code dir="ltr"&gt;{:?}&lt;/code&gt; format string or &lt;code dir="ltr"&gt;dbg!&lt;/code&gt; macro), &lt;code dir="ltr"&gt;PartialEq&lt;/code&gt; and &lt;code dir="ltr"&gt;Eq&lt;/code&gt; for equality checks, etc.&lt;/p&gt;&lt;p&gt;The Rust crates embrace this type of macros, and awesome libraries use it to create higher-level abstractions:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;a href="https://docs.rs/serde" dir="ltr"&gt;Serde&lt;/a&gt; allows you to derive a Serializer and Deserializer for your &lt;code dir="ltr"&gt;struct&lt;/code&gt; or &lt;code dir="ltr"&gt;enum&lt;/code&gt;, allowing you to serialize or de-serialize these data structures &lt;em dir="ltr"&gt;safely&lt;/em&gt; into various formats, like JSON, YAML, TOML, RON…&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://docs.rs/structopt" dir="ltr"&gt;StructOpt&lt;/a&gt; allows you to derive a &lt;a href="https://docs.rs/" dir="ltr"&gt;Clap&lt;/a&gt; configuration from your data structures. This is amazing, because it removes so much boilerplate, and co-locate the CLI definition with the data structures.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://docs.rs/snafu" dir="ltr"&gt;Snafu&lt;/a&gt; allows you to get a great developer experience for error handling, by allowing you to create error &lt;code dir="ltr"&gt;enum&lt;/code&gt;s and define the error messages next to their declaration. It also provides some nice macros to &lt;code dir="ltr"&gt;ensure!&lt;/code&gt; that something works, and some extensions to data structures like &lt;code dir="ltr"&gt;Option&lt;/code&gt; and &lt;code dir="ltr"&gt;Result&lt;/code&gt; for converting them into the meaningful errors you have defined.&lt;/LI&gt;&lt;/OL&gt;&lt;h2&gt;The Community&lt;/h2&gt;&lt;p dir="ltr"&gt;Last year I visited Chicago to attend ReasonConf US. I talked there to great people like &lt;a href="https://twitter.com/jordwalke" dir="ltr"&gt;Jordan&lt;/a&gt;, &lt;a href="https://twitter.com/sander_spies" dir="ltr"&gt;Sander&lt;/a&gt;, &lt;a href="https://twitter.com/peterpme" dir="ltr"&gt;Peter&lt;/a&gt; and &lt;a href="https://twitter.com/ryyppy" dir="ltr"&gt;Patrick&lt;/a&gt;. It was tons of fun, but also made me realize something I didn’t understand before.&lt;/p&gt;&lt;p dir="ltr"&gt;The Reason community was divided — OCaml vs Reason, Native vs BuckleScript vs Js&lt;em dir="ltr"&gt;of&lt;/em&gt;ocaml. Being a small community, we should invest in providing the best tools and experience, and when we can’t provide the best experience if we’re not focused.&lt;/p&gt;&lt;p&gt;When writing an HTTP server in native Reason you might lack a library for New Relic, or Bugsnag, or Sentry. Stack traces are not really a thing. Using Node as a mature VM is very appealing — and if you need something that performs better — you can write it in a different language. Realistically, people ship Node apps all the time, so the performance and safety guarantees Reason provides should be enough.&lt;/p&gt;&lt;p dir="ltr"&gt;In fnm, I couldn’t really understand how to use the &lt;code dir="ltr"&gt;tar&lt;/code&gt; opam package. This is why fnm used to shell out to &lt;code dir="ltr"&gt;tar&lt;/code&gt;, to extract the Node versions. This would obviously fail on Windows, but fnm didn’t work on Windows anyway, and I had no idea how to make it work in OCaml. In Rust, it is very easy to do conditional compilation for a specific configuration, so there are some differences in the Windows vs *nix versions of fnm now — especially regarding:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The installation files: Node.js is distributed in &lt;code dir="ltr"&gt;.tar.xz&lt;/code&gt; for *nix binaries, and &lt;code dir="ltr"&gt;.zip&lt;/code&gt; for Windows binaries.&lt;/LI&gt;&lt;LI&gt;The simple “shell inference” fnm has, to know on what shell type you’re using, is using &lt;code dir="ltr"&gt;ps&lt;/code&gt; on *nix, and &lt;code dir="ltr"&gt;wmic&lt;/code&gt; on Windows. Both share the same return types so the module abstracts away the differences.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Documentation&lt;/h2&gt;&lt;p dir="ltr"&gt;Rust, being a newer language, has some niceities to it, like centralized documentation on &lt;a href="https://docs.rs/" dir="ltr"&gt;https://docs.rs&lt;/a&gt;. It’s an amazing experience, having all the documentation for every crate on one site with a familiar theme. I know both &lt;a href="https://twitter.com/ulrikstrid" dir="ltr"&gt;Ulrik&lt;/a&gt; and Patrick are very into it and I hope they’ll succeed doing so.&lt;/p&gt;&lt;p dir="ltr"&gt;Another cool feature is the doctests which is something that I knew from Elixir and Rust supports it natively too. When you write code in your docs, &lt;code dir="ltr"&gt;cargo test&lt;/code&gt; will test it. It’s that easy. No more unmaintained README or other documentation. This is the future.&lt;/p&gt;&lt;p&gt;These are two things most languages should learn from.&lt;/p&gt;&lt;p&gt;Overall, feels that since the (big) Rust community is focused around the native toolchains (and not compile-to-JS), makes it easier to build native, performant CLIs in Rust compared to Reason. I no longer have to find out environment variables to compile C libraries with specific flags, because Cargo has feature toggles and I use it instead. I build an ARM-compatible binary to distribute for those running fnm in their Raspberry Pi’s. We now fully support Windows, so no more gatekeeping for people with different OS choices.&lt;/p&gt;&lt;p&gt;All without pounding my head against the wall.&lt;/p&gt;&lt;p&gt;Except from the build time, which is much faster in Reason.&lt;/p&gt;</description><pubDate>Sat, 17 Apr 2021 10:01:09 -0500</pubDate></item><item><title>Web Pages Must Live Forever (1998)</title><link>https://lobste.rs/s/lkdqys</link><description>&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Summary:&lt;/strong&gt;&amp;nbsp;&lt;/p&gt;&lt;p&gt;
+ Once you have put a page on the Web, you need to keep it there indefinitely:
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;
+&lt;strong dir="ltr"&gt;
+   Other sites
+  &lt;/strong&gt;
+  may link to your page, so removing it will cause
+  &lt;a href="https://www.nngroup.com/articles/fighting-linkrot/" title="Alertbox Jun. 1998: Fighting linkrot" dir="ltr"&gt;
+   linkrot
+  &lt;/a&gt;
+  &amp;nbsp;and lost business opportunities as you turn away new users
+ &lt;/LI&gt;&lt;LI&gt;
+  Users may have bookmarked the page because they want to go directly to a relevant part of your site instead of starting at the home page every time
+ &lt;/LI&gt;&lt;LI&gt;
+&lt;strong dir="ltr"&gt;
+   Search engines
+  &lt;/strong&gt;
+  are slow in updating their databases, so they too will lead users astray if you remove pages
+ &lt;/LI&gt;&lt;LI&gt;
+&lt;strong dir="ltr"&gt;
+   Old content adds value
+  &lt;/strong&gt;
+  to your site: some users will benefit from the old pages, so why not keep serving these customers?
+ &lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
+ The first three reasons are really arguments why
+ &lt;strong dir="ltr"&gt;
+  URLs must stay active forever
+ &lt;/strong&gt;
+ : any URL that has ever been exposed to the outside world must continue to bring up something reasonable when people go to it. Because they
+ &lt;em dir="ltr"&gt;
+  will.
+ &lt;/em&gt;
+ It is common experience among webmasters that they keep getting hits on URLs that were put out of service several years ago.
+&lt;/p&gt;&lt;p&gt;
+ Even if you believe that the old page has zero value, the old URL should be supported and made into a redirect to the closest related page on the site.
+&lt;/p&gt;&lt;h2&gt;
+ Value of Old Content
+&lt;/h2&gt;&lt;p dir="ltr"&gt;
+ Most old pages do have value for users, so I recommend keeping the pages themselves alive forever. Sure, new content is probably more valuable than old content, but there is
+ &lt;strong dir="ltr"&gt;
+  more old content
+ &lt;/strong&gt;
+ to choose from. As an example, consider a site that publishes new content on a weekly basis. After a year, this site will consist of 51 old editions and one new edition. Assuming that new content is ten times as valuable as old content,
+ &lt;strong dir="ltr"&gt;
+  84% of the site's value comes from old content
+ &lt;/strong&gt;
+ .
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+ I still get about 50 visitors per week who follow the link to my site from an
+ &lt;a href="http://www.nytimes.com/library/tech/98/07/cyber/articles/13usability.html" title="NY Times July 13, 1998: article by Matt Richtel" dir="ltr"&gt;
+  article about usability in
+  &lt;cite dir="ltr"&gt;
+   The New York Times
+  &lt;/cite&gt;
+  four months ago
+ &lt;/a&gt;
+ &amp;nbsp;(warning: access to the
+ &lt;cite dir="ltr"&gt;
+  Times
+ &lt;/cite&gt;
+ requires free registration). Adjusting for link click-through, this means that the newspaper provides extra value to many more readers simply by leaving this old article on their server. A great way to establish a reputation as a substantial online service of record.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+ Another example is my 1996 article on the
+ &lt;a href="https://www.nngroup.com/articles/top-10-mistakes-web-design/" title="Alertbox May 1996" dir="ltr"&gt;
+  top-ten mistakes of Web design
+ &lt;/a&gt;
+ . As shown in the table, it is getting
+ &lt;em dir="ltr"&gt;
+  more
+ &lt;/em&gt;
+ readers every year:
+&lt;/p&gt;&lt;table align="center" border="1" dir="ltr"&gt;
+&lt;tbody dir="ltr"&gt;
+&lt;tr dir="ltr"&gt;
+&lt;th align="left" dir="ltr"&gt;
+    Year
+   &lt;/th&gt;
+&lt;th align="right" dir="ltr"&gt;
+    Page Views
+   &lt;/th&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;
+    1996
+   &lt;/td&gt;
+&lt;td align="right" dir="ltr"&gt;
+    50,061
+   &lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;
+    1997
+   &lt;/td&gt;
+&lt;td align="right" dir="ltr"&gt;
+    72,454
+   &lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;
+    1998
+   &lt;/td&gt;
+&lt;td align="right" dir="ltr"&gt;
+    149,520
+   &lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;
+    1999
+   &lt;/td&gt;
+&lt;td align="right" dir="ltr"&gt;
+    226,320
+   &lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+&lt;td align="left" dir="ltr"&gt;
+    2000
+   &lt;/td&gt;
+&lt;td align="right" dir="ltr"&gt;
+    387,884
+   &lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;&lt;p&gt;
+ Admittedly, the "top-ten mistakes" Alertbox is somewhat of a Web classic, but the more average Alertbox columns also get most of their readers when they are "old." A typical Alertbox accumulates about 80,000 page views over time, only 20,000 of which are received while it is the "current" column.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+&lt;strong dir="ltr"&gt;
+  Users benefit from old content
+ &lt;/strong&gt;
+ because:
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;
+  it may be
+  &lt;strong dir="ltr"&gt;
+   intrinsically interesting
+  &lt;/strong&gt;
+  and worth reading even when it's not news (say, a well-written essay)
+ &lt;/LI&gt;&lt;LI&gt;
+  it can experience
+  &lt;strong dir="ltr"&gt;
+   renewed interest due to later events
+  &lt;/strong&gt;
+  (what did the new CEO of your main competitor do two jobs ago?)
+ &lt;/LI&gt;&lt;LI&gt;
+  it can have
+  &lt;strong dir="ltr"&gt;
+   historical interest
+  &lt;/strong&gt;
+  (how did reviewers view
+  &lt;cite dir="ltr"&gt;
+   Gone With the Wind
+  &lt;/cite&gt;
+  when it opened?)
+ &lt;/LI&gt;&lt;LI&gt;
+  it
+  &lt;strong dir="ltr"&gt;
+   helps with old products
+  &lt;/strong&gt;
+  (your neighbor has an HP printer from 1995 for sale: will it satisfy your needs?)
+ &lt;/LI&gt;&lt;LI&gt;
+  it provides
+  &lt;strong dir="ltr"&gt;
+   background information
+  &lt;/strong&gt;
+  and a richer texture for a website: the true killer app for the Web is diversity (Amazon.com gets many sales from listing a huge number of old books that each sell only a few copies per year; listing out-of-print books that they don't sell adds to the value of the service and makes users more likely to come back)
+ &lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;
+ Cost of Old Content
+&lt;/h2&gt;&lt;p&gt;
+ From a site management perspective, the cost of keeping old content is trivial: the cost of hard disk space is close to zero, and the cost of maintaining old files can be very low if they are developed according to the HTML standards or kept in a publishing database.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+ In order to enhance the value of the old content, I recommend investing a small amount of resources on
+ &lt;strong dir="ltr"&gt;
+  content gardening
+ &lt;/strong&gt;
+ :
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;
+  have
+  &lt;strong dir="ltr"&gt;
+   new articles link to old content
+  &lt;/strong&gt;
+  for background or supplementary information: since the new content may be written by people who don't know the old stuff, it is often an editorial function to add these links
+ &lt;/LI&gt;&lt;LI&gt;
+&lt;strong dir="ltr"&gt;
+   maintain the links
+  &lt;/strong&gt;
+  in the old files: kill or replace outdated ones
+ &lt;/LI&gt;&lt;LI&gt;
+  add
+  &lt;strong dir="ltr"&gt;
+   forward links
+  &lt;/strong&gt;
+  to the old pages so that they point to newer pages: otherwise users will never discover follow-on products and more recent developments in a case
+ &lt;/LI&gt;&lt;LI&gt;
+&lt;strong dir="ltr"&gt;
+   remove obsolete or misleading information
+  &lt;/strong&gt;
+  and replace with current data or a current link (for example, the announcement of a conference or product launch may be replaced with the proceedings or a report from the event; also add a forward link to this year's conference)
+ &lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
+ The cost of maintaining old content may be about 10% of the original cost of developing this content, but since doing so more than doubles the value of the website, it is a good investment.
+&lt;/p&gt;&lt;h2&gt;
+ Make Time Explicit
+&lt;/h2&gt;&lt;p&gt;
+ It can be confusing for users to stumble across old content if they are looking for current information. Confusion can be minimized by:
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;
+  explicitly
+  &lt;strong dir="ltr"&gt;
+   mention the date
+  &lt;/strong&gt;
+  (including the year) the page was originally written
+ &lt;/LI&gt;&lt;LI&gt;
+  add a prominent
+  &lt;strong dir="ltr"&gt;
+   disclaimer
+  &lt;/strong&gt;
+  to point out ways in which the page no longer applies (e.g.,
+  &lt;em dir="ltr"&gt;
+   "This product is no longer being manufactured"
+  &lt;/em&gt;
+  )
+ &lt;/LI&gt;&lt;LI&gt;
+&lt;strong dir="ltr"&gt;
+   forward-pointing links
+  &lt;/strong&gt;
+  to the most recent pages about the same topic
+ &lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;
+ Downplay Old Content in Search Listings
+&lt;/h3&gt;&lt;p&gt;
+ After a few years of accumulating old content, search results listings can be dominated by pointers to old stuff unless steps are taken to increase the priority of new content.
+&lt;/p&gt;&lt;p&gt;
+ The simplest solution is to have the search engine give a lower weight to old pages. Note that the weight should be computed relative to the creation date and not to the latest modification date (which will often be very recent if the old content has been maintained properly).
+&lt;/p&gt;&lt;p&gt;
+ A more advanced solution is to think of search as more of an index to the site and less of a simple keyword-counting operation. In this model, the search weight of old content will change based on its changing value as a resource for each query. It is a difficult research challenge to fully do this, but a manual approximation would be to have the content gardener change the search weights for each meta-keyword based on its current relevance.
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Share:&amp;nbsp;&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Sat, 17 Apr 2021 17:12:06 -0500</pubDate></item><item><title>Preface - an opinionated functional programming library for OCaml</title><link>https://lobste.rs/s/75rh8q</link><description>&lt;h1&gt;Preface&lt;/h1&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Preface is an opinionated library designed to facilitate the
 handling of recurring functional programming idioms in
 &lt;a href="https://ocaml.org/" rel="nofollow" dir="ltr"&gt;OCaml&lt;/a&gt;. Many of the design decisions were made
 in an attempt to calibrate, as best as possible, to the OCaml
@@ -1285,237 +1515,7 @@ list? Don't hesitate to open a PR or fill an issue, we'd love to hear
 from you.&lt;/p&gt;&lt;h2&gt;closing remarks&lt;/h2&gt;&lt;p&gt;Preface is a fun project to develop and we have learned a lot from
 it. We hope you find it useful and/or enjoyable to use. We are open to
 any improvements and open to external contributions!&lt;/p&gt;&lt;p dir="ltr"&gt;We received a lot of help during the development of Preface. Feel free
-to go to the &lt;a href="https://github.com/xvw/preface/blob/master/CREDITS.md" dir="ltr"&gt;CREDITS&lt;/a&gt; page to learn more.&lt;/p&gt;</description><pubDate>Sat, 17 Apr 2021 05:31:10 -0500</pubDate></item><item><title>Web Pages Must Live Forever (1998)</title><link>https://lobste.rs/s/lkdqys</link><description>&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Summary:&lt;/strong&gt;&amp;nbsp;&lt;/p&gt;&lt;p&gt;
- Once you have put a page on the Web, you need to keep it there indefinitely:
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;
-&lt;strong dir="ltr"&gt;
-   Other sites
-  &lt;/strong&gt;
-  may link to your page, so removing it will cause
-  &lt;a href="https://www.nngroup.com/articles/fighting-linkrot/" title="Alertbox Jun. 1998: Fighting linkrot" dir="ltr"&gt;
-   linkrot
-  &lt;/a&gt;
-  &amp;nbsp;and lost business opportunities as you turn away new users
- &lt;/LI&gt;&lt;LI&gt;
-  Users may have bookmarked the page because they want to go directly to a relevant part of your site instead of starting at the home page every time
- &lt;/LI&gt;&lt;LI&gt;
-&lt;strong dir="ltr"&gt;
-   Search engines
-  &lt;/strong&gt;
-  are slow in updating their databases, so they too will lead users astray if you remove pages
- &lt;/LI&gt;&lt;LI&gt;
-&lt;strong dir="ltr"&gt;
-   Old content adds value
-  &lt;/strong&gt;
-  to your site: some users will benefit from the old pages, so why not keep serving these customers?
- &lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
- The first three reasons are really arguments why
- &lt;strong dir="ltr"&gt;
-  URLs must stay active forever
- &lt;/strong&gt;
- : any URL that has ever been exposed to the outside world must continue to bring up something reasonable when people go to it. Because they
- &lt;em dir="ltr"&gt;
-  will.
- &lt;/em&gt;
- It is common experience among webmasters that they keep getting hits on URLs that were put out of service several years ago.
-&lt;/p&gt;&lt;p&gt;
- Even if you believe that the old page has zero value, the old URL should be supported and made into a redirect to the closest related page on the site.
-&lt;/p&gt;&lt;h2&gt;
- Value of Old Content
-&lt;/h2&gt;&lt;p dir="ltr"&gt;
- Most old pages do have value for users, so I recommend keeping the pages themselves alive forever. Sure, new content is probably more valuable than old content, but there is
- &lt;strong dir="ltr"&gt;
-  more old content
- &lt;/strong&gt;
- to choose from. As an example, consider a site that publishes new content on a weekly basis. After a year, this site will consist of 51 old editions and one new edition. Assuming that new content is ten times as valuable as old content,
- &lt;strong dir="ltr"&gt;
-  84% of the site's value comes from old content
- &lt;/strong&gt;
- .
-&lt;/p&gt;&lt;p dir="ltr"&gt;
- I still get about 50 visitors per week who follow the link to my site from an
- &lt;a href="http://www.nytimes.com/library/tech/98/07/cyber/articles/13usability.html" title="NY Times July 13, 1998: article by Matt Richtel" dir="ltr"&gt;
-  article about usability in
-  &lt;cite dir="ltr"&gt;
-   The New York Times
-  &lt;/cite&gt;
-  four months ago
- &lt;/a&gt;
- &amp;nbsp;(warning: access to the
- &lt;cite dir="ltr"&gt;
-  Times
- &lt;/cite&gt;
- requires free registration). Adjusting for link click-through, this means that the newspaper provides extra value to many more readers simply by leaving this old article on their server. A great way to establish a reputation as a substantial online service of record.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
- Another example is my 1996 article on the
- &lt;a href="https://www.nngroup.com/articles/top-10-mistakes-web-design/" title="Alertbox May 1996" dir="ltr"&gt;
-  top-ten mistakes of Web design
- &lt;/a&gt;
- . As shown in the table, it is getting
- &lt;em dir="ltr"&gt;
-  more
- &lt;/em&gt;
- readers every year:
-&lt;/p&gt;&lt;table align="center" border="1" dir="ltr"&gt;
-&lt;tbody dir="ltr"&gt;
-&lt;tr dir="ltr"&gt;
-&lt;th align="left" dir="ltr"&gt;
-    Year
-   &lt;/th&gt;
-&lt;th align="right" dir="ltr"&gt;
-    Page Views
-   &lt;/th&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;
-    1996
-   &lt;/td&gt;
-&lt;td align="right" dir="ltr"&gt;
-    50,061
-   &lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;
-    1997
-   &lt;/td&gt;
-&lt;td align="right" dir="ltr"&gt;
-    72,454
-   &lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;
-    1998
-   &lt;/td&gt;
-&lt;td align="right" dir="ltr"&gt;
-    149,520
-   &lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;
-    1999
-   &lt;/td&gt;
-&lt;td align="right" dir="ltr"&gt;
-    226,320
-   &lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-&lt;td align="left" dir="ltr"&gt;
-    2000
-   &lt;/td&gt;
-&lt;td align="right" dir="ltr"&gt;
-    387,884
-   &lt;/td&gt;
-&lt;/tr&gt;
-&lt;/tbody&gt;
-&lt;/table&gt;&lt;p&gt;
- Admittedly, the "top-ten mistakes" Alertbox is somewhat of a Web classic, but the more average Alertbox columns also get most of their readers when they are "old." A typical Alertbox accumulates about 80,000 page views over time, only 20,000 of which are received while it is the "current" column.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-&lt;strong dir="ltr"&gt;
-  Users benefit from old content
- &lt;/strong&gt;
- because:
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;
-  it may be
-  &lt;strong dir="ltr"&gt;
-   intrinsically interesting
-  &lt;/strong&gt;
-  and worth reading even when it's not news (say, a well-written essay)
- &lt;/LI&gt;&lt;LI&gt;
-  it can experience
-  &lt;strong dir="ltr"&gt;
-   renewed interest due to later events
-  &lt;/strong&gt;
-  (what did the new CEO of your main competitor do two jobs ago?)
- &lt;/LI&gt;&lt;LI&gt;
-  it can have
-  &lt;strong dir="ltr"&gt;
-   historical interest
-  &lt;/strong&gt;
-  (how did reviewers view
-  &lt;cite dir="ltr"&gt;
-   Gone With the Wind
-  &lt;/cite&gt;
-  when it opened?)
- &lt;/LI&gt;&lt;LI&gt;
-  it
-  &lt;strong dir="ltr"&gt;
-   helps with old products
-  &lt;/strong&gt;
-  (your neighbor has an HP printer from 1995 for sale: will it satisfy your needs?)
- &lt;/LI&gt;&lt;LI&gt;
-  it provides
-  &lt;strong dir="ltr"&gt;
-   background information
-  &lt;/strong&gt;
-  and a richer texture for a website: the true killer app for the Web is diversity (Amazon.com gets many sales from listing a huge number of old books that each sell only a few copies per year; listing out-of-print books that they don't sell adds to the value of the service and makes users more likely to come back)
- &lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;
- Cost of Old Content
-&lt;/h2&gt;&lt;p&gt;
- From a site management perspective, the cost of keeping old content is trivial: the cost of hard disk space is close to zero, and the cost of maintaining old files can be very low if they are developed according to the HTML standards or kept in a publishing database.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
- In order to enhance the value of the old content, I recommend investing a small amount of resources on
- &lt;strong dir="ltr"&gt;
-  content gardening
- &lt;/strong&gt;
- :
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;
-  have
-  &lt;strong dir="ltr"&gt;
-   new articles link to old content
-  &lt;/strong&gt;
-  for background or supplementary information: since the new content may be written by people who don't know the old stuff, it is often an editorial function to add these links
- &lt;/LI&gt;&lt;LI&gt;
-&lt;strong dir="ltr"&gt;
-   maintain the links
-  &lt;/strong&gt;
-  in the old files: kill or replace outdated ones
- &lt;/LI&gt;&lt;LI&gt;
-  add
-  &lt;strong dir="ltr"&gt;
-   forward links
-  &lt;/strong&gt;
-  to the old pages so that they point to newer pages: otherwise users will never discover follow-on products and more recent developments in a case
- &lt;/LI&gt;&lt;LI&gt;
-&lt;strong dir="ltr"&gt;
-   remove obsolete or misleading information
-  &lt;/strong&gt;
-  and replace with current data or a current link (for example, the announcement of a conference or product launch may be replaced with the proceedings or a report from the event; also add a forward link to this year's conference)
- &lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
- The cost of maintaining old content may be about 10% of the original cost of developing this content, but since doing so more than doubles the value of the website, it is a good investment.
-&lt;/p&gt;&lt;h2&gt;
- Make Time Explicit
-&lt;/h2&gt;&lt;p&gt;
- It can be confusing for users to stumble across old content if they are looking for current information. Confusion can be minimized by:
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;
-  explicitly
-  &lt;strong dir="ltr"&gt;
-   mention the date
-  &lt;/strong&gt;
-  (including the year) the page was originally written
- &lt;/LI&gt;&lt;LI&gt;
-  add a prominent
-  &lt;strong dir="ltr"&gt;
-   disclaimer
-  &lt;/strong&gt;
-  to point out ways in which the page no longer applies (e.g.,
-  &lt;em dir="ltr"&gt;
-   "This product is no longer being manufactured"
-  &lt;/em&gt;
-  )
- &lt;/LI&gt;&lt;LI&gt;
-&lt;strong dir="ltr"&gt;
-   forward-pointing links
-  &lt;/strong&gt;
-  to the most recent pages about the same topic
- &lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;
- Downplay Old Content in Search Listings
-&lt;/h3&gt;&lt;p&gt;
- After a few years of accumulating old content, search results listings can be dominated by pointers to old stuff unless steps are taken to increase the priority of new content.
-&lt;/p&gt;&lt;p&gt;
- The simplest solution is to have the search engine give a lower weight to old pages. Note that the weight should be computed relative to the creation date and not to the latest modification date (which will often be very recent if the old content has been maintained properly).
-&lt;/p&gt;&lt;p&gt;
- A more advanced solution is to think of search as more of an index to the site and less of a simple keyword-counting operation. In this model, the search weight of old content will change based on its changing value as a resource for each query. It is a difficult research challenge to fully do this, but a manual approximation would be to have the content gardener change the search weights for each meta-keyword based on its current relevance.
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Share:&amp;nbsp;&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Sat, 17 Apr 2021 17:12:06 -0500</pubDate></item><item><title>Pushing Python toward C speeds with SIMD</title><link>https://lobste.rs/s/lwtri6</link><description>&lt;p dir="ltr"&gt;
+to go to the &lt;a href="https://github.com/xvw/preface/blob/master/CREDITS.md" dir="ltr"&gt;CREDITS&lt;/a&gt; page to learn more.&lt;/p&gt;</description><pubDate>Sat, 17 Apr 2021 05:31:10 -0500</pubDate></item><item><title>Pushing Python toward C speeds with SIMD</title><link>https://lobste.rs/s/lwtri6</link><description>&lt;p dir="ltr"&gt;
 In fields like data science and image processing, running time-intensive computations in a for loop iterating over an array is essential, and in a language like Python, receiving a runtime error due to some array shape mismatch hours into a computation is inexcusable, though all too commonplace. Speeding up array computations in Python code can always provide huge benefits in both research and industry, so I was thrilled to learn about &lt;a href="https://numba.pydata.org/" dir="ltr"&gt;Numba&lt;/a&gt;, a JIT compiler for Python code with a focus on optimizing NumPy.&lt;/p&gt;&lt;p&gt;
 Numba works by outputting LLVM instructions for functions with a special decorator, and calling those pre-compiled functions in place of running the Python interpreter in the function body. What I find to be one of the coolest features of Numba is its ability to translate some loops into vector instructions, also called SIMD instructions, meaning "Single Instruction, Multiple Data."&lt;/p&gt;&lt;p&gt;
 SIMD is a variety of "data parallelism" that works when applying the same instruction to every element in an array. Instead of applying the instruction to the first element of the array, then the second, then the third, etc., a program that is vectorized/uses SIMD instructions will work on 4, 8, 16 or more elements of the array with a single instruction.&lt;/p&gt;&lt;p&gt;
