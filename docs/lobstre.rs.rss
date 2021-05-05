@@ -3556,7 +3556,283 @@ EOL&lt;/span&gt;
 		&lt;strong dir="ltr"&gt;
 			Share		&lt;/strong&gt;
 
-		&lt;/div&gt;</description><pubDate>Tue, 04 May 2021 23:42:09 -0500</pubDate></item><item><title>Statically Recompiling NES Games into Native Executables with LLVM and Go (2013)</title><link>https://lobste.rs/s/sek5qc</link><description>&lt;p&gt;
+		&lt;/div&gt;</description><pubDate>Tue, 04 May 2021 23:42:09 -0500</pubDate></item><item><title>Load Balancing and Auto Scaling with HAProxy</title><link>https://lobste.rs/s/ruumek</link><description>&lt;p&gt;When your application has more demand than can be handled by a single machine or
+when you want to safe-guard against failure or a single server, you might
+want to load balance it. There are different patterns to load balance an application,
+e.g. you can offload the heavy processing through a message queue, or you can redirect
+traffic directly to different servers. In this tutorial we will look at the latter.&lt;/p&gt;&lt;p&gt;On my job I’m currently working a lot with AWS, so I will first introduce the topic
+by showing how it works on AWS. Then we will have a look at the general problem and
+finally we will see an open source solution. In the end we will extend the load
+balancing to create an auto scaling system (partly in practice, partly in
+theory). My goal is to show you how you can achieve
+load balancing and auto scaling with open source software to
+avoid cloud vendor lock-in.&lt;/p&gt;&lt;p&gt;In my opinion, open source load balancing can be useful both for fully self-hosted
+as well as IaaS environments, whereas auto scaling might make more sense for IaaS
+environments. It doesn’t have to be AWS or Azure, though. For example, the
+German hosting provider Hetzner also has an API to manage VMs. I only see a
+use case for auto-scaling in self-hosting if you run multiple applications and
+your infrastructure is big enough to handle changing demand of said applications
+without addition or removal of physical servers.&lt;/p&gt;&lt;h2&gt;Load Balancing and Auto Scaling at AWS&lt;/h2&gt;&lt;p&gt;Before we dive into the software, let’s first have a look at AWS. In total
+we will look at three EC2 sub services:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Target Groups&lt;/LI&gt;&lt;LI&gt;Load Balancers&lt;/LI&gt;&lt;LI&gt;Auto Scaling Groups&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;AWS EC2 provides
+both load balancing and auto scaling. Load balancing in EC2 works with &lt;em dir="ltr"&gt;Load Balancers&lt;/em&gt;
+and &lt;em dir="ltr"&gt;Target Groups&lt;/em&gt;. A target group is a group of VMs running the same service. 
+A load balancer is the server that receives the original request and forwards it to one
+of the servers inside the target group. In fact a load balancer in AWS usually also
+consists of two servers (maybe even more, I’ve only seen two up to now). AWS hides these
+servers from you and only hands a DNS hostname to you. The DNS hostname resolves to the
+actual load balancer servers.&lt;/p&gt;&lt;p&gt;Now let’s imagine a user visiting your web service. You will probably have setup a CNAME
+or similar to forward from your public domain to the load balancing hostname. So the
+user’s request will be forwarded to the load balancer. One of the load balancer servers
+will receive the request. It will then forward the request to any of the servers that
+are currently active inside the attached target group. The selected server will process
+the request, respond to the load balancer which will in turn send the response to the
+user.&lt;/p&gt;&lt;p dir="ltr"&gt;A target group periodically performs health checks on each server belonging to the
+target group.
+If health checks fail the server will be marked as &lt;em dir="ltr"&gt;down&lt;/em&gt;. The load balancer can use this
+information to stop forwarding requests to this server. Health checks will continue to
+be run on this server and once it is considered to be OK again, it will be marked as
+&lt;em dir="ltr"&gt;up&lt;/em&gt; in the target group and load balancers can continue forwarding requests.&lt;/p&gt;&lt;img src="https://blog.stefan-koch.name/assets/2021-05-ec2-loadbalancer.png" alt="Auto Scaling Diagram" width="455" height="157"&gt;&lt;p dir="ltr"&gt;That’s load balancing in AWS without auto scaling. To add auto scaling, we have to use
+&lt;em dir="ltr"&gt;Auto Scaling Groups&lt;/em&gt;. An auto scaling group is a definition for auto scaling behaviour
+for a service. It defines:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;what kind of servers should be started (i.e. which VM specs and which base image to
+use for the VM)&lt;/LI&gt;&lt;LI&gt;what’s the limit for minimum and maximum number of servers (you probably don’t
+want to wake up and see 0 or 1000 servers running by accident)&lt;/LI&gt;&lt;LI&gt;which metrics to use to decide if more or less servers are required&lt;/LI&gt;&lt;LI&gt;whether a failed load balancer health check should lead to replacement of the VM&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Auto scaling will track a metric and when the metric is over a threshold it will
+start more servers and add them to the target group. Load balancers will then have
+one more target to forward requests to and hopefully the metrics should be in
+acceptable ranges again. If the metric below a threshold
+servers can be removed from the target group to save cost.&lt;/p&gt;&lt;img src="https://blog.stefan-koch.name/assets/2021-05-ec2-autoscaling-loadbalancer.png" alt="Auto Scaling Diagram" width="455" height="135"&gt;&lt;p dir="ltr"&gt;Removing servers from a target group introduces a new state.
+We already saw that servers in a target group can be &lt;em dir="ltr"&gt;up&lt;/em&gt; and &lt;em dir="ltr"&gt;down&lt;/em&gt;.
+When a server is removed from the target group, it goes into state &lt;em dir="ltr"&gt;draining&lt;/em&gt;.
+The &lt;em dir="ltr"&gt;draining&lt;/em&gt; state signals that there might still be requests running on this server,
+but no new requests should be sent to this server by the load balancer.
+To my knowledge on AWS the target remains in the &lt;em dir="ltr"&gt;draining&lt;/em&gt; state for a fixed amount
+of time. After the &lt;em dir="ltr"&gt;draining&lt;/em&gt; period the server will be removed from the
+target group no matter whether there are still active connections. At the same
+time the auto scaling group is also free to terminate the server.&lt;/p&gt;&lt;h2&gt;Load Balancing Algorithms&lt;/h2&gt;&lt;p&gt;How does the load balancer determine the target to which it should forward
+a request?&lt;/p&gt;&lt;p&gt;There are many different algorithms for this decision. Not all of them are
+supported by all software products. We will quickly have a look at the most
+common ones in this section.&lt;/p&gt;&lt;p dir="ltr"&gt;In a &lt;em dir="ltr"&gt;Round Robin&lt;/em&gt; load balancing scheme each server gets one request and then
+the load balancer switches to the next server. When the load balancer has
+reached the last server, it will start from the beginning again. This scheme
+is usually supported by all software. Round Robin can be extended to the &lt;em dir="ltr"&gt;Weighted
+Round Robin&lt;/em&gt; which can handle sets of servers of different size. Imagine you
+have one server with 4 cores and one server with 16 cores. The server with
+16 cores can probably handle more requests in the same time, so it would
+make sense to forward more requests to the more powerful server. This is what
+Weighted Round Robin does.&lt;/p&gt;&lt;p dir="ltr"&gt;Protocols with long-lasting connections can use the &lt;em dir="ltr"&gt;Least Connections&lt;/em&gt; scheme.
+In this load balancing scheme the server with
+the least number of open connections receives the request. AWS calls this
+load balancing scheme &lt;a href="https://aws.amazon.com/about-aws/whats-new/2019/11/application-load-balancer-now-supports-least-outstanding-requests-algorithm-for-load-balancing-requests/" dir="ltr"&gt;Least Outstanding Requests&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Two other common methods are &lt;em dir="ltr"&gt;Source IP Hash&lt;/em&gt; and &lt;em dir="ltr"&gt;URL Hash&lt;/em&gt;. In both cases
+an input value (IP address or URL) is used to determine the target server.
+The load balancer calculates the hash of the IP address or URL and then
+takes the modulo of it to get the index of the server to which it should route
+the request. In case of &lt;em dir="ltr"&gt;Source IP Hash&lt;/em&gt; this has the advantage that requests
+from the same IP address will always go to the same server. With &lt;em dir="ltr"&gt;URL Hash&lt;/em&gt;
+requests to the same URL will always be processed by the same server. Both
+schemes can be helpful to re-use cached data, &lt;em dir="ltr"&gt;Source IP Hash&lt;/em&gt; can also be
+useful when the user’s session storage on the backend is not global.&lt;/p&gt;&lt;p&gt;Of course, it’s also possible to forward requests to a random server.&lt;/p&gt;&lt;h2&gt;Open Source Load Balancing&lt;/h2&gt;&lt;p&gt;Now that we have seen how load balancing and auto scaling are handled in AWS,
+let’s see how we can do it with open source software.&lt;/p&gt;&lt;h3&gt;Preparation with Vagrant&lt;/h3&gt;&lt;p&gt;To test load balancing we will launch a few VMs with
+Vagrant. Each VM will simulate one web server. I chose Vagrant over
+Qemu, because it allows us to specify the IP address of VMs from the outside.
+I assume that libvirt might also be capable of this, but in my opinion
+a Vagrantfile is a bit simpler to understand in a blog post than
+a libvirt XML definition.&lt;/p&gt;&lt;p dir="ltr"&gt;So, create the following &lt;code dir="ltr"&gt;Vagrantfile&lt;/code&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;Vagrant.configure("2") do |config|
+  config.vm.define "web1" do |web|
+    web.vm.box = "ubuntu/focal64"
+    web.vm.network "private_network", ip: "192.168.50.101"
+    web.vm.provision "shell", path: "install_web.sh", args: "web1"
+  end
+
+  config.vm.define "web2" do |web|
+    web.vm.box = "ubuntu/focal64"
+    web.vm.network "private_network", ip: "192.168.50.102"
+    web.vm.provision "shell", path: "install_web.sh", args: "web2"
+  end
+
+  config.vm.define "web3" do |web|
+    web.vm.box = "ubuntu/focal64"
+    web.vm.network "private_network", ip: "192.168.50.103"
+    web.vm.provision "shell", path: "install_web.sh", args: "web3"
+  end
+end
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This vagrant file will use a provisioning script called &lt;code dir="ltr"&gt;install_web.sh&lt;/code&gt;
+which must be in the same folder. The script installs nginx with a simple
+HTML file containing the index of the server. This will allow us to see
+load balancing in action when we access the site.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;apt-get install -y nginx
+echo "Hello $1!" &amp;gt; /var/www/index.html
+
+cat &amp;lt;&amp;lt;CONF &amp;gt; /etc/nginx/nginx.conf
+worker_processes  1;
+
+events {
+    worker_connections  1024;
+}
+
+http {
+    include       mime.types;
+
+    server {
+        listen       80;
+        server_name  localhost;
+
+        location / {
+            root   /var/www;
+            index  index.html index.htm;
+        }
+    }
+}
+CONF
+
+systemctl restart nginx
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The above definition gives us a few VMs running web servers, each one
+serving a simple page with the server’s name.&lt;/p&gt;&lt;h3&gt;Load Balancing with HAProxy&lt;/h3&gt;&lt;p&gt;HAProxy provides a lot of features for load balancing. Many people also
+use nginx for load balancing, but in this tutorial we will be using HAProxy,
+because it gives us
+an overview over the current health checks which can also be exported to CSV.
+This will allow us to act on health checks and shutdown machines that are not
+healthy, anymore.&lt;/p&gt;&lt;p dir="ltr"&gt;The HAProxy blog gives a good &lt;a href="https://www.haproxy.com/de/blog/the-four-essential-sections-of-an-haproxy-configuration/" dir="ltr"&gt;introduction to the configuration file
+format&lt;/a&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;global
+    maxconn  20000
+    log      127.0.0.1 local0
+    user     haproxy
+    chroot   /usr/share/haproxy
+    pidfile  /run/haproxy.pid
+    daemon
+
+    stats socket /run/haproxy.sock mode 666
+    stats timeout 60s
+
+frontend main
+    bind :5000
+    mode               http
+    log                global
+    option             httplog
+    option             dontlognull
+    option             http_proxy
+    option forwardfor  except 127.0.0.0/8
+    timeout            client  30s
+    default_backend    app
+
+frontend stats
+    bind     *:8404
+    mode     http
+    stats    enable
+    stats    uri /stats
+    stats    refresh 10s
+    timeout  client  30s
+
+backend app
+    mode        http
+    balance     roundrobin
+    timeout     connect 5s
+    timeout     server  30s
+    timeout     queue   30s
+    server  web1 192.168.50.101:80 check
+    server  web2 192.168.50.102:80 check
+    server  web3 192.168.50.103:80 check
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;With this file we configure the load balancer to balance traffic on
+port &lt;code dir="ltr"&gt;5000&lt;/code&gt; across the servers defined in the backend &lt;code dir="ltr"&gt;app&lt;/code&gt;. All servers will
+be checked for their health status.&lt;/p&gt;&lt;p&gt;HAProxy provides two ways to get access to health checks: the socket interface
+and the web page. For this tutorial I enabled both. The
+socket interface is best for programmatic access, while the web page is nice
+for getting an overview over the information
+that’s available. Both methods have an admin mode
+to change the HAProxy configuration, but in this configuration the admin mode
+is not enabled.&lt;/p&gt;&lt;p dir="ltr"&gt;We are setting the mode of the socket file to &lt;code dir="ltr"&gt;666&lt;/code&gt; to allow standard users
+to use the socket. That way, we won’t have to run our auto scaling script
+as root.&lt;/p&gt;&lt;p&gt;When you have created the previous few files,
+start all the vagrant servers and HAProxy with something similar to (depending
+on your service manager):&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;vagrant up
+systemctl start haproxy
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;If you visit &lt;code dir="ltr"&gt;http://localhost:5000&lt;/code&gt; now and refresh the page a few times, you
+should see messages from different web servers. You can also go to
+&lt;code dir="ltr"&gt;http://localhost:8404/stats&lt;/code&gt; to view the HAProxy stats page.&lt;/p&gt;&lt;img src="https://blog.stefan-koch.name/assets/2021-05-haproxy-stats-page.png" alt="HAProxy Stats Web Page" width="455" height="289"&gt;&lt;p dir="ltr"&gt;Let’s shutdown one of the web servers with &lt;code dir="ltr"&gt;vagrant destroy web2&lt;/code&gt;. HAProxy
+will detect that this server is no longer available and mark it as down. It
+will take a few seconds until the server is really marked down. During this
+period it’s still possible that your request gets forwarded to the dead server
+and will timeout.&lt;/p&gt;&lt;p dir="ltr"&gt;The exact timings of health checks
+&lt;a href="http://cbonte.github.io/haproxy-dconv/2.4/configuration.html#5.2-check" dir="ltr"&gt;can be configured&lt;/a&gt;
+with the keyword &lt;code dir="ltr"&gt;inter&lt;/code&gt; (interval between checks) and &lt;code dir="ltr"&gt;fail&lt;/code&gt; (number of failed
+tests, before server gets flagged unavailable).
+There’s also the &lt;code dir="ltr"&gt;fastinter&lt;/code&gt;
+and &lt;code dir="ltr"&gt;downinter&lt;/code&gt; keywords to set different intervals in transitioning phases.
+E.g. this would allow you to perform regular health checks every 10 seconds,
+but after the first failed health check you poll every 2 seconds until the
+server is considered down or up again.&lt;/p&gt;&lt;h3&gt;Auto Healing&lt;/h3&gt;&lt;p&gt;Now let’s add functionality similar to AWS auto scaling to this setup. This
+means we want to:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;remove unhealthy instances and start a new instance&lt;/LI&gt;&lt;LI&gt;add and remove instances depending on a metric value&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;We will use HAProxy, because it gives us access to the live health situation
+of instances. For this proof-of-contept we will continue to use Vagrant, in a
+production environment you would probably use whatever API your IaaS provider
+offers.&lt;/p&gt;&lt;p&gt;A script will periodically check the health stats from HAProxy. When it
+detects a failed instance, it will take down this instance and start a fresh
+one. For this proof-of-concept we will just re-start the failed Vagrant VM.
+Otherwise, we’d have to generate a new Vagrantfile and a new HAProxy
+configuration file with the updated IP address. Feel free to implement
+it yourself as an exercise.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/usr/bin/env bash&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;while &lt;/span&gt;&lt;span dir="ltr"&gt;true&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;do
+    &lt;/span&gt;&lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;"Checking health stats"&lt;/span&gt;
+    &lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;"show stat"&lt;/span&gt; | socat unix-connect:/run/haproxy.sock stdio | &lt;span dir="ltr"&gt;\&lt;/span&gt;
+        &lt;span dir="ltr"&gt;sed&lt;/span&gt; &lt;span dir="ltr"&gt;'1s/^# //; /^$/d'&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; haproxy_stats.csv
+
+    &lt;span dir="ltr"&gt;down_servers&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;sqlite3 haproxy_stats.sqlite &lt;span dir="ltr"&gt;&amp;lt;&amp;lt;&lt;/span&gt;&lt;span dir="ltr"&gt;SQL&lt;/span&gt;&lt;span dir="ltr"&gt;
+DROP TABLE IF EXISTS haproxy;
+.mode csv
+.import haproxy_stats.csv haproxy
+SELECT svname FROM haproxy WHERE type = 2 AND status = 'DOWN';
+&lt;/span&gt;&lt;span dir="ltr"&gt;SQL
+&lt;/span&gt;    &lt;span dir="ltr"&gt;)&lt;/span&gt;
+
+    &lt;span dir="ltr"&gt;for &lt;/span&gt;server &lt;span dir="ltr"&gt;in&lt;/span&gt; &lt;span dir="ltr"&gt;$down_servers&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;do&lt;/span&gt;
+        &lt;span dir="ltr"&gt;# Take down the unhealthy server&lt;/span&gt;
+        vagrant destroy &lt;span dir="ltr"&gt;-f&lt;/span&gt; &lt;span dir="ltr"&gt;$server&lt;/span&gt;
+
+        &lt;span dir="ltr"&gt;# Create a fresh server&lt;/span&gt;
+        &lt;span dir="ltr"&gt;# For PoC simply re-start the same VM&lt;/span&gt;
+        vagrant up &lt;span dir="ltr"&gt;$server&lt;/span&gt;
+    &lt;span dir="ltr"&gt;done
+
+    &lt;/span&gt;&lt;span dir="ltr"&gt;sleep &lt;/span&gt;10
+&lt;span dir="ltr"&gt;done&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;In this script we fetch the current stats from the unix socket. We remove the
+leading hash from the header line, delete empty lines
+and then import everything into SQLite. SQLite allows
+us to easily filter the rows for all rows that are of type &lt;em dir="ltr"&gt;server&lt;/em&gt;
+(&lt;a href="https://cbonte.github.io/haproxy-dconv/1.7/management.html#9.1" dir="ltr"&gt;type 2&lt;/a&gt;) and
+are in status down.&lt;/p&gt;&lt;p dir="ltr"&gt;We then iterate over these servers and take them down. For simplicity we do
+not define new VMs in the &lt;code dir="ltr"&gt;Vagrantfile&lt;/code&gt;, but instead just restart the same VM.&lt;/p&gt;&lt;h3&gt;Auto Scaling&lt;/h3&gt;&lt;p&gt;Extending this to scale servers up and down based on a metric is (in theory)
+quite easy. It seems a bit of work to me to do in a short shell script, so I will
+only describe the theory. It should be straightforward to implement with e.g.
+Python, though.&lt;/p&gt;&lt;p dir="ltr"&gt;Let’s say we have a metric file with the number of desired servers inside. This
+file will be periodically checked by a Python script, or it could even be
+monitored by something like &lt;code dir="ltr"&gt;inotify&lt;/code&gt;. The service will then compare the
+current number of active servers to the desired number of servers. There
+are three cases:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;desired and actual number of servers match: nothing has to be done&lt;/LI&gt;&lt;LI&gt;there are too many servers: remove a few servers&lt;/LI&gt;&lt;LI&gt;there are too few servers: start new servers and add them to load balancing&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;If there are too many servers, we will have to remove some of them from HAProxy. This
+means that the service will have to write a new HAProxy configuration file
+with a few servers set to &lt;code dir="ltr"&gt;disabled&lt;/code&gt; and then reload HAProxy. It should not
+shutdown the servers immediately, because there might still be active connections
+being processed. This corresponds to the AWS mode &lt;em dir="ltr"&gt;draining&lt;/em&gt; that we saw in
+the beginning.
+Our Python service then has to monitor the number of active connections on the
+server that it wants to shutdown. This can be retrieved from the HAProxy stats
+socket. Once all connections are closed, the server can be fully removed
+from the HAProxy configuration and can be shutdown.&lt;/p&gt;&lt;p dir="ltr"&gt;If more servers are required, the service has to boot new servers. Now there
+are two possible ways to continue. Since HAProxy already includes health monitoring of
+servers, the servers can be added to HAProxy immediately. Requests will only
+be routed to these servers once the server is up. If you choose this way make
+sure to select a reasonable health check method in HAProxy. The standard
+TCP health check might not work depending on your exact web application
+startup behaviour. You also want to
+make sure that these servers are not taken down again due to their
+unhealthy status (in AWS this is called &lt;em dir="ltr"&gt;grace period&lt;/em&gt; for new instances).&lt;/p&gt;&lt;p&gt;Alternatively, the Python service could boot the servers and
+monitor them on its own. Once the servers are ready, it can add them to
+the HAProxy configuration file and reload HAProxy.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p&gt;In this blog post we have seen that conceptually it is quite simple to
+create an auto scaling load balancer with open source software and thereby
+avoid vendor lock-in with a specific cloud hosting provider. If we use HAProxy
+for load balancing instead of relying on e.g. EC2 load balancers, we can
+take our application and host it on AWS, Azure, Hetzner or any other IaaS
+provider with a management API. If we don’t need
+auto scaling we could even use our own bare metal servers (technically you
+can of course also scale VMs on your own bare metal, but I don’t see much
+sense in it, since the servers are running nonetheless).&lt;/p&gt;</description><pubDate>Tue, 04 May 2021 15:15:18 -0500</pubDate></item><item><title>Statically Recompiling NES Games into Native Executables with LLVM and Go (2013)</title><link>https://lobste.rs/s/sek5qc</link><description>&lt;p&gt;
   2013 June 7
 &lt;/p&gt;&lt;p dir="ltr"&gt;
   I have always wanted to write an emulator. I made a half-hearted attempt in college
@@ -7521,280 +7797,4 @@ was intellectually stimulating and highly effective at teaching me,
 and hopefully now, you, how the Nintendo Entertainment System works,
 how to use LLVM effectively, and an introduction to a wide range of
 problems that compilers and interpreters face.
-&lt;/p&gt;</description><pubDate>Mon, 03 May 2021 17:10:04 -0500</pubDate></item><item><title>Casio AI-1000 Pocket Lisp Computer from 1989</title><link>https://www.youtube.com/watch?v=H-yuZ2pejGU</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/kpkniq/casio_ai_1000_pocket_lisp_computer_from"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Tue, 04 May 2021 02:03:30 -0500</pubDate></item><item><title>Load Balancing and Auto Scaling with HAProxy</title><link>https://lobste.rs/s/ruumek</link><description>&lt;p&gt;When your application has more demand than can be handled by a single machine or
-when you want to safe-guard against failure or a single server, you might
-want to load balance it. There are different patterns to load balance an application,
-e.g. you can offload the heavy processing through a message queue, or you can redirect
-traffic directly to different servers. In this tutorial we will look at the latter.&lt;/p&gt;&lt;p&gt;On my job I’m currently working a lot with AWS, so I will first introduce the topic
-by showing how it works on AWS. Then we will have a look at the general problem and
-finally we will see an open source solution. In the end we will extend the load
-balancing to create an auto scaling system (partly in practice, partly in
-theory). My goal is to show you how you can achieve
-load balancing and auto scaling with open source software to
-avoid cloud vendor lock-in.&lt;/p&gt;&lt;p&gt;In my opinion, open source load balancing can be useful both for fully self-hosted
-as well as IaaS environments, whereas auto scaling might make more sense for IaaS
-environments. It doesn’t have to be AWS or Azure, though. For example, the
-German hosting provider Hetzner also has an API to manage VMs. I only see a
-use case for auto-scaling in self-hosting if you run multiple applications and
-your infrastructure is big enough to handle changing demand of said applications
-without addition or removal of physical servers.&lt;/p&gt;&lt;h2&gt;Load Balancing and Auto Scaling at AWS&lt;/h2&gt;&lt;p&gt;Before we dive into the software, let’s first have a look at AWS. In total
-we will look at three EC2 sub services:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Target Groups&lt;/LI&gt;&lt;LI&gt;Load Balancers&lt;/LI&gt;&lt;LI&gt;Auto Scaling Groups&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;AWS EC2 provides
-both load balancing and auto scaling. Load balancing in EC2 works with &lt;em dir="ltr"&gt;Load Balancers&lt;/em&gt;
-and &lt;em dir="ltr"&gt;Target Groups&lt;/em&gt;. A target group is a group of VMs running the same service. 
-A load balancer is the server that receives the original request and forwards it to one
-of the servers inside the target group. In fact a load balancer in AWS usually also
-consists of two servers (maybe even more, I’ve only seen two up to now). AWS hides these
-servers from you and only hands a DNS hostname to you. The DNS hostname resolves to the
-actual load balancer servers.&lt;/p&gt;&lt;p&gt;Now let’s imagine a user visiting your web service. You will probably have setup a CNAME
-or similar to forward from your public domain to the load balancing hostname. So the
-user’s request will be forwarded to the load balancer. One of the load balancer servers
-will receive the request. It will then forward the request to any of the servers that
-are currently active inside the attached target group. The selected server will process
-the request, respond to the load balancer which will in turn send the response to the
-user.&lt;/p&gt;&lt;p dir="ltr"&gt;A target group periodically performs health checks on each server belonging to the
-target group.
-If health checks fail the server will be marked as &lt;em dir="ltr"&gt;down&lt;/em&gt;. The load balancer can use this
-information to stop forwarding requests to this server. Health checks will continue to
-be run on this server and once it is considered to be OK again, it will be marked as
-&lt;em dir="ltr"&gt;up&lt;/em&gt; in the target group and load balancers can continue forwarding requests.&lt;/p&gt;&lt;img src="https://blog.stefan-koch.name/assets/2021-05-ec2-loadbalancer.png" alt="Auto Scaling Diagram" width="455" height="157"&gt;&lt;p dir="ltr"&gt;That’s load balancing in AWS without auto scaling. To add auto scaling, we have to use
-&lt;em dir="ltr"&gt;Auto Scaling Groups&lt;/em&gt;. An auto scaling group is a definition for auto scaling behaviour
-for a service. It defines:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;what kind of servers should be started (i.e. which VM specs and which base image to
-use for the VM)&lt;/LI&gt;&lt;LI&gt;what’s the limit for minimum and maximum number of servers (you probably don’t
-want to wake up and see 0 or 1000 servers running by accident)&lt;/LI&gt;&lt;LI&gt;which metrics to use to decide if more or less servers are required&lt;/LI&gt;&lt;LI&gt;whether a failed load balancer health check should lead to replacement of the VM&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Auto scaling will track a metric and when the metric is over a threshold it will
-start more servers and add them to the target group. Load balancers will then have
-one more target to forward requests to and hopefully the metrics should be in
-acceptable ranges again. If the metric below a threshold
-servers can be removed from the target group to save cost.&lt;/p&gt;&lt;img src="https://blog.stefan-koch.name/assets/2021-05-ec2-autoscaling-loadbalancer.png" alt="Auto Scaling Diagram" width="455" height="135"&gt;&lt;p dir="ltr"&gt;Removing servers from a target group introduces a new state.
-We already saw that servers in a target group can be &lt;em dir="ltr"&gt;up&lt;/em&gt; and &lt;em dir="ltr"&gt;down&lt;/em&gt;.
-When a server is removed from the target group, it goes into state &lt;em dir="ltr"&gt;draining&lt;/em&gt;.
-The &lt;em dir="ltr"&gt;draining&lt;/em&gt; state signals that there might still be requests running on this server,
-but no new requests should be sent to this server by the load balancer.
-To my knowledge on AWS the target remains in the &lt;em dir="ltr"&gt;draining&lt;/em&gt; state for a fixed amount
-of time. After the &lt;em dir="ltr"&gt;draining&lt;/em&gt; period the server will be removed from the
-target group no matter whether there are still active connections. At the same
-time the auto scaling group is also free to terminate the server.&lt;/p&gt;&lt;h2&gt;Load Balancing Algorithms&lt;/h2&gt;&lt;p&gt;How does the load balancer determine the target to which it should forward
-a request?&lt;/p&gt;&lt;p&gt;There are many different algorithms for this decision. Not all of them are
-supported by all software products. We will quickly have a look at the most
-common ones in this section.&lt;/p&gt;&lt;p dir="ltr"&gt;In a &lt;em dir="ltr"&gt;Round Robin&lt;/em&gt; load balancing scheme each server gets one request and then
-the load balancer switches to the next server. When the load balancer has
-reached the last server, it will start from the beginning again. This scheme
-is usually supported by all software. Round Robin can be extended to the &lt;em dir="ltr"&gt;Weighted
-Round Robin&lt;/em&gt; which can handle sets of servers of different size. Imagine you
-have one server with 4 cores and one server with 16 cores. The server with
-16 cores can probably handle more requests in the same time, so it would
-make sense to forward more requests to the more powerful server. This is what
-Weighted Round Robin does.&lt;/p&gt;&lt;p dir="ltr"&gt;Protocols with long-lasting connections can use the &lt;em dir="ltr"&gt;Least Connections&lt;/em&gt; scheme.
-In this load balancing scheme the server with
-the least number of open connections receives the request. AWS calls this
-load balancing scheme &lt;a href="https://aws.amazon.com/about-aws/whats-new/2019/11/application-load-balancer-now-supports-least-outstanding-requests-algorithm-for-load-balancing-requests/" dir="ltr"&gt;Least Outstanding Requests&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Two other common methods are &lt;em dir="ltr"&gt;Source IP Hash&lt;/em&gt; and &lt;em dir="ltr"&gt;URL Hash&lt;/em&gt;. In both cases
-an input value (IP address or URL) is used to determine the target server.
-The load balancer calculates the hash of the IP address or URL and then
-takes the modulo of it to get the index of the server to which it should route
-the request. In case of &lt;em dir="ltr"&gt;Source IP Hash&lt;/em&gt; this has the advantage that requests
-from the same IP address will always go to the same server. With &lt;em dir="ltr"&gt;URL Hash&lt;/em&gt;
-requests to the same URL will always be processed by the same server. Both
-schemes can be helpful to re-use cached data, &lt;em dir="ltr"&gt;Source IP Hash&lt;/em&gt; can also be
-useful when the user’s session storage on the backend is not global.&lt;/p&gt;&lt;p&gt;Of course, it’s also possible to forward requests to a random server.&lt;/p&gt;&lt;h2&gt;Open Source Load Balancing&lt;/h2&gt;&lt;p&gt;Now that we have seen how load balancing and auto scaling are handled in AWS,
-let’s see how we can do it with open source software.&lt;/p&gt;&lt;h3&gt;Preparation with Vagrant&lt;/h3&gt;&lt;p&gt;To test load balancing we will launch a few VMs with
-Vagrant. Each VM will simulate one web server. I chose Vagrant over
-Qemu, because it allows us to specify the IP address of VMs from the outside.
-I assume that libvirt might also be capable of this, but in my opinion
-a Vagrantfile is a bit simpler to understand in a blog post than
-a libvirt XML definition.&lt;/p&gt;&lt;p dir="ltr"&gt;So, create the following &lt;code dir="ltr"&gt;Vagrantfile&lt;/code&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;Vagrant.configure("2") do |config|
-  config.vm.define "web1" do |web|
-    web.vm.box = "ubuntu/focal64"
-    web.vm.network "private_network", ip: "192.168.50.101"
-    web.vm.provision "shell", path: "install_web.sh", args: "web1"
-  end
-
-  config.vm.define "web2" do |web|
-    web.vm.box = "ubuntu/focal64"
-    web.vm.network "private_network", ip: "192.168.50.102"
-    web.vm.provision "shell", path: "install_web.sh", args: "web2"
-  end
-
-  config.vm.define "web3" do |web|
-    web.vm.box = "ubuntu/focal64"
-    web.vm.network "private_network", ip: "192.168.50.103"
-    web.vm.provision "shell", path: "install_web.sh", args: "web3"
-  end
-end
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This vagrant file will use a provisioning script called &lt;code dir="ltr"&gt;install_web.sh&lt;/code&gt;
-which must be in the same folder. The script installs nginx with a simple
-HTML file containing the index of the server. This will allow us to see
-load balancing in action when we access the site.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;apt-get install -y nginx
-echo "Hello $1!" &amp;gt; /var/www/index.html
-
-cat &amp;lt;&amp;lt;CONF &amp;gt; /etc/nginx/nginx.conf
-worker_processes  1;
-
-events {
-    worker_connections  1024;
-}
-
-http {
-    include       mime.types;
-
-    server {
-        listen       80;
-        server_name  localhost;
-
-        location / {
-            root   /var/www;
-            index  index.html index.htm;
-        }
-    }
-}
-CONF
-
-systemctl restart nginx
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The above definition gives us a few VMs running web servers, each one
-serving a simple page with the server’s name.&lt;/p&gt;&lt;h3&gt;Load Balancing with HAProxy&lt;/h3&gt;&lt;p&gt;HAProxy provides a lot of features for load balancing. Many people also
-use nginx for load balancing, but in this tutorial we will be using HAProxy,
-because it gives us
-an overview over the current health checks which can also be exported to CSV.
-This will allow us to act on health checks and shutdown machines that are not
-healthy, anymore.&lt;/p&gt;&lt;p dir="ltr"&gt;The HAProxy blog gives a good &lt;a href="https://www.haproxy.com/de/blog/the-four-essential-sections-of-an-haproxy-configuration/" dir="ltr"&gt;introduction to the configuration file
-format&lt;/a&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;global
-    maxconn  20000
-    log      127.0.0.1 local0
-    user     haproxy
-    chroot   /usr/share/haproxy
-    pidfile  /run/haproxy.pid
-    daemon
-
-    stats socket /run/haproxy.sock mode 666
-    stats timeout 60s
-
-frontend main
-    bind :5000
-    mode               http
-    log                global
-    option             httplog
-    option             dontlognull
-    option             http_proxy
-    option forwardfor  except 127.0.0.0/8
-    timeout            client  30s
-    default_backend    app
-
-frontend stats
-    bind     *:8404
-    mode     http
-    stats    enable
-    stats    uri /stats
-    stats    refresh 10s
-    timeout  client  30s
-
-backend app
-    mode        http
-    balance     roundrobin
-    timeout     connect 5s
-    timeout     server  30s
-    timeout     queue   30s
-    server  web1 192.168.50.101:80 check
-    server  web2 192.168.50.102:80 check
-    server  web3 192.168.50.103:80 check
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;With this file we configure the load balancer to balance traffic on
-port &lt;code dir="ltr"&gt;5000&lt;/code&gt; across the servers defined in the backend &lt;code dir="ltr"&gt;app&lt;/code&gt;. All servers will
-be checked for their health status.&lt;/p&gt;&lt;p&gt;HAProxy provides two ways to get access to health checks: the socket interface
-and the web page. For this tutorial I enabled both. The
-socket interface is best for programmatic access, while the web page is nice
-for getting an overview over the information
-that’s available. Both methods have an admin mode
-to change the HAProxy configuration, but in this configuration the admin mode
-is not enabled.&lt;/p&gt;&lt;p dir="ltr"&gt;We are setting the mode of the socket file to &lt;code dir="ltr"&gt;666&lt;/code&gt; to allow standard users
-to use the socket. That way, we won’t have to run our auto scaling script
-as root.&lt;/p&gt;&lt;p&gt;When you have created the previous few files,
-start all the vagrant servers and HAProxy with something similar to (depending
-on your service manager):&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;vagrant up
-systemctl start haproxy
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;If you visit &lt;code dir="ltr"&gt;http://localhost:5000&lt;/code&gt; now and refresh the page a few times, you
-should see messages from different web servers. You can also go to
-&lt;code dir="ltr"&gt;http://localhost:8404/stats&lt;/code&gt; to view the HAProxy stats page.&lt;/p&gt;&lt;img src="https://blog.stefan-koch.name/assets/2021-05-haproxy-stats-page.png" alt="HAProxy Stats Web Page" width="455" height="289"&gt;&lt;p dir="ltr"&gt;Let’s shutdown one of the web servers with &lt;code dir="ltr"&gt;vagrant destroy web2&lt;/code&gt;. HAProxy
-will detect that this server is no longer available and mark it as down. It
-will take a few seconds until the server is really marked down. During this
-period it’s still possible that your request gets forwarded to the dead server
-and will timeout.&lt;/p&gt;&lt;p dir="ltr"&gt;The exact timings of health checks
-&lt;a href="http://cbonte.github.io/haproxy-dconv/2.4/configuration.html#5.2-check" dir="ltr"&gt;can be configured&lt;/a&gt;
-with the keyword &lt;code dir="ltr"&gt;inter&lt;/code&gt; (interval between checks) and &lt;code dir="ltr"&gt;fail&lt;/code&gt; (number of failed
-tests, before server gets flagged unavailable).
-There’s also the &lt;code dir="ltr"&gt;fastinter&lt;/code&gt;
-and &lt;code dir="ltr"&gt;downinter&lt;/code&gt; keywords to set different intervals in transitioning phases.
-E.g. this would allow you to perform regular health checks every 10 seconds,
-but after the first failed health check you poll every 2 seconds until the
-server is considered down or up again.&lt;/p&gt;&lt;h3&gt;Auto Healing&lt;/h3&gt;&lt;p&gt;Now let’s add functionality similar to AWS auto scaling to this setup. This
-means we want to:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;remove unhealthy instances and start a new instance&lt;/LI&gt;&lt;LI&gt;add and remove instances depending on a metric value&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;We will use HAProxy, because it gives us access to the live health situation
-of instances. For this proof-of-contept we will continue to use Vagrant, in a
-production environment you would probably use whatever API your IaaS provider
-offers.&lt;/p&gt;&lt;p&gt;A script will periodically check the health stats from HAProxy. When it
-detects a failed instance, it will take down this instance and start a fresh
-one. For this proof-of-concept we will just re-start the failed Vagrant VM.
-Otherwise, we’d have to generate a new Vagrantfile and a new HAProxy
-configuration file with the updated IP address. Feel free to implement
-it yourself as an exercise.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/usr/bin/env bash&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;while &lt;/span&gt;&lt;span dir="ltr"&gt;true&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;do
-    &lt;/span&gt;&lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;"Checking health stats"&lt;/span&gt;
-    &lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;"show stat"&lt;/span&gt; | socat unix-connect:/run/haproxy.sock stdio | &lt;span dir="ltr"&gt;\&lt;/span&gt;
-        &lt;span dir="ltr"&gt;sed&lt;/span&gt; &lt;span dir="ltr"&gt;'1s/^# //; /^$/d'&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; haproxy_stats.csv
-
-    &lt;span dir="ltr"&gt;down_servers&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;sqlite3 haproxy_stats.sqlite &lt;span dir="ltr"&gt;&amp;lt;&amp;lt;&lt;/span&gt;&lt;span dir="ltr"&gt;SQL&lt;/span&gt;&lt;span dir="ltr"&gt;
-DROP TABLE IF EXISTS haproxy;
-.mode csv
-.import haproxy_stats.csv haproxy
-SELECT svname FROM haproxy WHERE type = 2 AND status = 'DOWN';
-&lt;/span&gt;&lt;span dir="ltr"&gt;SQL
-&lt;/span&gt;    &lt;span dir="ltr"&gt;)&lt;/span&gt;
-
-    &lt;span dir="ltr"&gt;for &lt;/span&gt;server &lt;span dir="ltr"&gt;in&lt;/span&gt; &lt;span dir="ltr"&gt;$down_servers&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;do&lt;/span&gt;
-        &lt;span dir="ltr"&gt;# Take down the unhealthy server&lt;/span&gt;
-        vagrant destroy &lt;span dir="ltr"&gt;-f&lt;/span&gt; &lt;span dir="ltr"&gt;$server&lt;/span&gt;
-
-        &lt;span dir="ltr"&gt;# Create a fresh server&lt;/span&gt;
-        &lt;span dir="ltr"&gt;# For PoC simply re-start the same VM&lt;/span&gt;
-        vagrant up &lt;span dir="ltr"&gt;$server&lt;/span&gt;
-    &lt;span dir="ltr"&gt;done
-
-    &lt;/span&gt;&lt;span dir="ltr"&gt;sleep &lt;/span&gt;10
-&lt;span dir="ltr"&gt;done&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;In this script we fetch the current stats from the unix socket. We remove the
-leading hash from the header line, delete empty lines
-and then import everything into SQLite. SQLite allows
-us to easily filter the rows for all rows that are of type &lt;em dir="ltr"&gt;server&lt;/em&gt;
-(&lt;a href="https://cbonte.github.io/haproxy-dconv/1.7/management.html#9.1" dir="ltr"&gt;type 2&lt;/a&gt;) and
-are in status down.&lt;/p&gt;&lt;p dir="ltr"&gt;We then iterate over these servers and take them down. For simplicity we do
-not define new VMs in the &lt;code dir="ltr"&gt;Vagrantfile&lt;/code&gt;, but instead just restart the same VM.&lt;/p&gt;&lt;h3&gt;Auto Scaling&lt;/h3&gt;&lt;p&gt;Extending this to scale servers up and down based on a metric is (in theory)
-quite easy. It seems a bit of work to me to do in a short shell script, so I will
-only describe the theory. It should be straightforward to implement with e.g.
-Python, though.&lt;/p&gt;&lt;p dir="ltr"&gt;Let’s say we have a metric file with the number of desired servers inside. This
-file will be periodically checked by a Python script, or it could even be
-monitored by something like &lt;code dir="ltr"&gt;inotify&lt;/code&gt;. The service will then compare the
-current number of active servers to the desired number of servers. There
-are three cases:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;desired and actual number of servers match: nothing has to be done&lt;/LI&gt;&lt;LI&gt;there are too many servers: remove a few servers&lt;/LI&gt;&lt;LI&gt;there are too few servers: start new servers and add them to load balancing&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;If there are too many servers, we will have to remove some of them from HAProxy. This
-means that the service will have to write a new HAProxy configuration file
-with a few servers set to &lt;code dir="ltr"&gt;disabled&lt;/code&gt; and then reload HAProxy. It should not
-shutdown the servers immediately, because there might still be active connections
-being processed. This corresponds to the AWS mode &lt;em dir="ltr"&gt;draining&lt;/em&gt; that we saw in
-the beginning.
-Our Python service then has to monitor the number of active connections on the
-server that it wants to shutdown. This can be retrieved from the HAProxy stats
-socket. Once all connections are closed, the server can be fully removed
-from the HAProxy configuration and can be shutdown.&lt;/p&gt;&lt;p dir="ltr"&gt;If more servers are required, the service has to boot new servers. Now there
-are two possible ways to continue. Since HAProxy already includes health monitoring of
-servers, the servers can be added to HAProxy immediately. Requests will only
-be routed to these servers once the server is up. If you choose this way make
-sure to select a reasonable health check method in HAProxy. The standard
-TCP health check might not work depending on your exact web application
-startup behaviour. You also want to
-make sure that these servers are not taken down again due to their
-unhealthy status (in AWS this is called &lt;em dir="ltr"&gt;grace period&lt;/em&gt; for new instances).&lt;/p&gt;&lt;p&gt;Alternatively, the Python service could boot the servers and
-monitor them on its own. Once the servers are ready, it can add them to
-the HAProxy configuration file and reload HAProxy.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p&gt;In this blog post we have seen that conceptually it is quite simple to
-create an auto scaling load balancer with open source software and thereby
-avoid vendor lock-in with a specific cloud hosting provider. If we use HAProxy
-for load balancing instead of relying on e.g. EC2 load balancers, we can
-take our application and host it on AWS, Azure, Hetzner or any other IaaS
-provider with a management API. If we don’t need
-auto scaling we could even use our own bare metal servers (technically you
-can of course also scale VMs on your own bare metal, but I don’t see much
-sense in it, since the servers are running nonetheless).&lt;/p&gt;</description><pubDate>Tue, 04 May 2021 15:15:18 -0500</pubDate></item></channel></rss>
+&lt;/p&gt;</description><pubDate>Mon, 03 May 2021 17:10:04 -0500</pubDate></item><item><title>Casio AI-1000 Pocket Lisp Computer from 1989</title><link>https://www.youtube.com/watch?v=H-yuZ2pejGU</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/kpkniq/casio_ai_1000_pocket_lisp_computer_from"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Tue, 04 May 2021 02:03:30 -0500</pubDate></item></channel></rss>
