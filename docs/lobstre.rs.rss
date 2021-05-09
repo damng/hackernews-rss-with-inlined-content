@@ -275,125 +275,7 @@ language, which is otherwise remarkably simple and beautiful.
 &lt;/p&gt;&lt;p dir="ltr"&gt;
   &lt;strong dir="ltr"&gt;see also&lt;/strong&gt;&lt;br dir="ltr"&gt;
 
-&lt;/p&gt;</description><pubDate>Sat, 08 May 2021 08:19:55 -0500</pubDate></item><item><title>Why make (and ymake)</title><link>https://lobste.rs/s/a25vff</link><description>&lt;div dir="ltr"&gt;
-&lt;em dir="ltr"&gt;07 May 2021&lt;/em&gt;
-&lt;/div&gt;&lt;p&gt;In recent years many new build systems have emerged to replace traditional make.  Although they all have different strengths and weaknesses, one common theme is improving execution performance of the build system.&lt;/p&gt;&lt;p&gt;Traditional multiprocessor make systems are generally efficient at scheduling tasks within a given Makefile.  Given a dependency graph, child processes can be executed when their dependencies are satisfied and processor cores are available.&lt;/p&gt;&lt;p&gt;Unfortunately, this breaks down where multiple Makefiles are used across different directories or modules.  The choice that a build system maintainer faces becomes:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Using per-directory Makefiles allows developers to compile individual directories in isolation, but doing so means a full build needs to drain out child processes at various points in the build, because the engine cannot recognize dependencies natively;&lt;/LI&gt;&lt;LI&gt;Using fewer Makefiles means more efficient full builds but more difficult isolated compilation, as the developer would need to change directories and specify the correct target to build.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;However, there's no reason that this choice is inevitable.  If the full build can construct a single global dependency graph, but each directory still contains a partial dependency graph, a directory build can operate as well as traditional make and a full build can operate as efficiently as a newer build system.  YMAKE attempted to build such a system, and do so without requiring any changes to per-directory Makefiles.&lt;/p&gt;&lt;p&gt;Specifying the global graph requires a new syntax to logically graft a child directory into the dependency graph.  The remainder of Makefile syntax does not need to change, and conditionals can be used to fall back to recursive navigation if a global dependency graph is not supported.  This means that the build system does not require developers to install new build tools to compile, so it still benefits from the ubiquity of make, but having YMAKE just makes the existing build system faster.&lt;/p&gt;&lt;PRE&gt;DIRS=dir_a \
-     dir_b
-
-!IFDEF _YMAKE_VER
-all[dirs target=all]: $(DIRS)
-!ELSE
-all:
-    for %%i in ($(DIRS)) do cd %%i &amp;amp;&amp;amp; make &amp;amp;&amp;amp; cd ..
-!ENDIF
-&lt;/PRE&gt;&lt;p&gt;Rules within Makefiles are unchanged.  A regular rule in a Makefile refers to a relative file path, both for targets or prerequisites.  Building a global graph can be done by calculating the full paths of objects relative to the Makefile referencing them, and building graphs against the full paths.&lt;/p&gt;&lt;p&gt;In addition to more efficient scheduling of jobs, this also means many fewer child processes.  A conventional recursive make-based build system needs to invoke different instances of make for each makefile; here those processes are avoided.  This is particularly significant on Windows where process creation is relatively expensive.&lt;/p&gt;&lt;table cols="3" border="1" dir="ltr"&gt;
-&lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Time in seconds, 4 core i5&lt;/th&gt;
-    &lt;th dir="ltr"&gt;NMAKE (5 child processes)&lt;/th&gt;
-    &lt;th dir="ltr"&gt;YMAKE (5 child processes)&lt;/th&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Full build (wall time)&lt;/th&gt;
-    &lt;td dir="ltr"&gt;14.58&lt;/td&gt;
-    &lt;td dir="ltr"&gt;9.55&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Full build (CPU time)&lt;/th&gt;
-    &lt;td dir="ltr"&gt;41.31&lt;/td&gt;
-    &lt;td dir="ltr"&gt;36.08&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Inferred CPU utilization&lt;/th&gt;
-    &lt;td dir="ltr"&gt;70.8%&lt;/td&gt;
-    &lt;td dir="ltr"&gt;94.4%&lt;/td&gt;
-&lt;/tr&gt;
-&lt;/tbody&gt;&lt;/table&gt;&lt;p&gt;NMAKE is not a natively multi-process build system, so these results used a seperate process to schedule up to 5 child directories to be compiled at once.  Unfortunately the consequence of this is single directory builds can only utilize a single child process.  YMAKE addresses this, but note that other make systems such as GNU make address it too.  Thus, single directory results are primarily illustrating the limitations of NMAKE rather than capabilities of YMAKE.  In addition, single directory builds are frequently too small for any build engine to keep all cores busy, due to having more processor cores than scheduleable tasks.  With those caveats, single directory times are presented for completeness:&lt;/p&gt;&lt;table cols="3" border="1" dir="ltr"&gt;
-&lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Time in seconds, 4 core i5&lt;/th&gt;
-    &lt;th dir="ltr"&gt;NMAKE (1 child process)&lt;/th&gt;
-    &lt;th dir="ltr"&gt;YMAKE (5 child processes)&lt;/th&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Single directory (wall time)&lt;/th&gt;
-    &lt;td dir="ltr"&gt;1.14&lt;/td&gt;
-    &lt;td dir="ltr"&gt;0.52&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Single directory (CPU time)&lt;/th&gt;
-    &lt;td dir="ltr"&gt;1.21&lt;/td&gt;
-    &lt;td dir="ltr"&gt;1.18&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Inferred CPU utilization&lt;/th&gt;
-    &lt;td dir="ltr"&gt;26.5%&lt;/td&gt;
-    &lt;td dir="ltr"&gt;54.8%&lt;/td&gt;
-&lt;/tr&gt;
-&lt;/tbody&gt;&lt;/table&gt;&lt;p&gt;Having a global graph with per directory Makefiles also simplies the task of rebuilding a directory when dependencies have changed.  Rather than needing to manually build different directories, a developer can build the targets in a single directory by evaluating the global graph and building any targets needed to build the requested directory.  This requires specifying the global makefile to build from and the target directory to build:&lt;/p&gt;&lt;PRE&gt;c:\src\github\yori\edit&amp;gt;ymake -f ..\Makefile .
-mod_edit.obj
-options.c
-about.c
-edit.c
-yedit.exe
-edit.c
-builtins.lib
-&lt;/PRE&gt;&lt;p&gt;Because the global graph takes more time to parse, this is slower than the single directory Makefile results above, but not prohibitively so:&lt;/p&gt;&lt;table cols="3" border="1" dir="ltr"&gt;
-&lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Time in seconds, 4 core i5&lt;/th&gt;
-    &lt;th dir="ltr"&gt;YMAKE (global graph)&lt;/th&gt;
-    &lt;th dir="ltr"&gt;YMAKE (single Makefile)&lt;/th&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Single directory (wall time)&lt;/th&gt;
-    &lt;td dir="ltr"&gt;0.70&lt;/td&gt;
-    &lt;td dir="ltr"&gt;0.52&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Single directory (CPU time)&lt;/th&gt;
-    &lt;td dir="ltr"&gt;1.37&lt;/td&gt;
-    &lt;td dir="ltr"&gt;1.18&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Inferred CPU utilization&lt;/th&gt;
-    &lt;td dir="ltr"&gt;48.9%&lt;/td&gt;
-    &lt;td dir="ltr"&gt;54.8%&lt;/td&gt;
-&lt;/tr&gt;
-&lt;/tbody&gt;&lt;/table&gt;&lt;p dir="ltr"&gt;The build system in Yori uses &lt;a href="http://www.malsmith.net/blog/autoconf-in-nmake/" dir="ltr"&gt;preprocessor child processes&lt;/a&gt; to determine the capabilties of the compiler version and tailor compilation options, similar to autoconf.  Unfortunately, this means that by default autoconf-style probes exist on each invokation of make.  In addition to build scheduling improvements, YMAKE allows these probes to be cached, so that repeated compilations do not need to check the environment.  This cache is built using a hash of the environment, so if the compilation environment changes, the cache will be ignored automatically.&lt;/p&gt;&lt;table cols="3" border="1" dir="ltr"&gt;
-&lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Time in seconds, 4 core i5&lt;/th&gt;
-    &lt;th dir="ltr"&gt;YMAKE (no cache)&lt;/th&gt;
-    &lt;th dir="ltr"&gt;YMAKE (cached probes)&lt;/th&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Single directory (local graph, wall time)&lt;/th&gt;
-    &lt;td dir="ltr"&gt;0.52&lt;/td&gt;
-    &lt;td dir="ltr"&gt;0.32&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Single directory (local graph, CPU time)&lt;/th&gt;
-    &lt;td dir="ltr"&gt;1.18&lt;/td&gt;
-    &lt;td dir="ltr"&gt;0.91&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Inferred CPU utilization&lt;/th&gt;
-    &lt;td dir="ltr"&gt;54.8%&lt;/td&gt;
-    &lt;td dir="ltr"&gt;72.0%&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Single directory (global graph, wall time)&lt;/th&gt;
-    &lt;td dir="ltr"&gt;0.70&lt;/td&gt;
-    &lt;td dir="ltr"&gt;0.39&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Single directory (global graph, CPU time)&lt;/th&gt;
-    &lt;td dir="ltr"&gt;1.37&lt;/td&gt;
-    &lt;td dir="ltr"&gt;1.00&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Inferred CPU utilization&lt;/th&gt;
-    &lt;td dir="ltr"&gt;48.9%&lt;/td&gt;
-    &lt;td dir="ltr"&gt;64.1%&lt;/td&gt;
-&lt;/tr&gt;
-&lt;/tbody&gt;&lt;/table&gt;</description><pubDate>Sat, 08 May 2021 18:02:10 -0500</pubDate></item><item><title>Oil Language: Variable Declaration, Mutation, and Scope</title><link>https://lobste.rs/s/s2trbn</link><description>&lt;h2&gt;Oil Design Goals&lt;/h2&gt;&lt;p&gt;The Oil language is a graceful upgrade to shell, and the behavior
+&lt;/p&gt;</description><pubDate>Sat, 08 May 2021 08:19:55 -0500</pubDate></item><item><title>Oil Language: Variable Declaration, Mutation, and Scope</title><link>https://lobste.rs/s/s2trbn</link><description>&lt;h2&gt;Oil Design Goals&lt;/h2&gt;&lt;p&gt;The Oil language is a graceful upgrade to shell, and the behavior
 of variables follows from that philosophy.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Oil implements shell-compatible behavior.&lt;/LI&gt;&lt;LI&gt;It enhances shell with &lt;strong dir="ltr"&gt;new features&lt;/strong&gt; like expressions over typed data, which
 will be familiar to Python and JavaScript programmers.&lt;/LI&gt;&lt;LI&gt;It's a &lt;strong dir="ltr"&gt;stricter&lt;/strong&gt; language.
 &lt;UL&gt;&lt;LI&gt;Procs (shell functions) are self-contained and modular.  In other words,
@@ -522,183 +404,7 @@ proc myproc {
                            &lt;span dir="ltr"&gt;# "out params" with setref.&lt;/span&gt;
 
 }
-&lt;/code&gt;&lt;/PRE&gt;</description><pubDate>Sat, 08 May 2021 17:48:58 -0500</pubDate></item><item><title>What I Learned by Relearning HTML</title><link>https://lobste.rs/s/mm0pya</link><description>&lt;div dir="ltr"&gt;&lt;time itemprop="datePublished" datetime="2021-05-07" dir="ltr"&gt;May 7, 2021&lt;/time&gt;&amp;nbsp;&amp;nbsp;·&amp;nbsp;&amp;nbsp;1,685 words&amp;nbsp;&amp;nbsp;·&amp;nbsp;&amp;nbsp;~8 minutes to read
-            
-        &lt;/div&gt;&lt;p&gt;I’ve worked on websites for several years, both professionally and for side
-projects. One day, I reflected on the fact that all of my web development
-education had come from actually making websites. In most cases, I’d have a
-specific problem, Google how to solve it, and learn something new in the
-process.&lt;/p&gt;&lt;p&gt;I wondered what I was missing by never learning HTML in a comprehensive way.
-Forget CSS and JavaScript. I’m just talking about raw HTML. It might seem
-silly to go back to such a basic aspect of web development after a decent
-amount of experience, but it’s easy to become overconfident with a skill just
-because you know enough to do a few useful things.&lt;/p&gt;&lt;p dir="ltr"&gt;So I decided to relearn HTML and discover my &lt;a href="https://en.wikipedia.org/wiki/There_are_known_knowns" dir="ltr"&gt;unknown
-unknowns&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;Experience&lt;/h2&gt;&lt;p dir="ltr"&gt;For context, I made my first website in middle school for a class project. We
-learned basic HTML, and embedding a MP3 song felt like magic. But I didn’t touch
-web development again until college. I made a lightweight news aggregator called
-&lt;a href="https://www.dailylore.com/" dir="ltr"&gt;The Daily Lore&lt;/a&gt; that’s still running (I preserved
-the &lt;a href="https://www.dailylore.com/legacy" dir="ltr"&gt;original version&lt;/a&gt;).&lt;/p&gt;&lt;p dir="ltr"&gt;Since then, I’ve worked on two websites professionally, one website for a
-&lt;a href="https://sublimefund.org/" dir="ltr"&gt;nonprofit&lt;/a&gt;, this personal website, and a few small
-websites for side projects, such as &lt;a href="https://www.makeareadme.com/" dir="ltr"&gt;Make a
-README&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;Introduction to HTML5&lt;/h2&gt;&lt;p dir="ltr"&gt;I don’t consider myself to be a web development expert based on just that
-experience, but I surely had far more knowledge than the typical student for
-&lt;a href="https://www.coursera.org/" dir="ltr"&gt;Coursera&lt;/a&gt;’s &lt;a href="https://www.coursera.org/learn/html" dir="ltr"&gt;Introduction to
-HTML5&lt;/a&gt; course. I started the course
-expecting to know a lot of the content already, since it was designed for
-complete beginners with no programming backgrounds.&lt;/p&gt;&lt;p&gt;As I went through the material, I did in fact know a lot of it already, but it
-was still a good refresher for two points in particular: the importance of using
-semantic elements and what to think about in terms of accessibility.&lt;/p&gt;&lt;p dir="ltr"&gt;I’ve always had a bad habit of using generic &lt;code dir="ltr"&gt;&amp;lt;div&amp;gt;&lt;/code&gt; elements to make what I
-need, rather than semantic elements that represent specific content, like the
-&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/header" dir="ltr"&gt;header&lt;/a&gt; and
-&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/footer" dir="ltr"&gt;footer&lt;/a&gt;
-elements.&lt;/p&gt;&lt;p dir="ltr"&gt;Accessibility was also something I had never considered in depth. I knew that
-images should have &lt;code dir="ltr"&gt;alt&lt;/code&gt; descriptions, and that was about it. One of the
-course’s key points is that using the appropriate semantic elements is important
-to making a site more accessible.&lt;/p&gt;&lt;p dir="ltr"&gt;For example, people who use screen readers can jump around using
-&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/Heading_Elements" dir="ltr"&gt;heading&lt;/a&gt;
-elements (&lt;code dir="ltr"&gt;&amp;lt;h1&amp;gt;&lt;/code&gt; through &lt;code dir="ltr"&gt;&amp;lt;h6&amp;gt;&lt;/code&gt;), so it’s important to use them and make sure
-they’re in the correct order. It’s wrong to use them only to make text bigger
-because their real purpose is to define the structure of the content. They’re
-like a table of contents.&lt;/p&gt;&lt;p dir="ltr"&gt;Instead of headings, we could use &lt;code dir="ltr"&gt;&amp;lt;p&amp;gt;&lt;/code&gt; elements and alter their font sizes with
-CSS to create a website that looks identical, but it’d be less semantic and less
-accessible. There is more to web development than making websites look the way
-we want. It’s important to make the content &lt;em dir="ltr"&gt;mean&lt;/em&gt; what we want as well.&lt;/p&gt;&lt;p&gt;Accessibility isn’t just about improving how websites work with screen readers.
-We should think about font size, font style, and color contrast for people who
-have visual impairments or color blindness. We should consider that people who
-have hearing loss may have a harder time recognizing that audio or video is
-playing. We should make tab navigation work well for people who rely primarily
-on the keyboard, perhaps because they have a difficult time using a mouse. When
-we add animations, we should take care to avoid ones that make it more difficult
-for someone to actually use the website, such as animations that change the page
-layout in the middle of interactions. And we should consider when a page is
-overloaded with too much information or too many elements, making it hard for
-people to understand things or how to actually use the website.&lt;/p&gt;&lt;p&gt;It’s easy to forget about accessibility, but we should strive to make websites
-work well for as many people as possible. Accessibility also goes hand in hand
-with usability and search engine optimization. The course points out that
-improving one frequently means improving all the others.&lt;/p&gt;&lt;h2&gt;Reading the Documentation&lt;/h2&gt;&lt;p dir="ltr"&gt;I have a &lt;a href="https://azeemba.com/" dir="ltr"&gt;friend&lt;/a&gt; who is probably the only person I know
-who has read the entire &lt;a href="https://operations.nfl.com/the-rules" dir="ltr"&gt;NFL rulebook&lt;/a&gt;
-(the 2020 version is 87 pages long). Watching football with him was fun because
-he was so good at understanding nuances to the game and weird situations. I
-figured there was a similar opportunity for me with HTML.&lt;/p&gt;&lt;p dir="ltr"&gt;The strict equivalent would have been to read the &lt;a href="https://html.spec.whatwg.org/" dir="ltr"&gt;HTML
-standard&lt;/a&gt; for every HTML element, but I decided
-to read the &lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element" dir="ltr"&gt;MDN
-documentation&lt;/a&gt; for
-every element instead since MDN has a lot of information about browser
-compatibility and using elements in practice. I read the entire page for each
-element, took notes, and made &lt;a href="https://apps.ankiweb.net/" dir="ltr"&gt;Anki&lt;/a&gt; cards for the
-bits that I wanted to commit to memory.&lt;/p&gt;&lt;p&gt;There were many deprecated elements that I only skimmed through, and I didn’t
-bother to take notes for those, but dozens of standardized elements and
-attributes were totally new to me.&lt;/p&gt;&lt;p dir="ltr"&gt;I didn’t intend to come out of this experience as a master of HTML, and I still
-have to apply what I’ve learned (including to this website), but I find it
-useful just to be aware of what is available. Even though I can’t recall all the
-details about using a
-&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/picture" dir="ltr"&gt;picture&lt;/a&gt;
-element, I know it exists now, and I can always look up the details later during
-implementation. It’s a categorical difference from not being aware of it at all
-and using a plain &lt;code dir="ltr"&gt;&amp;lt;img&amp;gt;&lt;/code&gt; for all cases because I don’t know any better.&lt;/p&gt;&lt;h2&gt;Observations&lt;/h2&gt;&lt;p&gt;As I read the documentation, some things were particularly interesting to me,
-and I had some observations.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/address" dir="ltr"&gt;address&lt;/a&gt;
-element is for contact information in general, not just physical mailing
-addresses.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/dfn" dir="ltr"&gt;definition&lt;/a&gt;
-element represents the term that is being defined, rather than the definition
-itself.&lt;/p&gt;&lt;p dir="ltr"&gt;There is a whole set of
-&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/ruby" dir="ltr"&gt;ruby&lt;/a&gt; elements
-that are primarily used to show the pronunciations of East Asian characters.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/track" dir="ltr"&gt;track&lt;/a&gt;
-element provides a standard way to embed timed text tracks for video and audio.
-I had never heard of the
-&lt;a href="https://developer.mozilla.org/en-US/docs/Web/API/WebVTT_API" dir="ltr"&gt;WebVTT&lt;/a&gt; (Web Video
-Text Tracks) format before.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/map" dir="ltr"&gt;map&lt;/a&gt; element
-seems like an anachronism, especially considering that it isn’t responsive.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/data" dir="ltr"&gt;data&lt;/a&gt;
-element provides a machine-readable translation for content. This seems likes it
-could help screen scraping, which some websites like &lt;a href="https://www.theverge.com/2019/9/10/20859399/linkedin-hiq-data-scraping-cfaa-lawsuit-ninth-circuit-ruling" dir="ltr"&gt;LinkedIn have been
-actively trying to
-prevent&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;There’s subtlety when it comes to correctly choosing to use
-&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/strong" dir="ltr"&gt;strong&lt;/a&gt;
-versus &lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/em" dir="ltr"&gt;em&lt;/a&gt; versus
-&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/i" dir="ltr"&gt;i&lt;/a&gt; versus
-&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/u" dir="ltr"&gt;u&lt;/a&gt; versus
-&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/b" dir="ltr"&gt;b&lt;/a&gt; versus
-&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/mark" dir="ltr"&gt;mark&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;There are a few elements that seem redundant. The
-&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/legend" dir="ltr"&gt;legend&lt;/a&gt;
-element represents a caption for a
-&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/fieldset" dir="ltr"&gt;fieldset&lt;/a&gt;
-element, the
-&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/caption" dir="ltr"&gt;caption&lt;/a&gt;
-element represents a caption for a
-&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/table" dir="ltr"&gt;table&lt;/a&gt;
-element, and the
-&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/figcaption" dir="ltr"&gt;figcaption&lt;/a&gt;
-element represents a caption for a
-&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/figure" dir="ltr"&gt;figure&lt;/a&gt;
-element. I don’t know why one element couldn’t do the job for all three, since
-the meaning could be derived from the parent element.&lt;/p&gt;&lt;h3&gt;The Future of HTML&lt;/h3&gt;&lt;p dir="ltr"&gt;As I read through the documentation, it kept making me consider the question of
-how HTML should evolve. Browsers keeps gaining more and more functionality, to
-the point that they are becoming more like operating systems.  There’s even an
-experimental &lt;a href="https://developer.mozilla.org/en-US/docs/Web/API/Web_Bluetooth_API" dir="ltr"&gt;API for connecting to Bluetooth
-devices&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Wikipedia is the perfect website for what HTML was originally designed for:
-mostly static documents that are connected through hyperlinks. But now we use
-the browser to deliver full on applications, like
-&lt;a href="https://www.figma.com/" dir="ltr"&gt;Figma&lt;/a&gt;, which is a design tool that &lt;a href="https://www.figma.com/blog/webassembly-cut-figmas-load-time-by-3x/" dir="ltr"&gt;effectively runs
-C++ code in the browser by compiling it to
-WebAssembly&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;HTML has added a few elements and attributes that make interactivity possible
-without JavaScript. For example, the
-&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/details" dir="ltr"&gt;details&lt;/a&gt;
-element creates a widget that can be toggled between open and closed states.&lt;/p&gt;&lt;p dir="ltr"&gt;But as your use case become more advanced, it quickly becomes difficult to rely
-solely on what HTML provides. For example,
-&lt;a href="https://getbootstrap.com/" dir="ltr"&gt;Bootstrap&lt;/a&gt;’s progress bar &lt;a href="https://getbootstrap.com/docs/5.0/components/progress/" dir="ltr"&gt;doesn’t
-use&lt;/a&gt; the HTML
-&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/progress" dir="ltr"&gt;progress&lt;/a&gt;
-element.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;We don’t use the HTML5  element, ensuring you can stack progress
-bars, animate them, and place text labels over them.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Another example is the
-&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/table" dir="ltr"&gt;table&lt;/a&gt;
-element. Pure HTML tables &lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/tr#advanced_styling" dir="ltr"&gt;can be pretty
-sophisticated&lt;/a&gt;
-in terms of displaying data, but there’s no built-in support for interactive
-functionality like sorting, filtering, and pagination.&lt;/p&gt;&lt;p dir="ltr"&gt;Browser support also becomes an issue when an element does become more advanced.
-The &lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input" dir="ltr"&gt;input&lt;/a&gt;
-element is one of the most complex elements because it supports so many
-combinations of input types and attributes. In theory, you could use it to
-easily collect a date and a time, using the &lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input/datetime-local" dir="ltr"&gt;datetime-local
-type&lt;/a&gt;.
-But not all browsers support it, and there is variation in how it works even
-among those that do.&lt;/p&gt;&lt;p dir="ltr"&gt;Some elements are also difficult to style, such as the
-&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/select" dir="ltr"&gt;select&lt;/a&gt;
-element. So website developers may want to rely on standard functionality
-instead of using a library or implementing a feature themselves, but then they
-have to worry about it not working well in certain browsers or stylistic
-inconsistency with the rest of the website.&lt;/p&gt;&lt;p dir="ltr"&gt;I’m eager to see if &lt;a href="https://developer.mozilla.org/en-US/docs/Web/Web_Components" dir="ltr"&gt;Web
-Components&lt;/a&gt; become
-more popular and provide a good solution to these problems. If they do, the
-situation could become similar to programming languages, where different
-languages take difference stances on the question of how much functionality
-should be included in the standard library (HTML) so that the community has a
-lesser or greater tendency to rely on third party libraries (Web Components).&lt;/p&gt;&lt;p dir="ltr"&gt;Web Components do seem to be picking up some momentum.
-&lt;a href="https://github.com/" dir="ltr"&gt;GitHub&lt;/a&gt; has &lt;a href="https://github.blog/2021-05-04-how-we-use-web-components-at-github/" dir="ltr"&gt;started to use
-them&lt;/a&gt;, and
-they publish their components to
-&lt;a href="https://www.webcomponents.org/" dir="ltr"&gt;WebComponents.org&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p&gt;It was easy to feel confident with HTML after doing web development for several
-years. Yet I found plenty of value in going back to learn it in a more rigorous
-manner. I learned about many improvements I can make to the websites I work on,
-and I have a better big picture view of HTML and how it might develop. While I
-still think learning by doing is highly effective, this experience has made me
-want to go back and relearn other things with a bottom up approach.&lt;/p&gt;</description><pubDate>Fri, 07 May 2021 13:59:52 -0500</pubDate></item><item><title>Undo your last git mistake with ugit</title><link>https://lobste.rs/s/64lthd</link><description>&lt;div dir="ltr"&gt;📅️ Last Updated: May  1, 2020&amp;nbsp;  
-    •&amp;nbsp;📅️ Published: April 30, 2021&amp;nbsp; • 🕣
-    &lt;span title="Estimated read time" dir="ltr"&gt;
-	
-	
-		1 min read
-	
-&lt;/span&gt;
-    
-  &lt;/div&gt;&lt;img alt="Undo your last git mistake with ugit" src="https://ik.imagekit.io/bhupesh/banners/Untitled__4___FERl1OiR.png" width="365" height="227"&gt;&lt;p dir="ltr"&gt;So I have been working on this little tool called &lt;a href="https://github.com/Bhupesh-V/ugit" dir="ltr"&gt;&lt;strong dir="ltr"&gt;ugit&lt;/strong&gt;&lt;/a&gt; (and was finally able to release a stable version), the goal is to make it easier for beginner to intermediate git users to undo their last (accidental) git command.
-Because we are not perfect and commit mistakes.&lt;/p&gt;&lt;p dir="ltr"&gt;“Oh wait I deleted the &lt;em dir="ltr"&gt;auth-jwt&lt;/em&gt; branch without merging!! fuck” &lt;br dir="ltr"&gt;
-&lt;em dir="ltr"&gt;Opens browser&lt;/em&gt;&lt;br dir="ltr"&gt;
-“How to restore deleted branch”&lt;br dir="ltr"&gt;
-&lt;em dir="ltr"&gt;Wastes 5 minutes reading the thread,&lt;/em&gt;&lt;br dir="ltr"&gt;
-&lt;em dir="ltr"&gt;Brain context switch, losses focus&lt;/em&gt;&lt;br dir="ltr"&gt;
-“Aarrgh, Git sucks”&lt;/p&gt;&lt;p&gt;Failure is a good way to learn something new but how many times are you going to mess up with git, if your ultimate goal is to deliver the new feature in your startup as fast as possible, huh?
-Git is great but it’s not really good with developer experience (DX).&lt;/p&gt;&lt;p dir="ltr"&gt;Yo bhupesh, I can just you know &lt;em dir="ltr"&gt;alias&lt;/em&gt; this command. Oh cool, good luck remembering that alias after 1 month when you fuck-up again.&lt;/p&gt;&lt;p dir="ltr"&gt;If you are in the gang of getting things done, adding &lt;strong dir="ltr"&gt;ugit&lt;/strong&gt; might be a good choice for you.&lt;/p&gt;&lt;p&gt;Ok enough talking.&lt;/p&gt;&lt;h2 dir="ltr"&gt;What is &lt;code dir="ltr"&gt;ugit&lt;/code&gt;?&lt;/h2&gt;&lt;p dir="ltr"&gt;It’s just a simple shell script with guided programmatic steps to undo your last git command, powered by &lt;a href="https://bhupesh-v.github.io/undo-your-last-git-mistake-with-ugit/" dir="ltr"&gt;FZF&lt;/a&gt; built for people who live and work with terminals every day.&lt;/p&gt;&lt;h2&gt;Guided Tutorials&lt;/h2&gt;&lt;p&gt;Below are some GIF demos of undoing some git operations, the list is long (around 17 scenarios) but I am only demonstrating some common ones.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Head over to &lt;a href="https://github.com/Bhupesh-V/ugit#installation" dir="ltr"&gt;installation instructions&lt;/a&gt; for ugit&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h3 dir="ltr"&gt;Undoing &lt;code dir="ltr"&gt;git add&lt;/code&gt;&lt;/h3&gt;&lt;video width="100%" controls=""&gt;&lt;source src="https://drive.google.com/uc?export=view&amp;amp;id=1YSHnAp2gDho-a-U7IhXcyo069JuoxMeP" type="video/mp4"&gt;&lt;/video&gt;&lt;h3 dir="ltr"&gt;Undoing &lt;code dir="ltr"&gt;git branch -D&lt;/code&gt; (Restore deleted branch)&lt;/h3&gt;&lt;video width="100%" controls=""&gt;&lt;source src="https://drive.google.com/uc?export=view&amp;amp;id=1JJ1j3A3SFWlUpusSzrhKZv7espkpcDrk" type="video/mp4"&gt;&lt;/video&gt;&lt;h2&gt;Undoing/Restoring file to previous version&lt;/h2&gt;&lt;video width="100%" controls=""&gt;&lt;source src="https://drive.google.com/uc?export=view&amp;amp;id=1BrUdWc9EbPtuUHZfNIyfLT0NSBu802RR" type="video/mp4"&gt;&lt;/video&gt;&lt;h3 dir="ltr"&gt;Undoing &lt;code dir="ltr"&gt;git merge&lt;/code&gt;&lt;/h3&gt;&lt;video width="100%" controls=""&gt;&lt;source src="https://drive.google.com/uc?export=view&amp;amp;id=1zZYGyI0DnvmZ2NYl6GdlpE-u1fdzo3T2" type="video/mp4"&gt;&lt;/video&gt;&lt;h2 dir="ltr"&gt;Story behind &lt;code dir="ltr"&gt;ugit&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;Part of credits go to &lt;a href="https://twitter.com/anthonypjshaw" dir="ltr"&gt;Anthony&lt;/a&gt; &amp;amp; &lt;a href="https://twitter.com/treyhunner" dir="ltr"&gt;Trey&lt;/a&gt; for the idea, I stumbled upon &lt;a href="https://twitter.com/anthonypjshaw/status/1377162020554874886?s=20" dir="ltr"&gt;their tweet&lt;/a&gt; while lurking on Twitter.
-So thanks!&lt;/p&gt;&lt;h2&gt;I don’t like your stupid script&lt;/h2&gt;&lt;img alt="sad dogo crying" height="120" src="https://ik.imagekit.io/bhupesh/blog_content_pics/sed-doggo_e7RD-mM7L.webp" width="120"&gt;&lt;p dir="ltr"&gt;Cool, I mean we are still friends right??
-Friends help friends avoid git mistakes, that’s why I wrote an accompanying text guide on &lt;a href="https://bhupesh.gitbook.io/notes/git/how-to-undo-anything-in-git" dir="ltr"&gt;How to undo anything in Git&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;Share it with your friends, co-workers. No hard feelings&lt;/p&gt;&lt;p&gt;Peace ✌️&lt;/p&gt;&lt;p dir="ltr"&gt;Update: Woke up to an email, that ugit was &lt;a href="https://changelog.com/news/ugit-helps-you-undo-your-last-git-command-with-grace-8X6L#discussion" dir="ltr"&gt;Featured on Changelog News&lt;/a&gt;, yay 🎉️&lt;/p&gt;</description><pubDate>Sat, 08 May 2021 10:00:34 -0500</pubDate></item><item><title>Measure and reduce keyboard input latency with QMK on the Kinesis Advantage</title><link>https://lobste.rs/s/33he46</link><description>&lt;div&gt;published 2021-05-08&lt;/div&gt;&lt;img src="https://michael.stapelberg.ch/Bilder/pen-square-solid.svg" width="18" height="20" alt="Edit Icon" title="Suggest a change to this article"&gt;&lt;img src="https://michael.stapelberg.ch/Bilder/twitter-brands.svg" width="18" height="18" alt="Twitter icon" title="Discuss this article on Twitter!"&gt;&lt;p&gt;Over the last few years, I worked on a few projects around keyboard input latency:&lt;/p&gt;&lt;p dir="ltr"&gt;In 2020, I introduced the &lt;a href="https://michael.stapelberg.ch/posts/2020-07-09-kint-kinesis-keyboard-controller/" dir="ltr"&gt;kinT keyboard
+&lt;/code&gt;&lt;/PRE&gt;</description><pubDate>Sat, 08 May 2021 17:48:58 -0500</pubDate></item><item><title>Measure and reduce keyboard input latency with QMK on the Kinesis Advantage</title><link>https://lobste.rs/s/33he46</link><description>&lt;div&gt;published 2021-05-08&lt;/div&gt;&lt;img src="https://michael.stapelberg.ch/Bilder/pen-square-solid.svg" width="18" height="20" alt="Edit Icon" title="Suggest a change to this article"&gt;&lt;img src="https://michael.stapelberg.ch/Bilder/twitter-brands.svg" width="18" height="18" alt="Twitter icon" title="Discuss this article on Twitter!"&gt;&lt;p&gt;Over the last few years, I worked on a few projects around keyboard input latency:&lt;/p&gt;&lt;p dir="ltr"&gt;In 2020, I introduced the &lt;a href="https://michael.stapelberg.ch/posts/2020-07-09-kint-kinesis-keyboard-controller/" dir="ltr"&gt;kinT keyboard
 controller&lt;/a&gt;, which works
 with a wide range of Teensy micro controllers, and both the old KB500 and the
 newer KB600 Kinesis Advantage models.&lt;/p&gt;&lt;p&gt;While the 2018 kinX controller had built-in latency measurement, I was starting
@@ -1151,9 +857,301 @@ print the cycle delta to the previous SOF callback, every second:&lt;/p&gt;&lt;P
   }
 }&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Using &lt;code dir="ltr"&gt;hid_listen&lt;/code&gt;, we expect to see ≈75000 cycles of delta, which
 corresponds to the 125μs microframe latency of USB 2.0 High Speed with
-&lt;code dir="ltr"&gt;bInterval=1&lt;/code&gt; in the USB device descriptor:&lt;/p&gt;&lt;p&gt;125μs * 1000 * 0.6 cycles/ns = 75000 cycles&lt;/p&gt;</description><pubDate>Sat, 08 May 2021 09:03:22 -0500</pubDate></item><item><title>3 Alternatives to Rubber Duck Debugging</title><link>https://lobste.rs/s/8jrozb</link><description>&lt;p dir="ltr"&gt;
-      &lt;time datetime="2019-05-09T00:00:00+00:00" itemprop="datePublished" dir="ltr"&gt;May 9, 2019
-      &lt;/time&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Known among programmers for being a method of analysing code, &lt;a href="https://en.wikipedia.org/wiki/Rubber_duck_debugging" dir="ltr"&gt;rubber duck debugging&lt;/a&gt; can also help you deal with a wide range of workplace difficulties in an effective and self-fulfilling way.&lt;/p&gt;&lt;p&gt;If you do not feel like getting involved in a conversation with a duck-shaped piece of rubber which acts as a silent interlocutor, then you probably want to give these alternatives a try.&lt;/p&gt;&lt;h3&gt;Alternative 1: The Email&lt;/h3&gt;&lt;p&gt;First alternative consists of preparing an email to be sent to colleagues. You start writing the following content in a clear and concise way:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Summary of the problem;&lt;/LI&gt;&lt;LI&gt;Difficulties being faced with some details;&lt;/LI&gt;&lt;LI&gt;Approaches already considered.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;You often come up with a solution by yourself during the writing process so no email needs to be sent.&lt;/p&gt;&lt;p&gt;If you finish writing the email and no solution comes to mind, that’s fine too; you’re going to raise a worth-noting issue by sending the email, so none of your time was wasted after all!&lt;/p&gt;&lt;h3&gt;Alternative 2: The List of Questions&lt;/h3&gt;&lt;p&gt;Similar to the above, you prepare a list of questions you need to ask someone. During the preparation, you often clarify your doubts all by yourself.&lt;/p&gt;&lt;h3&gt;Alternative 3: The Chatbot&lt;/h3&gt;&lt;p dir="ltr"&gt;Haven’t tried it yet, but I think talking to &lt;a href="https://massimo-nazaria.github.io/blog/2019/02/19/talk-about-your-problems-to-eliza.html" dir="ltr"&gt;ELIZA&lt;/a&gt; can also be a valid alternative.&lt;/p&gt;</description><pubDate>Sat, 08 May 2021 06:18:17 -0500</pubDate></item><item><title>Your ABI is Probably Wrong</title><link>https://lobste.rs/s/ltroon</link><description>&lt;div&gt;
+&lt;code dir="ltr"&gt;bInterval=1&lt;/code&gt; in the USB device descriptor:&lt;/p&gt;&lt;p&gt;125μs * 1000 * 0.6 cycles/ns = 75000 cycles&lt;/p&gt;</description><pubDate>Sat, 08 May 2021 09:03:22 -0500</pubDate></item><item><title>Why make (and ymake)</title><link>https://lobste.rs/s/a25vff</link><description>&lt;div dir="ltr"&gt;
+&lt;em dir="ltr"&gt;07 May 2021&lt;/em&gt;
+&lt;/div&gt;&lt;p&gt;In recent years many new build systems have emerged to replace traditional make.  Although they all have different strengths and weaknesses, one common theme is improving execution performance of the build system.&lt;/p&gt;&lt;p&gt;Traditional multiprocessor make systems are generally efficient at scheduling tasks within a given Makefile.  Given a dependency graph, child processes can be executed when their dependencies are satisfied and processor cores are available.&lt;/p&gt;&lt;p&gt;Unfortunately, this breaks down where multiple Makefiles are used across different directories or modules.  The choice that a build system maintainer faces becomes:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Using per-directory Makefiles allows developers to compile individual directories in isolation, but doing so means a full build needs to drain out child processes at various points in the build, because the engine cannot recognize dependencies natively;&lt;/LI&gt;&lt;LI&gt;Using fewer Makefiles means more efficient full builds but more difficult isolated compilation, as the developer would need to change directories and specify the correct target to build.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;However, there's no reason that this choice is inevitable.  If the full build can construct a single global dependency graph, but each directory still contains a partial dependency graph, a directory build can operate as well as traditional make and a full build can operate as efficiently as a newer build system.  YMAKE attempted to build such a system, and do so without requiring any changes to per-directory Makefiles.&lt;/p&gt;&lt;p&gt;Specifying the global graph requires a new syntax to logically graft a child directory into the dependency graph.  The remainder of Makefile syntax does not need to change, and conditionals can be used to fall back to recursive navigation if a global dependency graph is not supported.  This means that the build system does not require developers to install new build tools to compile, so it still benefits from the ubiquity of make, but having YMAKE just makes the existing build system faster.&lt;/p&gt;&lt;PRE&gt;DIRS=dir_a \
+     dir_b
+
+!IFDEF _YMAKE_VER
+all[dirs target=all]: $(DIRS)
+!ELSE
+all:
+    for %%i in ($(DIRS)) do cd %%i &amp;amp;&amp;amp; make &amp;amp;&amp;amp; cd ..
+!ENDIF
+&lt;/PRE&gt;&lt;p&gt;Rules within Makefiles are unchanged.  A regular rule in a Makefile refers to a relative file path, both for targets or prerequisites.  Building a global graph can be done by calculating the full paths of objects relative to the Makefile referencing them, and building graphs against the full paths.&lt;/p&gt;&lt;p&gt;In addition to more efficient scheduling of jobs, this also means many fewer child processes.  A conventional recursive make-based build system needs to invoke different instances of make for each makefile; here those processes are avoided.  This is particularly significant on Windows where process creation is relatively expensive.&lt;/p&gt;&lt;table cols="3" border="1" dir="ltr"&gt;
+&lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Time in seconds, 4 core i5&lt;/th&gt;
+    &lt;th dir="ltr"&gt;NMAKE (5 child processes)&lt;/th&gt;
+    &lt;th dir="ltr"&gt;YMAKE (5 child processes)&lt;/th&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Full build (wall time)&lt;/th&gt;
+    &lt;td dir="ltr"&gt;14.58&lt;/td&gt;
+    &lt;td dir="ltr"&gt;9.55&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Full build (CPU time)&lt;/th&gt;
+    &lt;td dir="ltr"&gt;41.31&lt;/td&gt;
+    &lt;td dir="ltr"&gt;36.08&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Inferred CPU utilization&lt;/th&gt;
+    &lt;td dir="ltr"&gt;70.8%&lt;/td&gt;
+    &lt;td dir="ltr"&gt;94.4%&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;&lt;/table&gt;&lt;p&gt;NMAKE is not a natively multi-process build system, so these results used a seperate process to schedule up to 5 child directories to be compiled at once.  Unfortunately the consequence of this is single directory builds can only utilize a single child process.  YMAKE addresses this, but note that other make systems such as GNU make address it too.  Thus, single directory results are primarily illustrating the limitations of NMAKE rather than capabilities of YMAKE.  In addition, single directory builds are frequently too small for any build engine to keep all cores busy, due to having more processor cores than scheduleable tasks.  With those caveats, single directory times are presented for completeness:&lt;/p&gt;&lt;table cols="3" border="1" dir="ltr"&gt;
+&lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Time in seconds, 4 core i5&lt;/th&gt;
+    &lt;th dir="ltr"&gt;NMAKE (1 child process)&lt;/th&gt;
+    &lt;th dir="ltr"&gt;YMAKE (5 child processes)&lt;/th&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Single directory (wall time)&lt;/th&gt;
+    &lt;td dir="ltr"&gt;1.14&lt;/td&gt;
+    &lt;td dir="ltr"&gt;0.52&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Single directory (CPU time)&lt;/th&gt;
+    &lt;td dir="ltr"&gt;1.21&lt;/td&gt;
+    &lt;td dir="ltr"&gt;1.18&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Inferred CPU utilization&lt;/th&gt;
+    &lt;td dir="ltr"&gt;26.5%&lt;/td&gt;
+    &lt;td dir="ltr"&gt;54.8%&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;&lt;/table&gt;&lt;p&gt;Having a global graph with per directory Makefiles also simplies the task of rebuilding a directory when dependencies have changed.  Rather than needing to manually build different directories, a developer can build the targets in a single directory by evaluating the global graph and building any targets needed to build the requested directory.  This requires specifying the global makefile to build from and the target directory to build:&lt;/p&gt;&lt;PRE&gt;c:\src\github\yori\edit&amp;gt;ymake -f ..\Makefile .
+mod_edit.obj
+options.c
+about.c
+edit.c
+yedit.exe
+edit.c
+builtins.lib
+&lt;/PRE&gt;&lt;p&gt;Because the global graph takes more time to parse, this is slower than the single directory Makefile results above, but not prohibitively so:&lt;/p&gt;&lt;table cols="3" border="1" dir="ltr"&gt;
+&lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Time in seconds, 4 core i5&lt;/th&gt;
+    &lt;th dir="ltr"&gt;YMAKE (global graph)&lt;/th&gt;
+    &lt;th dir="ltr"&gt;YMAKE (single Makefile)&lt;/th&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Single directory (wall time)&lt;/th&gt;
+    &lt;td dir="ltr"&gt;0.70&lt;/td&gt;
+    &lt;td dir="ltr"&gt;0.52&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Single directory (CPU time)&lt;/th&gt;
+    &lt;td dir="ltr"&gt;1.37&lt;/td&gt;
+    &lt;td dir="ltr"&gt;1.18&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Inferred CPU utilization&lt;/th&gt;
+    &lt;td dir="ltr"&gt;48.9%&lt;/td&gt;
+    &lt;td dir="ltr"&gt;54.8%&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;&lt;/table&gt;&lt;p dir="ltr"&gt;The build system in Yori uses &lt;a href="http://www.malsmith.net/blog/autoconf-in-nmake/" dir="ltr"&gt;preprocessor child processes&lt;/a&gt; to determine the capabilties of the compiler version and tailor compilation options, similar to autoconf.  Unfortunately, this means that by default autoconf-style probes exist on each invokation of make.  In addition to build scheduling improvements, YMAKE allows these probes to be cached, so that repeated compilations do not need to check the environment.  This cache is built using a hash of the environment, so if the compilation environment changes, the cache will be ignored automatically.&lt;/p&gt;&lt;table cols="3" border="1" dir="ltr"&gt;
+&lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Time in seconds, 4 core i5&lt;/th&gt;
+    &lt;th dir="ltr"&gt;YMAKE (no cache)&lt;/th&gt;
+    &lt;th dir="ltr"&gt;YMAKE (cached probes)&lt;/th&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Single directory (local graph, wall time)&lt;/th&gt;
+    &lt;td dir="ltr"&gt;0.52&lt;/td&gt;
+    &lt;td dir="ltr"&gt;0.32&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Single directory (local graph, CPU time)&lt;/th&gt;
+    &lt;td dir="ltr"&gt;1.18&lt;/td&gt;
+    &lt;td dir="ltr"&gt;0.91&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Inferred CPU utilization&lt;/th&gt;
+    &lt;td dir="ltr"&gt;54.8%&lt;/td&gt;
+    &lt;td dir="ltr"&gt;72.0%&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Single directory (global graph, wall time)&lt;/th&gt;
+    &lt;td dir="ltr"&gt;0.70&lt;/td&gt;
+    &lt;td dir="ltr"&gt;0.39&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Single directory (global graph, CPU time)&lt;/th&gt;
+    &lt;td dir="ltr"&gt;1.37&lt;/td&gt;
+    &lt;td dir="ltr"&gt;1.00&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Inferred CPU utilization&lt;/th&gt;
+    &lt;td dir="ltr"&gt;48.9%&lt;/td&gt;
+    &lt;td dir="ltr"&gt;64.1%&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;&lt;/table&gt;</description><pubDate>Sat, 08 May 2021 18:02:10 -0500</pubDate></item><item><title>What I Learned by Relearning HTML</title><link>https://lobste.rs/s/mm0pya</link><description>&lt;div dir="ltr"&gt;&lt;time itemprop="datePublished" datetime="2021-05-07" dir="ltr"&gt;May 7, 2021&lt;/time&gt;&amp;nbsp;&amp;nbsp;·&amp;nbsp;&amp;nbsp;1,685 words&amp;nbsp;&amp;nbsp;·&amp;nbsp;&amp;nbsp;~8 minutes to read
+            
+        &lt;/div&gt;&lt;p&gt;I’ve worked on websites for several years, both professionally and for side
+projects. One day, I reflected on the fact that all of my web development
+education had come from actually making websites. In most cases, I’d have a
+specific problem, Google how to solve it, and learn something new in the
+process.&lt;/p&gt;&lt;p&gt;I wondered what I was missing by never learning HTML in a comprehensive way.
+Forget CSS and JavaScript. I’m just talking about raw HTML. It might seem
+silly to go back to such a basic aspect of web development after a decent
+amount of experience, but it’s easy to become overconfident with a skill just
+because you know enough to do a few useful things.&lt;/p&gt;&lt;p dir="ltr"&gt;So I decided to relearn HTML and discover my &lt;a href="https://en.wikipedia.org/wiki/There_are_known_knowns" dir="ltr"&gt;unknown
+unknowns&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;Experience&lt;/h2&gt;&lt;p dir="ltr"&gt;For context, I made my first website in middle school for a class project. We
+learned basic HTML, and embedding a MP3 song felt like magic. But I didn’t touch
+web development again until college. I made a lightweight news aggregator called
+&lt;a href="https://www.dailylore.com/" dir="ltr"&gt;The Daily Lore&lt;/a&gt; that’s still running (I preserved
+the &lt;a href="https://www.dailylore.com/legacy" dir="ltr"&gt;original version&lt;/a&gt;).&lt;/p&gt;&lt;p dir="ltr"&gt;Since then, I’ve worked on two websites professionally, one website for a
+&lt;a href="https://sublimefund.org/" dir="ltr"&gt;nonprofit&lt;/a&gt;, this personal website, and a few small
+websites for side projects, such as &lt;a href="https://www.makeareadme.com/" dir="ltr"&gt;Make a
+README&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;Introduction to HTML5&lt;/h2&gt;&lt;p dir="ltr"&gt;I don’t consider myself to be a web development expert based on just that
+experience, but I surely had far more knowledge than the typical student for
+&lt;a href="https://www.coursera.org/" dir="ltr"&gt;Coursera&lt;/a&gt;’s &lt;a href="https://www.coursera.org/learn/html" dir="ltr"&gt;Introduction to
+HTML5&lt;/a&gt; course. I started the course
+expecting to know a lot of the content already, since it was designed for
+complete beginners with no programming backgrounds.&lt;/p&gt;&lt;p&gt;As I went through the material, I did in fact know a lot of it already, but it
+was still a good refresher for two points in particular: the importance of using
+semantic elements and what to think about in terms of accessibility.&lt;/p&gt;&lt;p dir="ltr"&gt;I’ve always had a bad habit of using generic &lt;code dir="ltr"&gt;&amp;lt;div&amp;gt;&lt;/code&gt; elements to make what I
+need, rather than semantic elements that represent specific content, like the
+&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/header" dir="ltr"&gt;header&lt;/a&gt; and
+&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/footer" dir="ltr"&gt;footer&lt;/a&gt;
+elements.&lt;/p&gt;&lt;p dir="ltr"&gt;Accessibility was also something I had never considered in depth. I knew that
+images should have &lt;code dir="ltr"&gt;alt&lt;/code&gt; descriptions, and that was about it. One of the
+course’s key points is that using the appropriate semantic elements is important
+to making a site more accessible.&lt;/p&gt;&lt;p dir="ltr"&gt;For example, people who use screen readers can jump around using
+&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/Heading_Elements" dir="ltr"&gt;heading&lt;/a&gt;
+elements (&lt;code dir="ltr"&gt;&amp;lt;h1&amp;gt;&lt;/code&gt; through &lt;code dir="ltr"&gt;&amp;lt;h6&amp;gt;&lt;/code&gt;), so it’s important to use them and make sure
+they’re in the correct order. It’s wrong to use them only to make text bigger
+because their real purpose is to define the structure of the content. They’re
+like a table of contents.&lt;/p&gt;&lt;p dir="ltr"&gt;Instead of headings, we could use &lt;code dir="ltr"&gt;&amp;lt;p&amp;gt;&lt;/code&gt; elements and alter their font sizes with
+CSS to create a website that looks identical, but it’d be less semantic and less
+accessible. There is more to web development than making websites look the way
+we want. It’s important to make the content &lt;em dir="ltr"&gt;mean&lt;/em&gt; what we want as well.&lt;/p&gt;&lt;p&gt;Accessibility isn’t just about improving how websites work with screen readers.
+We should think about font size, font style, and color contrast for people who
+have visual impairments or color blindness. We should consider that people who
+have hearing loss may have a harder time recognizing that audio or video is
+playing. We should make tab navigation work well for people who rely primarily
+on the keyboard, perhaps because they have a difficult time using a mouse. When
+we add animations, we should take care to avoid ones that make it more difficult
+for someone to actually use the website, such as animations that change the page
+layout in the middle of interactions. And we should consider when a page is
+overloaded with too much information or too many elements, making it hard for
+people to understand things or how to actually use the website.&lt;/p&gt;&lt;p&gt;It’s easy to forget about accessibility, but we should strive to make websites
+work well for as many people as possible. Accessibility also goes hand in hand
+with usability and search engine optimization. The course points out that
+improving one frequently means improving all the others.&lt;/p&gt;&lt;h2&gt;Reading the Documentation&lt;/h2&gt;&lt;p dir="ltr"&gt;I have a &lt;a href="https://azeemba.com/" dir="ltr"&gt;friend&lt;/a&gt; who is probably the only person I know
+who has read the entire &lt;a href="https://operations.nfl.com/the-rules" dir="ltr"&gt;NFL rulebook&lt;/a&gt;
+(the 2020 version is 87 pages long). Watching football with him was fun because
+he was so good at understanding nuances to the game and weird situations. I
+figured there was a similar opportunity for me with HTML.&lt;/p&gt;&lt;p dir="ltr"&gt;The strict equivalent would have been to read the &lt;a href="https://html.spec.whatwg.org/" dir="ltr"&gt;HTML
+standard&lt;/a&gt; for every HTML element, but I decided
+to read the &lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element" dir="ltr"&gt;MDN
+documentation&lt;/a&gt; for
+every element instead since MDN has a lot of information about browser
+compatibility and using elements in practice. I read the entire page for each
+element, took notes, and made &lt;a href="https://apps.ankiweb.net/" dir="ltr"&gt;Anki&lt;/a&gt; cards for the
+bits that I wanted to commit to memory.&lt;/p&gt;&lt;p&gt;There were many deprecated elements that I only skimmed through, and I didn’t
+bother to take notes for those, but dozens of standardized elements and
+attributes were totally new to me.&lt;/p&gt;&lt;p dir="ltr"&gt;I didn’t intend to come out of this experience as a master of HTML, and I still
+have to apply what I’ve learned (including to this website), but I find it
+useful just to be aware of what is available. Even though I can’t recall all the
+details about using a
+&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/picture" dir="ltr"&gt;picture&lt;/a&gt;
+element, I know it exists now, and I can always look up the details later during
+implementation. It’s a categorical difference from not being aware of it at all
+and using a plain &lt;code dir="ltr"&gt;&amp;lt;img&amp;gt;&lt;/code&gt; for all cases because I don’t know any better.&lt;/p&gt;&lt;h2&gt;Observations&lt;/h2&gt;&lt;p&gt;As I read the documentation, some things were particularly interesting to me,
+and I had some observations.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/address" dir="ltr"&gt;address&lt;/a&gt;
+element is for contact information in general, not just physical mailing
+addresses.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/dfn" dir="ltr"&gt;definition&lt;/a&gt;
+element represents the term that is being defined, rather than the definition
+itself.&lt;/p&gt;&lt;p dir="ltr"&gt;There is a whole set of
+&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/ruby" dir="ltr"&gt;ruby&lt;/a&gt; elements
+that are primarily used to show the pronunciations of East Asian characters.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/track" dir="ltr"&gt;track&lt;/a&gt;
+element provides a standard way to embed timed text tracks for video and audio.
+I had never heard of the
+&lt;a href="https://developer.mozilla.org/en-US/docs/Web/API/WebVTT_API" dir="ltr"&gt;WebVTT&lt;/a&gt; (Web Video
+Text Tracks) format before.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/map" dir="ltr"&gt;map&lt;/a&gt; element
+seems like an anachronism, especially considering that it isn’t responsive.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/data" dir="ltr"&gt;data&lt;/a&gt;
+element provides a machine-readable translation for content. This seems likes it
+could help screen scraping, which some websites like &lt;a href="https://www.theverge.com/2019/9/10/20859399/linkedin-hiq-data-scraping-cfaa-lawsuit-ninth-circuit-ruling" dir="ltr"&gt;LinkedIn have been
+actively trying to
+prevent&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;There’s subtlety when it comes to correctly choosing to use
+&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/strong" dir="ltr"&gt;strong&lt;/a&gt;
+versus &lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/em" dir="ltr"&gt;em&lt;/a&gt; versus
+&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/i" dir="ltr"&gt;i&lt;/a&gt; versus
+&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/u" dir="ltr"&gt;u&lt;/a&gt; versus
+&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/b" dir="ltr"&gt;b&lt;/a&gt; versus
+&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/mark" dir="ltr"&gt;mark&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;There are a few elements that seem redundant. The
+&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/legend" dir="ltr"&gt;legend&lt;/a&gt;
+element represents a caption for a
+&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/fieldset" dir="ltr"&gt;fieldset&lt;/a&gt;
+element, the
+&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/caption" dir="ltr"&gt;caption&lt;/a&gt;
+element represents a caption for a
+&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/table" dir="ltr"&gt;table&lt;/a&gt;
+element, and the
+&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/figcaption" dir="ltr"&gt;figcaption&lt;/a&gt;
+element represents a caption for a
+&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/figure" dir="ltr"&gt;figure&lt;/a&gt;
+element. I don’t know why one element couldn’t do the job for all three, since
+the meaning could be derived from the parent element.&lt;/p&gt;&lt;h3&gt;The Future of HTML&lt;/h3&gt;&lt;p dir="ltr"&gt;As I read through the documentation, it kept making me consider the question of
+how HTML should evolve. Browsers keeps gaining more and more functionality, to
+the point that they are becoming more like operating systems.  There’s even an
+experimental &lt;a href="https://developer.mozilla.org/en-US/docs/Web/API/Web_Bluetooth_API" dir="ltr"&gt;API for connecting to Bluetooth
+devices&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Wikipedia is the perfect website for what HTML was originally designed for:
+mostly static documents that are connected through hyperlinks. But now we use
+the browser to deliver full on applications, like
+&lt;a href="https://www.figma.com/" dir="ltr"&gt;Figma&lt;/a&gt;, which is a design tool that &lt;a href="https://www.figma.com/blog/webassembly-cut-figmas-load-time-by-3x/" dir="ltr"&gt;effectively runs
+C++ code in the browser by compiling it to
+WebAssembly&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;HTML has added a few elements and attributes that make interactivity possible
+without JavaScript. For example, the
+&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/details" dir="ltr"&gt;details&lt;/a&gt;
+element creates a widget that can be toggled between open and closed states.&lt;/p&gt;&lt;p dir="ltr"&gt;But as your use case become more advanced, it quickly becomes difficult to rely
+solely on what HTML provides. For example,
+&lt;a href="https://getbootstrap.com/" dir="ltr"&gt;Bootstrap&lt;/a&gt;’s progress bar &lt;a href="https://getbootstrap.com/docs/5.0/components/progress/" dir="ltr"&gt;doesn’t
+use&lt;/a&gt; the HTML
+&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/progress" dir="ltr"&gt;progress&lt;/a&gt;
+element.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;We don’t use the HTML5  element, ensuring you can stack progress
+bars, animate them, and place text labels over them.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Another example is the
+&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/table" dir="ltr"&gt;table&lt;/a&gt;
+element. Pure HTML tables &lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/tr#advanced_styling" dir="ltr"&gt;can be pretty
+sophisticated&lt;/a&gt;
+in terms of displaying data, but there’s no built-in support for interactive
+functionality like sorting, filtering, and pagination.&lt;/p&gt;&lt;p dir="ltr"&gt;Browser support also becomes an issue when an element does become more advanced.
+The &lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input" dir="ltr"&gt;input&lt;/a&gt;
+element is one of the most complex elements because it supports so many
+combinations of input types and attributes. In theory, you could use it to
+easily collect a date and a time, using the &lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input/datetime-local" dir="ltr"&gt;datetime-local
+type&lt;/a&gt;.
+But not all browsers support it, and there is variation in how it works even
+among those that do.&lt;/p&gt;&lt;p dir="ltr"&gt;Some elements are also difficult to style, such as the
+&lt;a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/select" dir="ltr"&gt;select&lt;/a&gt;
+element. So website developers may want to rely on standard functionality
+instead of using a library or implementing a feature themselves, but then they
+have to worry about it not working well in certain browsers or stylistic
+inconsistency with the rest of the website.&lt;/p&gt;&lt;p dir="ltr"&gt;I’m eager to see if &lt;a href="https://developer.mozilla.org/en-US/docs/Web/Web_Components" dir="ltr"&gt;Web
+Components&lt;/a&gt; become
+more popular and provide a good solution to these problems. If they do, the
+situation could become similar to programming languages, where different
+languages take difference stances on the question of how much functionality
+should be included in the standard library (HTML) so that the community has a
+lesser or greater tendency to rely on third party libraries (Web Components).&lt;/p&gt;&lt;p dir="ltr"&gt;Web Components do seem to be picking up some momentum.
+&lt;a href="https://github.com/" dir="ltr"&gt;GitHub&lt;/a&gt; has &lt;a href="https://github.blog/2021-05-04-how-we-use-web-components-at-github/" dir="ltr"&gt;started to use
+them&lt;/a&gt;, and
+they publish their components to
+&lt;a href="https://www.webcomponents.org/" dir="ltr"&gt;WebComponents.org&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p&gt;It was easy to feel confident with HTML after doing web development for several
+years. Yet I found plenty of value in going back to learn it in a more rigorous
+manner. I learned about many improvements I can make to the websites I work on,
+and I have a better big picture view of HTML and how it might develop. While I
+still think learning by doing is highly effective, this experience has made me
+want to go back and relearn other things with a bottom up approach.&lt;/p&gt;</description><pubDate>Fri, 07 May 2021 13:59:52 -0500</pubDate></item><item><title>Undo your last git mistake with ugit</title><link>https://lobste.rs/s/64lthd</link><description>&lt;div dir="ltr"&gt;📅️ Last Updated: May  1, 2020&amp;nbsp;  
+    •&amp;nbsp;📅️ Published: April 30, 2021&amp;nbsp; • 🕣
+    &lt;span title="Estimated read time" dir="ltr"&gt;
+	
+	
+		1 min read
+	
+&lt;/span&gt;
+    
+  &lt;/div&gt;&lt;img alt="Undo your last git mistake with ugit" src="https://ik.imagekit.io/bhupesh/banners/Untitled__4___FERl1OiR.png" width="365" height="227"&gt;&lt;p dir="ltr"&gt;So I have been working on this little tool called &lt;a href="https://github.com/Bhupesh-V/ugit" dir="ltr"&gt;&lt;strong dir="ltr"&gt;ugit&lt;/strong&gt;&lt;/a&gt; (and was finally able to release a stable version), the goal is to make it easier for beginner to intermediate git users to undo their last (accidental) git command.
+Because we are not perfect and commit mistakes.&lt;/p&gt;&lt;p dir="ltr"&gt;“Oh wait I deleted the &lt;em dir="ltr"&gt;auth-jwt&lt;/em&gt; branch without merging!! fuck” &lt;br dir="ltr"&gt;
+&lt;em dir="ltr"&gt;Opens browser&lt;/em&gt;&lt;br dir="ltr"&gt;
+“How to restore deleted branch”&lt;br dir="ltr"&gt;
+&lt;em dir="ltr"&gt;Wastes 5 minutes reading the thread,&lt;/em&gt;&lt;br dir="ltr"&gt;
+&lt;em dir="ltr"&gt;Brain context switch, losses focus&lt;/em&gt;&lt;br dir="ltr"&gt;
+“Aarrgh, Git sucks”&lt;/p&gt;&lt;p&gt;Failure is a good way to learn something new but how many times are you going to mess up with git, if your ultimate goal is to deliver the new feature in your startup as fast as possible, huh?
+Git is great but it’s not really good with developer experience (DX).&lt;/p&gt;&lt;p dir="ltr"&gt;Yo bhupesh, I can just you know &lt;em dir="ltr"&gt;alias&lt;/em&gt; this command. Oh cool, good luck remembering that alias after 1 month when you fuck-up again.&lt;/p&gt;&lt;p dir="ltr"&gt;If you are in the gang of getting things done, adding &lt;strong dir="ltr"&gt;ugit&lt;/strong&gt; might be a good choice for you.&lt;/p&gt;&lt;p&gt;Ok enough talking.&lt;/p&gt;&lt;h2 dir="ltr"&gt;What is &lt;code dir="ltr"&gt;ugit&lt;/code&gt;?&lt;/h2&gt;&lt;p dir="ltr"&gt;It’s just a simple shell script with guided programmatic steps to undo your last git command, powered by &lt;a href="https://bhupesh-v.github.io/undo-your-last-git-mistake-with-ugit/" dir="ltr"&gt;FZF&lt;/a&gt; built for people who live and work with terminals every day.&lt;/p&gt;&lt;h2&gt;Guided Tutorials&lt;/h2&gt;&lt;p&gt;Below are some GIF demos of undoing some git operations, the list is long (around 17 scenarios) but I am only demonstrating some common ones.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Head over to &lt;a href="https://github.com/Bhupesh-V/ugit#installation" dir="ltr"&gt;installation instructions&lt;/a&gt; for ugit&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h3 dir="ltr"&gt;Undoing &lt;code dir="ltr"&gt;git add&lt;/code&gt;&lt;/h3&gt;&lt;video width="100%" controls=""&gt;&lt;source src="https://drive.google.com/uc?export=view&amp;amp;id=1YSHnAp2gDho-a-U7IhXcyo069JuoxMeP" type="video/mp4"&gt;&lt;/video&gt;&lt;h3 dir="ltr"&gt;Undoing &lt;code dir="ltr"&gt;git branch -D&lt;/code&gt; (Restore deleted branch)&lt;/h3&gt;&lt;video width="100%" controls=""&gt;&lt;source src="https://drive.google.com/uc?export=view&amp;amp;id=1JJ1j3A3SFWlUpusSzrhKZv7espkpcDrk" type="video/mp4"&gt;&lt;/video&gt;&lt;h2&gt;Undoing/Restoring file to previous version&lt;/h2&gt;&lt;video width="100%" controls=""&gt;&lt;source src="https://drive.google.com/uc?export=view&amp;amp;id=1BrUdWc9EbPtuUHZfNIyfLT0NSBu802RR" type="video/mp4"&gt;&lt;/video&gt;&lt;h3 dir="ltr"&gt;Undoing &lt;code dir="ltr"&gt;git merge&lt;/code&gt;&lt;/h3&gt;&lt;video width="100%" controls=""&gt;&lt;source src="https://drive.google.com/uc?export=view&amp;amp;id=1zZYGyI0DnvmZ2NYl6GdlpE-u1fdzo3T2" type="video/mp4"&gt;&lt;/video&gt;&lt;h2 dir="ltr"&gt;Story behind &lt;code dir="ltr"&gt;ugit&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;Part of credits go to &lt;a href="https://twitter.com/anthonypjshaw" dir="ltr"&gt;Anthony&lt;/a&gt; &amp;amp; &lt;a href="https://twitter.com/treyhunner" dir="ltr"&gt;Trey&lt;/a&gt; for the idea, I stumbled upon &lt;a href="https://twitter.com/anthonypjshaw/status/1377162020554874886?s=20" dir="ltr"&gt;their tweet&lt;/a&gt; while lurking on Twitter.
+So thanks!&lt;/p&gt;&lt;h2&gt;I don’t like your stupid script&lt;/h2&gt;&lt;img alt="sad dogo crying" height="120" src="https://ik.imagekit.io/bhupesh/blog_content_pics/sed-doggo_e7RD-mM7L.webp" width="120"&gt;&lt;p dir="ltr"&gt;Cool, I mean we are still friends right??
+Friends help friends avoid git mistakes, that’s why I wrote an accompanying text guide on &lt;a href="https://bhupesh.gitbook.io/notes/git/how-to-undo-anything-in-git" dir="ltr"&gt;How to undo anything in Git&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;Share it with your friends, co-workers. No hard feelings&lt;/p&gt;&lt;p&gt;Peace ✌️&lt;/p&gt;&lt;p dir="ltr"&gt;Update: Woke up to an email, that ugit was &lt;a href="https://changelog.com/news/ugit-helps-you-undo-your-last-git-command-with-grace-8X6L#discussion" dir="ltr"&gt;Featured on Changelog News&lt;/a&gt;, yay 🎉️&lt;/p&gt;</description><pubDate>Sat, 08 May 2021 10:00:34 -0500</pubDate></item><item><title>Your ABI is Probably Wrong</title><link>https://lobste.rs/s/ltroon</link><description>&lt;div&gt;
 &lt;em dir="ltr"&gt;2021-05-07&lt;/em&gt;
 
 &lt;/div&gt;&lt;p&gt;
@@ -1228,7 +1226,9 @@ Take heed, future ABI-makers, lest the angel of neuralgia take you!
 
 &lt;/p&gt;&lt;p&gt;
 References:
-&lt;/p&gt;</description><pubDate>Fri, 07 May 2021 18:50:51 -0500</pubDate></item><item><title>Github Stale Bots: A False Economy</title><link>https://lobste.rs/s/jsuyr4</link><description>&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Stale Bot’s&lt;/em&gt; are a type of automated bot on Github, which locks issues which are “stale” (as in have no recent activity). This seems like a helpful tool at first, but in reality it’s terrible for all parties involved.&lt;/p&gt;&lt;h1&gt;Example: The Angular Repo&lt;/h1&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/angular/angular/issues" rel="noopener" dir="ltr"&gt;Angular has a popular repository&lt;/a&gt; on github which receives hundreds of issues every day. They use the stale bot to lock old issues, which have no activity in order to reduce the amount of issues in the repository. On the surface the Stale Bot is doing great work, reducing the number of active issues in the repo, but in reality it’s a bit insane.&lt;/p&gt;&lt;h2&gt;Maintainer’s perspective&lt;/h2&gt;&lt;p&gt;Issues are being automatically locked, new users can’t add to issue so they create a duplicate issue, or even worse, just don’t report that the issue still exists!&lt;/p&gt;&lt;h2&gt;User’s perspective&lt;/h2&gt;&lt;p dir="ltr"&gt;A user of Angular will &lt;em dir="ltr"&gt;Google&lt;/em&gt; the error text and will usually find the corresponding github issue. But more often than not, the issue is locked, by the heroic &lt;em dir="ltr"&gt;lock bot&lt;/em&gt;. So they have a few options, continue searching for another more recent (less SEO’d issue) OR either create another issue, effectively duplicating the bug.&lt;/p&gt;&lt;p&gt;If they decide to create a duplicate issue, it will often not be linked it to the original issue… Now there are 2 issues duplicating the same bug in the Angular repo, so what did “Stale Bot” achieve?&lt;/p&gt;&lt;p&gt;Well the stale bot has had the following effects on the repository:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Reduce the metric of &lt;em dir="ltr"&gt;Open Issues&lt;/em&gt; in github&lt;/LI&gt;&lt;LI&gt;Made duplicate issues far more likely&lt;/LI&gt;&lt;LI&gt;Increased friction of users reporting that the issue still exists&lt;/LI&gt;&lt;LI&gt;Ultimately decreased the quality of the software, as the issues don’t accurately reflect reality&lt;/LI&gt;&lt;/OL&gt;&lt;h1&gt;Devil’s Advocate&lt;/h1&gt;&lt;p&gt;For a moment, imagine that Stack Overflow did this. If there’s no interaction on a question, then the question should be locked… Well questions that don’t get consistent interaction are inevitably duplicated, or not updated with correct information, or people get frustrated and don’t ask the question again.&lt;/p&gt;&lt;h1&gt;Conclusion&lt;/h1&gt;&lt;p dir="ltr"&gt;The best repo’s in my opinion, don’t prevent users from contributing to older issues. This gives a much better user experience, as friction to contribute to issues is much lower. It also lets the maintainers ensure that old issues aren’t needlessly duplicated. Finally, the community feels like the maintainers actually care about their input, which doesn’t feel that way when an automated &lt;em dir="ltr"&gt;stale bot&lt;/em&gt; locks and closes your inactive issue without any input from a human…&lt;/p&gt;&lt;footer&gt;&lt;a data-url="https://blog.benwinding.com/github-stale-bots/" data-id="ckmoy9non000h9pon7vbv6ycr"&gt;Share&lt;/a&gt;&lt;/footer&gt;</description><pubDate>Fri, 07 May 2021 13:19:40 -0500</pubDate></item><item><title>Lessons On Writing JavaScript and React From ClojureScript</title><link>https://lobste.rs/s/xykyrd</link><description>&lt;h2 dir="ltr"&gt;Lessons On Writing JavaScript and React From ClojureScript &lt;/h2&gt;&lt;div&gt;5/2/2021&lt;/div&gt;&lt;p&gt;
+&lt;/p&gt;</description><pubDate>Fri, 07 May 2021 18:50:51 -0500</pubDate></item><item><title>3 Alternatives to Rubber Duck Debugging</title><link>https://lobste.rs/s/8jrozb</link><description>&lt;p dir="ltr"&gt;
+      &lt;time datetime="2019-05-09T00:00:00+00:00" itemprop="datePublished" dir="ltr"&gt;May 9, 2019
+      &lt;/time&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Known among programmers for being a method of analysing code, &lt;a href="https://en.wikipedia.org/wiki/Rubber_duck_debugging" dir="ltr"&gt;rubber duck debugging&lt;/a&gt; can also help you deal with a wide range of workplace difficulties in an effective and self-fulfilling way.&lt;/p&gt;&lt;p&gt;If you do not feel like getting involved in a conversation with a duck-shaped piece of rubber which acts as a silent interlocutor, then you probably want to give these alternatives a try.&lt;/p&gt;&lt;h3&gt;Alternative 1: The Email&lt;/h3&gt;&lt;p&gt;First alternative consists of preparing an email to be sent to colleagues. You start writing the following content in a clear and concise way:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Summary of the problem;&lt;/LI&gt;&lt;LI&gt;Difficulties being faced with some details;&lt;/LI&gt;&lt;LI&gt;Approaches already considered.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;You often come up with a solution by yourself during the writing process so no email needs to be sent.&lt;/p&gt;&lt;p&gt;If you finish writing the email and no solution comes to mind, that’s fine too; you’re going to raise a worth-noting issue by sending the email, so none of your time was wasted after all!&lt;/p&gt;&lt;h3&gt;Alternative 2: The List of Questions&lt;/h3&gt;&lt;p&gt;Similar to the above, you prepare a list of questions you need to ask someone. During the preparation, you often clarify your doubts all by yourself.&lt;/p&gt;&lt;h3&gt;Alternative 3: The Chatbot&lt;/h3&gt;&lt;p dir="ltr"&gt;Haven’t tried it yet, but I think talking to &lt;a href="https://massimo-nazaria.github.io/blog/2019/02/19/talk-about-your-problems-to-eliza.html" dir="ltr"&gt;ELIZA&lt;/a&gt; can also be a valid alternative.&lt;/p&gt;</description><pubDate>Sat, 08 May 2021 06:18:17 -0500</pubDate></item><item><title>Github Stale Bots: A False Economy</title><link>https://lobste.rs/s/jsuyr4</link><description>&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Stale Bot’s&lt;/em&gt; are a type of automated bot on Github, which locks issues which are “stale” (as in have no recent activity). This seems like a helpful tool at first, but in reality it’s terrible for all parties involved.&lt;/p&gt;&lt;h1&gt;Example: The Angular Repo&lt;/h1&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/angular/angular/issues" rel="noopener" dir="ltr"&gt;Angular has a popular repository&lt;/a&gt; on github which receives hundreds of issues every day. They use the stale bot to lock old issues, which have no activity in order to reduce the amount of issues in the repository. On the surface the Stale Bot is doing great work, reducing the number of active issues in the repo, but in reality it’s a bit insane.&lt;/p&gt;&lt;h2&gt;Maintainer’s perspective&lt;/h2&gt;&lt;p&gt;Issues are being automatically locked, new users can’t add to issue so they create a duplicate issue, or even worse, just don’t report that the issue still exists!&lt;/p&gt;&lt;h2&gt;User’s perspective&lt;/h2&gt;&lt;p dir="ltr"&gt;A user of Angular will &lt;em dir="ltr"&gt;Google&lt;/em&gt; the error text and will usually find the corresponding github issue. But more often than not, the issue is locked, by the heroic &lt;em dir="ltr"&gt;lock bot&lt;/em&gt;. So they have a few options, continue searching for another more recent (less SEO’d issue) OR either create another issue, effectively duplicating the bug.&lt;/p&gt;&lt;p&gt;If they decide to create a duplicate issue, it will often not be linked it to the original issue… Now there are 2 issues duplicating the same bug in the Angular repo, so what did “Stale Bot” achieve?&lt;/p&gt;&lt;p&gt;Well the stale bot has had the following effects on the repository:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Reduce the metric of &lt;em dir="ltr"&gt;Open Issues&lt;/em&gt; in github&lt;/LI&gt;&lt;LI&gt;Made duplicate issues far more likely&lt;/LI&gt;&lt;LI&gt;Increased friction of users reporting that the issue still exists&lt;/LI&gt;&lt;LI&gt;Ultimately decreased the quality of the software, as the issues don’t accurately reflect reality&lt;/LI&gt;&lt;/OL&gt;&lt;h1&gt;Devil’s Advocate&lt;/h1&gt;&lt;p&gt;For a moment, imagine that Stack Overflow did this. If there’s no interaction on a question, then the question should be locked… Well questions that don’t get consistent interaction are inevitably duplicated, or not updated with correct information, or people get frustrated and don’t ask the question again.&lt;/p&gt;&lt;h1&gt;Conclusion&lt;/h1&gt;&lt;p dir="ltr"&gt;The best repo’s in my opinion, don’t prevent users from contributing to older issues. This gives a much better user experience, as friction to contribute to issues is much lower. It also lets the maintainers ensure that old issues aren’t needlessly duplicated. Finally, the community feels like the maintainers actually care about their input, which doesn’t feel that way when an automated &lt;em dir="ltr"&gt;stale bot&lt;/em&gt; locks and closes your inactive issue without any input from a human…&lt;/p&gt;&lt;footer&gt;&lt;a data-url="https://blog.benwinding.com/github-stale-bots/" data-id="ckmoy9non000h9pon7vbv6ycr"&gt;Share&lt;/a&gt;&lt;/footer&gt;</description><pubDate>Fri, 07 May 2021 13:19:40 -0500</pubDate></item><item><title>Lessons On Writing JavaScript and React From ClojureScript</title><link>https://lobste.rs/s/xykyrd</link><description>&lt;h2 dir="ltr"&gt;Lessons On Writing JavaScript and React From ClojureScript &lt;/h2&gt;&lt;div&gt;5/2/2021&lt;/div&gt;&lt;p&gt;
 Recently, I started a new role as a Software Engineer at Reify Health. Unlike any other role that I have had, a 
 huge part of our product stack is written in Clojure and ClojureScript. Thankfully, I have spent my last few years 
 as a JS/TS dev working with React and as a result, have employed and appreciated a very functional style. 
@@ -11359,7 +11359,131 @@ To make the implementation efficient, we also create an index for this column.&l
 &lt;span dir="ltr"&gt;CREATE&lt;/span&gt; &lt;span dir="ltr"&gt;INDEX&lt;/span&gt; &lt;span dir="ltr"&gt;repositories_randomness&lt;/span&gt; &lt;span dir="ltr"&gt;on&lt;/span&gt; &lt;span dir="ltr"&gt;repositories&lt;/span&gt; &lt;span dir="ltr"&gt;using&lt;/span&gt; &lt;span dir="ltr"&gt;spgist&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;randomness&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;With the database now distributing all records uniformly in a two-dimensional space, the data can be queried.
 The query to find random values is now performed using the &lt;a href="https://en.wikipedia.org/wiki/K-nearest_neighbors_algorithm" dir="ltr"&gt;k-nearest neighbors (k-NN)&lt;/a&gt;  algorithm indicated by the &lt;code dir="ltr"&gt;&amp;lt;-&amp;gt;&lt;/code&gt; operator with reference to a random point in the created two-dimensional space.
 Though the following query does not include any further conditions to narrow the result set, it is possible to do so and will not change the random distribution like in the failed former approaches.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="sql" dir="ltr"&gt;&lt;span dir="ltr"&gt;SELECT&lt;/span&gt; &lt;span dir="ltr"&gt;*&lt;/span&gt; &lt;span dir="ltr"&gt;FROM&lt;/span&gt; &lt;span dir="ltr"&gt;repositories&lt;/span&gt; &lt;span dir="ltr"&gt;ORDER&lt;/span&gt; &lt;span dir="ltr"&gt;BY&lt;/span&gt; &lt;span dir="ltr"&gt;randomness&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;-&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;point&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;753&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;294&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;LIMIT&lt;/span&gt; &lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;h1&gt;Final Remarks&lt;/h1&gt;&lt;p&gt;This method is still fast with several million records and consistently takes less than 1 millisecond to execute.
-Database optimizations are very difficult sometimes, but there are solutions for event the most complex problems, you just have to get creative.&lt;/p&gt;</description><pubDate>Sat, 08 May 2021 03:34:58 -0500</pubDate></item><item><title>Analytics, Crashreports and Audacity</title><link>https://lobste.rs/s/kbfde4</link><description>&lt;p&gt;I want to talk about analytics and my view on Audacities incentive to add analytics in the next release.&lt;/p&gt;&lt;p&gt;Many people seem to be enraged by the sheer idea of adding analytics. And in some parts of the FOSS world analytics are a no-go, for example, F-Droid (FOSS android appstore) forbids any kind of tracking that isn't OPT-IN. As a user I can understand this, I also wouldn't want any tracking behind my back and by disallowing any of it without prior consent they prevent any corner cases or discussions. From a developer's point of view, I think it's creating some problems.&lt;/p&gt;&lt;p dir="ltr"&gt;I'm in the process of adding crash reporting (analytics) to my app on f-droid. In an opt-in style where you get a dialog on start asking about your preferences. The reason is simply that users won't report crashes, yes even on f-droid where you have to get at least the store itself onto your phone. So you could expect people to have more technical knowledge. My experience is that you might even know them personally and they will mention these only weeks later when you ask them specifically. Of course at this point there is no knowledge anymore of what happened and a crash report will always have more details about the exact circumstances. So yes, I'll add crash reporting. And you will get one of these annoying dialogs at startup that ask you &lt;del dir="ltr"&gt;whether you believe in the lord and savior jesus&lt;/del&gt; about your preferences and you probably click away mindless like all the other times.&lt;/p&gt;&lt;p dir="ltr"&gt;I also added an android API survey before that, because I can't decide whether or not I want to support some old API version when I don't know how many of my users might still use something from 8 years ago. I might run into &lt;a href="https://en.wikipedia.org/wiki/Survivorship_bias" dir="ltr"&gt;Survivorship bias&lt;/a&gt; but if people that want this supported click "no" on a dialog explaining why I want this data and don't say something, I might as well call them nonexisting.&lt;/p&gt;&lt;h2&gt;Just ask your users&lt;/h2&gt;&lt;p&gt;Somebody mentioned on lobsters (sadly the whole post got deleted) that you might just ask your userbase about their usage and needs, opening a discussion about the future of the project. My counterargument is that - looking at audacity - your typical user won't reply to such discussions. You will lose those people that just want to record some audio and edit it, which don't know anything about hardware or software. So if you want any usage data, you'll a) have to give them a dialog multiple times and b) ask them technical details they might not know. You will lose those people and only know about the power users that might already be reporting issues on their own. You should also make this discussion, but it's not enough when you create more than some dev tools.&lt;/p&gt;&lt;h2&gt;Dog feeding&lt;/h2&gt;&lt;p&gt;This also comes down to another point: Dog-feeding your own software won't work up until a certain point. I can't test all of the possible device configurations for my app and the audacity people probably don't have all the different audio setups/hardware their users have. So collecting usage data about this can help prioritize some features and detect common hardware that they might want to buy or test more thoroughly. Most importantly they want to detect crashes. This ultimately also makes it far easier to develop new features as you know that if something goes sideways you will know about it fast and detailed from your crash reports. I personally got word about issues in f-droid apps even half a year after they got patched because people simply didn't update. Without those analytics, it might as well be half a year until you even know about this problem.&lt;/p&gt;&lt;h2&gt;Developing for other people&lt;/h2&gt;&lt;p&gt;There is another interesting point here. I don't personally use all the software I write and I think for certain systems it might be for the greater good to still maintain or develop them even if you don't use them by yourself (and thus rely even more on your users data/reports). Maybe just to keep it running until somebody takes over or writes something better. I can certainly imagine that some of the people working for audacity are pretty good in what they do, but don't record any audio at all (or don't do so anymore) in their private time. So at this point the project and users need these people, but not vice versa. And I think many people will have scratched their personal itch far earlier than the point in time where their software took of in the OSS community. And the only options are to abandon the project or keep developing it unless somebody wants to take over. Even if you don't use it anymore, or not in the way that other people do. For example, I don't think that the developers of the static site generator for this blog do really need all of the features and options they added so it can be used by a wider audience. So they might even be dogfooding, but not every corner of the software. But I really appreciate that they still decided to build it with all the bells and whistles that are required to make it more than your pet project.&lt;/p&gt;&lt;p&gt;Last but not least the tracking is opt-in also for builds, so the typical linux user won't see this at all. It'll certainly only show for exactly the people that install audacity via their website which are probably the less technical users.&lt;/p&gt;&lt;h2&gt;Closing&lt;/h2&gt;&lt;p&gt;Yes, I also don't like that the audacity folks seem to adopt google/yandex for analytics. I don't know whether they don't want to or cannot maintain their own instance of tools like sentry. Also, why would you trust them more with collecting your IP than google? Whether trading UUID-based tracking with IP collection to identify one-off users was a good idea is another topic. But I really do appreciate the work they do and if opt-in, (basically) non-linux analytics makes their life easier I have no right to complain.&lt;/p&gt;&lt;p&gt;It's still much more trustworthy than the analytics opt-in I got shown by the grammarly browser plugin while checking this blog post. Which wants my login and logout usage, basically tracking when I have my browser open and which can scrape every website.&lt;/p&gt;&lt;img src="https://blog.proctet.net/analytics-audacity/analytics_screenshot_20210507.png" alt="Image of analytics agreement for tracking login times" title="Tracking Antipattern" width="437" height="114"&gt;&lt;div&gt; 7 May 2021&lt;/div&gt;</description><pubDate>Fri, 07 May 2021 17:49:31 -0500</pubDate></item><item><title>Intersection-free Rigid Body Dynamics</title><link>https://lobste.rs/s/cbsu5s</link><description>&lt;div&gt;Abstract&lt;/div&gt;&lt;p&gt;
+Database optimizations are very difficult sometimes, but there are solutions for event the most complex problems, you just have to get creative.&lt;/p&gt;</description><pubDate>Sat, 08 May 2021 03:34:58 -0500</pubDate></item><item><title>Using virtualization: QEMU and NVMM</title><link>https://lobste.rs/s/omixcw</link><description>&lt;p&gt;&lt;b&gt;Table of Contents&lt;/b&gt;&lt;/p&gt;&lt;p&gt;A virtual machine is a virtual computer (the "guest") running inside
+another computer (the "host"). Virtual machines are useful for testing,
+running different operating systems, isolating parts of a system, and
+more.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/nvmm.4" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;nvmm&lt;/span&gt;(4)&lt;/span&gt;&lt;/a&gt; (NetBSD Virtual Machine Monitor) is NetBSD's native
+hypervisor.
+In regular usage, it's used as an "accelerator" for the QEMU
+virtual machine software. It will make virtual machines on your
+NetBSD host run faster by taking advantage of CPU virtualization
+extensions.
+Currently, a CPU that supports AMD SVM or Intel VMX is required, but
+more backends for other architectures may be added in the future.
+QEMU can also be used without an accelerator, with significantly reduced
+performance.&lt;/p&gt;&lt;p dir="ltr"&gt;Other hypervisors supported by NetBSD include
+&lt;a href="https://github.com/intel/haxm" dir="ltr"&gt;Intel HAXM&lt;/a&gt;
+(also used with QEMU), and
+&lt;a href="https://wiki.netbsd.org/ports/xen/howto/" dir="ltr"&gt;Xen&lt;/a&gt;,
+which has quite a different design.&lt;/p&gt;&lt;p dir="ltr"&gt;When running modern operating systems as VM guests,
+you will generally want to use para-virtualized I/O, rather than having
+QEMU emulate real hardware devices.
+On NetBSD, this is supported with the &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/virtio.4" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;virtio&lt;/span&gt;(4)&lt;/span&gt;&lt;/a&gt; drivers.&lt;/p&gt;&lt;h2 dir="ltr"&gt;
+14.1.&amp;nbsp;Enabling the NetBSD Virtual Machine Monitor&lt;/h2&gt;&lt;p dir="ltr"&gt;The NetBSD Virtual Machine Monitor isn't active by default.
+It must be activated by loading the &lt;code dir="ltr"&gt;nvmm&lt;/code&gt; module with
+&lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/modload.8" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;modload&lt;/span&gt;(8)&lt;/span&gt;&lt;/a&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;#&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;modload nvmm&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Verify NVMM is loaded with &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/modstat.8" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;modstat&lt;/span&gt;(8)&lt;/span&gt;&lt;/a&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;#&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;modstat | grep nvmm&lt;/code&gt;&lt;/strong&gt;
+nvmm                       misc     filesys  -        0       - -&lt;/PRE&gt;&lt;p dir="ltr"&gt;You can load the module automatically at boot time by adding this
+line to &lt;code dir="ltr"&gt;/etc/modules.conf&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;nvmm&lt;/PRE&gt;&lt;p dir="ltr"&gt;Loading NVMM at boot time will also allow the system to run with a
+&lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/secmodel_securelevel.9" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;secmodel_securelevel&lt;/span&gt;(9)&lt;/span&gt;&lt;/a&gt; of 1, which prevents loading modules
+after boot.
+However, since NVMM blocks things like suspend, you may wish
+to unload it:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;#&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;modunload nvmm&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;By default the &lt;code dir="ltr"&gt;/dev/nvmm&lt;/code&gt; device is owned by the
+&lt;code dir="ltr"&gt;root&lt;/code&gt; user.
+You probably want to run virtual machines as a non-root user
+for security reasons, so set the owner of the &lt;code dir="ltr"&gt;/dev/nvmm&lt;/code&gt;
+device to something reasonable:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;#&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;chown nia:wheel /dev/nvmm&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;On a machine containing lots of untrusted VMs, you may wish
+to create a dedicated user or group for them with &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/useradd.8" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;useradd&lt;/span&gt;(8)&lt;/span&gt;&lt;/a&gt;
+and &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/groupadd.8" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;groupadd&lt;/span&gt;(8)&lt;/span&gt;&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;You can see NVMM's current status with &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/nvmmctl.8" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;nvmmctl&lt;/span&gt;(8)&lt;/span&gt;&lt;/a&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;$&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;nvmmctl identify&lt;/code&gt;&lt;/strong&gt;
+nvmm: Kernel API version 2
+nvmm: State size 1008
+nvmm: Max machines 128
+nvmm: Max VCPUs per machine 256
+nvmm: Max RAM per machine 128G
+nvmm: Arch Mach conf 0
+nvmm: Arch VCPU conf 0x3&amp;lt;CPUID,TPR&amp;gt;
+nvmm: Guest FPU states 0x3&amp;lt;x87,SSE&amp;gt;&lt;/PRE&gt;&lt;h2 dir="ltr"&gt;
+14.2.&amp;nbsp;Using QEMU with NVMM&lt;/h2&gt;&lt;p dir="ltr"&gt;QEMU is a CPU emulator and virtual machine that can use
+NVMM as an accelerator. It isn't included with NetBSD by default.
+However, it is available in pkgsrc
+as &lt;a href="https://cdn.netbsd.org/pub/pkgsrc/current/pkgsrc/emulators/qemu/index.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;emulators/qemu&lt;/code&gt;&lt;/a&gt;, and can be
+installed with &lt;span dir="ltr"&gt;&lt;strong dir="ltr"&gt;pkgin&lt;/strong&gt;&lt;/span&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;#&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;pkgin install qemu&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;h3 dir="ltr"&gt;
+14.2.1.&amp;nbsp;Starting QEMU with acceleration&lt;/h3&gt;&lt;p&gt;This command starts a VM in an X11 window with NVMM acceleration,
+the same CPU type as the host machine, two CPU cores,
+and one gigabyte of memory:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;$&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;qemu-system-x86_64 -accel nvmm
+        -cpu max -smp cpus=2 -m 1G \
+        -display sdl,gl=on -vga vmware \
+        -cdrom NetBSD-9.1-amd64.iso&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p&gt;The guest system will be much slower without acceleration
+as every CPU instruction will have to be emulated.&lt;/p&gt;&lt;p dir="ltr"&gt;You should also be able to see the virtual machine running
+with &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/nvmmctl.8" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;nvmmctl&lt;/span&gt;(8)&lt;/span&gt;&lt;/a&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;$&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;nvmmctl list&lt;/code&gt;&lt;/strong&gt;
+Machine ID VCPUs RAM  Owner PID Creation Time
+---------- ----- ---- --------- ------------------------
+0          2     147M 10982     Sat May  8 10:09:59 2021&lt;/PRE&gt;&lt;h3 dir="ltr"&gt;
+14.2.2.&amp;nbsp;Creating a virtual disk&lt;/h3&gt;&lt;p dir="ltr"&gt;Generally, you will want to create a virtual drive to contain your
+virtual machine on the host. We’ll want to create a
+&lt;code dir="ltr"&gt;qcow2&lt;/code&gt; image
+because it provides better performance and is more versatile than a
+raw image:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;$&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;qemu-img create -f qcow2 netbsd.qcow2 16G&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;A VirtIO block device provides the best performance.
+Add the following arguments to &lt;code dir="ltr"&gt;qemu-system-x86_64&lt;/code&gt;
+to use it:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-drive file=netbsd.qcow2,if=none,id=hd0 \
+-device virtio-blk-pci,drive=hd0&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p&gt;Older operating systems may not have VirtIO drivers, in which
+case you can use a normal emulated disk:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-hda netbsd.qcow2&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;h3 dir="ltr"&gt;
+14.2.3.&amp;nbsp;Adding entropy to the guest&lt;/h3&gt;&lt;p&gt;Operating systems require a good source of randomness for system
+security, cryptography, and so on. In a VM, this is ideally
+provided by the host machine, which has greater access to the
+underlying hardware. You can easily attach a VirtIO random number
+generator device with the following arguments to QEMU:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-object rng-random,filename=/dev/urandom,id=viornd0 \
+-device virtio-rng-pci,rng=viornd0&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p&gt;This requires no extra configuration on the host machine.&lt;/p&gt;&lt;p dir="ltr"&gt;Entropy is generally required for secure communications.
+For more information on entropy, refer to &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/entropy.7" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;entropy&lt;/span&gt;(7)&lt;/span&gt;&lt;/a&gt;.&lt;/p&gt;&lt;h3 dir="ltr"&gt;
+14.2.4.&amp;nbsp;Using networking&lt;/h3&gt;&lt;p dir="ltr"&gt;The simplest way to set up networking with QEMU is so-called
+"user networking". This will mean raw socket operations like
+&lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/ping.8" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;ping&lt;/span&gt;(8)&lt;/span&gt;&lt;/a&gt; won’t work, but normal TCP/IP protocols
+like HTTP/FTP/etc will work. Another way is with bridged
+networking, see
+&lt;a href="https://netbsd.org/docs/guide/en/chap-virt.html#chap-virt-net-bridge" title="14.3.&amp;nbsp;Configuring bridged networking on a NetBSD host" dir="ltr"&gt;Section&amp;nbsp;14.3, “Configuring bridged networking on a NetBSD host”&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;The most performant device type is
+&lt;code dir="ltr"&gt;virtio-net-pci&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-netdev user,id=vioif0 -device virtio-net-pci,netdev=vioif0&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p&gt;To use older guest operating systems that don’t support VirtIO,
+Intel Gigabit Ethernet is a good choice:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-netdev user,id=wm0 -device e1000,netdev=wm0&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p&gt;Or an AMD PCnet card, for very old guest operating systems:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-netdev user,id=pcn0 -device pcnet,netdev=pcn0&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;h3 dir="ltr"&gt;
+14.2.5.&amp;nbsp;Using audio&lt;/h3&gt;&lt;p&gt;On a NetBSD host, the following QEMU arguments may be used
+to enable audio:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-audiodev oss,id=oss,out.dev=/dev/audio,in.dev=/dev/audio \
+-device ac97,audiodev=oss&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;ac97&lt;/code&gt; is the classic standardized sound driver
+for x86 systems.&lt;/p&gt;&lt;p dir="ltr"&gt;You may wish to change the &lt;code dir="ltr"&gt;/dev/audioX&lt;/code&gt;
+device being used, see
+&lt;a href="https://netbsd.org/docs/guide/en/chap-audio.html" title="Chapter&amp;nbsp;10.&amp;nbsp;Audio" dir="ltr"&gt;Chapter&amp;nbsp;10, &lt;i dir="ltr"&gt;Audio&lt;/i&gt;&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;You may need to adjust things further to get smooth playback,
+see &lt;a href="https://netbsd.org/docs/guide/en/chap-virt.html#chap-virt-guest-audio" title="14.4.3.&amp;nbsp;Smooth audio playback and latency in VMs" dir="ltr"&gt;Section&amp;nbsp;14.4.3, “Smooth audio playback and latency in VMs”&lt;/a&gt;.&lt;/p&gt;&lt;h3 dir="ltr"&gt;
+14.2.6.&amp;nbsp;Using graphics (or no graphics)&lt;/h3&gt;&lt;p&gt;These arguments will create an X11 window with OpenGL enabled
+(for smooth scaling if the window is resized), using a VMware-compatible
+VGA device, and an emulated USB tablet:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-display sdl,gl=on -vga vmware \
+-usb -device usb-tablet,bus=usb-bus.0&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;There is a VMware video driver included with X11 on NetBSD, so
+the display will automatically configure when &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/startx.1" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;startx&lt;/span&gt;(1)&lt;/span&gt;&lt;/a&gt;
+runs and can be adjusted with &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/xrandr.1" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;xrandr&lt;/span&gt;(1)&lt;/span&gt;&lt;/a&gt;.
+An emulated USB tablet will provide a better mouse experience
+in QEMU because it provides exact window co-ordinates to the VM.
+However, some older operating systems might not support a USB tablet,
+in which case the &lt;code dir="ltr"&gt;usb-tablet&lt;/code&gt; line should be
+omitted.&lt;/p&gt;&lt;p dir="ltr"&gt;A VNC display will allow remote access from a VNC client like
+&lt;a href="https://cdn.netbsd.org/pub/pkgsrc/current/pkgsrc/net/tigervnc/index.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;net/tigervnc&lt;/code&gt;&lt;/a&gt;, useful when running QEMU
+with &lt;code dir="ltr"&gt;--daemonize&lt;/code&gt; on a server:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-display vnc=unix:/home/nia/.qemu-myvm-vnc -vga vmware&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;A simpler option is a &lt;code dir="ltr"&gt;curses&lt;/code&gt; display,
+preferable for systems that don’t
+need more than text output in a terminal:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-display curses&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;For more information on configuring X11, see
+&lt;a href="https://netbsd.org/docs/guide/en/chap-x.html" title="Chapter&amp;nbsp;9.&amp;nbsp;X" dir="ltr"&gt;Chapter&amp;nbsp;9, &lt;i dir="ltr"&gt;X&lt;/i&gt;&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;For more information on securely configuring VNC, see
+&lt;a href="https://qemu.readthedocs.io/en/latest/system/vnc-security.html" dir="ltr"&gt;QEMU’s online documentation on VNC&lt;/a&gt;.&lt;/p&gt;&lt;h2 dir="ltr"&gt;
+14.3.&amp;nbsp;Configuring bridged networking on a NetBSD host&lt;/h2&gt;&lt;p dir="ltr"&gt;While QEMU user networking is easy to use and doesn't require root
+privileges, it's generally slower than bridged networking using a &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/tap.4" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;tap&lt;/span&gt;(4)&lt;/span&gt;&lt;/a&gt;
+device, and doesn't allow the use of diagnostic tools like &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/ping.8" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;ping&lt;/span&gt;(8)&lt;/span&gt;&lt;/a&gt;
+inside the guest.&lt;/p&gt;&lt;p dir="ltr"&gt;To configure bridged networking on a NetBSD host, you must first
+make note of your host machine’s primary network interace.
+Find the one with an address assigned and a route to the outside
+world with &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/ifconfig.8" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;ifconfig&lt;/span&gt;(8)&lt;/span&gt;&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;In this example, the host machine’s primary interface is
+&lt;code dir="ltr"&gt;wm0&lt;/code&gt;. All of these commands run on the host machine.&lt;/p&gt;&lt;p dir="ltr"&gt;Create a virtual &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/tap.4" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;tap&lt;/span&gt;(4)&lt;/span&gt;&lt;/a&gt; interface:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;#&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;ifconfig tap0 create&lt;/code&gt;&lt;/strong&gt;
+&lt;code dir="ltr"&gt;#&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;ifconfig tap0 descr "NetBSD VM" up&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Create a &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/bridge.4" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;bridge&lt;/span&gt;(4)&lt;/span&gt;&lt;/a&gt; connecting the actual interface
+and the virtual interface:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;#&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;ifconfig bridge0 create&lt;/code&gt;&lt;/strong&gt;
+&lt;code dir="ltr"&gt;#&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;ifconfig bridge0 descr "LAN VM bridge" up&lt;/code&gt;&lt;/strong&gt;
+&lt;code dir="ltr"&gt;#&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;brconfig bridge0 add tap0 add wm0&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Configure NetBSD to do this all at boot time by editing
+&lt;code dir="ltr"&gt;/etc/ifconfig.tap0&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;create
+descr "NetBSD VM" up
+! ifconfig bridge0 create
+! ifconfig bridge0 descr "LAN VM bridge" up
+! brconfig bridge0 add tap0 add wm0&lt;/PRE&gt;&lt;p&gt;You can now pass the arguments to QEMU to run with
+bridged networking:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-netdev tap,id=tap0,ifname=tap0,script=no -device virtio-net-pci,netdev=tap0&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;</description><pubDate>Sat, 08 May 2021 07:49:25 -0500</pubDate></item><item><title>Analytics, Crashreports and Audacity</title><link>https://lobste.rs/s/kbfde4</link><description>&lt;p&gt;I want to talk about analytics and my view on Audacities incentive to add analytics in the next release.&lt;/p&gt;&lt;p&gt;Many people seem to be enraged by the sheer idea of adding analytics. And in some parts of the FOSS world analytics are a no-go, for example, F-Droid (FOSS android appstore) forbids any kind of tracking that isn't OPT-IN. As a user I can understand this, I also wouldn't want any tracking behind my back and by disallowing any of it without prior consent they prevent any corner cases or discussions. From a developer's point of view, I think it's creating some problems.&lt;/p&gt;&lt;p dir="ltr"&gt;I'm in the process of adding crash reporting (analytics) to my app on f-droid. In an opt-in style where you get a dialog on start asking about your preferences. The reason is simply that users won't report crashes, yes even on f-droid where you have to get at least the store itself onto your phone. So you could expect people to have more technical knowledge. My experience is that you might even know them personally and they will mention these only weeks later when you ask them specifically. Of course at this point there is no knowledge anymore of what happened and a crash report will always have more details about the exact circumstances. So yes, I'll add crash reporting. And you will get one of these annoying dialogs at startup that ask you &lt;del dir="ltr"&gt;whether you believe in the lord and savior jesus&lt;/del&gt; about your preferences and you probably click away mindless like all the other times.&lt;/p&gt;&lt;p dir="ltr"&gt;I also added an android API survey before that, because I can't decide whether or not I want to support some old API version when I don't know how many of my users might still use something from 8 years ago. I might run into &lt;a href="https://en.wikipedia.org/wiki/Survivorship_bias" dir="ltr"&gt;Survivorship bias&lt;/a&gt; but if people that want this supported click "no" on a dialog explaining why I want this data and don't say something, I might as well call them nonexisting.&lt;/p&gt;&lt;h2&gt;Just ask your users&lt;/h2&gt;&lt;p&gt;Somebody mentioned on lobsters (sadly the whole post got deleted) that you might just ask your userbase about their usage and needs, opening a discussion about the future of the project. My counterargument is that - looking at audacity - your typical user won't reply to such discussions. You will lose those people that just want to record some audio and edit it, which don't know anything about hardware or software. So if you want any usage data, you'll a) have to give them a dialog multiple times and b) ask them technical details they might not know. You will lose those people and only know about the power users that might already be reporting issues on their own. You should also make this discussion, but it's not enough when you create more than some dev tools.&lt;/p&gt;&lt;h2&gt;Dog feeding&lt;/h2&gt;&lt;p&gt;This also comes down to another point: Dog-feeding your own software won't work up until a certain point. I can't test all of the possible device configurations for my app and the audacity people probably don't have all the different audio setups/hardware their users have. So collecting usage data about this can help prioritize some features and detect common hardware that they might want to buy or test more thoroughly. Most importantly they want to detect crashes. This ultimately also makes it far easier to develop new features as you know that if something goes sideways you will know about it fast and detailed from your crash reports. I personally got word about issues in f-droid apps even half a year after they got patched because people simply didn't update. Without those analytics, it might as well be half a year until you even know about this problem.&lt;/p&gt;&lt;h2&gt;Developing for other people&lt;/h2&gt;&lt;p&gt;There is another interesting point here. I don't personally use all the software I write and I think for certain systems it might be for the greater good to still maintain or develop them even if you don't use them by yourself (and thus rely even more on your users data/reports). Maybe just to keep it running until somebody takes over or writes something better. I can certainly imagine that some of the people working for audacity are pretty good in what they do, but don't record any audio at all (or don't do so anymore) in their private time. So at this point the project and users need these people, but not vice versa. And I think many people will have scratched their personal itch far earlier than the point in time where their software took of in the OSS community. And the only options are to abandon the project or keep developing it unless somebody wants to take over. Even if you don't use it anymore, or not in the way that other people do. For example, I don't think that the developers of the static site generator for this blog do really need all of the features and options they added so it can be used by a wider audience. So they might even be dogfooding, but not every corner of the software. But I really appreciate that they still decided to build it with all the bells and whistles that are required to make it more than your pet project.&lt;/p&gt;&lt;p&gt;Last but not least the tracking is opt-in also for builds, so the typical linux user won't see this at all. It'll certainly only show for exactly the people that install audacity via their website which are probably the less technical users.&lt;/p&gt;&lt;h2&gt;Closing&lt;/h2&gt;&lt;p&gt;Yes, I also don't like that the audacity folks seem to adopt google/yandex for analytics. I don't know whether they don't want to or cannot maintain their own instance of tools like sentry. Also, why would you trust them more with collecting your IP than google? Whether trading UUID-based tracking with IP collection to identify one-off users was a good idea is another topic. But I really do appreciate the work they do and if opt-in, (basically) non-linux analytics makes their life easier I have no right to complain.&lt;/p&gt;&lt;p&gt;It's still much more trustworthy than the analytics opt-in I got shown by the grammarly browser plugin while checking this blog post. Which wants my login and logout usage, basically tracking when I have my browser open and which can scrape every website.&lt;/p&gt;&lt;img src="https://blog.proctet.net/analytics-audacity/analytics_screenshot_20210507.png" alt="Image of analytics agreement for tracking login times" title="Tracking Antipattern" width="437" height="114"&gt;&lt;div&gt; 7 May 2021&lt;/div&gt;</description><pubDate>Fri, 07 May 2021 17:49:31 -0500</pubDate></item><item><title>Intersection-free Rigid Body Dynamics</title><link>https://lobste.rs/s/cbsu5s</link><description>&lt;div&gt;Abstract&lt;/div&gt;&lt;p&gt;
                     We introduce the first implicit time-stepping algorithm for rigid body dynamics, with contact and
                     friction, that guarantees intersection-free configurations at every time step.
                 &lt;/p&gt;&lt;p&gt;
@@ -12651,128 +12775,4 @@ and more featureful tools written in Rust&lt;/LI&gt;&lt;LI&gt;use of Rust to imp
 commands&lt;/LI&gt;&lt;/UL&gt;&lt;OL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Update project documentation to make a clear statement about platform support&lt;/strong&gt; &lt;em dir="ltr"&gt;(immediate)&lt;/em&gt;
 &lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Replace GCC 4.4.4 shadow with a GCC version greater than 7&lt;/strong&gt; &lt;em dir="ltr"&gt;(coming months)&lt;/em&gt;
 &lt;UL&gt;&lt;LI&gt;Coordinate with folks doing warning cleanup for newer GCC builds&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Delete the SPARC code from the tree&lt;/strong&gt; &lt;em dir="ltr"&gt;(coming months)&lt;/em&gt;
-&lt;UL&gt;&lt;LI&gt;Care must be taken not to break anything, but one benefit of dropping the platform is cleaning up a &lt;em dir="ltr"&gt;lot&lt;/em&gt; of code that is mostly not relevant anymore so we should likely do this deliberately and not just clean up occasional files "as we go"&lt;/LI&gt;&lt;LI&gt;Even though there will be just one architecture after the removal, any machinery that exists to support multiple architectures must be kept to enable future porting work (e.g., ARM or RISC-V)&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Fri, 07 May 2021 09:32:39 -0500</pubDate></item><item><title>Using virtualization: QEMU and NVMM</title><link>https://lobste.rs/s/omixcw</link><description>&lt;p&gt;&lt;b&gt;Table of Contents&lt;/b&gt;&lt;/p&gt;&lt;p&gt;A virtual machine is a virtual computer (the "guest") running inside
-another computer (the "host"). Virtual machines are useful for testing,
-running different operating systems, isolating parts of a system, and
-more.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/nvmm.4" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;nvmm&lt;/span&gt;(4)&lt;/span&gt;&lt;/a&gt; (NetBSD Virtual Machine Monitor) is NetBSD's native
-hypervisor.
-In regular usage, it's used as an "accelerator" for the QEMU
-virtual machine software. It will make virtual machines on your
-NetBSD host run faster by taking advantage of CPU virtualization
-extensions.
-Currently, a CPU that supports AMD SVM or Intel VMX is required, but
-more backends for other architectures may be added in the future.
-QEMU can also be used without an accelerator, with significantly reduced
-performance.&lt;/p&gt;&lt;p dir="ltr"&gt;Other hypervisors supported by NetBSD include
-&lt;a href="https://github.com/intel/haxm" dir="ltr"&gt;Intel HAXM&lt;/a&gt;
-(also used with QEMU), and
-&lt;a href="https://wiki.netbsd.org/ports/xen/howto/" dir="ltr"&gt;Xen&lt;/a&gt;,
-which has quite a different design.&lt;/p&gt;&lt;p dir="ltr"&gt;When running modern operating systems as VM guests,
-you will generally want to use para-virtualized I/O, rather than having
-QEMU emulate real hardware devices.
-On NetBSD, this is supported with the &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/virtio.4" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;virtio&lt;/span&gt;(4)&lt;/span&gt;&lt;/a&gt; drivers.&lt;/p&gt;&lt;h2 dir="ltr"&gt;
-14.1.&amp;nbsp;Enabling the NetBSD Virtual Machine Monitor&lt;/h2&gt;&lt;p dir="ltr"&gt;The NetBSD Virtual Machine Monitor isn't active by default.
-It must be activated by loading the &lt;code dir="ltr"&gt;nvmm&lt;/code&gt; module with
-&lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/modload.8" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;modload&lt;/span&gt;(8)&lt;/span&gt;&lt;/a&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;#&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;modload nvmm&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Verify NVMM is loaded with &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/modstat.8" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;modstat&lt;/span&gt;(8)&lt;/span&gt;&lt;/a&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;#&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;modstat | grep nvmm&lt;/code&gt;&lt;/strong&gt;
-nvmm                       misc     filesys  -        0       - -&lt;/PRE&gt;&lt;p dir="ltr"&gt;You can load the module automatically at boot time by adding this
-line to &lt;code dir="ltr"&gt;/etc/modules.conf&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;nvmm&lt;/PRE&gt;&lt;p dir="ltr"&gt;Loading NVMM at boot time will also allow the system to run with a
-&lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/secmodel_securelevel.9" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;secmodel_securelevel&lt;/span&gt;(9)&lt;/span&gt;&lt;/a&gt; of 1, which prevents loading modules
-after boot.
-However, since NVMM blocks things like suspend, you may wish
-to unload it:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;#&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;modunload nvmm&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;By default the &lt;code dir="ltr"&gt;/dev/nvmm&lt;/code&gt; device is owned by the
-&lt;code dir="ltr"&gt;root&lt;/code&gt; user.
-You probably want to run virtual machines as a non-root user
-for security reasons, so set the owner of the &lt;code dir="ltr"&gt;/dev/nvmm&lt;/code&gt;
-device to something reasonable:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;#&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;chown nia:wheel /dev/nvmm&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;On a machine containing lots of untrusted VMs, you may wish
-to create a dedicated user or group for them with &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/useradd.8" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;useradd&lt;/span&gt;(8)&lt;/span&gt;&lt;/a&gt;
-and &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/groupadd.8" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;groupadd&lt;/span&gt;(8)&lt;/span&gt;&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;You can see NVMM's current status with &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/nvmmctl.8" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;nvmmctl&lt;/span&gt;(8)&lt;/span&gt;&lt;/a&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;$&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;nvmmctl identify&lt;/code&gt;&lt;/strong&gt;
-nvmm: Kernel API version 2
-nvmm: State size 1008
-nvmm: Max machines 128
-nvmm: Max VCPUs per machine 256
-nvmm: Max RAM per machine 128G
-nvmm: Arch Mach conf 0
-nvmm: Arch VCPU conf 0x3&amp;lt;CPUID,TPR&amp;gt;
-nvmm: Guest FPU states 0x3&amp;lt;x87,SSE&amp;gt;&lt;/PRE&gt;&lt;h2 dir="ltr"&gt;
-14.2.&amp;nbsp;Using QEMU with NVMM&lt;/h2&gt;&lt;p dir="ltr"&gt;QEMU is a CPU emulator and virtual machine that can use
-NVMM as an accelerator. It isn't included with NetBSD by default.
-However, it is available in pkgsrc
-as &lt;a href="https://cdn.netbsd.org/pub/pkgsrc/current/pkgsrc/emulators/qemu/index.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;emulators/qemu&lt;/code&gt;&lt;/a&gt;, and can be
-installed with &lt;span dir="ltr"&gt;&lt;strong dir="ltr"&gt;pkgin&lt;/strong&gt;&lt;/span&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;#&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;pkgin install qemu&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;h3 dir="ltr"&gt;
-14.2.1.&amp;nbsp;Starting QEMU with acceleration&lt;/h3&gt;&lt;p&gt;This command starts a VM in an X11 window with NVMM acceleration,
-the same CPU type as the host machine, two CPU cores,
-and one gigabyte of memory:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;$&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;qemu-system-x86_64 -accel nvmm
-        -cpu max -smp cpus=2 -m 1G \
-        -display sdl,gl=on -vga vmware \
-        -cdrom NetBSD-9.1-amd64.iso&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p&gt;The guest system will be much slower without acceleration
-as every CPU instruction will have to be emulated.&lt;/p&gt;&lt;p dir="ltr"&gt;You should also be able to see the virtual machine running
-with &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/nvmmctl.8" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;nvmmctl&lt;/span&gt;(8)&lt;/span&gt;&lt;/a&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;$&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;nvmmctl list&lt;/code&gt;&lt;/strong&gt;
-Machine ID VCPUs RAM  Owner PID Creation Time
----------- ----- ---- --------- ------------------------
-0          2     147M 10982     Sat May  8 10:09:59 2021&lt;/PRE&gt;&lt;h3 dir="ltr"&gt;
-14.2.2.&amp;nbsp;Creating a virtual disk&lt;/h3&gt;&lt;p dir="ltr"&gt;Generally, you will want to create a virtual drive to contain your
-virtual machine on the host. We’ll want to create a
-&lt;code dir="ltr"&gt;qcow2&lt;/code&gt; image
-because it provides better performance and is more versatile than a
-raw image:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;$&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;qemu-img create -f qcow2 netbsd.qcow2 16G&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;A VirtIO block device provides the best performance.
-Add the following arguments to &lt;code dir="ltr"&gt;qemu-system-x86_64&lt;/code&gt;
-to use it:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-drive file=netbsd.qcow2,if=none,id=hd0 \
--device virtio-blk-pci,drive=hd0&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p&gt;Older operating systems may not have VirtIO drivers, in which
-case you can use a normal emulated disk:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-hda netbsd.qcow2&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;h3 dir="ltr"&gt;
-14.2.3.&amp;nbsp;Adding entropy to the guest&lt;/h3&gt;&lt;p&gt;Operating systems require a good source of randomness for system
-security, cryptography, and so on. In a VM, this is ideally
-provided by the host machine, which has greater access to the
-underlying hardware. You can easily attach a VirtIO random number
-generator device with the following arguments to QEMU:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-object rng-random,filename=/dev/urandom,id=viornd0 \
--device virtio-rng-pci,rng=viornd0&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p&gt;This requires no extra configuration on the host machine.&lt;/p&gt;&lt;p dir="ltr"&gt;Entropy is generally required for secure communications.
-For more information on entropy, refer to &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/entropy.7" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;entropy&lt;/span&gt;(7)&lt;/span&gt;&lt;/a&gt;.&lt;/p&gt;&lt;h3 dir="ltr"&gt;
-14.2.4.&amp;nbsp;Using networking&lt;/h3&gt;&lt;p dir="ltr"&gt;The simplest way to set up networking with QEMU is so-called
-"user networking". This will mean raw socket operations like
-&lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/ping.8" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;ping&lt;/span&gt;(8)&lt;/span&gt;&lt;/a&gt; won’t work, but normal TCP/IP protocols
-like HTTP/FTP/etc will work. Another way is with bridged
-networking, see
-&lt;a href="https://netbsd.org/docs/guide/en/chap-virt.html#chap-virt-net-bridge" title="14.3.&amp;nbsp;Configuring bridged networking on a NetBSD host" dir="ltr"&gt;Section&amp;nbsp;14.3, “Configuring bridged networking on a NetBSD host”&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;The most performant device type is
-&lt;code dir="ltr"&gt;virtio-net-pci&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-netdev user,id=vioif0 -device virtio-net-pci,netdev=vioif0&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p&gt;To use older guest operating systems that don’t support VirtIO,
-Intel Gigabit Ethernet is a good choice:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-netdev user,id=wm0 -device e1000,netdev=wm0&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p&gt;Or an AMD PCnet card, for very old guest operating systems:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-netdev user,id=pcn0 -device pcnet,netdev=pcn0&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;h3 dir="ltr"&gt;
-14.2.5.&amp;nbsp;Using audio&lt;/h3&gt;&lt;p&gt;On a NetBSD host, the following QEMU arguments may be used
-to enable audio:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-audiodev oss,id=oss,out.dev=/dev/audio,in.dev=/dev/audio \
--device ac97,audiodev=oss&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;ac97&lt;/code&gt; is the classic standardized sound driver
-for x86 systems.&lt;/p&gt;&lt;p dir="ltr"&gt;You may wish to change the &lt;code dir="ltr"&gt;/dev/audioX&lt;/code&gt;
-device being used, see
-&lt;a href="https://netbsd.org/docs/guide/en/chap-audio.html" title="Chapter&amp;nbsp;10.&amp;nbsp;Audio" dir="ltr"&gt;Chapter&amp;nbsp;10, &lt;i dir="ltr"&gt;Audio&lt;/i&gt;&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;You may need to adjust things further to get smooth playback,
-see &lt;a href="https://netbsd.org/docs/guide/en/chap-virt.html#chap-virt-guest-audio" title="14.4.3.&amp;nbsp;Smooth audio playback and latency in VMs" dir="ltr"&gt;Section&amp;nbsp;14.4.3, “Smooth audio playback and latency in VMs”&lt;/a&gt;.&lt;/p&gt;&lt;h3 dir="ltr"&gt;
-14.2.6.&amp;nbsp;Using graphics (or no graphics)&lt;/h3&gt;&lt;p&gt;These arguments will create an X11 window with OpenGL enabled
-(for smooth scaling if the window is resized), using a VMware-compatible
-VGA device, and an emulated USB tablet:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-display sdl,gl=on -vga vmware \
--usb -device usb-tablet,bus=usb-bus.0&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;There is a VMware video driver included with X11 on NetBSD, so
-the display will automatically configure when &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/startx.1" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;startx&lt;/span&gt;(1)&lt;/span&gt;&lt;/a&gt;
-runs and can be adjusted with &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/xrandr.1" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;xrandr&lt;/span&gt;(1)&lt;/span&gt;&lt;/a&gt;.
-An emulated USB tablet will provide a better mouse experience
-in QEMU because it provides exact window co-ordinates to the VM.
-However, some older operating systems might not support a USB tablet,
-in which case the &lt;code dir="ltr"&gt;usb-tablet&lt;/code&gt; line should be
-omitted.&lt;/p&gt;&lt;p dir="ltr"&gt;A VNC display will allow remote access from a VNC client like
-&lt;a href="https://cdn.netbsd.org/pub/pkgsrc/current/pkgsrc/net/tigervnc/index.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;net/tigervnc&lt;/code&gt;&lt;/a&gt;, useful when running QEMU
-with &lt;code dir="ltr"&gt;--daemonize&lt;/code&gt; on a server:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-display vnc=unix:/home/nia/.qemu-myvm-vnc -vga vmware&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;A simpler option is a &lt;code dir="ltr"&gt;curses&lt;/code&gt; display,
-preferable for systems that don’t
-need more than text output in a terminal:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-display curses&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;For more information on configuring X11, see
-&lt;a href="https://netbsd.org/docs/guide/en/chap-x.html" title="Chapter&amp;nbsp;9.&amp;nbsp;X" dir="ltr"&gt;Chapter&amp;nbsp;9, &lt;i dir="ltr"&gt;X&lt;/i&gt;&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;For more information on securely configuring VNC, see
-&lt;a href="https://qemu.readthedocs.io/en/latest/system/vnc-security.html" dir="ltr"&gt;QEMU’s online documentation on VNC&lt;/a&gt;.&lt;/p&gt;&lt;h2 dir="ltr"&gt;
-14.3.&amp;nbsp;Configuring bridged networking on a NetBSD host&lt;/h2&gt;&lt;p dir="ltr"&gt;While QEMU user networking is easy to use and doesn't require root
-privileges, it's generally slower than bridged networking using a &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/tap.4" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;tap&lt;/span&gt;(4)&lt;/span&gt;&lt;/a&gt;
-device, and doesn't allow the use of diagnostic tools like &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/ping.8" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;ping&lt;/span&gt;(8)&lt;/span&gt;&lt;/a&gt;
-inside the guest.&lt;/p&gt;&lt;p dir="ltr"&gt;To configure bridged networking on a NetBSD host, you must first
-make note of your host machine’s primary network interace.
-Find the one with an address assigned and a route to the outside
-world with &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/ifconfig.8" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;ifconfig&lt;/span&gt;(8)&lt;/span&gt;&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;In this example, the host machine’s primary interface is
-&lt;code dir="ltr"&gt;wm0&lt;/code&gt;. All of these commands run on the host machine.&lt;/p&gt;&lt;p dir="ltr"&gt;Create a virtual &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/tap.4" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;tap&lt;/span&gt;(4)&lt;/span&gt;&lt;/a&gt; interface:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;#&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;ifconfig tap0 create&lt;/code&gt;&lt;/strong&gt;
-&lt;code dir="ltr"&gt;#&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;ifconfig tap0 descr "NetBSD VM" up&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Create a &lt;a href="https://man.netbsd.org/NetBSD-9.1/i386/bridge.4" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;bridge&lt;/span&gt;(4)&lt;/span&gt;&lt;/a&gt; connecting the actual interface
-and the virtual interface:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;#&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;ifconfig bridge0 create&lt;/code&gt;&lt;/strong&gt;
-&lt;code dir="ltr"&gt;#&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;ifconfig bridge0 descr "LAN VM bridge" up&lt;/code&gt;&lt;/strong&gt;
-&lt;code dir="ltr"&gt;#&lt;/code&gt; &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;brconfig bridge0 add tap0 add wm0&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Configure NetBSD to do this all at boot time by editing
-&lt;code dir="ltr"&gt;/etc/ifconfig.tap0&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;create
-descr "NetBSD VM" up
-! ifconfig bridge0 create
-! ifconfig bridge0 descr "LAN VM bridge" up
-! brconfig bridge0 add tap0 add wm0&lt;/PRE&gt;&lt;p&gt;You can now pass the arguments to QEMU to run with
-bridged networking:&lt;/p&gt;&lt;PRE&gt;&lt;strong&gt;&lt;code&gt;-netdev tap,id=tap0,ifname=tap0,script=no -device virtio-net-pci,netdev=tap0&lt;/code&gt;&lt;/strong&gt;&lt;/PRE&gt;</description><pubDate>Sat, 08 May 2021 07:49:25 -0500</pubDate></item></channel></rss>
+&lt;UL&gt;&lt;LI&gt;Care must be taken not to break anything, but one benefit of dropping the platform is cleaning up a &lt;em dir="ltr"&gt;lot&lt;/em&gt; of code that is mostly not relevant anymore so we should likely do this deliberately and not just clean up occasional files "as we go"&lt;/LI&gt;&lt;LI&gt;Even though there will be just one architecture after the removal, any machinery that exists to support multiple architectures must be kept to enable future porting work (e.g., ARM or RISC-V)&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Fri, 07 May 2021 09:32:39 -0500</pubDate></item></channel></rss>
