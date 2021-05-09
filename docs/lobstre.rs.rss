@@ -275,7 +275,254 @@ language, which is otherwise remarkably simple and beautiful.
 &lt;/p&gt;&lt;p dir="ltr"&gt;
   &lt;strong dir="ltr"&gt;see also&lt;/strong&gt;&lt;br dir="ltr"&gt;
 
-&lt;/p&gt;</description><pubDate>Sat, 08 May 2021 08:19:55 -0500</pubDate></item><item><title>Undo your last git mistake with ugit</title><link>https://lobste.rs/s/64lthd</link><description>&lt;div dir="ltr"&gt;📅️ Last Updated: May  1, 2020&amp;nbsp;  
+&lt;/p&gt;</description><pubDate>Sat, 08 May 2021 08:19:55 -0500</pubDate></item><item><title>Why make (and ymake)</title><link>https://lobste.rs/s/a25vff</link><description>&lt;div dir="ltr"&gt;
+&lt;em dir="ltr"&gt;07 May 2021&lt;/em&gt;
+&lt;/div&gt;&lt;p&gt;In recent years many new build systems have emerged to replace traditional make.  Although they all have different strengths and weaknesses, one common theme is improving execution performance of the build system.&lt;/p&gt;&lt;p&gt;Traditional multiprocessor make systems are generally efficient at scheduling tasks within a given Makefile.  Given a dependency graph, child processes can be executed when their dependencies are satisfied and processor cores are available.&lt;/p&gt;&lt;p&gt;Unfortunately, this breaks down where multiple Makefiles are used across different directories or modules.  The choice that a build system maintainer faces becomes:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Using per-directory Makefiles allows developers to compile individual directories in isolation, but doing so means a full build needs to drain out child processes at various points in the build, because the engine cannot recognize dependencies natively;&lt;/LI&gt;&lt;LI&gt;Using fewer Makefiles means more efficient full builds but more difficult isolated compilation, as the developer would need to change directories and specify the correct target to build.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;However, there's no reason that this choice is inevitable.  If the full build can construct a single global dependency graph, but each directory still contains a partial dependency graph, a directory build can operate as well as traditional make and a full build can operate as efficiently as a newer build system.  YMAKE attempted to build such a system, and do so without requiring any changes to per-directory Makefiles.&lt;/p&gt;&lt;p&gt;Specifying the global graph requires a new syntax to logically graft a child directory into the dependency graph.  The remainder of Makefile syntax does not need to change, and conditionals can be used to fall back to recursive navigation if a global dependency graph is not supported.  This means that the build system does not require developers to install new build tools to compile, so it still benefits from the ubiquity of make, but having YMAKE just makes the existing build system faster.&lt;/p&gt;&lt;PRE&gt;DIRS=dir_a \
+     dir_b
+
+!IFDEF _YMAKE_VER
+all[dirs target=all]: $(DIRS)
+!ELSE
+all:
+    for %%i in ($(DIRS)) do cd %%i &amp;amp;&amp;amp; make &amp;amp;&amp;amp; cd ..
+!ENDIF
+&lt;/PRE&gt;&lt;p&gt;Rules within Makefiles are unchanged.  A regular rule in a Makefile refers to a relative file path, both for targets or prerequisites.  Building a global graph can be done by calculating the full paths of objects relative to the Makefile referencing them, and building graphs against the full paths.&lt;/p&gt;&lt;p&gt;In addition to more efficient scheduling of jobs, this also means many fewer child processes.  A conventional recursive make-based build system needs to invoke different instances of make for each makefile; here those processes are avoided.  This is particularly significant on Windows where process creation is relatively expensive.&lt;/p&gt;&lt;table cols="3" border="1" dir="ltr"&gt;
+&lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Time in seconds, 4 core i5&lt;/th&gt;
+    &lt;th dir="ltr"&gt;NMAKE (5 child processes)&lt;/th&gt;
+    &lt;th dir="ltr"&gt;YMAKE (5 child processes)&lt;/th&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Full build (wall time)&lt;/th&gt;
+    &lt;td dir="ltr"&gt;14.58&lt;/td&gt;
+    &lt;td dir="ltr"&gt;9.55&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Full build (CPU time)&lt;/th&gt;
+    &lt;td dir="ltr"&gt;41.31&lt;/td&gt;
+    &lt;td dir="ltr"&gt;36.08&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Inferred CPU utilization&lt;/th&gt;
+    &lt;td dir="ltr"&gt;70.8%&lt;/td&gt;
+    &lt;td dir="ltr"&gt;94.4%&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;&lt;/table&gt;&lt;p&gt;NMAKE is not a natively multi-process build system, so these results used a seperate process to schedule up to 5 child directories to be compiled at once.  Unfortunately the consequence of this is single directory builds can only utilize a single child process.  YMAKE addresses this, but note that other make systems such as GNU make address it too.  Thus, single directory results are primarily illustrating the limitations of NMAKE rather than capabilities of YMAKE.  In addition, single directory builds are frequently too small for any build engine to keep all cores busy, due to having more processor cores than scheduleable tasks.  With those caveats, single directory times are presented for completeness:&lt;/p&gt;&lt;table cols="3" border="1" dir="ltr"&gt;
+&lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Time in seconds, 4 core i5&lt;/th&gt;
+    &lt;th dir="ltr"&gt;NMAKE (1 child process)&lt;/th&gt;
+    &lt;th dir="ltr"&gt;YMAKE (5 child processes)&lt;/th&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Single directory (wall time)&lt;/th&gt;
+    &lt;td dir="ltr"&gt;1.14&lt;/td&gt;
+    &lt;td dir="ltr"&gt;0.52&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Single directory (CPU time)&lt;/th&gt;
+    &lt;td dir="ltr"&gt;1.21&lt;/td&gt;
+    &lt;td dir="ltr"&gt;1.18&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Inferred CPU utilization&lt;/th&gt;
+    &lt;td dir="ltr"&gt;26.5%&lt;/td&gt;
+    &lt;td dir="ltr"&gt;54.8%&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;&lt;/table&gt;&lt;p&gt;Having a global graph with per directory Makefiles also simplies the task of rebuilding a directory when dependencies have changed.  Rather than needing to manually build different directories, a developer can build the targets in a single directory by evaluating the global graph and building any targets needed to build the requested directory.  This requires specifying the global makefile to build from and the target directory to build:&lt;/p&gt;&lt;PRE&gt;c:\src\github\yori\edit&amp;gt;ymake -f ..\Makefile .
+mod_edit.obj
+options.c
+about.c
+edit.c
+yedit.exe
+edit.c
+builtins.lib
+&lt;/PRE&gt;&lt;p&gt;Because the global graph takes more time to parse, this is slower than the single directory Makefile results above, but not prohibitively so:&lt;/p&gt;&lt;table cols="3" border="1" dir="ltr"&gt;
+&lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Time in seconds, 4 core i5&lt;/th&gt;
+    &lt;th dir="ltr"&gt;YMAKE (global graph)&lt;/th&gt;
+    &lt;th dir="ltr"&gt;YMAKE (single Makefile)&lt;/th&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Single directory (wall time)&lt;/th&gt;
+    &lt;td dir="ltr"&gt;0.70&lt;/td&gt;
+    &lt;td dir="ltr"&gt;0.52&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Single directory (CPU time)&lt;/th&gt;
+    &lt;td dir="ltr"&gt;1.37&lt;/td&gt;
+    &lt;td dir="ltr"&gt;1.18&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Inferred CPU utilization&lt;/th&gt;
+    &lt;td dir="ltr"&gt;48.9%&lt;/td&gt;
+    &lt;td dir="ltr"&gt;54.8%&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;&lt;/table&gt;&lt;p dir="ltr"&gt;The build system in Yori uses &lt;a href="http://www.malsmith.net/blog/autoconf-in-nmake/" dir="ltr"&gt;preprocessor child processes&lt;/a&gt; to determine the capabilties of the compiler version and tailor compilation options, similar to autoconf.  Unfortunately, this means that by default autoconf-style probes exist on each invokation of make.  In addition to build scheduling improvements, YMAKE allows these probes to be cached, so that repeated compilations do not need to check the environment.  This cache is built using a hash of the environment, so if the compilation environment changes, the cache will be ignored automatically.&lt;/p&gt;&lt;table cols="3" border="1" dir="ltr"&gt;
+&lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Time in seconds, 4 core i5&lt;/th&gt;
+    &lt;th dir="ltr"&gt;YMAKE (no cache)&lt;/th&gt;
+    &lt;th dir="ltr"&gt;YMAKE (cached probes)&lt;/th&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Single directory (local graph, wall time)&lt;/th&gt;
+    &lt;td dir="ltr"&gt;0.52&lt;/td&gt;
+    &lt;td dir="ltr"&gt;0.32&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Single directory (local graph, CPU time)&lt;/th&gt;
+    &lt;td dir="ltr"&gt;1.18&lt;/td&gt;
+    &lt;td dir="ltr"&gt;0.91&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Inferred CPU utilization&lt;/th&gt;
+    &lt;td dir="ltr"&gt;54.8%&lt;/td&gt;
+    &lt;td dir="ltr"&gt;72.0%&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Single directory (global graph, wall time)&lt;/th&gt;
+    &lt;td dir="ltr"&gt;0.70&lt;/td&gt;
+    &lt;td dir="ltr"&gt;0.39&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Single directory (global graph, CPU time)&lt;/th&gt;
+    &lt;td dir="ltr"&gt;1.37&lt;/td&gt;
+    &lt;td dir="ltr"&gt;1.00&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr dir="ltr"&gt;
+    &lt;th dir="ltr"&gt;Inferred CPU utilization&lt;/th&gt;
+    &lt;td dir="ltr"&gt;48.9%&lt;/td&gt;
+    &lt;td dir="ltr"&gt;64.1%&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;&lt;/table&gt;</description><pubDate>Sat, 08 May 2021 18:02:10 -0500</pubDate></item><item><title>Oil Language: Variable Declaration, Mutation, and Scope</title><link>https://lobste.rs/s/s2trbn</link><description>&lt;h2&gt;Oil Design Goals&lt;/h2&gt;&lt;p&gt;The Oil language is a graceful upgrade to shell, and the behavior
+of variables follows from that philosophy.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Oil implements shell-compatible behavior.&lt;/LI&gt;&lt;LI&gt;It enhances shell with &lt;strong dir="ltr"&gt;new features&lt;/strong&gt; like expressions over typed data, which
+will be familiar to Python and JavaScript programmers.&lt;/LI&gt;&lt;LI&gt;It's a &lt;strong dir="ltr"&gt;stricter&lt;/strong&gt; language.
+&lt;UL&gt;&lt;LI&gt;Procs (shell functions) are self-contained and modular.  In other words,
+they're understandable by reading their signature.&lt;/LI&gt;&lt;LI&gt;We removed &lt;a href="http://www.oilshell.org/cross-ref.html?tag=dynamic-scope#dynamic-scope" dir="ltr"&gt;dynamic scope&lt;/a&gt;.  This mechanism isn't
+familiar to most programmers, and may cause unintentional mutation (bugs).&lt;/LI&gt;&lt;LI&gt;Oil has variable &lt;strong dir="ltr"&gt;declarations&lt;/strong&gt; like JavaScript, which can prevent
+trivial bugs.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;Even though Oil is stricter, it should still be convenient to use
+interactively.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Keywords Are More Consistent and Powerful Than Builtins&lt;/h2&gt;&lt;p dir="ltr"&gt;Oil has 5 keywords affect shell variables.  Unlike shell builtins, they're
+statically-parsed, and take dynamically-typed &lt;strong dir="ltr"&gt;expressions&lt;/strong&gt; on the right.&lt;/p&gt;&lt;h3 dir="ltr"&gt;Declare With &lt;code dir="ltr"&gt;var&lt;/code&gt; and &lt;code dir="ltr"&gt;const&lt;/code&gt;&lt;/h3&gt;&lt;p&gt;This is similar to JavaScript.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;proc p {
+  var name = 'Bob'
+  const age = (20 + 1) * 2
+  echo "$name is $age years old"  &lt;span dir="ltr"&gt;# Bob is 42 years old&lt;/span&gt;
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3 dir="ltr"&gt;Mutate With &lt;code dir="ltr"&gt;setvar&lt;/code&gt; and &lt;code dir="ltr"&gt;setglobal&lt;/code&gt;&lt;/h3&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;proc p {
+  var name = 'Bob'       &lt;span dir="ltr"&gt;# declare&lt;/span&gt;
+  setvar name = 'Alice'  &lt;span dir="ltr"&gt;# mutate&lt;/span&gt;
+
+  setglobal g = 42       &lt;span dir="ltr"&gt;# create or mutate a global variable&lt;/span&gt;
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3 dir="ltr"&gt;"Return" By Mutating Out Params With &lt;code dir="ltr"&gt;setref&lt;/code&gt; (advanced)&lt;/h3&gt;&lt;p dir="ltr"&gt;"Out Params" are a more controlled version of shell's dynamic scope.  They
+reuse the &lt;a href="http://www.oilshell.org/preview/doc/osh-help.html?topic=nameref#nameref" dir="ltr"&gt;nameref&lt;/a&gt; mechanism.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;proc p(s, :myout) {           &lt;span dir="ltr"&gt;# declare out param with :&lt;/span&gt;
+  setref myout = "prefix-$s"  &lt;span dir="ltr"&gt;# mutate it to "return" value to caller&lt;/span&gt;
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;UL&gt;&lt;LI&gt;&lt;em dir="ltr"&gt;Style guideline&lt;/em&gt;: In some situations, it's better to "return" a value on
+stdout, and use &lt;code dir="ltr"&gt;$(myproc)&lt;/code&gt; to retrieve it.&lt;/LI&gt;&lt;LI&gt;&lt;em dir="ltr"&gt;Implementation detail&lt;/em&gt;: The out parameter name is "hidden" with a &lt;code dir="ltr"&gt;__&lt;/code&gt;
+prefix.  This avoids a problem with nameref cycle detection.&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;Comparison to Shell&lt;/h3&gt;&lt;p dir="ltr"&gt;Shell and &lt;a href="http://www.oilshell.org/cross-ref.html?tag=bash#bash" dir="ltr"&gt;bash&lt;/a&gt; have grown many mechanisms for "declaring" and mutating
+variables:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;"bare" assignments like &lt;code dir="ltr"&gt;x=foo&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;builtins&lt;/strong&gt; like &lt;code dir="ltr"&gt;declare&lt;/code&gt;, &lt;code dir="ltr"&gt;local&lt;/code&gt;, and &lt;code dir="ltr"&gt;readonly&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;The &lt;code dir="ltr"&gt;-n&lt;/code&gt; "nameref" flag&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Examples:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;readonly name=World        &lt;span dir="ltr"&gt;# no spaces allowed around =&lt;/span&gt;
+declare foo="Hello $name"
+foo=$((42 + a[2]))
+declare -n ref=foo         &lt;span dir="ltr"&gt;# $foo can be written through $ref&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;These constructs are all discouraged in Oil code.&lt;/p&gt;&lt;h2&gt;Keywords Behave Differently at the Top Level (Like JavaScript)&lt;/h2&gt;&lt;p&gt;The "top-level" of the interpreter is used in two situations:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;When using Oil &lt;strong dir="ltr"&gt;interactively&lt;/strong&gt;.&lt;/LI&gt;&lt;LI&gt;As the &lt;strong dir="ltr"&gt;global&lt;/strong&gt; scope of a batch program.&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;Experienced Oil users should know that keywords like &lt;code dir="ltr"&gt;var&lt;/code&gt; behave differently
+in the top-level scope vs. &lt;code dir="ltr"&gt;proc&lt;/code&gt; scope.  This is due to the tension between
+shell's interactive nature and Oil's strictness (and to the dynamic nature of
+the &lt;code dir="ltr"&gt;source&lt;/code&gt; builtin).&lt;/p&gt;&lt;p dir="ltr"&gt;For reference, JavaScript's modern &lt;code dir="ltr"&gt;let&lt;/code&gt; keyword has similar behavior.&lt;/p&gt;&lt;h3&gt;Usage Guidelines&lt;/h3&gt;&lt;p&gt;Before going into detail on keyword behavior, here are some practical
+guidelines:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Interactive&lt;/strong&gt; sessions: Use &lt;code dir="ltr"&gt;setvar&lt;/code&gt; only.  This keyword is like Python's
+assignment operator: it creates or mutates a variable.
+&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Short scripts&lt;/strong&gt; (~20 lines) can also use this style.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Long programs&lt;/strong&gt;: Refactor them into composable "functions", i.e. &lt;code dir="ltr"&gt;proc&lt;/code&gt;.
+&lt;UL&gt;&lt;LI&gt;First wrap the &lt;strong dir="ltr"&gt;whole program&lt;/strong&gt; into &lt;code dir="ltr"&gt;proc main(@argv)&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;Declare all variables with &lt;code dir="ltr"&gt;var&lt;/code&gt; and &lt;code dir="ltr"&gt;const&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;Inside procs, use &lt;code dir="ltr"&gt;setvar&lt;/code&gt; to mutate &lt;strong dir="ltr"&gt;local&lt;/strong&gt; variables, and &lt;code dir="ltr"&gt;setglobal&lt;/code&gt;
+to mutate &lt;strong dir="ltr"&gt;globals&lt;/strong&gt;.&lt;/LI&gt;&lt;LI&gt;The top level should only have &lt;code dir="ltr"&gt;const&lt;/code&gt; declarations.  (You can use &lt;code dir="ltr"&gt;var&lt;/code&gt;,
+but it has special rules, explained below.)&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;That's all you need to remember.  The following sections explain the rationale
+for these guidelines.&lt;/p&gt;&lt;h3&gt;The Top-Level Scope Has Only Dynamic Checks&lt;/h3&gt;&lt;p&gt;The lack of static checks affects the recommended usage for both interactive
+sessions and batch scripts.&lt;/p&gt;&lt;h4 dir="ltr"&gt;Interactive Use: &lt;code dir="ltr"&gt;setvar&lt;/code&gt; only&lt;/h4&gt;&lt;p dir="ltr"&gt;As mentioned, you only need the &lt;code dir="ltr"&gt;setvar&lt;/code&gt; keyword in an interactive shell:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;oil$&lt;/span&gt; &lt;span dir="ltr"&gt;setvar x = 42 &lt;/span&gt;  &lt;span dir="ltr"&gt;# create variable 'x'&lt;/span&gt;
+&lt;span dir="ltr"&gt;oil$&lt;/span&gt; &lt;span dir="ltr"&gt;setvar x = 43 &lt;/span&gt;  &lt;span dir="ltr"&gt;# mutate it&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Details on top-level behavior:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;var&lt;/code&gt; behaves like &lt;code dir="ltr"&gt;setvar&lt;/code&gt;: It creates or mutates a variable.  In other
+words, a &lt;code dir="ltr"&gt;var&lt;/code&gt; definition can be &lt;strong dir="ltr"&gt;redefined&lt;/strong&gt; at the top-level.&lt;/LI&gt;&lt;LI&gt;A &lt;code dir="ltr"&gt;const&lt;/code&gt; can also redefine a &lt;code dir="ltr"&gt;var&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;A &lt;code dir="ltr"&gt;var&lt;/code&gt; can't redefine a &lt;code dir="ltr"&gt;const&lt;/code&gt; because there's a &lt;strong dir="ltr"&gt;dynamic&lt;/strong&gt; check that
+disallows mutation (like shell's &lt;code dir="ltr"&gt;readonly&lt;/code&gt;).&lt;/LI&gt;&lt;/UL&gt;&lt;h4 dir="ltr"&gt;Batch Use: &lt;code dir="ltr"&gt;const&lt;/code&gt; only&lt;/h4&gt;&lt;p&gt;It's simpler to use only constants at the top level.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;const USER = 'bob'
+const HOST = 'example.com'
+
+proc p {
+  ssh $USER@$HOST ls -l
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This is so you don't have to worry about a &lt;code dir="ltr"&gt;var&lt;/code&gt; being redefined by a statement
+like &lt;code dir="ltr"&gt;source mylib.sh&lt;/code&gt;.  A &lt;code dir="ltr"&gt;const&lt;/code&gt; can't be redefined because it can't be
+mutated.&lt;/p&gt;&lt;p&gt;It may be useful to put mutable globals in a constant dictionary, as it will
+prevent them from being redefined:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;const G = {
+  mystate = 0
+}
+
+proc p {
+  setglobal G-&amp;gt;mystate = 1
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3 dir="ltr"&gt;&lt;code dir="ltr"&gt;proc&lt;/code&gt; Scope Has Static Checks&lt;/h3&gt;&lt;p dir="ltr"&gt;Procs are Oil's stricter notion of "shell functions", and they have additional
+&lt;strong dir="ltr"&gt;static checks&lt;/strong&gt; (parse errors):&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Every variable must be declared once and only once with &lt;code dir="ltr"&gt;var&lt;/code&gt; or &lt;code dir="ltr"&gt;const&lt;/code&gt;.  A
+duplicate declaration is a parse error.&lt;/LI&gt;&lt;LI&gt;Mutating a &lt;code dir="ltr"&gt;const&lt;/code&gt; is a parse error.&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;setvar&lt;/code&gt; of an undeclared variable is a parse error.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Procs Don't Use "Dynamic Scope"&lt;/h2&gt;&lt;p dir="ltr"&gt;Procs are designed to be encapsulated and composable like processes.  But
+Bourne shell functions use a rule called &lt;a href="http://www.oilshell.org/cross-ref.html?tag=dynamic-scope#dynamic-scope" dir="ltr"&gt;dynamic scope&lt;/a&gt;
+for variable name lookup that breaks encapsulation.&lt;/p&gt;&lt;p dir="ltr"&gt;Dynamic scope means that a function can &lt;strong dir="ltr"&gt;read and mutate&lt;/strong&gt; the locals of its
+caller, its caller's caller, and so forth.  Example:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;g() {
+  echo "f_var is $f_var"  &lt;span dir="ltr"&gt;# g can see f's local variables&lt;/span&gt;
+}
+
+f() {
+  local f_var=42
+  g
+}
+
+f
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Oil code should use &lt;code dir="ltr"&gt;proc&lt;/code&gt; instead.  Inside a proc call, the &lt;code dir="ltr"&gt;dynamic_scope&lt;/code&gt;
+option is implicitly disabled (equivalent to &lt;code dir="ltr"&gt;shopt --unset dynamic_scope&lt;/code&gt;).&lt;/p&gt;&lt;p dir="ltr"&gt;This means that adding the &lt;code dir="ltr"&gt;proc&lt;/code&gt; keyword to the definition of &lt;code dir="ltr"&gt;g&lt;/code&gt; changes its
+behavior:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;proc g() {
+  echo "f_var is $f_var"  &lt;span dir="ltr"&gt;# Undefined!&lt;/span&gt;
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This affects all kinds of variable references:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;proc p {
+  echo $foo        &lt;span dir="ltr"&gt;# look up foo in command mode&lt;/span&gt;
+  var y = foo + 1  &lt;span dir="ltr"&gt;# look up foo in expression mode&lt;/span&gt;
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Shell Language Constructs Affected&lt;/h3&gt;&lt;p dir="ltr"&gt;In shell, these language constructs assign to variables using dynamic
+scope.  In Oil, they only mutate the &lt;strong dir="ltr"&gt;local&lt;/strong&gt; scope:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;x=val&lt;/code&gt;
+&lt;UL&gt;&lt;LI&gt;And variants &lt;code dir="ltr"&gt;x+=val&lt;/code&gt;, &lt;code dir="ltr"&gt;a[i]=val&lt;/code&gt;, &lt;code dir="ltr"&gt;a[i]+=val&lt;/code&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;export x=val&lt;/code&gt; and &lt;code dir="ltr"&gt;readonly x=val&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;&lt;code&gt;${x=default}&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;mycmd {x}&amp;gt;out&lt;/code&gt; (stores a file descriptor in &lt;code dir="ltr"&gt;$x&lt;/code&gt;)&lt;/LI&gt;&lt;LI&gt;&lt;code&gt;(( x = 42 + y ))&lt;/code&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;Builtins Affected&lt;/h3&gt;&lt;p&gt;These builtins are also "isolated" inside procs, using local scope:&lt;/p&gt;&lt;p&gt;Oil Builtins:&lt;/p&gt;&lt;h2&gt;More Details&lt;/h2&gt;&lt;h3&gt;Examples of Place Mutation&lt;/h3&gt;&lt;p dir="ltr"&gt;The expression to the left of &lt;code dir="ltr"&gt;=&lt;/code&gt; is called a &lt;strong dir="ltr"&gt;place&lt;/strong&gt;.  These are basically
+Python or JavaScript expressions, except that you add the &lt;code dir="ltr"&gt;setvar&lt;/code&gt; or
+&lt;code dir="ltr"&gt;setglobal&lt;/code&gt; keyword.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;setvar x[1] = 2
+setvar d['key'] = 3
+setvar d-&amp;gt;key = 3               &lt;span dir="ltr"&gt;# syntactic sugar for the above&lt;/span&gt;
+setvar func_returning_list()[3] = 3
+setvar x, y = y, x              &lt;span dir="ltr"&gt;# swap&lt;/span&gt;
+setvar x.foo, x.bar = foo, bar
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3 dir="ltr"&gt;Syntactic Sugar: Omit &lt;code dir="ltr"&gt;const&lt;/code&gt;&lt;/h3&gt;&lt;p dir="ltr"&gt;In Oil, but not OSH, you can omit &lt;code dir="ltr"&gt;const&lt;/code&gt; when there's only one variable:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;const x = 'foo'
+
+x = 'foo'  &lt;span dir="ltr"&gt;# Same thing.  This is NOT a mutation as in C or Java.&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;To prevent confusion, &lt;code dir="ltr"&gt;x=foo&lt;/code&gt; (no spaces) is disallowed in Oil.  Use the &lt;code dir="ltr"&gt;env&lt;/code&gt;
+command instead:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;env PYTHONPATH=. ./foo.py  &lt;span dir="ltr"&gt;# good&lt;/span&gt;
+PYTHONPATH=. ./foo.py`.    &lt;span dir="ltr"&gt;# disallowed because it would be confusing&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;Appendix A: More on Shell vs. Oil&lt;/h2&gt;&lt;p&gt;This section may help experienced shell users understand Oil.&lt;/p&gt;&lt;p&gt;Shell:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;g=G                        &lt;span dir="ltr"&gt;# global variable&lt;/span&gt;
+readonly c=C               &lt;span dir="ltr"&gt;# global constant&lt;/span&gt;
+
+myfunc() {
+  local x=X                &lt;span dir="ltr"&gt;# local variable&lt;/span&gt;
+  readonly y=Y             &lt;span dir="ltr"&gt;# local constant&lt;/span&gt;
+
+  x=mutated                &lt;span dir="ltr"&gt;# mutate local&lt;/span&gt;
+  g=mutated                &lt;span dir="ltr"&gt;# mutate global&lt;/span&gt;
+  newglobal=G              &lt;span dir="ltr"&gt;# create new global&lt;/span&gt;
+
+  caller_var=mutated       &lt;span dir="ltr"&gt;# dynamic scope (Oil doesn't have this)&lt;/span&gt;
+}
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Oil:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;var g = 'G'                &lt;span dir="ltr"&gt;# global variable (discouraged)&lt;/span&gt;
+const c = 'C'              &lt;span dir="ltr"&gt;# global constant&lt;/span&gt;
+
+proc myproc {
+  var x = 'L'              &lt;span dir="ltr"&gt;# local variable&lt;/span&gt;
+  const y = 'Y'            &lt;span dir="ltr"&gt;# local constant&lt;/span&gt;
+
+  setvar x = 'mutated'     &lt;span dir="ltr"&gt;# mutate local&lt;/span&gt;
+  setglobal g = 'mutated'  &lt;span dir="ltr"&gt;# mutate global&lt;/span&gt;
+  setvar newglobal = 'G'   &lt;span dir="ltr"&gt;# create new global&lt;/span&gt;
+
+                           &lt;span dir="ltr"&gt;# There's no dynamic scope, but you can use&lt;/span&gt;
+                           &lt;span dir="ltr"&gt;# "out params" with setref.&lt;/span&gt;
+
+}
+&lt;/code&gt;&lt;/PRE&gt;</description><pubDate>Sat, 08 May 2021 17:48:58 -0500</pubDate></item><item><title>Undo your last git mistake with ugit</title><link>https://lobste.rs/s/64lthd</link><description>&lt;div dir="ltr"&gt;📅️ Last Updated: May  1, 2020&amp;nbsp;  
     •&amp;nbsp;📅️ Published: April 30, 2021&amp;nbsp; • 🕣
     &lt;span title="Estimated read time" dir="ltr"&gt;
 	
@@ -981,254 +1228,7 @@ Take heed, future ABI-makers, lest the angel of neuralgia take you!
 
 &lt;/p&gt;&lt;p&gt;
 References:
-&lt;/p&gt;</description><pubDate>Fri, 07 May 2021 18:50:51 -0500</pubDate></item><item><title>Github Stale Bots: A False Economy</title><link>https://lobste.rs/s/jsuyr4</link><description>&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Stale Bot’s&lt;/em&gt; are a type of automated bot on Github, which locks issues which are “stale” (as in have no recent activity). This seems like a helpful tool at first, but in reality it’s terrible for all parties involved.&lt;/p&gt;&lt;h1&gt;Example: The Angular Repo&lt;/h1&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/angular/angular/issues" rel="noopener" dir="ltr"&gt;Angular has a popular repository&lt;/a&gt; on github which receives hundreds of issues every day. They use the stale bot to lock old issues, which have no activity in order to reduce the amount of issues in the repository. On the surface the Stale Bot is doing great work, reducing the number of active issues in the repo, but in reality it’s a bit insane.&lt;/p&gt;&lt;h2&gt;Maintainer’s perspective&lt;/h2&gt;&lt;p&gt;Issues are being automatically locked, new users can’t add to issue so they create a duplicate issue, or even worse, just don’t report that the issue still exists!&lt;/p&gt;&lt;h2&gt;User’s perspective&lt;/h2&gt;&lt;p dir="ltr"&gt;A user of Angular will &lt;em dir="ltr"&gt;Google&lt;/em&gt; the error text and will usually find the corresponding github issue. But more often than not, the issue is locked, by the heroic &lt;em dir="ltr"&gt;lock bot&lt;/em&gt;. So they have a few options, continue searching for another more recent (less SEO’d issue) OR either create another issue, effectively duplicating the bug.&lt;/p&gt;&lt;p&gt;If they decide to create a duplicate issue, it will often not be linked it to the original issue… Now there are 2 issues duplicating the same bug in the Angular repo, so what did “Stale Bot” achieve?&lt;/p&gt;&lt;p&gt;Well the stale bot has had the following effects on the repository:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Reduce the metric of &lt;em dir="ltr"&gt;Open Issues&lt;/em&gt; in github&lt;/LI&gt;&lt;LI&gt;Made duplicate issues far more likely&lt;/LI&gt;&lt;LI&gt;Increased friction of users reporting that the issue still exists&lt;/LI&gt;&lt;LI&gt;Ultimately decreased the quality of the software, as the issues don’t accurately reflect reality&lt;/LI&gt;&lt;/OL&gt;&lt;h1&gt;Devil’s Advocate&lt;/h1&gt;&lt;p&gt;For a moment, imagine that Stack Overflow did this. If there’s no interaction on a question, then the question should be locked… Well questions that don’t get consistent interaction are inevitably duplicated, or not updated with correct information, or people get frustrated and don’t ask the question again.&lt;/p&gt;&lt;h1&gt;Conclusion&lt;/h1&gt;&lt;p dir="ltr"&gt;The best repo’s in my opinion, don’t prevent users from contributing to older issues. This gives a much better user experience, as friction to contribute to issues is much lower. It also lets the maintainers ensure that old issues aren’t needlessly duplicated. Finally, the community feels like the maintainers actually care about their input, which doesn’t feel that way when an automated &lt;em dir="ltr"&gt;stale bot&lt;/em&gt; locks and closes your inactive issue without any input from a human…&lt;/p&gt;&lt;footer&gt;&lt;a data-url="https://blog.benwinding.com/github-stale-bots/" data-id="ckmoy9non000h9pon7vbv6ycr"&gt;Share&lt;/a&gt;&lt;/footer&gt;</description><pubDate>Fri, 07 May 2021 13:19:40 -0500</pubDate></item><item><title>Why make (and ymake)</title><link>https://lobste.rs/s/a25vff</link><description>&lt;div dir="ltr"&gt;
-&lt;em dir="ltr"&gt;07 May 2021&lt;/em&gt;
-&lt;/div&gt;&lt;p&gt;In recent years many new build systems have emerged to replace traditional make.  Although they all have different strengths and weaknesses, one common theme is improving execution performance of the build system.&lt;/p&gt;&lt;p&gt;Traditional multiprocessor make systems are generally efficient at scheduling tasks within a given Makefile.  Given a dependency graph, child processes can be executed when their dependencies are satisfied and processor cores are available.&lt;/p&gt;&lt;p&gt;Unfortunately, this breaks down where multiple Makefiles are used across different directories or modules.  The choice that a build system maintainer faces becomes:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Using per-directory Makefiles allows developers to compile individual directories in isolation, but doing so means a full build needs to drain out child processes at various points in the build, because the engine cannot recognize dependencies natively;&lt;/LI&gt;&lt;LI&gt;Using fewer Makefiles means more efficient full builds but more difficult isolated compilation, as the developer would need to change directories and specify the correct target to build.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;However, there's no reason that this choice is inevitable.  If the full build can construct a single global dependency graph, but each directory still contains a partial dependency graph, a directory build can operate as well as traditional make and a full build can operate as efficiently as a newer build system.  YMAKE attempted to build such a system, and do so without requiring any changes to per-directory Makefiles.&lt;/p&gt;&lt;p&gt;Specifying the global graph requires a new syntax to logically graft a child directory into the dependency graph.  The remainder of Makefile syntax does not need to change, and conditionals can be used to fall back to recursive navigation if a global dependency graph is not supported.  This means that the build system does not require developers to install new build tools to compile, so it still benefits from the ubiquity of make, but having YMAKE just makes the existing build system faster.&lt;/p&gt;&lt;PRE&gt;DIRS=dir_a \
-     dir_b
-
-!IFDEF _YMAKE_VER
-all[dirs target=all]: $(DIRS)
-!ELSE
-all:
-    for %%i in ($(DIRS)) do cd %%i &amp;amp;&amp;amp; make &amp;amp;&amp;amp; cd ..
-!ENDIF
-&lt;/PRE&gt;&lt;p&gt;Rules within Makefiles are unchanged.  A regular rule in a Makefile refers to a relative file path, both for targets or prerequisites.  Building a global graph can be done by calculating the full paths of objects relative to the Makefile referencing them, and building graphs against the full paths.&lt;/p&gt;&lt;p&gt;In addition to more efficient scheduling of jobs, this also means many fewer child processes.  A conventional recursive make-based build system needs to invoke different instances of make for each makefile; here those processes are avoided.  This is particularly significant on Windows where process creation is relatively expensive.&lt;/p&gt;&lt;table cols="3" border="1" dir="ltr"&gt;
-&lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Time in seconds, 4 core i5&lt;/th&gt;
-    &lt;th dir="ltr"&gt;NMAKE (5 child processes)&lt;/th&gt;
-    &lt;th dir="ltr"&gt;YMAKE (5 child processes)&lt;/th&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Full build (wall time)&lt;/th&gt;
-    &lt;td dir="ltr"&gt;14.58&lt;/td&gt;
-    &lt;td dir="ltr"&gt;9.55&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Full build (CPU time)&lt;/th&gt;
-    &lt;td dir="ltr"&gt;41.31&lt;/td&gt;
-    &lt;td dir="ltr"&gt;36.08&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Inferred CPU utilization&lt;/th&gt;
-    &lt;td dir="ltr"&gt;70.8%&lt;/td&gt;
-    &lt;td dir="ltr"&gt;94.4%&lt;/td&gt;
-&lt;/tr&gt;
-&lt;/tbody&gt;&lt;/table&gt;&lt;p&gt;NMAKE is not a natively multi-process build system, so these results used a seperate process to schedule up to 5 child directories to be compiled at once.  Unfortunately the consequence of this is single directory builds can only utilize a single child process.  YMAKE addresses this, but note that other make systems such as GNU make address it too.  Thus, single directory results are primarily illustrating the limitations of NMAKE rather than capabilities of YMAKE.  In addition, single directory builds are frequently too small for any build engine to keep all cores busy, due to having more processor cores than scheduleable tasks.  With those caveats, single directory times are presented for completeness:&lt;/p&gt;&lt;table cols="3" border="1" dir="ltr"&gt;
-&lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Time in seconds, 4 core i5&lt;/th&gt;
-    &lt;th dir="ltr"&gt;NMAKE (1 child process)&lt;/th&gt;
-    &lt;th dir="ltr"&gt;YMAKE (5 child processes)&lt;/th&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Single directory (wall time)&lt;/th&gt;
-    &lt;td dir="ltr"&gt;1.14&lt;/td&gt;
-    &lt;td dir="ltr"&gt;0.52&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Single directory (CPU time)&lt;/th&gt;
-    &lt;td dir="ltr"&gt;1.21&lt;/td&gt;
-    &lt;td dir="ltr"&gt;1.18&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Inferred CPU utilization&lt;/th&gt;
-    &lt;td dir="ltr"&gt;26.5%&lt;/td&gt;
-    &lt;td dir="ltr"&gt;54.8%&lt;/td&gt;
-&lt;/tr&gt;
-&lt;/tbody&gt;&lt;/table&gt;&lt;p&gt;Having a global graph with per directory Makefiles also simplies the task of rebuilding a directory when dependencies have changed.  Rather than needing to manually build different directories, a developer can build the targets in a single directory by evaluating the global graph and building any targets needed to build the requested directory.  This requires specifying the global makefile to build from and the target directory to build:&lt;/p&gt;&lt;PRE&gt;c:\src\github\yori\edit&amp;gt;ymake -f ..\Makefile .
-mod_edit.obj
-options.c
-about.c
-edit.c
-yedit.exe
-edit.c
-builtins.lib
-&lt;/PRE&gt;&lt;p&gt;Because the global graph takes more time to parse, this is slower than the single directory Makefile results above, but not prohibitively so:&lt;/p&gt;&lt;table cols="3" border="1" dir="ltr"&gt;
-&lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Time in seconds, 4 core i5&lt;/th&gt;
-    &lt;th dir="ltr"&gt;YMAKE (global graph)&lt;/th&gt;
-    &lt;th dir="ltr"&gt;YMAKE (single Makefile)&lt;/th&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Single directory (wall time)&lt;/th&gt;
-    &lt;td dir="ltr"&gt;0.70&lt;/td&gt;
-    &lt;td dir="ltr"&gt;0.52&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Single directory (CPU time)&lt;/th&gt;
-    &lt;td dir="ltr"&gt;1.37&lt;/td&gt;
-    &lt;td dir="ltr"&gt;1.18&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Inferred CPU utilization&lt;/th&gt;
-    &lt;td dir="ltr"&gt;48.9%&lt;/td&gt;
-    &lt;td dir="ltr"&gt;54.8%&lt;/td&gt;
-&lt;/tr&gt;
-&lt;/tbody&gt;&lt;/table&gt;&lt;p dir="ltr"&gt;The build system in Yori uses &lt;a href="http://www.malsmith.net/blog/autoconf-in-nmake/" dir="ltr"&gt;preprocessor child processes&lt;/a&gt; to determine the capabilties of the compiler version and tailor compilation options, similar to autoconf.  Unfortunately, this means that by default autoconf-style probes exist on each invokation of make.  In addition to build scheduling improvements, YMAKE allows these probes to be cached, so that repeated compilations do not need to check the environment.  This cache is built using a hash of the environment, so if the compilation environment changes, the cache will be ignored automatically.&lt;/p&gt;&lt;table cols="3" border="1" dir="ltr"&gt;
-&lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Time in seconds, 4 core i5&lt;/th&gt;
-    &lt;th dir="ltr"&gt;YMAKE (no cache)&lt;/th&gt;
-    &lt;th dir="ltr"&gt;YMAKE (cached probes)&lt;/th&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Single directory (local graph, wall time)&lt;/th&gt;
-    &lt;td dir="ltr"&gt;0.52&lt;/td&gt;
-    &lt;td dir="ltr"&gt;0.32&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Single directory (local graph, CPU time)&lt;/th&gt;
-    &lt;td dir="ltr"&gt;1.18&lt;/td&gt;
-    &lt;td dir="ltr"&gt;0.91&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Inferred CPU utilization&lt;/th&gt;
-    &lt;td dir="ltr"&gt;54.8%&lt;/td&gt;
-    &lt;td dir="ltr"&gt;72.0%&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Single directory (global graph, wall time)&lt;/th&gt;
-    &lt;td dir="ltr"&gt;0.70&lt;/td&gt;
-    &lt;td dir="ltr"&gt;0.39&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Single directory (global graph, CPU time)&lt;/th&gt;
-    &lt;td dir="ltr"&gt;1.37&lt;/td&gt;
-    &lt;td dir="ltr"&gt;1.00&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr dir="ltr"&gt;
-    &lt;th dir="ltr"&gt;Inferred CPU utilization&lt;/th&gt;
-    &lt;td dir="ltr"&gt;48.9%&lt;/td&gt;
-    &lt;td dir="ltr"&gt;64.1%&lt;/td&gt;
-&lt;/tr&gt;
-&lt;/tbody&gt;&lt;/table&gt;</description><pubDate>Sat, 08 May 2021 18:02:10 -0500</pubDate></item><item><title>Odin Programming Language: An Introduction</title><link>https://www.youtube.com/watch?v=rCqFdYUnC24</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/z9yyax/odin_programming_language_introduction"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sat, 08 May 2021 14:36:02 -0500</pubDate></item><item><title>Oil Language: Variable Declaration, Mutation, and Scope</title><link>https://lobste.rs/s/s2trbn</link><description>&lt;h2&gt;Oil Design Goals&lt;/h2&gt;&lt;p&gt;The Oil language is a graceful upgrade to shell, and the behavior
-of variables follows from that philosophy.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Oil implements shell-compatible behavior.&lt;/LI&gt;&lt;LI&gt;It enhances shell with &lt;strong dir="ltr"&gt;new features&lt;/strong&gt; like expressions over typed data, which
-will be familiar to Python and JavaScript programmers.&lt;/LI&gt;&lt;LI&gt;It's a &lt;strong dir="ltr"&gt;stricter&lt;/strong&gt; language.
-&lt;UL&gt;&lt;LI&gt;Procs (shell functions) are self-contained and modular.  In other words,
-they're understandable by reading their signature.&lt;/LI&gt;&lt;LI&gt;We removed &lt;a href="http://www.oilshell.org/cross-ref.html?tag=dynamic-scope#dynamic-scope" dir="ltr"&gt;dynamic scope&lt;/a&gt;.  This mechanism isn't
-familiar to most programmers, and may cause unintentional mutation (bugs).&lt;/LI&gt;&lt;LI&gt;Oil has variable &lt;strong dir="ltr"&gt;declarations&lt;/strong&gt; like JavaScript, which can prevent
-trivial bugs.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;Even though Oil is stricter, it should still be convenient to use
-interactively.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Keywords Are More Consistent and Powerful Than Builtins&lt;/h2&gt;&lt;p dir="ltr"&gt;Oil has 5 keywords affect shell variables.  Unlike shell builtins, they're
-statically-parsed, and take dynamically-typed &lt;strong dir="ltr"&gt;expressions&lt;/strong&gt; on the right.&lt;/p&gt;&lt;h3 dir="ltr"&gt;Declare With &lt;code dir="ltr"&gt;var&lt;/code&gt; and &lt;code dir="ltr"&gt;const&lt;/code&gt;&lt;/h3&gt;&lt;p&gt;This is similar to JavaScript.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;proc p {
-  var name = 'Bob'
-  const age = (20 + 1) * 2
-  echo "$name is $age years old"  &lt;span dir="ltr"&gt;# Bob is 42 years old&lt;/span&gt;
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3 dir="ltr"&gt;Mutate With &lt;code dir="ltr"&gt;setvar&lt;/code&gt; and &lt;code dir="ltr"&gt;setglobal&lt;/code&gt;&lt;/h3&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;proc p {
-  var name = 'Bob'       &lt;span dir="ltr"&gt;# declare&lt;/span&gt;
-  setvar name = 'Alice'  &lt;span dir="ltr"&gt;# mutate&lt;/span&gt;
-
-  setglobal g = 42       &lt;span dir="ltr"&gt;# create or mutate a global variable&lt;/span&gt;
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3 dir="ltr"&gt;"Return" By Mutating Out Params With &lt;code dir="ltr"&gt;setref&lt;/code&gt; (advanced)&lt;/h3&gt;&lt;p dir="ltr"&gt;"Out Params" are a more controlled version of shell's dynamic scope.  They
-reuse the &lt;a href="http://www.oilshell.org/preview/doc/osh-help.html?topic=nameref#nameref" dir="ltr"&gt;nameref&lt;/a&gt; mechanism.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;proc p(s, :myout) {           &lt;span dir="ltr"&gt;# declare out param with :&lt;/span&gt;
-  setref myout = "prefix-$s"  &lt;span dir="ltr"&gt;# mutate it to "return" value to caller&lt;/span&gt;
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;UL&gt;&lt;LI&gt;&lt;em dir="ltr"&gt;Style guideline&lt;/em&gt;: In some situations, it's better to "return" a value on
-stdout, and use &lt;code dir="ltr"&gt;$(myproc)&lt;/code&gt; to retrieve it.&lt;/LI&gt;&lt;LI&gt;&lt;em dir="ltr"&gt;Implementation detail&lt;/em&gt;: The out parameter name is "hidden" with a &lt;code dir="ltr"&gt;__&lt;/code&gt;
-prefix.  This avoids a problem with nameref cycle detection.&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;Comparison to Shell&lt;/h3&gt;&lt;p dir="ltr"&gt;Shell and &lt;a href="http://www.oilshell.org/cross-ref.html?tag=bash#bash" dir="ltr"&gt;bash&lt;/a&gt; have grown many mechanisms for "declaring" and mutating
-variables:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;"bare" assignments like &lt;code dir="ltr"&gt;x=foo&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;builtins&lt;/strong&gt; like &lt;code dir="ltr"&gt;declare&lt;/code&gt;, &lt;code dir="ltr"&gt;local&lt;/code&gt;, and &lt;code dir="ltr"&gt;readonly&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;The &lt;code dir="ltr"&gt;-n&lt;/code&gt; "nameref" flag&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Examples:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;readonly name=World        &lt;span dir="ltr"&gt;# no spaces allowed around =&lt;/span&gt;
-declare foo="Hello $name"
-foo=$((42 + a[2]))
-declare -n ref=foo         &lt;span dir="ltr"&gt;# $foo can be written through $ref&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;These constructs are all discouraged in Oil code.&lt;/p&gt;&lt;h2&gt;Keywords Behave Differently at the Top Level (Like JavaScript)&lt;/h2&gt;&lt;p&gt;The "top-level" of the interpreter is used in two situations:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;When using Oil &lt;strong dir="ltr"&gt;interactively&lt;/strong&gt;.&lt;/LI&gt;&lt;LI&gt;As the &lt;strong dir="ltr"&gt;global&lt;/strong&gt; scope of a batch program.&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;Experienced Oil users should know that keywords like &lt;code dir="ltr"&gt;var&lt;/code&gt; behave differently
-in the top-level scope vs. &lt;code dir="ltr"&gt;proc&lt;/code&gt; scope.  This is due to the tension between
-shell's interactive nature and Oil's strictness (and to the dynamic nature of
-the &lt;code dir="ltr"&gt;source&lt;/code&gt; builtin).&lt;/p&gt;&lt;p dir="ltr"&gt;For reference, JavaScript's modern &lt;code dir="ltr"&gt;let&lt;/code&gt; keyword has similar behavior.&lt;/p&gt;&lt;h3&gt;Usage Guidelines&lt;/h3&gt;&lt;p&gt;Before going into detail on keyword behavior, here are some practical
-guidelines:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Interactive&lt;/strong&gt; sessions: Use &lt;code dir="ltr"&gt;setvar&lt;/code&gt; only.  This keyword is like Python's
-assignment operator: it creates or mutates a variable.
-&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Short scripts&lt;/strong&gt; (~20 lines) can also use this style.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Long programs&lt;/strong&gt;: Refactor them into composable "functions", i.e. &lt;code dir="ltr"&gt;proc&lt;/code&gt;.
-&lt;UL&gt;&lt;LI&gt;First wrap the &lt;strong dir="ltr"&gt;whole program&lt;/strong&gt; into &lt;code dir="ltr"&gt;proc main(@argv)&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;Declare all variables with &lt;code dir="ltr"&gt;var&lt;/code&gt; and &lt;code dir="ltr"&gt;const&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;Inside procs, use &lt;code dir="ltr"&gt;setvar&lt;/code&gt; to mutate &lt;strong dir="ltr"&gt;local&lt;/strong&gt; variables, and &lt;code dir="ltr"&gt;setglobal&lt;/code&gt;
-to mutate &lt;strong dir="ltr"&gt;globals&lt;/strong&gt;.&lt;/LI&gt;&lt;LI&gt;The top level should only have &lt;code dir="ltr"&gt;const&lt;/code&gt; declarations.  (You can use &lt;code dir="ltr"&gt;var&lt;/code&gt;,
-but it has special rules, explained below.)&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;That's all you need to remember.  The following sections explain the rationale
-for these guidelines.&lt;/p&gt;&lt;h3&gt;The Top-Level Scope Has Only Dynamic Checks&lt;/h3&gt;&lt;p&gt;The lack of static checks affects the recommended usage for both interactive
-sessions and batch scripts.&lt;/p&gt;&lt;h4 dir="ltr"&gt;Interactive Use: &lt;code dir="ltr"&gt;setvar&lt;/code&gt; only&lt;/h4&gt;&lt;p dir="ltr"&gt;As mentioned, you only need the &lt;code dir="ltr"&gt;setvar&lt;/code&gt; keyword in an interactive shell:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;oil$&lt;/span&gt; &lt;span dir="ltr"&gt;setvar x = 42 &lt;/span&gt;  &lt;span dir="ltr"&gt;# create variable 'x'&lt;/span&gt;
-&lt;span dir="ltr"&gt;oil$&lt;/span&gt; &lt;span dir="ltr"&gt;setvar x = 43 &lt;/span&gt;  &lt;span dir="ltr"&gt;# mutate it&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Details on top-level behavior:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;var&lt;/code&gt; behaves like &lt;code dir="ltr"&gt;setvar&lt;/code&gt;: It creates or mutates a variable.  In other
-words, a &lt;code dir="ltr"&gt;var&lt;/code&gt; definition can be &lt;strong dir="ltr"&gt;redefined&lt;/strong&gt; at the top-level.&lt;/LI&gt;&lt;LI&gt;A &lt;code dir="ltr"&gt;const&lt;/code&gt; can also redefine a &lt;code dir="ltr"&gt;var&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;A &lt;code dir="ltr"&gt;var&lt;/code&gt; can't redefine a &lt;code dir="ltr"&gt;const&lt;/code&gt; because there's a &lt;strong dir="ltr"&gt;dynamic&lt;/strong&gt; check that
-disallows mutation (like shell's &lt;code dir="ltr"&gt;readonly&lt;/code&gt;).&lt;/LI&gt;&lt;/UL&gt;&lt;h4 dir="ltr"&gt;Batch Use: &lt;code dir="ltr"&gt;const&lt;/code&gt; only&lt;/h4&gt;&lt;p&gt;It's simpler to use only constants at the top level.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;const USER = 'bob'
-const HOST = 'example.com'
-
-proc p {
-  ssh $USER@$HOST ls -l
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This is so you don't have to worry about a &lt;code dir="ltr"&gt;var&lt;/code&gt; being redefined by a statement
-like &lt;code dir="ltr"&gt;source mylib.sh&lt;/code&gt;.  A &lt;code dir="ltr"&gt;const&lt;/code&gt; can't be redefined because it can't be
-mutated.&lt;/p&gt;&lt;p&gt;It may be useful to put mutable globals in a constant dictionary, as it will
-prevent them from being redefined:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;const G = {
-  mystate = 0
-}
-
-proc p {
-  setglobal G-&amp;gt;mystate = 1
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3 dir="ltr"&gt;&lt;code dir="ltr"&gt;proc&lt;/code&gt; Scope Has Static Checks&lt;/h3&gt;&lt;p dir="ltr"&gt;Procs are Oil's stricter notion of "shell functions", and they have additional
-&lt;strong dir="ltr"&gt;static checks&lt;/strong&gt; (parse errors):&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Every variable must be declared once and only once with &lt;code dir="ltr"&gt;var&lt;/code&gt; or &lt;code dir="ltr"&gt;const&lt;/code&gt;.  A
-duplicate declaration is a parse error.&lt;/LI&gt;&lt;LI&gt;Mutating a &lt;code dir="ltr"&gt;const&lt;/code&gt; is a parse error.&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;setvar&lt;/code&gt; of an undeclared variable is a parse error.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Procs Don't Use "Dynamic Scope"&lt;/h2&gt;&lt;p dir="ltr"&gt;Procs are designed to be encapsulated and composable like processes.  But
-Bourne shell functions use a rule called &lt;a href="http://www.oilshell.org/cross-ref.html?tag=dynamic-scope#dynamic-scope" dir="ltr"&gt;dynamic scope&lt;/a&gt;
-for variable name lookup that breaks encapsulation.&lt;/p&gt;&lt;p dir="ltr"&gt;Dynamic scope means that a function can &lt;strong dir="ltr"&gt;read and mutate&lt;/strong&gt; the locals of its
-caller, its caller's caller, and so forth.  Example:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;g() {
-  echo "f_var is $f_var"  &lt;span dir="ltr"&gt;# g can see f's local variables&lt;/span&gt;
-}
-
-f() {
-  local f_var=42
-  g
-}
-
-f
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Oil code should use &lt;code dir="ltr"&gt;proc&lt;/code&gt; instead.  Inside a proc call, the &lt;code dir="ltr"&gt;dynamic_scope&lt;/code&gt;
-option is implicitly disabled (equivalent to &lt;code dir="ltr"&gt;shopt --unset dynamic_scope&lt;/code&gt;).&lt;/p&gt;&lt;p dir="ltr"&gt;This means that adding the &lt;code dir="ltr"&gt;proc&lt;/code&gt; keyword to the definition of &lt;code dir="ltr"&gt;g&lt;/code&gt; changes its
-behavior:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;proc g() {
-  echo "f_var is $f_var"  &lt;span dir="ltr"&gt;# Undefined!&lt;/span&gt;
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This affects all kinds of variable references:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;proc p {
-  echo $foo        &lt;span dir="ltr"&gt;# look up foo in command mode&lt;/span&gt;
-  var y = foo + 1  &lt;span dir="ltr"&gt;# look up foo in expression mode&lt;/span&gt;
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Shell Language Constructs Affected&lt;/h3&gt;&lt;p dir="ltr"&gt;In shell, these language constructs assign to variables using dynamic
-scope.  In Oil, they only mutate the &lt;strong dir="ltr"&gt;local&lt;/strong&gt; scope:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;x=val&lt;/code&gt;
-&lt;UL&gt;&lt;LI&gt;And variants &lt;code dir="ltr"&gt;x+=val&lt;/code&gt;, &lt;code dir="ltr"&gt;a[i]=val&lt;/code&gt;, &lt;code dir="ltr"&gt;a[i]+=val&lt;/code&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;export x=val&lt;/code&gt; and &lt;code dir="ltr"&gt;readonly x=val&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;&lt;code&gt;${x=default}&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;mycmd {x}&amp;gt;out&lt;/code&gt; (stores a file descriptor in &lt;code dir="ltr"&gt;$x&lt;/code&gt;)&lt;/LI&gt;&lt;LI&gt;&lt;code&gt;(( x = 42 + y ))&lt;/code&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;Builtins Affected&lt;/h3&gt;&lt;p&gt;These builtins are also "isolated" inside procs, using local scope:&lt;/p&gt;&lt;p&gt;Oil Builtins:&lt;/p&gt;&lt;h2&gt;More Details&lt;/h2&gt;&lt;h3&gt;Examples of Place Mutation&lt;/h3&gt;&lt;p dir="ltr"&gt;The expression to the left of &lt;code dir="ltr"&gt;=&lt;/code&gt; is called a &lt;strong dir="ltr"&gt;place&lt;/strong&gt;.  These are basically
-Python or JavaScript expressions, except that you add the &lt;code dir="ltr"&gt;setvar&lt;/code&gt; or
-&lt;code dir="ltr"&gt;setglobal&lt;/code&gt; keyword.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;setvar x[1] = 2
-setvar d['key'] = 3
-setvar d-&amp;gt;key = 3               &lt;span dir="ltr"&gt;# syntactic sugar for the above&lt;/span&gt;
-setvar func_returning_list()[3] = 3
-setvar x, y = y, x              &lt;span dir="ltr"&gt;# swap&lt;/span&gt;
-setvar x.foo, x.bar = foo, bar
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3 dir="ltr"&gt;Syntactic Sugar: Omit &lt;code dir="ltr"&gt;const&lt;/code&gt;&lt;/h3&gt;&lt;p dir="ltr"&gt;In Oil, but not OSH, you can omit &lt;code dir="ltr"&gt;const&lt;/code&gt; when there's only one variable:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;const x = 'foo'
-
-x = 'foo'  &lt;span dir="ltr"&gt;# Same thing.  This is NOT a mutation as in C or Java.&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;To prevent confusion, &lt;code dir="ltr"&gt;x=foo&lt;/code&gt; (no spaces) is disallowed in Oil.  Use the &lt;code dir="ltr"&gt;env&lt;/code&gt;
-command instead:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;env PYTHONPATH=. ./foo.py  &lt;span dir="ltr"&gt;# good&lt;/span&gt;
-PYTHONPATH=. ./foo.py`.    &lt;span dir="ltr"&gt;# disallowed because it would be confusing&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;Appendix A: More on Shell vs. Oil&lt;/h2&gt;&lt;p&gt;This section may help experienced shell users understand Oil.&lt;/p&gt;&lt;p&gt;Shell:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;g=G                        &lt;span dir="ltr"&gt;# global variable&lt;/span&gt;
-readonly c=C               &lt;span dir="ltr"&gt;# global constant&lt;/span&gt;
-
-myfunc() {
-  local x=X                &lt;span dir="ltr"&gt;# local variable&lt;/span&gt;
-  readonly y=Y             &lt;span dir="ltr"&gt;# local constant&lt;/span&gt;
-
-  x=mutated                &lt;span dir="ltr"&gt;# mutate local&lt;/span&gt;
-  g=mutated                &lt;span dir="ltr"&gt;# mutate global&lt;/span&gt;
-  newglobal=G              &lt;span dir="ltr"&gt;# create new global&lt;/span&gt;
-
-  caller_var=mutated       &lt;span dir="ltr"&gt;# dynamic scope (Oil doesn't have this)&lt;/span&gt;
-}
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Oil:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;var g = 'G'                &lt;span dir="ltr"&gt;# global variable (discouraged)&lt;/span&gt;
-const c = 'C'              &lt;span dir="ltr"&gt;# global constant&lt;/span&gt;
-
-proc myproc {
-  var x = 'L'              &lt;span dir="ltr"&gt;# local variable&lt;/span&gt;
-  const y = 'Y'            &lt;span dir="ltr"&gt;# local constant&lt;/span&gt;
-
-  setvar x = 'mutated'     &lt;span dir="ltr"&gt;# mutate local&lt;/span&gt;
-  setglobal g = 'mutated'  &lt;span dir="ltr"&gt;# mutate global&lt;/span&gt;
-  setvar newglobal = 'G'   &lt;span dir="ltr"&gt;# create new global&lt;/span&gt;
-
-                           &lt;span dir="ltr"&gt;# There's no dynamic scope, but you can use&lt;/span&gt;
-                           &lt;span dir="ltr"&gt;# "out params" with setref.&lt;/span&gt;
-
-}
-&lt;/code&gt;&lt;/PRE&gt;</description><pubDate>Sat, 08 May 2021 17:48:58 -0500</pubDate></item><item><title>Lessons On Writing JavaScript and React From ClojureScript</title><link>https://lobste.rs/s/xykyrd</link><description>&lt;h2 dir="ltr"&gt;Lessons On Writing JavaScript and React From ClojureScript &lt;/h2&gt;&lt;div&gt;5/2/2021&lt;/div&gt;&lt;p&gt;
+&lt;/p&gt;</description><pubDate>Fri, 07 May 2021 18:50:51 -0500</pubDate></item><item><title>Github Stale Bots: A False Economy</title><link>https://lobste.rs/s/jsuyr4</link><description>&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Stale Bot’s&lt;/em&gt; are a type of automated bot on Github, which locks issues which are “stale” (as in have no recent activity). This seems like a helpful tool at first, but in reality it’s terrible for all parties involved.&lt;/p&gt;&lt;h1&gt;Example: The Angular Repo&lt;/h1&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/angular/angular/issues" rel="noopener" dir="ltr"&gt;Angular has a popular repository&lt;/a&gt; on github which receives hundreds of issues every day. They use the stale bot to lock old issues, which have no activity in order to reduce the amount of issues in the repository. On the surface the Stale Bot is doing great work, reducing the number of active issues in the repo, but in reality it’s a bit insane.&lt;/p&gt;&lt;h2&gt;Maintainer’s perspective&lt;/h2&gt;&lt;p&gt;Issues are being automatically locked, new users can’t add to issue so they create a duplicate issue, or even worse, just don’t report that the issue still exists!&lt;/p&gt;&lt;h2&gt;User’s perspective&lt;/h2&gt;&lt;p dir="ltr"&gt;A user of Angular will &lt;em dir="ltr"&gt;Google&lt;/em&gt; the error text and will usually find the corresponding github issue. But more often than not, the issue is locked, by the heroic &lt;em dir="ltr"&gt;lock bot&lt;/em&gt;. So they have a few options, continue searching for another more recent (less SEO’d issue) OR either create another issue, effectively duplicating the bug.&lt;/p&gt;&lt;p&gt;If they decide to create a duplicate issue, it will often not be linked it to the original issue… Now there are 2 issues duplicating the same bug in the Angular repo, so what did “Stale Bot” achieve?&lt;/p&gt;&lt;p&gt;Well the stale bot has had the following effects on the repository:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Reduce the metric of &lt;em dir="ltr"&gt;Open Issues&lt;/em&gt; in github&lt;/LI&gt;&lt;LI&gt;Made duplicate issues far more likely&lt;/LI&gt;&lt;LI&gt;Increased friction of users reporting that the issue still exists&lt;/LI&gt;&lt;LI&gt;Ultimately decreased the quality of the software, as the issues don’t accurately reflect reality&lt;/LI&gt;&lt;/OL&gt;&lt;h1&gt;Devil’s Advocate&lt;/h1&gt;&lt;p&gt;For a moment, imagine that Stack Overflow did this. If there’s no interaction on a question, then the question should be locked… Well questions that don’t get consistent interaction are inevitably duplicated, or not updated with correct information, or people get frustrated and don’t ask the question again.&lt;/p&gt;&lt;h1&gt;Conclusion&lt;/h1&gt;&lt;p dir="ltr"&gt;The best repo’s in my opinion, don’t prevent users from contributing to older issues. This gives a much better user experience, as friction to contribute to issues is much lower. It also lets the maintainers ensure that old issues aren’t needlessly duplicated. Finally, the community feels like the maintainers actually care about their input, which doesn’t feel that way when an automated &lt;em dir="ltr"&gt;stale bot&lt;/em&gt; locks and closes your inactive issue without any input from a human…&lt;/p&gt;&lt;footer&gt;&lt;a data-url="https://blog.benwinding.com/github-stale-bots/" data-id="ckmoy9non000h9pon7vbv6ycr"&gt;Share&lt;/a&gt;&lt;/footer&gt;</description><pubDate>Fri, 07 May 2021 13:19:40 -0500</pubDate></item><item><title>Lessons On Writing JavaScript and React From ClojureScript</title><link>https://lobste.rs/s/xykyrd</link><description>&lt;h2 dir="ltr"&gt;Lessons On Writing JavaScript and React From ClojureScript &lt;/h2&gt;&lt;div&gt;5/2/2021&lt;/div&gt;&lt;p&gt;
 Recently, I started a new role as a Software Engineer at Reify Health. Unlike any other role that I have had, a 
 huge part of our product stack is written in Clojure and ClojureScript. Thankfully, I have spent my last few years 
 as a JS/TS dev working with React and as a result, have employed and appreciated a very functional style. 
@@ -1409,7 +1409,7 @@ is, it is nowhere near as fast as the JVM, nor does it support technologies such
 as multi-threading out of the box.&lt;/p&gt;&lt;p dir="ltr"&gt;If you want to work with Clojure and ClojureScript professionally, we are also
 hiring at &lt;a href="https://www.reifyhealth.com/careers" dir="ltr"&gt;Reify Health&lt;/a&gt;! While you do not
 need to know Clojure prior to joining (I didn't!), having a ❤ for functional
-programming is always a plus!&lt;/p&gt;</description><pubDate>Sat, 08 May 2021 13:28:05 -0500</pubDate></item><item><title>ReScript 9.1</title><link>https://lobste.rs/s/prf0k5</link><description>&lt;h2&gt;Exciting Improvements in ReScript 9.1&lt;/h2&gt;&lt;p dir="ltr"&gt;Our recent few releases of ReScript contains &lt;a href="https://github.com/rescript-lang/rescript-compiler/blob/3134392a364b70c9c172aa6c1dbaa1ac6580265d/Changes.md#91" rel="noopener noreferrer" dir="ltr"&gt;lots of improvements&lt;/a&gt;, among which are a few standout features we'd like to further promote. Hope you're as excited as we are about these! It goes without saying, our &lt;a href="https://forum.rescript-lang.org/t/ann-rescript-vscode-1-1-1-released/1542/3" rel="noopener noreferrer" dir="ltr"&gt;updated editor plugin&lt;/a&gt; works with the new releases.&lt;/p&gt;&lt;h3&gt;New NPM Package&lt;/h3&gt;&lt;p dir="ltr"&gt;We've finally moved from &lt;a href="https://www.npmjs.com/package/bs-platform" rel="noopener noreferrer" dir="ltr"&gt;bs-platform&lt;/a&gt; to &lt;a href="https://www.npmjs.com/package/rescript" rel="noopener noreferrer" dir="ltr"&gt;rescript&lt;/a&gt;!&lt;/p&gt;&lt;p&gt;This is mostly just a long overdue name change; the package's virtually identical. Apart from the renaming of our CLI.&lt;/p&gt;&lt;h3&gt;CLI Cleanup&lt;/h3&gt;&lt;p dir="ltr"&gt;We took the occasion of the NPM package move to also unify the binaries &lt;code dir="ltr"&gt;bsc&lt;/code&gt;, &lt;code dir="ltr"&gt;bsb&lt;/code&gt; and their various commands into a single &lt;code dir="ltr"&gt;rescript&lt;/code&gt; command:&lt;/p&gt;&lt;PRE&gt;&lt;div&gt;SH&lt;/div&gt;&lt;div&gt;&lt;code dir="ltr"&gt;❯ rescript -&lt;span dir="ltr"&gt;help&lt;/span&gt;
+programming is always a plus!&lt;/p&gt;</description><pubDate>Sat, 08 May 2021 13:28:05 -0500</pubDate></item><item><title>Odin Programming Language: An Introduction</title><link>https://www.youtube.com/watch?v=rCqFdYUnC24</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/z9yyax/odin_programming_language_introduction"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sat, 08 May 2021 14:36:02 -0500</pubDate></item><item><title>ReScript 9.1</title><link>https://lobste.rs/s/prf0k5</link><description>&lt;h2&gt;Exciting Improvements in ReScript 9.1&lt;/h2&gt;&lt;p dir="ltr"&gt;Our recent few releases of ReScript contains &lt;a href="https://github.com/rescript-lang/rescript-compiler/blob/3134392a364b70c9c172aa6c1dbaa1ac6580265d/Changes.md#91" rel="noopener noreferrer" dir="ltr"&gt;lots of improvements&lt;/a&gt;, among which are a few standout features we'd like to further promote. Hope you're as excited as we are about these! It goes without saying, our &lt;a href="https://forum.rescript-lang.org/t/ann-rescript-vscode-1-1-1-released/1542/3" rel="noopener noreferrer" dir="ltr"&gt;updated editor plugin&lt;/a&gt; works with the new releases.&lt;/p&gt;&lt;h3&gt;New NPM Package&lt;/h3&gt;&lt;p dir="ltr"&gt;We've finally moved from &lt;a href="https://www.npmjs.com/package/bs-platform" rel="noopener noreferrer" dir="ltr"&gt;bs-platform&lt;/a&gt; to &lt;a href="https://www.npmjs.com/package/rescript" rel="noopener noreferrer" dir="ltr"&gt;rescript&lt;/a&gt;!&lt;/p&gt;&lt;p&gt;This is mostly just a long overdue name change; the package's virtually identical. Apart from the renaming of our CLI.&lt;/p&gt;&lt;h3&gt;CLI Cleanup&lt;/h3&gt;&lt;p dir="ltr"&gt;We took the occasion of the NPM package move to also unify the binaries &lt;code dir="ltr"&gt;bsc&lt;/code&gt;, &lt;code dir="ltr"&gt;bsb&lt;/code&gt; and their various commands into a single &lt;code dir="ltr"&gt;rescript&lt;/code&gt; command:&lt;/p&gt;&lt;PRE&gt;&lt;div&gt;SH&lt;/div&gt;&lt;div&gt;&lt;code dir="ltr"&gt;❯ rescript -&lt;span dir="ltr"&gt;help&lt;/span&gt;
 Available flags
 -v, -version  display version number
 -h, -&lt;span dir="ltr"&gt;help&lt;/span&gt;     display &lt;span dir="ltr"&gt;help&lt;/span&gt;
