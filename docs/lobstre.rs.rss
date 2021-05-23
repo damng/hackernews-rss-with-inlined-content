@@ -173,7 +173,7 @@ AWS Usage:
 &lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;It cost us around forty cents, with close to zero ongoing spend if you’re not currently running a build&lt;sup dir="ltr"&gt;&lt;a href="https://blog.nelhage.com/post/building-llvm-in-90s/#fn:1" role="doc-noteref" dir="ltr"&gt;1&lt;/a&gt;&lt;/sup&gt;. It also scales with how much compute you need – we could edit a few files and do a partial rebuild and pay for only what we need.&lt;/p&gt;&lt;h2 dir="ltr"&gt;How Llama works&amp;nbsp; &lt;/h2&gt;&lt;p dir="ltr"&gt;At a high level, Llama follows in the family of &lt;a href="https://github.com/distcc/distcc" dir="ltr"&gt;distcc&lt;/a&gt; and its descendants: We provide a drop-in replacement for &lt;code dir="ltr"&gt;g++&lt;/code&gt; which does the actual compute remotely, and then allow the user to run &lt;code dir="ltr"&gt;make&lt;/code&gt; or &lt;code dir="ltr"&gt;ninja&lt;/code&gt; with a &lt;code dir="ltr"&gt;-j&lt;/code&gt; argument much larger than the actual number of local cores.&lt;/p&gt;&lt;p dir="ltr"&gt;In the case of llamacc, inspired by &lt;a href="https://github.com/StanfordSNR/gg" dir="ltr"&gt;Stanford’s &lt;code dir="ltr"&gt;gg&lt;/code&gt;&lt;/a&gt;&lt;sup dir="ltr"&gt;&lt;a href="https://blog.nelhage.com/post/building-llvm-in-90s/#fn:2" role="doc-noteref" dir="ltr"&gt;2&lt;/a&gt;&lt;/sup&gt;, the actual compilation happens inside Amazon Lambda. When invoked to build a source file, &lt;code dir="ltr"&gt;llamacc&lt;/code&gt; or &lt;code dir="ltr"&gt;llamac++&lt;/code&gt;:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;First runs the preprocessor locally to discover all header files required by that source file&lt;/LI&gt;&lt;LI&gt;Uploads each source file to a content-addressed store in S3&lt;/LI&gt;&lt;LI&gt;Invokes an Amazon Lambda function with a custom runtime, which
 &lt;UL&gt;&lt;LI&gt;Downloads the required headers from S3&lt;/LI&gt;&lt;LI&gt;Invokes the compiler inside the Lambda function&lt;/LI&gt;&lt;LI&gt;Uploads the resulting object file to the same S3 store&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;Downloads the resulting object from S3&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Caching is used on both the client and in the Lambda function to avoid repeatedly uploading or downloading the same files, exploiting the fact that Amazon will reuse the same function instance to serve multiple requests.&lt;/p&gt;&lt;h2 dir="ltr"&gt;Potential improvements&amp;nbsp; &lt;/h2&gt;&lt;p&gt;This result is impressive, but I think there’s actually still some relatively low-hanging fruit for improvement.&lt;/p&gt;&lt;h3 dir="ltr"&gt;Removing unnecessary dependencies&amp;nbsp; &lt;/h3&gt;&lt;p dir="ltr"&gt;If we use &lt;a href="https://github.com/nico/ninjatracing" dir="ltr"&gt;ninjatracing&lt;/a&gt; to visualize the build in Chrome’s trace viewer, we can see a number of bottlenecks where the entire build is waiting on one or two processes:&lt;/p&gt;&lt;img src="https://blog.nelhage.com/images/posts/llvm-llama/profile.png" alt="" width="453" height="145"&gt;&lt;p dir="ltr"&gt;I haven’t investigated to be sure, but I strongly suspect that these are related to cmake’s Ninja generator &lt;a href="https://gitlab.kitware.com/cmake/cmake/-/issues/17097" dir="ltr"&gt;emitting unnecessary dependencies&lt;/a&gt;; if that bug were fixed, and LLVM’s build updated accordingly, I bet we could get much better utilization and an even-faster build!&lt;/p&gt;&lt;h3 dir="ltr"&gt;Optimizing long-pole files&amp;nbsp; &lt;/h3&gt;&lt;p dir="ltr"&gt;We can also see from the above trace that a few files take disproportionately long to compile. For instance, &lt;code dir="ltr"&gt;llvm/lib/Target/X86/X86ISelLowering.cpp&lt;/code&gt; is extremely slow. That file turns out to contain 50,000(!) lines of C++ source, constituting 2MB (!!) of text. I suspect that splitting the largest ~5 files into smaller compilation units, so that they are no longer holding up the parallel build, might also be a substantial win.&lt;/p&gt;&lt;h3 dir="ltr"&gt;Llama improvements&amp;nbsp; &lt;/h3&gt;&lt;p dir="ltr"&gt;Llama is still young and there’s a lot of work yet-to-be-done! For instance, I haven’t yet &lt;a href="https://buttondown.email/nelhage/archive/http-pipelining-s3-and-gg" dir="ltr"&gt;implemented HTTP pipelining&lt;/a&gt;, which my experiments demonstrate to be a substantial win when downloading files from S3.&lt;/p&gt;&lt;h1 dir="ltr"&gt;Give Llama a try!&amp;nbsp; &lt;/h1&gt;&lt;p dir="ltr"&gt;Do you have a large C or C++ codebase you wish were faster to compile? &lt;a href="https://github.com/nelhage/llama#getting-started" dir="ltr"&gt;Give Llama a try!&lt;/a&gt;&lt;/p&gt;&lt;p&gt;I’ve tried to make it fairly easy to get started. I’d love to hear from you if you give it a go.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;It’s not quite zero because we use S3 for moving objects between the client and the cloud, and that will cost us a few cents until objects expire (after one month, in Llama’s default configuration). &lt;a href="https://blog.nelhage.com/post/building-llvm-in-90s/#fnref:1" role="doc-backlink" dir="ltr"&gt;↩︎&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;I’ve &lt;a href="https://buttondown.email/nelhage/archive/papers-i-love-gg" dir="ltr"&gt;written previously&lt;/a&gt; about &lt;code dir="ltr"&gt;gg&lt;/code&gt; and how much I enjoy that paper. &lt;a href="https://blog.nelhage.com/post/building-llvm-in-90s/#fnref:2" role="doc-backlink" dir="ltr"&gt;↩︎&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;
             &lt;label for="bd-email" dir="ltr"&gt;Subscribe to my newsletter (~1 post/week and blog updates):&lt;/label&gt;
-          &lt;/p&gt;</description><pubDate>Fri, 21 May 2021 12:04:12 -0500</pubDate></item><item><title>My Road to Erlang</title><link>https://lobste.rs/s/5u1fuu</link><description>&lt;p&gt;I had three or four job offers my last semester of college, all of them with telecom companies just north of Dallas.  I ended up working for Ericsson in the early 1990s.&lt;/p&gt;&lt;p dir="ltr"&gt;Now if you're expecting me to talk about how I hung around with the brilliant folks who developed Erlang...don't.  Ericsson's telephone exchanges were programmed in a custom, baroque language called &lt;a href="http://en.wikipedia.org/wiki/PLEX_(programming_language)" dir="ltr"&gt;PLEX&lt;/a&gt;.  Syntactically it was a cross between Fortran and a macro assembler.  You couldn't pass parameters to functions, for example; you assigned them to variables instead, much like the limited GOSUB of an 8-bit BASIC.  The advantage was that there was a clean one-to-one correspondence between the source code and the generated assembly code, a necessity when it came to writing patches for live systems where taking them down for maintenance was Very Bad Indeed.&lt;/p&gt;&lt;p&gt;The other thing worth mentioning about PLEX and Ericsson's hardware of the time is that they were custom designed for large scale message passing concurrency.  That hardware created in the 1970s and 1980s was built to handle tens of thousands of processes certainly makes dual core CPUs seem a bit late to the party.&lt;/p&gt;&lt;p&gt;Ericsson had a habit of periodically sending employees to the mothership in Sweden, and after one such trip my office mate brought back a sheet of paper with a short, completely unintelligible to me, Erlang program on it.  In three years at Ericsson, my total exposure to Erlang was about thirty seconds.  I left shortly after that, getting back into game development. &lt;/p&gt;&lt;p dir="ltr"&gt;In 1998 I started looking at very high level programming languages, because I was in a rut and getting behind the times.  Most of my experience was in various assembly languages (6502, 68000, 8086, SH2, PowerPC), C, Pascal, plus some oddities like Forth.  The only modern language I was familiar with was Perl, so like everyone else at the time I could write CGI scripts.  I wanted to leapfrog ahead, to get myself out of the low-level world, so I looked to functional programming (covered a bit more in the first part of &lt;a href="https://prog21.dadgum.com/3.html" dir="ltr"&gt;Admitting that Functional Programming Can Be Awkward&lt;/a&gt;).&lt;/p&gt;&lt;p&gt;I worked through online tutorials for three languages: Standard ML, OCaml, and Haskell. I had fun with them, especially OCaml, but there were two glaring issues that held me back.&lt;/p&gt;&lt;p&gt;The first was that the tutorials were self-absorbed in the accoutrements of functional programming: type systems, fancy ways of using types for generic programming, lambda calculus tricks like currying.  The tutorials for all three languages were surprisingly similar.  The examples were either trivial or geared toward writing compilers.  At the time I was interested in in complex, interactive programs--video games--but I didn't have a clue about how to structure even the simplest of games in Haskell.  There were a few trivial games written in OCaml, but they made heavy use of imperative features which made me wonder what the point was.&lt;/p&gt;&lt;p&gt;The second issue was that I was used to working on commercial products, and there was little evidence at the time that Standard ML, OCaml, or Haskell was up to the task.  Would they scale up to programs orders of magnitude larger than class assignments?  And more critically, would functional programming scale up?  Would I hit a point when the garbage collector crossed the line from imperceptible to perceptible?  Would there be anything I could possibly do if that happened?  Would lazy evaluation become too difficult to reason about?  There was also the worry that Windows seemed to be a "barely there" platform in the eyes of all three language maintainers.  The OCaml interpreter had a beautiful interactive shell under MacOS, but the Windows version was--or should have been--a great embarrassment to everyone involved.&lt;/p&gt;&lt;p dir="ltr"&gt;Somewhere in this period I also took a hard look at Lisp (I was one of the first registered users of &lt;a href="http://www.cormanlisp.com/" dir="ltr"&gt;Corman Lisp&lt;/a&gt;) and Erlang.  Erlang wasn't open source yet and required a license for commercial use.  The evaluation version still used the old JAM runtime instead of the more modern BEAM and was dog slow.  It also had the same dated, cold, industrial feeling of the systems I used when at Ericsson.  I put it aside and kept tinkering elsewhere.&lt;/p&gt;&lt;p&gt;But I came back when the move to open source occurred.  Here's why:&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;I found I had an easier time writing programs in Erlang.&lt;/b&gt;  I was focused entirely on the mysterious concept of writing code that didn't involve destructive updates.  I wasn't distracted by type systems or complex module and class systems.  The lack of "let" and "where" clauses in Erlang makes code easier to structure, without the creeping indentation caused by numerous levels of scope.  Atoms are a beautiful data type to work with.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;That the tools had been used to ship large-scale commercial products gave me faith in them.&lt;/b&gt; Yes, they &lt;i dir="ltr"&gt;are&lt;/i&gt; cold and industrial, and I started seeing that as a good thing.  The warts and quirks are there for a reason: because they were needed in order to get a project out the door.  I'll take pragmatism over idealism any day.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;Besides being useful in its own right, concurrency is a good pressure valve for functional programming.&lt;/b&gt;  Too difficult to puzzle out how to make a large functional program work?  Break it into multiple smaller programs that communicate.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;Speed was much improved.&lt;/b&gt;  The BEAM runtime is 3x faster than JAM.  When I started looking at different languages, I was obsessed with performance, but I eventually realized I was limiting my options.  I could always go back to the madness of writing assembly code if I cared that much.  Flexibility mattered more.  The 3x improvement pushed Erlang from "kinda slow" to "good enough."&lt;/p&gt;&lt;p&gt;I've been using Erlang since 1999, but I hardly think of myself as a fanatic.  I still use Perl, Python, C++, with occasional forays into REBOL, Lua, and Forth, plus some other special purpose languages.  They all have strengths and weaknesses.  But for most difficult problems I run into, Erlang is my first choice.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://prog21.dadgum.com/22.html" dir="ltr"&gt;permalink&lt;/a&gt; &lt;i dir="ltr"&gt;March 23, 2008&lt;/i&gt;&lt;/p&gt;</description><pubDate>Sat, 22 May 2021 16:52:29 -0500</pubDate></item><item><title>Playing with DJGPP and GCC 10 on DOS</title><link>https://lobste.rs/s/f1rhjh</link><description>&lt;p dir="ltr"&gt;I was recently amazed to discover that &lt;a href="https://www.delorie.com/djgpp/" dir="ltr"&gt;DJGPP&lt;/a&gt; was still being maintained,
+          &lt;/p&gt;</description><pubDate>Fri, 21 May 2021 12:04:12 -0500</pubDate></item><item><title>Playing with DJGPP and GCC 10 on DOS</title><link>https://lobste.rs/s/f1rhjh</link><description>&lt;p dir="ltr"&gt;I was recently amazed to discover that &lt;a href="https://www.delorie.com/djgpp/" dir="ltr"&gt;DJGPP&lt;/a&gt; was still being maintained,
 and had very recent versions of GCC and binutils available. I have not been
 doing any C programming on DOS in a very long time now, so I think the timing
 is right.&lt;/p&gt;&lt;p dir="ltr"&gt;There is an installation program with an interface very similar to the good
@@ -287,7 +287,7 @@ Disassembly of section .text:
 and &lt;strong dir="ltr"&gt;Pascal&lt;/strong&gt; frontends are also available. While I used DOSBox to test the
 development environment and prepare this article, I've since moved to FreeDOS
 which I'm running natively on my ASUS Eee PC. I'm currently having a lot of
-fun redoing some small character and color cycling effects in text mode.&lt;/p&gt;</description><pubDate>Sat, 22 May 2021 18:00:32 -0500</pubDate></item><item><title>Quickly copy the output of the last shell command you ran</title><link>https://lobste.rs/s/fhxelk</link><description>&lt;p&gt;This is a fancy thing that iTerm can do, somewhat invasively, and Terminal.app can do, somewhat transparently, and if you already know how to do this then just keep doing your thing and don’t worry about it.&lt;/p&gt;&lt;p dir="ltr"&gt;This post is going to show you how to do it in tmux, because &lt;a href="https://ianthehenry.com/posts/tmux-psa/" dir="ltr"&gt;tmux is great&lt;/a&gt; and it’s not coupled to your choice of terminal emulator and it’s a cool superpower to add to your toolkit.&lt;/p&gt;&lt;div&gt;&lt;span&gt;&lt;span&gt;00:00&lt;/span&gt;&lt;/span&gt;&lt;/div&gt;&lt;p&gt;But it’s not trivial to do in tmux. It took me a while to figure it out. Which is why you’re looking at a blog post, and not a code snippet.&lt;/p&gt;&lt;p dir="ltr"&gt;I mean, I can show you the code snippet if you &lt;em dir="ltr"&gt;want&lt;/em&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;bind -n S-M-Up {
+fun redoing some small character and color cycling effects in text mode.&lt;/p&gt;</description><pubDate>Sat, 22 May 2021 18:00:32 -0500</pubDate></item><item><title>My Road to Erlang</title><link>https://lobste.rs/s/5u1fuu</link><description>&lt;p&gt;I had three or four job offers my last semester of college, all of them with telecom companies just north of Dallas.  I ended up working for Ericsson in the early 1990s.&lt;/p&gt;&lt;p dir="ltr"&gt;Now if you're expecting me to talk about how I hung around with the brilliant folks who developed Erlang...don't.  Ericsson's telephone exchanges were programmed in a custom, baroque language called &lt;a href="http://en.wikipedia.org/wiki/PLEX_(programming_language)" dir="ltr"&gt;PLEX&lt;/a&gt;.  Syntactically it was a cross between Fortran and a macro assembler.  You couldn't pass parameters to functions, for example; you assigned them to variables instead, much like the limited GOSUB of an 8-bit BASIC.  The advantage was that there was a clean one-to-one correspondence between the source code and the generated assembly code, a necessity when it came to writing patches for live systems where taking them down for maintenance was Very Bad Indeed.&lt;/p&gt;&lt;p&gt;The other thing worth mentioning about PLEX and Ericsson's hardware of the time is that they were custom designed for large scale message passing concurrency.  That hardware created in the 1970s and 1980s was built to handle tens of thousands of processes certainly makes dual core CPUs seem a bit late to the party.&lt;/p&gt;&lt;p&gt;Ericsson had a habit of periodically sending employees to the mothership in Sweden, and after one such trip my office mate brought back a sheet of paper with a short, completely unintelligible to me, Erlang program on it.  In three years at Ericsson, my total exposure to Erlang was about thirty seconds.  I left shortly after that, getting back into game development. &lt;/p&gt;&lt;p dir="ltr"&gt;In 1998 I started looking at very high level programming languages, because I was in a rut and getting behind the times.  Most of my experience was in various assembly languages (6502, 68000, 8086, SH2, PowerPC), C, Pascal, plus some oddities like Forth.  The only modern language I was familiar with was Perl, so like everyone else at the time I could write CGI scripts.  I wanted to leapfrog ahead, to get myself out of the low-level world, so I looked to functional programming (covered a bit more in the first part of &lt;a href="https://prog21.dadgum.com/3.html" dir="ltr"&gt;Admitting that Functional Programming Can Be Awkward&lt;/a&gt;).&lt;/p&gt;&lt;p&gt;I worked through online tutorials for three languages: Standard ML, OCaml, and Haskell. I had fun with them, especially OCaml, but there were two glaring issues that held me back.&lt;/p&gt;&lt;p&gt;The first was that the tutorials were self-absorbed in the accoutrements of functional programming: type systems, fancy ways of using types for generic programming, lambda calculus tricks like currying.  The tutorials for all three languages were surprisingly similar.  The examples were either trivial or geared toward writing compilers.  At the time I was interested in in complex, interactive programs--video games--but I didn't have a clue about how to structure even the simplest of games in Haskell.  There were a few trivial games written in OCaml, but they made heavy use of imperative features which made me wonder what the point was.&lt;/p&gt;&lt;p&gt;The second issue was that I was used to working on commercial products, and there was little evidence at the time that Standard ML, OCaml, or Haskell was up to the task.  Would they scale up to programs orders of magnitude larger than class assignments?  And more critically, would functional programming scale up?  Would I hit a point when the garbage collector crossed the line from imperceptible to perceptible?  Would there be anything I could possibly do if that happened?  Would lazy evaluation become too difficult to reason about?  There was also the worry that Windows seemed to be a "barely there" platform in the eyes of all three language maintainers.  The OCaml interpreter had a beautiful interactive shell under MacOS, but the Windows version was--or should have been--a great embarrassment to everyone involved.&lt;/p&gt;&lt;p dir="ltr"&gt;Somewhere in this period I also took a hard look at Lisp (I was one of the first registered users of &lt;a href="http://www.cormanlisp.com/" dir="ltr"&gt;Corman Lisp&lt;/a&gt;) and Erlang.  Erlang wasn't open source yet and required a license for commercial use.  The evaluation version still used the old JAM runtime instead of the more modern BEAM and was dog slow.  It also had the same dated, cold, industrial feeling of the systems I used when at Ericsson.  I put it aside and kept tinkering elsewhere.&lt;/p&gt;&lt;p&gt;But I came back when the move to open source occurred.  Here's why:&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;I found I had an easier time writing programs in Erlang.&lt;/b&gt;  I was focused entirely on the mysterious concept of writing code that didn't involve destructive updates.  I wasn't distracted by type systems or complex module and class systems.  The lack of "let" and "where" clauses in Erlang makes code easier to structure, without the creeping indentation caused by numerous levels of scope.  Atoms are a beautiful data type to work with.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;That the tools had been used to ship large-scale commercial products gave me faith in them.&lt;/b&gt; Yes, they &lt;i dir="ltr"&gt;are&lt;/i&gt; cold and industrial, and I started seeing that as a good thing.  The warts and quirks are there for a reason: because they were needed in order to get a project out the door.  I'll take pragmatism over idealism any day.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;Besides being useful in its own right, concurrency is a good pressure valve for functional programming.&lt;/b&gt;  Too difficult to puzzle out how to make a large functional program work?  Break it into multiple smaller programs that communicate.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;b dir="ltr"&gt;Speed was much improved.&lt;/b&gt;  The BEAM runtime is 3x faster than JAM.  When I started looking at different languages, I was obsessed with performance, but I eventually realized I was limiting my options.  I could always go back to the madness of writing assembly code if I cared that much.  Flexibility mattered more.  The 3x improvement pushed Erlang from "kinda slow" to "good enough."&lt;/p&gt;&lt;p&gt;I've been using Erlang since 1999, but I hardly think of myself as a fanatic.  I still use Perl, Python, C++, with occasional forays into REBOL, Lua, and Forth, plus some other special purpose languages.  They all have strengths and weaknesses.  But for most difficult problems I run into, Erlang is my first choice.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://prog21.dadgum.com/22.html" dir="ltr"&gt;permalink&lt;/a&gt; &lt;i dir="ltr"&gt;March 23, 2008&lt;/i&gt;&lt;/p&gt;</description><pubDate>Sat, 22 May 2021 16:52:29 -0500</pubDate></item><item><title>Quickly copy the output of the last shell command you ran</title><link>https://lobste.rs/s/fhxelk</link><description>&lt;p&gt;This is a fancy thing that iTerm can do, somewhat invasively, and Terminal.app can do, somewhat transparently, and if you already know how to do this then just keep doing your thing and don’t worry about it.&lt;/p&gt;&lt;p dir="ltr"&gt;This post is going to show you how to do it in tmux, because &lt;a href="https://ianthehenry.com/posts/tmux-psa/" dir="ltr"&gt;tmux is great&lt;/a&gt; and it’s not coupled to your choice of terminal emulator and it’s a cool superpower to add to your toolkit.&lt;/p&gt;&lt;div&gt;&lt;span&gt;&lt;span&gt;00:00&lt;/span&gt;&lt;/span&gt;&lt;/div&gt;&lt;p&gt;But it’s not trivial to do in tmux. It took me a while to figure it out. Which is why you’re looking at a blog post, and not a code snippet.&lt;/p&gt;&lt;p dir="ltr"&gt;I mean, I can show you the code snippet if you &lt;em dir="ltr"&gt;want&lt;/em&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;bind -n S-M-Up {
   copy-mode
   send -X clear-selection
   send -X start-of-line
@@ -384,7 +384,506 @@ send -X cursor-right
 send -X begin-selection
 send -X cursor-up
 send -X start-of-line
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Will select the &lt;em dir="ltr"&gt;first character of the next line&lt;/em&gt; although it will not &lt;em dir="ltr"&gt;highlight&lt;/em&gt; the first character of the next line. These bugs made debugging my script very fun, since I had to actually copy things to make sure that I was actually selecting the text I thought I was.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Maybe one day I’ll submit patches for that, and everything will be better. But for now… I have spent way too much time on this already.&lt;/p&gt;</description><pubDate>Sat, 22 May 2021 12:20:39 -0500</pubDate></item><item><title>Why Do Computers Stop and What Can Be Done About It? (1985)</title><link>https://hplabs.itcs.hp.com/techreports/tandem/TR-85.7.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/8enwwl/why_do_computers_stop_what_can_be_done"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sat, 22 May 2021 10:31:11 -0500</pubDate></item><item><title>New book "Rust Web Development" in MEAP</title><link>https://lobste.rs/s/onwkgh</link><description>&lt;UL&gt;&lt;LI&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Will select the &lt;em dir="ltr"&gt;first character of the next line&lt;/em&gt; although it will not &lt;em dir="ltr"&gt;highlight&lt;/em&gt; the first character of the next line. These bugs made debugging my script very fun, since I had to actually copy things to make sure that I was actually selecting the text I thought I was.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Maybe one day I’ll submit patches for that, and everything will be better. But for now… I have spent way too much time on this already.&lt;/p&gt;</description><pubDate>Sat, 22 May 2021 12:20:39 -0500</pubDate></item><item><title>Why Do Computers Stop and What Can Be Done About It? (1985)</title><link>https://hplabs.itcs.hp.com/techreports/tandem/TR-85.7.pdf</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/8enwwl/why_do_computers_stop_what_can_be_done"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Sat, 22 May 2021 10:31:11 -0500</pubDate></item><item><title>Slashdot interview with Rob Pike (2004)</title><link>https://lobste.rs/s/x0zydf</link><description>&lt;div&gt;&lt;span dir="ltr"&gt;
+	
+				
+			Posted
+				by 
+		
+		
+			
+				  Roblimo
+			
+		
+		
+
+		
+		
+		&lt;time datetime="on Monday October 18, 2004 @12:00PM" dir="ltr"&gt;on Monday October 18, 2004 @12:00PM&lt;/time&gt;
+		
+		
+			 from the &lt;span dir="ltr"&gt;straight-talk-express&lt;/span&gt; dept.
+		
+		&lt;/span&gt;&lt;/div&gt;&lt;div dir="ltr"&gt;
+			
+		 	
+				He starts by clearing up my error in saying he was a Unix co-creator in the original &lt;a href="https://interviews.slashdot.org/article.pl?sid=04/10/05/1537242&amp;amp;tid=189" dir="ltr"&gt;Call For Questions&lt;/a&gt;. From there he goes on to answer your questions both completely and lucidly. A refreshing change from the politicians and executives we've talked to so much recently, no doubt about it.
+		 	
+		&lt;/div&gt;&lt;div dir="ltr"&gt;
+
+		
+			&lt;span dir="ltr"&gt;&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt;
+First, let me clear up a misstatement.  I am not a co-creator of Unix.
+I suppose I am described that way because I am co-author (with Brian
+Kernighan) of a book about Unix, but neither Brian nor I would want to
+take credit for creating Unix.  Ken Thompson and Dennis Ritchie
+created Unix and deserve all the credit, and more.  I joined their
+group - the Computing Science Research Center of Bell Labs -
+after 7th Edition Unix had come out.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+&lt;i dir="ltr"&gt; &lt;b dir="ltr"&gt;1) Innovation and patents - by Zocalo&lt;/b&gt; &lt;br dir="ltr"&gt;
+With so many of your ideas being used with such ubiquity in modern
+operating systems, what is your stance on the issue of patenting of
+software and other "intellectual property" concepts?  Assuming that
+business isn't going to let IP patents go away as they strive to build
+patent stockpiles reminiscent of the nuclear arms buildup during the
+cold war, how would you like to see the issue resolved?
+&lt;/i&gt;
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt; Comparing patents to nuclear weapons is a bit extreme.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+&lt;b dir="ltr"&gt;2)  Systems research - by asyncster&lt;/b&gt; &lt;br dir="ltr"&gt;
+
+&lt;i dir="ltr"&gt;In your paper, systems software research is irrelevant, you claim that there is little room for innovation in
+systems programming, and that all energy is devoted to supporting
+existing standards.  Do you still feel this way now that you're
+working at Google?&lt;/i&gt;
+
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt;I was very careful to define my terms in that talk (it was never a
+paper).  I was speaking primarily about operating systems and most of
+what I said then (early 2000) is still true.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+Here at Google the issues are quite different.  The scale of the
+problem we're trying to solve is so vast there are always challenges.
+I find it interesting that the slide in that talk about 'Things to
+Build' is a close match to the stuff we're doing at Google, if you
+squint a bit.  To summarize:
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+GUI: Google put the cleanest, prettiest UI on the internet and work
+continues to find new ways to present data and make it easy to
+explore.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+Component architectures: We use a number of big (BIG!) piece parts
+like the Google File System (GFS) and MapReduce (see the paper by Jeff
+Dean and Sanjay Ghemawat in the upcoming OSDI
+&lt;a href="http://labs.google.com/papers/mapreduce.html" dir="ltr"&gt;http://labs.google.com/papers/mapreduce.html&lt;/a&gt;) to build massive
+engines for processing data.  Using those pieces we can harness
+zillions of machines with a few keystrokes to attack a problem like
+indexing the entire internet.  (OK, it's not quite that easy, but it's
+still amazing.) I have a daily test job I run to monitor the health of
+one of the systems I'm developing; it uses a week of CPU time but runs
+for only a few minutes of real time.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+Languages for distributed computing: I'm part of a team working on
+something along those lines that we hope to write up soon.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+Bringing data to the user instead of the other way around:  Those damn browsers
+are still in the way, but other ways of connecting to data are starting to appear,
+things like the Google API.  However, the surface is barely scratched on this topic.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+System administration: Google's production people are phenomenal at
+keeping all those machines humming and ready for your queries.  They
+demonstrated that there was real progress to be made in the field of
+system administration, and they continue to push forward.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;i dir="ltr"&gt;
+&lt;b dir="ltr"&gt;3)  Back in The Day - by Greyfox&lt;/b&gt; &lt;br dir="ltr"&gt;
+
+Were programmers treated as hot-pluggable resources as they are today?
+There seems to be a mystique to the programmer prior to about 1995.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+From reading the various netnews posts and recollections of older
+programmers, it seems like the programmer back then was viewed as
+something of a wizard without whom all the computers he was
+responsible for would immediately collapse.  Has anything really
+changed or was it the same back then as it is now?  I'm wondering how
+much of what I've read is simply nostalgia.&lt;/i&gt;
+
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt;Isn't it just that today there are a lot more computers, a lot more
+programmers, and most people are familiar with what computers and
+programmers do?  I'm not sure I understand your reference to 1995, but
+twenty or thirty years ago, computers were big expensive temples of
+modernity and anyone who could control their power was almost by
+definition a wizard.  Today, even musicians can use computers (hi
+gary).
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;i dir="ltr"&gt;
+&lt;b dir="ltr"&gt;4)  What are you doing... - by Mark Wilkinson&lt;/b&gt; &lt;br dir="ltr"&gt;
+
+Google employees are apparently allowed to work on their own projects
+20% of the time.  Given that you probably can't comment on what you're
+doing for Google, what are you doing to fill the other 20%?&lt;/i&gt;
+
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt;One of the most interesting projects out there, one I am
+peripherally (but only peripherally) involved with, is the Large
+Synoptic Survey Telescope &lt;a href="http://www.lsst.org/" dir="ltr"&gt;http://www.lsst.org&lt;/a&gt;, which will scan the
+visible sky to very high angular precision, in multiple colors, many
+times a year.  It's got an 8.4 meter aperture and 10 square degree
+field, taking an image every 20 seconds with its 3 gigapixel (sic)
+camera.  The resulting data set will be many petabytes of image and
+catalog data, a data miner's dream.  The software for the telescope is
+as big a challenge as the instrument itself; just the real-time pixel
+pipeline on the mountain will make today's compute clusters look
+wimpy.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+&lt;i dir="ltr"&gt; &lt;b dir="ltr"&gt;5)  Database filesystems - by defile&lt;/b&gt; &lt;br dir="ltr"&gt;
+
+The buzz around filesystems research nowadays is making the UNIX
+filesystem more database-ish.  The buzz around database research
+nowadays is making the relational database more OOP-ish.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+This research to me sounds like the original designers growing tired
+of the limitations of their "creations" now that they're commodities
+and going back to the drawing board to "do things right this time".  I
+predict the reinvented versions will never catch on because they'll be
+too complex and inaccessible.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+Of course, this second system syndrome isn't just limited to systems.
+It happens to bands, directors, probably in every creative art.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+I think what we've got in the modern filesystem and RDBMS is about as
+good as it gets and we should move on.  What do you think?&lt;/i&gt;
+
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt;This is not the first time databases and file systems have
+collided, merged, argued, and split up, and it won't be the last.  The
+specifics of whether you have a file system or a database is a rather
+dull semantic dispute, a contest to see who's got the best technology,
+rigged in a way that neither side wins.  Well, as with most
+technologies, the solution depends on the problem; there is no single
+right answer.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+What's really interesting is how you think about accessing your data.
+File systems and databases provide different ways of organizing data
+to help find structure and meaning in what you've stored, but they're
+not the only approaches possible.  Moreover, the structure they
+provide is really for one purpose: to simplify accessing it.  Once you
+realize it's the access, not the structure, that matters, the whole
+debate changes character.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+One of the big insights in the last few years, through work by the
+internet search engines but also tools like Udi Manber's glimpse, is
+that data with no meaningful structure can still be very powerful if
+the tools to help you search the data are good.  In fact, structure
+can be bad if the structure you have doesn't fit the problem you're
+trying to solve today, regardless of how well it fit the problem you
+were solving yesterday.  So I don't much care any more how my data is
+stored; what matters is how to retrieve the relevant pieces when I
+need them.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+Grep was the definitive Unix tool early on; now we have tools that
+could be characterized as `grep my machine' and `grep the Internet'.
+GMail, Google's mail product, takes that idea and applies it to mail:
+don't bother organizing your mail messages; just put them away for
+searching later.  It's quite liberating if you can let go your old
+file-and-folder-oriented mentality.  Expect more liberation as
+searching replaces structure as the way to handle data.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+&lt;i dir="ltr"&gt; &lt;b dir="ltr"&gt;6) Thoughts on Bell Labs - by geeber
+&lt;/b&gt; &lt;br dir="ltr"&gt;
+Plan 9, Unix and so many other great things came out of Bell Labs.
+Since the crash of the internet bubble, telecom companies have
+suffered immensely.  One of the results of this is that Lucent has
+systematically dismantled one of the world's greatest industrial
+research facilities.  You spent a great part of your career at Bell
+Labs.  What are your thoughts about the history and future (if any) of
+Bell Labs, and how did the culture of the Labs influence the growth of
+Unix?&lt;/i&gt;
+
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt;It's unfair to say `systematically dismantled', as though it was a
+deliberate process and there's nothing left.  A more honest assessment
+might be that changes in the market and in government regulation made
+it harder to keep a freewheeling research lab thriving at the scale of
+the old Bell Labs.  Bell Labs Research is much smaller these days, but
+there are still some very bright people working there and they're
+doing great stuff.  I hope one day to see Bell Labs restored to its
+former glory, but the world has changed enough that that may never
+happen.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+I could go on for pages about the old Bell Labs culture, but I must be
+brief.  When I arrived, in 1980, the Computing Science Research
+Center, also known as 127 (later 1127; therein lies a tale) had
+recently launched 7th Edition Unix and the Center, after a long period
+of essentially zero growth, was just entering a period of rapid
+expansion.  That expansion brought in a lot of new people with new
+ideas.  I was a graphics guy then, and I hooked up with Bart Locanthi,
+another graphics guy, and we brought graphics to Research Unix with
+the Blit.  Other folks brought in new languages, novel hardware,
+networking; all kinds of stuff.  That period in the early 80s
+generated a lot of ideas that influenced Unix both within the Labs and
+in the outside community.  I believe the fact that the Center was
+growing was a big part of its success.  The growth not only provided
+new ideas, it also generated a kind of enthusiasm that doesn't exist
+in the steady state or in a shrinking group.  Universities harness a
+variant of that energy with the continuous flow of graduate students;
+in industrial research you need to create it in other ways.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+One odd detail that I think was vital to how the group functioned was
+a result of the first Unix being run on a clunky minicomputer with
+terminals in the machine room.  People working on the system
+congregated in the room - to use the computer, you pretty much had to
+be there.  (This idea didn't seem odd back then; it was a natural
+evolution of the old hour-at-a-time way of booking machines like the
+IBM 7090.) The folks liked working that way, so when the machine was
+moved to a different room from the terminals, even when it was
+possible to connect from your private office, there was still a `Unix
+room' with a bunch of terminals where people would congregate, code,
+design, and just hang out.  (The coffee machine was there too.) The
+Unix room still exists, and it may be the greatest cultural reason for
+the success of Unix as a technology.  More groups could profit from
+its lesson, but it's really hard to add a Unix-room-like space to an
+existing organization.  You need the culture to encourage people not
+to hide in their offices, you need a way of using systems that makes a
+public machine a viable place to work - typically by storing the data
+somewhere other than the 'desktop' - and you need people like Ken and
+Dennis (and Brian Kernighan and Doug McIlroy and Mike Lesk and Stu
+Feldman and Greg Chesson and ...) hanging out in the room, but if you
+can make it work, it's magical.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+When I first started at the Labs, I spent most of my time in the Unix
+room.  The buzz was palpable; the education unparalleled.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+(And speaking of Doug, he's the unsung hero of Unix.  He was manager of
+the group that produced it and a huge creative force in the group, but
+he's almost unknown in the Unix community.  He invented a couple of
+things you might have heard of: pipes and - get this - macros.  Well,
+someone had to do it and that someone was Doug.  As Ken once said when
+we were talking one day in the Unix room, "There's no one smarter than
+Doug.")
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+&lt;i dir="ltr"&gt; &lt;b dir="ltr"&gt;7)  Languages - by btlzu2
+&lt;/b&gt; &lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+Hello!
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+Maybe this is an overly-asked question, but I still often ponder it.
+Does object-oriented design negate or diminish the future prospects of
+Unix's continuing popularity?
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+I've developed in C (which I still love), but lately, I've been doing
+a lot of purely object-oriented development in Java.  Using things
+like delegation and reusable classes have made life so much easier in
+many respects.  Since the *nixes are so dependent upon C, I was
+wondering what future you see in C combined with Unix.  Like I said, I
+love C and still enjoy developing in Unix, but there has to be a point
+where you build on your progress and the object-oriented languages, in
+my opinion, seem to be doing that.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+Thank you for all your contributions!!!&lt;/i&gt;
+
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt;The future does indeed seem to have an OO hue.  It may have bearing
+on Unix, but I doubt it; Unix in all its variants has become so
+important as the operating system of the internet that whatever the
+Java applications and desktop dances may lead to, Unix will still be
+pushing the packets around for a quite a while.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+On a related topic, let me say that I'm not much of a fan of
+object-oriented design.  I've seen some beautiful stuff done with OO,
+and I've even done some OO stuff myself, but it's just one way to
+approach a problem.  For some problems, it's an ideal way; for others,
+it's not such a good fit.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+Here's an analogy.  If you want to make some physical artifact, you
+might decide to build it purely in wood because you like the way the
+grain of the wood adds to the beauty of the object.  In fact many of
+the most beautiful things in the world are made of wood.  But wood is
+not ideal for everything.  No amount of beauty of the grain can make
+wood conduct electricity, or support a skyscraper, or absorb huge
+amounts of energy without breaking.  Sometimes you need metal or
+plastic or synthetic materials; more often you need a wide range of
+materials to build something of lasting value.  Don't let the fact
+that you love wood blind you to the problems wood has as a material,
+or to the possibilities offered by other materials.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+The promoters of object-oriented design sometimes sound like master
+woodworkers waiting for the beauty of the physical block of wood to
+reveal itself before they begin to work.  "Oh, look; if I turn the
+wood this way, the grain flows along the angle of the seat at just the
+right angle, see?" Great, nice chair.  But will you notice the grain
+when you're sitting on it?  And what about next time?  Sometimes the
+thing that needs to be made is not hiding in any block of wood.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+OO is great for problems where an interface applies naturally to a
+wide range of types, not so good for managing polymorphism (the
+machinations to get collections into OO languages are astounding to
+watch and can be hellish to work with), and remarkably ill-suited for
+network computing.  That's why I reserve the right to match the
+language to the problem, and even - often - to coordinate software
+written in several languages towards solving a single problem.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+It's that last point - different languages for different subproblems -
+that sometimes seems lost to the OO crowd.  In a typical working day I
+probably use a half dozen languages - C, C++, Java, Python, Awk, Shell
+- and many more little languages you don't usually even think of as
+languages - regular expressions, Makefiles, shell wildcards,
+arithmetic, logic, statistics, calculus - the list goes on.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+Does object-oriented design have much to say to Unix?  Sure, but no
+more than functions or concurrency or databases or pattern matching or
+little languages or....
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+Regardless of what I think, though, OO design is the way people are
+taught to think about computing these days.  I guess that's OK - the
+work does seem to get done, after all - but I wish the view was a
+little broader.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+&lt;i dir="ltr"&gt; &lt;b dir="ltr"&gt;8)  One tool for one job? - by sczimme&lt;/b&gt;
+&lt;br dir="ltr"&gt;
+Given the nature of current operating systems and applications, do you
+think the idea of "one tool doing one job well" has been abandoned?
+If so, do you think a return to this model would help bring some
+innovation back to software development?
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+(It's easier to toss a small, single-purpose app and start over than
+it is to toss a large, feature-laden app and start over.)&lt;/i&gt;
+
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt; Those days are dead and gone and the eulogy was delivered by Perl.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+
+&lt;i dir="ltr"&gt; &lt;b dir="ltr"&gt;9) Emacs or Vi?  - by Neil Blender&lt;/b&gt; &lt;/i&gt;
+
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; Neither.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+When I was a lad, I hacked up the 6th Edition ed with Tom Duff, Hugh
+Redelmeier, and David Tilbrook to resuscitate qed, the editor Ken
+Thompson wrote for CTSS that was the inspiration for the much slimmer
+ed.  (Children must learn these things for themselves.) Dennis Ritchie
+has a nice history of qed at
+&lt;a href="http://cm.bell-labs.com/cm/cs/who/dmr/qed.html" dir="ltr"&gt;http://cm.bell-labs.com/cm/cs/who/dmr/qed.html&amp;gt; &lt;/a&gt;.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+I liked qed for one key reason: it was really good at editing a number
+of files simultaneously.  Ed only handled one file at a time.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+Ed and qed were command-driven line editors designed for printing
+terminals, not full-screen displays.  After I got to Bell Labs, I
+tried out vi but it could only handle one
+file at a time, which I found too limiting.  Then I tried emacs, which
+handled multiple files but much more clumsily than qed.  But the thing
+that bothered me most about vi and emacs was that they gave you a
+two-dimensional display of your file but you had only a
+one-dimensional input device to talk to them.  It was like giving
+directions with a map on the table, but being forced to say "up a
+little, right, no back down, right there, yes turn there that's the
+spot" instead of just putting your finger on the map.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+(Today, emacs and vi support the mouse, but back in 1980 the versions
+I had access to had no support for mice.  For that matter, there
+weren't really many mice yet.)
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+So as soon as the Blit started to work, it was time to write an editor
+that used the mouse as an input device.  I used qed (mostly) and
+emacs (a little) to write the first draft of jim, a full-screen editor
+that showed you text you could point to with a mouse.  Jim handled
+multiple files very smoothly, and was really easy to use, but it was
+not terribly powerful.  (Similar editors had been at Xerox PARC and
+other research labs but, well, children must learn these things for
+themselves.)
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+A few years later I took the basic input idea of jim and put a new
+ed-like command language underneath it and called it sam, a locally
+popular editor that still has its adherents today.  To me, the proof
+of sam's success was that it was the first full screen editor Ken
+Thompson liked.  (He's still using it.) Here's the SP&amp;amp;E paper about
+sam from 1987: &lt;a href="http://plan9.bell-labs.com/sys/doc/sam/sam.pdf" dir="ltr"&gt;http://plan9.bell-labs.com/sys/doc/sam/sam.pdf&lt;/a&gt;.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+A few years later, I decided the pop-up menu model for commanding an
+editor with a mouse was too restrictive, so I started over and built
+the much more radical Acme, which I'm using to write these answers.
+Here's the Acme paper:
+&lt;a href="http://plan9.bell-labs.com/sys/doc/acme/acme.pdf" dir="ltr"&gt;http://plan9.bell-labs.com/sys/doc/acme/acme.pdf&lt;/a&gt;
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+I don't expect any Slashdot readers to switch editors after reading
+these papers (although the code is available for most major
+platforms), but I think it's worth reading about them to see that
+there are ways of editing - and working - that span a much larger
+gamut than is captured by the question, 'Emacs or vi?'
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+&lt;i dir="ltr"&gt; &lt;b dir="ltr"&gt;10)  Biggest problem with Unix - by akaina
+&lt;/b&gt; &lt;br dir="ltr"&gt;
+Recently on the Google Labs Aptitude Test there was a question:
+"What's broken with Unix?  How would you fix it?"
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+What would you have put?&lt;/i&gt;
+
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt;Ken Thompson and I started Plan 9 as an answer to that question.
+The major things we saw wrong with Unix when we started talking about
+what would become Plan 9, back around 1985, all stemmed from the
+appearance of a network.  As a stand-alone system, Unix was pretty
+good.  But when you networked Unix machines together, you got a
+network of stand-alone systems instead of a seamless, integrated
+networked system.  Instead of one big file system, one user community,
+one secure setup uniting your network of machines, you had a
+hodgepodge of workarounds to Unix's fundamental design decision that
+each machine is self-sufficient.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+Nothing's really changed today.  The workarounds have become smoother
+and some of the things we can do with networks of Unix machines are
+pretty impressive, but when ssh is the foundation of your security
+architecture, you know things aren't working as they should.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+Looking at things from a lower altitude:
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+I didn't use Unix at all, really, from about 1990 until 2002, when I
+joined Google.  (I worked entirely on Plan 9, which I still believe
+does a pretty good job of solving those fundamental problems.) I was
+surprised when I came back to Unix how many of even the little things
+that were annoying in 1990 continue to annoy today.  In 1975, when the
+argument vector had to live in a 512-byte-block, the 6th Edition
+system would often complain, 'arg list too long'.  But today, when
+machines have gigabytes of memory, I still see that silly message far
+too often.  The argument list is now limited somewhere north of 100K
+on the Linux machines I use at work, but come on people, dynamic
+memory allocation is a done deal!
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+I started keeping a list of these annoyances but it got too long and
+depressing so I just learned to live with them again.  We really are
+using a 1970s era operating system well past its sell-by date.  We get
+a lot done, and we have fun, but let's face it, the fundamental design
+of Unix is older than many of the readers of Slashdot, while lots of
+different, great ideas about computing and networks have been
+developed in the last 30 years.  Using Unix is the computing
+equivalent of listening only to music by David Cassidy.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+&lt;i dir="ltr"&gt; &lt;b dir="ltr"&gt;11)  Re: Plan9 - by Spyffe
+&lt;/b&gt; &lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+Rob,
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+Right now, there are a large number of research kernels.  Plan 9,
+Inferno, AtheOS, Syllable, K42, Mach, L4, etc.  all have their own
+ideas about the future of the kernel.  But they all end up
+implementing a POSIX interface because the UNIX userland is the
+default.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+The kernel space needs to be invigorated using a new userland that
+demands new and innovative functionality from the underlying system.
+Suppose you were to design a user environment for the next 30 years.
+What would the central abstractions be?  What sort of applications
+would it support?&lt;/i&gt;
+
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt;At the risk of contradicting my last answer a little, let me ask
+you back: Does the kernel matter any more?  I don't think it does.
+They're all the same at some level.  I don't care nearly as much as I
+used to about the what the kernel does; it's so easy to emulate your
+way back to a familiar state.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+Applications - web browsers, MP3 players, games, all that jazz - and
+networks are where the action is today, and aside from irritating
+little incompatibilities, the kernel has become a commodity.  Almost
+all the programs I care about can run above Windows, Unix, Plan 9, and
+on PCs, Macs, palmtops and more.  And that, of course, is why these all
+have a POSIX interface: so they can support those applications.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+And then there's the standard network protocols to glue things
+together.  It's all a uniform sea of interoperability (and bugs).
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+I think the future lies in new hardware as much as in new software.  A
+generation from now machines will be so much more portable than they
+are now, so much more powerful, so much more interactive that we
+haven't begun to think about the changes they will bring.  This may be
+the biggest threat to Microsoft: the PC, the desktop, the laptop, will
+all go the way of the slide rule.  As one example, when flexible
+organic semiconductor displays roll out in a few years, the
+transformation in how and where people use computers and other devices
+will be amazing.
+
+It's going to be a wild ride.
+&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
+
+===============&lt;/span&gt;
+			
+		
+
+		
+
+		
+			
+		
+	&lt;/div&gt;</description><pubDate>Sat, 22 May 2021 14:50:56 -0500</pubDate></item><item><title>New book "Rust Web Development" in MEAP</title><link>https://lobste.rs/s/onwkgh</link><description>&lt;UL&gt;&lt;LI&gt;
                     MEAP began May 2021
                 &lt;/LI&gt;&lt;LI&gt;
                     
@@ -938,506 +1437,7 @@ In &lt;i dir="ltr"&gt;Rust Web Development&lt;/i&gt; you will learn:&lt;br dir="
 &lt;a name="499" href="https://nxr.netbsd.org/xref/src/share/misc/style#499" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;499&amp;nbsp;&lt;/a&gt;	&lt;a href="https://nxr.netbsd.org/source/s?defs=exit&amp;amp;project=src" dir="ltr"&gt;exit&lt;/a&gt;(&lt;a href="https://nxr.netbsd.org/source/s?defs=EXIT_FAILURE&amp;amp;project=src" dir="ltr"&gt;EXIT_FAILURE&lt;/a&gt;);
 &lt;a name="500" href="https://nxr.netbsd.org/xref/src/share/misc/style#500" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;500&amp;nbsp;&lt;/a&gt;}
 &lt;a name="501" href="https://nxr.netbsd.org/xref/src/share/misc/style#501" dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;501&amp;nbsp;&lt;/a&gt;&lt;/PRE&gt;&lt;img src="https://nxr.netbsd.org/default/img/servedby.png" alt="Served by OpenGrok" title="Served by OpenGrok" width="208" height="45"&gt;&lt;p&gt;Indexes created Sat May 22 04:51:39 UTC 2021
-    &lt;/p&gt;</description><pubDate>Sat, 22 May 2021 03:30:15 -0500</pubDate></item><item><title>Slashdot interview with Rob Pike (2004)</title><link>https://lobste.rs/s/x0zydf</link><description>&lt;div&gt;&lt;span dir="ltr"&gt;
-	
-				
-			Posted
-				by 
-		
-		
-			
-				  Roblimo
-			
-		
-		
-
-		
-		
-		&lt;time datetime="on Monday October 18, 2004 @12:00PM" dir="ltr"&gt;on Monday October 18, 2004 @12:00PM&lt;/time&gt;
-		
-		
-			 from the &lt;span dir="ltr"&gt;straight-talk-express&lt;/span&gt; dept.
-		
-		&lt;/span&gt;&lt;/div&gt;&lt;div dir="ltr"&gt;
-			
-		 	
-				He starts by clearing up my error in saying he was a Unix co-creator in the original &lt;a href="https://interviews.slashdot.org/article.pl?sid=04/10/05/1537242&amp;amp;tid=189" dir="ltr"&gt;Call For Questions&lt;/a&gt;. From there he goes on to answer your questions both completely and lucidly. A refreshing change from the politicians and executives we've talked to so much recently, no doubt about it.
-		 	
-		&lt;/div&gt;&lt;div dir="ltr"&gt;
-
-		
-			&lt;span dir="ltr"&gt;&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt;
-First, let me clear up a misstatement.  I am not a co-creator of Unix.
-I suppose I am described that way because I am co-author (with Brian
-Kernighan) of a book about Unix, but neither Brian nor I would want to
-take credit for creating Unix.  Ken Thompson and Dennis Ritchie
-created Unix and deserve all the credit, and more.  I joined their
-group - the Computing Science Research Center of Bell Labs -
-after 7th Edition Unix had come out.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-&lt;i dir="ltr"&gt; &lt;b dir="ltr"&gt;1) Innovation and patents - by Zocalo&lt;/b&gt; &lt;br dir="ltr"&gt;
-With so many of your ideas being used with such ubiquity in modern
-operating systems, what is your stance on the issue of patenting of
-software and other "intellectual property" concepts?  Assuming that
-business isn't going to let IP patents go away as they strive to build
-patent stockpiles reminiscent of the nuclear arms buildup during the
-cold war, how would you like to see the issue resolved?
-&lt;/i&gt;
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt; Comparing patents to nuclear weapons is a bit extreme.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-&lt;b dir="ltr"&gt;2)  Systems research - by asyncster&lt;/b&gt; &lt;br dir="ltr"&gt;
-
-&lt;i dir="ltr"&gt;In your paper, systems software research is irrelevant, you claim that there is little room for innovation in
-systems programming, and that all energy is devoted to supporting
-existing standards.  Do you still feel this way now that you're
-working at Google?&lt;/i&gt;
-
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt;I was very careful to define my terms in that talk (it was never a
-paper).  I was speaking primarily about operating systems and most of
-what I said then (early 2000) is still true.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-Here at Google the issues are quite different.  The scale of the
-problem we're trying to solve is so vast there are always challenges.
-I find it interesting that the slide in that talk about 'Things to
-Build' is a close match to the stuff we're doing at Google, if you
-squint a bit.  To summarize:
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-GUI: Google put the cleanest, prettiest UI on the internet and work
-continues to find new ways to present data and make it easy to
-explore.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-Component architectures: We use a number of big (BIG!) piece parts
-like the Google File System (GFS) and MapReduce (see the paper by Jeff
-Dean and Sanjay Ghemawat in the upcoming OSDI
-&lt;a href="http://labs.google.com/papers/mapreduce.html" dir="ltr"&gt;http://labs.google.com/papers/mapreduce.html&lt;/a&gt;) to build massive
-engines for processing data.  Using those pieces we can harness
-zillions of machines with a few keystrokes to attack a problem like
-indexing the entire internet.  (OK, it's not quite that easy, but it's
-still amazing.) I have a daily test job I run to monitor the health of
-one of the systems I'm developing; it uses a week of CPU time but runs
-for only a few minutes of real time.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-Languages for distributed computing: I'm part of a team working on
-something along those lines that we hope to write up soon.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-Bringing data to the user instead of the other way around:  Those damn browsers
-are still in the way, but other ways of connecting to data are starting to appear,
-things like the Google API.  However, the surface is barely scratched on this topic.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-System administration: Google's production people are phenomenal at
-keeping all those machines humming and ready for your queries.  They
-demonstrated that there was real progress to be made in the field of
-system administration, and they continue to push forward.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;i dir="ltr"&gt;
-&lt;b dir="ltr"&gt;3)  Back in The Day - by Greyfox&lt;/b&gt; &lt;br dir="ltr"&gt;
-
-Were programmers treated as hot-pluggable resources as they are today?
-There seems to be a mystique to the programmer prior to about 1995.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-From reading the various netnews posts and recollections of older
-programmers, it seems like the programmer back then was viewed as
-something of a wizard without whom all the computers he was
-responsible for would immediately collapse.  Has anything really
-changed or was it the same back then as it is now?  I'm wondering how
-much of what I've read is simply nostalgia.&lt;/i&gt;
-
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt;Isn't it just that today there are a lot more computers, a lot more
-programmers, and most people are familiar with what computers and
-programmers do?  I'm not sure I understand your reference to 1995, but
-twenty or thirty years ago, computers were big expensive temples of
-modernity and anyone who could control their power was almost by
-definition a wizard.  Today, even musicians can use computers (hi
-gary).
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;i dir="ltr"&gt;
-&lt;b dir="ltr"&gt;4)  What are you doing... - by Mark Wilkinson&lt;/b&gt; &lt;br dir="ltr"&gt;
-
-Google employees are apparently allowed to work on their own projects
-20% of the time.  Given that you probably can't comment on what you're
-doing for Google, what are you doing to fill the other 20%?&lt;/i&gt;
-
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt;One of the most interesting projects out there, one I am
-peripherally (but only peripherally) involved with, is the Large
-Synoptic Survey Telescope &lt;a href="http://www.lsst.org/" dir="ltr"&gt;http://www.lsst.org&lt;/a&gt;, which will scan the
-visible sky to very high angular precision, in multiple colors, many
-times a year.  It's got an 8.4 meter aperture and 10 square degree
-field, taking an image every 20 seconds with its 3 gigapixel (sic)
-camera.  The resulting data set will be many petabytes of image and
-catalog data, a data miner's dream.  The software for the telescope is
-as big a challenge as the instrument itself; just the real-time pixel
-pipeline on the mountain will make today's compute clusters look
-wimpy.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-&lt;i dir="ltr"&gt; &lt;b dir="ltr"&gt;5)  Database filesystems - by defile&lt;/b&gt; &lt;br dir="ltr"&gt;
-
-The buzz around filesystems research nowadays is making the UNIX
-filesystem more database-ish.  The buzz around database research
-nowadays is making the relational database more OOP-ish.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-This research to me sounds like the original designers growing tired
-of the limitations of their "creations" now that they're commodities
-and going back to the drawing board to "do things right this time".  I
-predict the reinvented versions will never catch on because they'll be
-too complex and inaccessible.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-Of course, this second system syndrome isn't just limited to systems.
-It happens to bands, directors, probably in every creative art.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-I think what we've got in the modern filesystem and RDBMS is about as
-good as it gets and we should move on.  What do you think?&lt;/i&gt;
-
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt;This is not the first time databases and file systems have
-collided, merged, argued, and split up, and it won't be the last.  The
-specifics of whether you have a file system or a database is a rather
-dull semantic dispute, a contest to see who's got the best technology,
-rigged in a way that neither side wins.  Well, as with most
-technologies, the solution depends on the problem; there is no single
-right answer.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-What's really interesting is how you think about accessing your data.
-File systems and databases provide different ways of organizing data
-to help find structure and meaning in what you've stored, but they're
-not the only approaches possible.  Moreover, the structure they
-provide is really for one purpose: to simplify accessing it.  Once you
-realize it's the access, not the structure, that matters, the whole
-debate changes character.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-One of the big insights in the last few years, through work by the
-internet search engines but also tools like Udi Manber's glimpse, is
-that data with no meaningful structure can still be very powerful if
-the tools to help you search the data are good.  In fact, structure
-can be bad if the structure you have doesn't fit the problem you're
-trying to solve today, regardless of how well it fit the problem you
-were solving yesterday.  So I don't much care any more how my data is
-stored; what matters is how to retrieve the relevant pieces when I
-need them.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-Grep was the definitive Unix tool early on; now we have tools that
-could be characterized as `grep my machine' and `grep the Internet'.
-GMail, Google's mail product, takes that idea and applies it to mail:
-don't bother organizing your mail messages; just put them away for
-searching later.  It's quite liberating if you can let go your old
-file-and-folder-oriented mentality.  Expect more liberation as
-searching replaces structure as the way to handle data.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-&lt;i dir="ltr"&gt; &lt;b dir="ltr"&gt;6) Thoughts on Bell Labs - by geeber
-&lt;/b&gt; &lt;br dir="ltr"&gt;
-Plan 9, Unix and so many other great things came out of Bell Labs.
-Since the crash of the internet bubble, telecom companies have
-suffered immensely.  One of the results of this is that Lucent has
-systematically dismantled one of the world's greatest industrial
-research facilities.  You spent a great part of your career at Bell
-Labs.  What are your thoughts about the history and future (if any) of
-Bell Labs, and how did the culture of the Labs influence the growth of
-Unix?&lt;/i&gt;
-
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt;It's unfair to say `systematically dismantled', as though it was a
-deliberate process and there's nothing left.  A more honest assessment
-might be that changes in the market and in government regulation made
-it harder to keep a freewheeling research lab thriving at the scale of
-the old Bell Labs.  Bell Labs Research is much smaller these days, but
-there are still some very bright people working there and they're
-doing great stuff.  I hope one day to see Bell Labs restored to its
-former glory, but the world has changed enough that that may never
-happen.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-I could go on for pages about the old Bell Labs culture, but I must be
-brief.  When I arrived, in 1980, the Computing Science Research
-Center, also known as 127 (later 1127; therein lies a tale) had
-recently launched 7th Edition Unix and the Center, after a long period
-of essentially zero growth, was just entering a period of rapid
-expansion.  That expansion brought in a lot of new people with new
-ideas.  I was a graphics guy then, and I hooked up with Bart Locanthi,
-another graphics guy, and we brought graphics to Research Unix with
-the Blit.  Other folks brought in new languages, novel hardware,
-networking; all kinds of stuff.  That period in the early 80s
-generated a lot of ideas that influenced Unix both within the Labs and
-in the outside community.  I believe the fact that the Center was
-growing was a big part of its success.  The growth not only provided
-new ideas, it also generated a kind of enthusiasm that doesn't exist
-in the steady state or in a shrinking group.  Universities harness a
-variant of that energy with the continuous flow of graduate students;
-in industrial research you need to create it in other ways.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-One odd detail that I think was vital to how the group functioned was
-a result of the first Unix being run on a clunky minicomputer with
-terminals in the machine room.  People working on the system
-congregated in the room - to use the computer, you pretty much had to
-be there.  (This idea didn't seem odd back then; it was a natural
-evolution of the old hour-at-a-time way of booking machines like the
-IBM 7090.) The folks liked working that way, so when the machine was
-moved to a different room from the terminals, even when it was
-possible to connect from your private office, there was still a `Unix
-room' with a bunch of terminals where people would congregate, code,
-design, and just hang out.  (The coffee machine was there too.) The
-Unix room still exists, and it may be the greatest cultural reason for
-the success of Unix as a technology.  More groups could profit from
-its lesson, but it's really hard to add a Unix-room-like space to an
-existing organization.  You need the culture to encourage people not
-to hide in their offices, you need a way of using systems that makes a
-public machine a viable place to work - typically by storing the data
-somewhere other than the 'desktop' - and you need people like Ken and
-Dennis (and Brian Kernighan and Doug McIlroy and Mike Lesk and Stu
-Feldman and Greg Chesson and ...) hanging out in the room, but if you
-can make it work, it's magical.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-When I first started at the Labs, I spent most of my time in the Unix
-room.  The buzz was palpable; the education unparalleled.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-(And speaking of Doug, he's the unsung hero of Unix.  He was manager of
-the group that produced it and a huge creative force in the group, but
-he's almost unknown in the Unix community.  He invented a couple of
-things you might have heard of: pipes and - get this - macros.  Well,
-someone had to do it and that someone was Doug.  As Ken once said when
-we were talking one day in the Unix room, "There's no one smarter than
-Doug.")
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-&lt;i dir="ltr"&gt; &lt;b dir="ltr"&gt;7)  Languages - by btlzu2
-&lt;/b&gt; &lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-Hello!
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-Maybe this is an overly-asked question, but I still often ponder it.
-Does object-oriented design negate or diminish the future prospects of
-Unix's continuing popularity?
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-I've developed in C (which I still love), but lately, I've been doing
-a lot of purely object-oriented development in Java.  Using things
-like delegation and reusable classes have made life so much easier in
-many respects.  Since the *nixes are so dependent upon C, I was
-wondering what future you see in C combined with Unix.  Like I said, I
-love C and still enjoy developing in Unix, but there has to be a point
-where you build on your progress and the object-oriented languages, in
-my opinion, seem to be doing that.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-Thank you for all your contributions!!!&lt;/i&gt;
-
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt;The future does indeed seem to have an OO hue.  It may have bearing
-on Unix, but I doubt it; Unix in all its variants has become so
-important as the operating system of the internet that whatever the
-Java applications and desktop dances may lead to, Unix will still be
-pushing the packets around for a quite a while.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-On a related topic, let me say that I'm not much of a fan of
-object-oriented design.  I've seen some beautiful stuff done with OO,
-and I've even done some OO stuff myself, but it's just one way to
-approach a problem.  For some problems, it's an ideal way; for others,
-it's not such a good fit.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-Here's an analogy.  If you want to make some physical artifact, you
-might decide to build it purely in wood because you like the way the
-grain of the wood adds to the beauty of the object.  In fact many of
-the most beautiful things in the world are made of wood.  But wood is
-not ideal for everything.  No amount of beauty of the grain can make
-wood conduct electricity, or support a skyscraper, or absorb huge
-amounts of energy without breaking.  Sometimes you need metal or
-plastic or synthetic materials; more often you need a wide range of
-materials to build something of lasting value.  Don't let the fact
-that you love wood blind you to the problems wood has as a material,
-or to the possibilities offered by other materials.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-The promoters of object-oriented design sometimes sound like master
-woodworkers waiting for the beauty of the physical block of wood to
-reveal itself before they begin to work.  "Oh, look; if I turn the
-wood this way, the grain flows along the angle of the seat at just the
-right angle, see?" Great, nice chair.  But will you notice the grain
-when you're sitting on it?  And what about next time?  Sometimes the
-thing that needs to be made is not hiding in any block of wood.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-OO is great for problems where an interface applies naturally to a
-wide range of types, not so good for managing polymorphism (the
-machinations to get collections into OO languages are astounding to
-watch and can be hellish to work with), and remarkably ill-suited for
-network computing.  That's why I reserve the right to match the
-language to the problem, and even - often - to coordinate software
-written in several languages towards solving a single problem.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-It's that last point - different languages for different subproblems -
-that sometimes seems lost to the OO crowd.  In a typical working day I
-probably use a half dozen languages - C, C++, Java, Python, Awk, Shell
-- and many more little languages you don't usually even think of as
-languages - regular expressions, Makefiles, shell wildcards,
-arithmetic, logic, statistics, calculus - the list goes on.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-Does object-oriented design have much to say to Unix?  Sure, but no
-more than functions or concurrency or databases or pattern matching or
-little languages or....
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-Regardless of what I think, though, OO design is the way people are
-taught to think about computing these days.  I guess that's OK - the
-work does seem to get done, after all - but I wish the view was a
-little broader.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-&lt;i dir="ltr"&gt; &lt;b dir="ltr"&gt;8)  One tool for one job? - by sczimme&lt;/b&gt;
-&lt;br dir="ltr"&gt;
-Given the nature of current operating systems and applications, do you
-think the idea of "one tool doing one job well" has been abandoned?
-If so, do you think a return to this model would help bring some
-innovation back to software development?
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-(It's easier to toss a small, single-purpose app and start over than
-it is to toss a large, feature-laden app and start over.)&lt;/i&gt;
-
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt; Those days are dead and gone and the eulogy was delivered by Perl.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-
-&lt;i dir="ltr"&gt; &lt;b dir="ltr"&gt;9) Emacs or Vi?  - by Neil Blender&lt;/b&gt; &lt;/i&gt;
-
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; Neither.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-When I was a lad, I hacked up the 6th Edition ed with Tom Duff, Hugh
-Redelmeier, and David Tilbrook to resuscitate qed, the editor Ken
-Thompson wrote for CTSS that was the inspiration for the much slimmer
-ed.  (Children must learn these things for themselves.) Dennis Ritchie
-has a nice history of qed at
-&lt;a href="http://cm.bell-labs.com/cm/cs/who/dmr/qed.html" dir="ltr"&gt;http://cm.bell-labs.com/cm/cs/who/dmr/qed.html&amp;gt; &lt;/a&gt;.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-I liked qed for one key reason: it was really good at editing a number
-of files simultaneously.  Ed only handled one file at a time.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-Ed and qed were command-driven line editors designed for printing
-terminals, not full-screen displays.  After I got to Bell Labs, I
-tried out vi but it could only handle one
-file at a time, which I found too limiting.  Then I tried emacs, which
-handled multiple files but much more clumsily than qed.  But the thing
-that bothered me most about vi and emacs was that they gave you a
-two-dimensional display of your file but you had only a
-one-dimensional input device to talk to them.  It was like giving
-directions with a map on the table, but being forced to say "up a
-little, right, no back down, right there, yes turn there that's the
-spot" instead of just putting your finger on the map.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-(Today, emacs and vi support the mouse, but back in 1980 the versions
-I had access to had no support for mice.  For that matter, there
-weren't really many mice yet.)
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-So as soon as the Blit started to work, it was time to write an editor
-that used the mouse as an input device.  I used qed (mostly) and
-emacs (a little) to write the first draft of jim, a full-screen editor
-that showed you text you could point to with a mouse.  Jim handled
-multiple files very smoothly, and was really easy to use, but it was
-not terribly powerful.  (Similar editors had been at Xerox PARC and
-other research labs but, well, children must learn these things for
-themselves.)
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-A few years later I took the basic input idea of jim and put a new
-ed-like command language underneath it and called it sam, a locally
-popular editor that still has its adherents today.  To me, the proof
-of sam's success was that it was the first full screen editor Ken
-Thompson liked.  (He's still using it.) Here's the SP&amp;amp;E paper about
-sam from 1987: &lt;a href="http://plan9.bell-labs.com/sys/doc/sam/sam.pdf" dir="ltr"&gt;http://plan9.bell-labs.com/sys/doc/sam/sam.pdf&lt;/a&gt;.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-A few years later, I decided the pop-up menu model for commanding an
-editor with a mouse was too restrictive, so I started over and built
-the much more radical Acme, which I'm using to write these answers.
-Here's the Acme paper:
-&lt;a href="http://plan9.bell-labs.com/sys/doc/acme/acme.pdf" dir="ltr"&gt;http://plan9.bell-labs.com/sys/doc/acme/acme.pdf&lt;/a&gt;
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-I don't expect any Slashdot readers to switch editors after reading
-these papers (although the code is available for most major
-platforms), but I think it's worth reading about them to see that
-there are ways of editing - and working - that span a much larger
-gamut than is captured by the question, 'Emacs or vi?'
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-&lt;i dir="ltr"&gt; &lt;b dir="ltr"&gt;10)  Biggest problem with Unix - by akaina
-&lt;/b&gt; &lt;br dir="ltr"&gt;
-Recently on the Google Labs Aptitude Test there was a question:
-"What's broken with Unix?  How would you fix it?"
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-What would you have put?&lt;/i&gt;
-
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt;Ken Thompson and I started Plan 9 as an answer to that question.
-The major things we saw wrong with Unix when we started talking about
-what would become Plan 9, back around 1985, all stemmed from the
-appearance of a network.  As a stand-alone system, Unix was pretty
-good.  But when you networked Unix machines together, you got a
-network of stand-alone systems instead of a seamless, integrated
-networked system.  Instead of one big file system, one user community,
-one secure setup uniting your network of machines, you had a
-hodgepodge of workarounds to Unix's fundamental design decision that
-each machine is self-sufficient.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-Nothing's really changed today.  The workarounds have become smoother
-and some of the things we can do with networks of Unix machines are
-pretty impressive, but when ssh is the foundation of your security
-architecture, you know things aren't working as they should.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-Looking at things from a lower altitude:
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-I didn't use Unix at all, really, from about 1990 until 2002, when I
-joined Google.  (I worked entirely on Plan 9, which I still believe
-does a pretty good job of solving those fundamental problems.) I was
-surprised when I came back to Unix how many of even the little things
-that were annoying in 1990 continue to annoy today.  In 1975, when the
-argument vector had to live in a 512-byte-block, the 6th Edition
-system would often complain, 'arg list too long'.  But today, when
-machines have gigabytes of memory, I still see that silly message far
-too often.  The argument list is now limited somewhere north of 100K
-on the Linux machines I use at work, but come on people, dynamic
-memory allocation is a done deal!
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-I started keeping a list of these annoyances but it got too long and
-depressing so I just learned to live with them again.  We really are
-using a 1970s era operating system well past its sell-by date.  We get
-a lot done, and we have fun, but let's face it, the fundamental design
-of Unix is older than many of the readers of Slashdot, while lots of
-different, great ideas about computing and networks have been
-developed in the last 30 years.  Using Unix is the computing
-equivalent of listening only to music by David Cassidy.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-&lt;i dir="ltr"&gt; &lt;b dir="ltr"&gt;11)  Re: Plan9 - by Spyffe
-&lt;/b&gt; &lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-Rob,
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-Right now, there are a large number of research kernels.  Plan 9,
-Inferno, AtheOS, Syllable, K42, Mach, L4, etc.  all have their own
-ideas about the future of the kernel.  But they all end up
-implementing a POSIX interface because the UNIX userland is the
-default.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-The kernel space needs to be invigorated using a new userland that
-demands new and innovative functionality from the underlying system.
-Suppose you were to design a user environment for the next 30 years.
-What would the central abstractions be?  What sort of applications
-would it support?&lt;/i&gt;
-
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt; &lt;b dir="ltr"&gt;Pike:&lt;/b&gt; &lt;br dir="ltr"&gt;At the risk of contradicting my last answer a little, let me ask
-you back: Does the kernel matter any more?  I don't think it does.
-They're all the same at some level.  I don't care nearly as much as I
-used to about the what the kernel does; it's so easy to emulate your
-way back to a familiar state.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-Applications - web browsers, MP3 players, games, all that jazz - and
-networks are where the action is today, and aside from irritating
-little incompatibilities, the kernel has become a commodity.  Almost
-all the programs I care about can run above Windows, Unix, Plan 9, and
-on PCs, Macs, palmtops and more.  And that, of course, is why these all
-have a POSIX interface: so they can support those applications.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-And then there's the standard network protocols to glue things
-together.  It's all a uniform sea of interoperability (and bugs).
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-I think the future lies in new hardware as much as in new software.  A
-generation from now machines will be so much more portable than they
-are now, so much more powerful, so much more interactive that we
-haven't begun to think about the changes they will bring.  This may be
-the biggest threat to Microsoft: the PC, the desktop, the laptop, will
-all go the way of the slide rule.  As one example, when flexible
-organic semiconductor displays roll out in a few years, the
-transformation in how and where people use computers and other devices
-will be amazing.
-
-It's going to be a wild ride.
-&lt;br dir="ltr"&gt; &lt;br dir="ltr"&gt;
-
-===============&lt;/span&gt;
-			
-		
-
-		
-
-		
-			
-		
-	&lt;/div&gt;</description><pubDate>Sat, 22 May 2021 14:50:56 -0500</pubDate></item><item><title>How to Play Tetris in the Linux Terminal</title><link>https://lobste.rs/s/f1ayzd</link><description>&lt;img alt="" src="https://secure.gravatar.com/avatar/2623034032315d5cf0bcf5e213ff5547?s=36&amp;amp;d=retro&amp;amp;r=g" srcset="https://secure.gravatar.com/avatar/2623034032315d5cf0bcf5e213ff5547?s=72&amp;amp;d=retro&amp;amp;r=g 2x" height="28" width="28"&gt;&lt;p&gt;&lt;strong dir="ltr"&gt;Tetris is easily the most famous puzzle game of all time so to celebrate its birthdays we show you how to play &lt;a aria-label="Tetris (opens in a new tab)" rel="noreferrer noopener" href="https://en.wikipedia.org/wiki/Tetris" dir="ltr"&gt;Tetris&lt;/a&gt; in the terminal.&lt;/strong&gt;&lt;/p&gt;&lt;p&gt;Why the terminal? Because why not! Besides, I associate the terminal with being productive. So, this way, I can kinda fool myself in to thinking I’m doing something properly! &lt;/p&gt;&lt;img alt="😉" src="https://s.w.org/images/core/emoji/13.0.1/svg/1f609.svg" width="16" height="16"&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;With estimated sales of 170 million, Tetris is one of the best selling games of all time&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Now, chances are you know of Tetris. That counts even if you’ve never played it. In fact, most people would struggle to think of a falling blocks game &lt;em dir="ltr"&gt;other&lt;/em&gt; than Tetris (&lt;a aria-label="sorry Columns (opens in a new tab)" rel="noreferrer noopener" href="https://en.wikipedia.org/wiki/Columns_(video_game)" dir="ltr"&gt;sorry &lt;/a&gt;&lt;em dir="ltr"&gt;&lt;a aria-label="sorry Columns (opens in a new tab)" rel="noreferrer noopener" href="https://en.wikipedia.org/wiki/Columns_(video_game)" dir="ltr"&gt;Columns&lt;/a&gt;&lt;/em&gt;, you tried). &lt;/p&gt;&lt;p&gt;So to mark this particular puzzle game’s anniversary I figured I’d show you how to play Tetris in a terminal emulator of your choice.&lt;/p&gt;&lt;p dir="ltr"&gt;Whether you’re wedded to &lt;em dir="ltr"&gt;Tilix&lt;/em&gt;, cosy with &lt;em dir="ltr"&gt;Guake&lt;/em&gt;, or keeping things vanilla with &lt;em dir="ltr"&gt;GNOME Terminal&lt;/em&gt;, you already everything you need to play command line Tetris on Linux — as you’ll soon see!&lt;/p&gt;&lt;h2&gt;Happy Birthday, Tetris!&lt;/h2&gt;&lt;div class="embed-placeholder" data-type="youtube" data-id="LsqnFf65ANM"&gt;&lt;/div&gt;&lt;figcaption&gt;Nintendo Game Boy, the console which made Tetris famous&lt;/figcaption&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Tetris&lt;/em&gt; is one of the best selling games of all time with estimated &lt;strong dir="ltr"&gt;sales of 170 million&lt;/strong&gt; over the past 35 years, across multiple platforms. Even my beloved &lt;a href="https://harddrop.com/w/images/e/e8/Amstrad1.png" dir="ltr"&gt;Amstrad CPC got a port&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;The first commercially available version of the famed game of falling blocks game was released on June 6, 1984, created by Russian game designer &lt;a href="https://en.wikipedia.org/wiki/Alexey_Pajitnov" dir="ltr"&gt;Alexey Leonidovich Pajitnov&lt;/a&gt;.&amp;nbsp;&lt;/p&gt;&lt;p dir="ltr"&gt;While &lt;em dir="ltr"&gt;Tetris&lt;/em&gt;&amp;nbsp;found success early on it was with the &lt;a href="https://www.nintendo.co.uk/Corporate/Nintendo-History/Game-Boy/Game-Boy-627031.html" rel="noreferrer noopener" aria-label="Nintendo Game Boy (opens in a new tab)" dir="ltr"&gt;Nintendo Game Boy&lt;/a&gt; to which it become a mainstream hit. The handheld console even bundled a free copy of the game for a time, further cementing the puzzle game in the public consciousness.&lt;/p&gt;&lt;p dir="ltr"&gt;The success of the original game meant, inevitably, that imitations soon followed. A veritable stack of would-be and wannabe Tetris clones were (and still are) made, with unofficial recreations even cropping up as &lt;a rel="noreferrer noopener" aria-label=" (opens in a new tab)" href="https://kotaku.com/heres-how-to-play-tetris-and-asteroids-on-lab-equipmen-1560280553" dir="ltr"&gt;playable easter eggs on lab equipment&lt;/a&gt;!&lt;/p&gt;&lt;p dir="ltr"&gt;In all its guises &lt;em dir="ltr"&gt;Tetris&lt;/em&gt; still going strong today. The most recent ‘official’ version is &lt;a aria-label="Tetris 99 (opens in a new tab)" href="https://en.wikipedia.org/wiki/Tetris_99" rel="noreferrer noopener" dir="ltr"&gt;Tetris 99&lt;/a&gt;, a Battle Royale-style multiplayer version, available exclusively on the Nintendo Switch.&lt;/p&gt;&lt;h3&gt;Play Tetris in a Terminal on Linux&lt;/h3&gt;&lt;p&gt;A veritable stack of Tetris clones are available on Linux and other platforms — more than enough to fill several blog posts several times over! Better yet, most of them are playable outside of the Linux terminal, too.&lt;/p&gt;&lt;p dir="ltr"&gt;But since I think there’s something unabashedly nerdy and, yes, cool, about being able to play Tetris in the terminal, that’s what &lt;em dir="ltr"&gt;this&lt;/em&gt; post focuses on.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Hate CLI?&lt;/strong&gt; Check out Quadrapassel. It’s a free GUI Tetris clone that’s available in the repos of most major Linux distributions (as well as &lt;a href="snap://quadrapassel" dir="ltr"&gt;the Snap Store&lt;/a&gt;).&lt;/p&gt;&lt;p&gt;Below, I highlight two different versions of “Tetris” you can play at the command line: one is basic, but easy to install, while the other is more flashy, but requires a binary download. &lt;/p&gt;&lt;p&gt;Nver played Tetris? The concept is this: rotate and reposition blocks as they fall to create horizontal rows (lines) which disappear and score you points when made. The more points you score the faster the blocks fall. When the stack gets too high the game is over.&lt;/p&gt;&lt;h4&gt;Option 1: Tint Tetris&lt;/h4&gt;&lt;figure&gt;&lt;img width="453" height="302" src="https://149366088.v2.pressablecdn.com/wp-content/uploads/2019/06/tint-tetris-gif.gif" alt=""&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;We highlighted the terrific terminal Tetris clone &lt;em dir="ltr"&gt;Tint&lt;/em&gt; &lt;a aria-label=" (opens in a new tab)" rel="noreferrer noopener" href="https://www.omgubuntu.co.uk/2009/10/random-things-to-do-in-a-terminal-play-tetris" dir="ltr"&gt;way back in 2009&lt;/a&gt; (yes, we’ve been around that long) but I’m pleased to say it still stands up today.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Tint tries to stay as close to the original game as possible, but there are a few small differences&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Tint&lt;/em&gt; tries to veer ‘as close to the original game as possible’, but there are a couple of notable differences. For instance, there’s no ‘preview’ of the next block to drop. This is a basic feature that I find particularly helpful &lt;/p&gt;&lt;p&gt;The play screen does keep track of your score, including how many lines you’ve made. There’s also a statistics section to keep track on the number of specific tetronimoes that fall.&lt;/p&gt;&lt;p dir="ltr"&gt;A (minor) downside to &lt;em dir="ltr"&gt;Tint&lt;/em&gt; is that doesn’t let you use your keyboard’s arrow keys to rotate or speed up blocks, only reposition them.&lt;/p&gt;&lt;p dir="ltr"&gt;To install &lt;em dir="ltr"&gt;Tint&lt;/em&gt; on Ubuntu, Linux Mint, Peppermint OS and other related distros run this command:&lt;/p&gt;&lt;PRE&gt;sudo apt install tint&lt;/PRE&gt;&lt;p&gt;To play the game run:&lt;/p&gt;&lt;PRE&gt;tint&lt;/PRE&gt;&lt;p dir="ltr"&gt;Enter a number from &lt;code dir="ltr"&gt;1-9&lt;/code&gt; to pick a level (1 being easiest, 9 being hardest).&lt;/p&gt;&lt;h4&gt;Option 2: Sam Tay’s Tetris&lt;/h4&gt;&lt;figure&gt;&lt;img width="453" height="302" src="https://149366088.v2.pressablecdn.com/wp-content/uploads/2019/06/tetris-terminal.gif" alt=""&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;Tint is impressive, but it’s &lt;a href="https://github.com/samtay/tetris" dir="ltr"&gt;Sam Tay’s open-source&lt;/a&gt; ASCII implementation of Tetris that is my own personal go-to version.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;The dotted grid behind the play area makes it easier to gauge exactly where tetronimoes will fall&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;His version looks much nicer. It has a cleaner, spacier layout, and the dotted grid behind the play area and use of shadows makes it much easier to gauge exactly where &lt;a rel="noreferrer noopener" aria-label="tetronimoes (opens in a new tab)" href="https://en.wikipedia.org/wiki/Tetromino" dir="ltr"&gt;tetronimoes&lt;/a&gt; will fall.&lt;/p&gt;&lt;p&gt;Like the Game Boy version, there’s a handy “preview” window to see you which block is coming up next (which might inform where you put the current piece). &lt;/p&gt;&lt;p dir="ltr"&gt;I’m pleased to say that in this version you &lt;em dir="ltr"&gt;can&lt;/em&gt; &lt;strong dir="ltr"&gt;use your keyboard arrow keys to reposition and rotate blocks&lt;/strong&gt;. If you need to pee or answer the door during the middle of a round just hit the &lt;code dir="ltr"&gt;p&lt;/code&gt; key to temporarily pause the game.&lt;/p&gt;&lt;p&gt;Source code, a precompiled binary, and instructions for running this game as a Docker image are can be found on GitHub. Ubuntu users may prefer to install the game from the Snap Store:&lt;/p&gt;&lt;PRE&gt;sudo snap install tetris-thefenriswolf&lt;/PRE&gt;&lt;p&gt;To play the game run:&lt;/p&gt;&lt;PRE&gt;tetris-thefenriswolf.tetris&lt;/PRE&gt;&lt;p&gt;Let me know what you think of the game down in the comments!&lt;/p&gt;</description><pubDate>Sat, 22 May 2021 16:32:12 -0500</pubDate></item><item><title>OpenConnect VPN service daemon for FreeBSD rc(8)</title><link>https://lobste.rs/s/7rsuc0</link><description>&lt;h1&gt;OpenConnect FreeBSD Daemon&lt;/h1&gt;&lt;p&gt;A service daemon for the FreeBSD rc(8) framework. It lets the user configure
+    &lt;/p&gt;</description><pubDate>Sat, 22 May 2021 03:30:15 -0500</pubDate></item><item><title>How to Play Tetris in the Linux Terminal</title><link>https://lobste.rs/s/f1ayzd</link><description>&lt;img alt="" src="https://secure.gravatar.com/avatar/2623034032315d5cf0bcf5e213ff5547?s=36&amp;amp;d=retro&amp;amp;r=g" srcset="https://secure.gravatar.com/avatar/2623034032315d5cf0bcf5e213ff5547?s=72&amp;amp;d=retro&amp;amp;r=g 2x" height="28" width="28"&gt;&lt;p&gt;&lt;strong dir="ltr"&gt;Tetris is easily the most famous puzzle game of all time so to celebrate its birthdays we show you how to play &lt;a aria-label="Tetris (opens in a new tab)" rel="noreferrer noopener" href="https://en.wikipedia.org/wiki/Tetris" dir="ltr"&gt;Tetris&lt;/a&gt; in the terminal.&lt;/strong&gt;&lt;/p&gt;&lt;p&gt;Why the terminal? Because why not! Besides, I associate the terminal with being productive. So, this way, I can kinda fool myself in to thinking I’m doing something properly! &lt;/p&gt;&lt;img alt="😉" src="https://s.w.org/images/core/emoji/13.0.1/svg/1f609.svg" width="16" height="16"&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;With estimated sales of 170 million, Tetris is one of the best selling games of all time&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;Now, chances are you know of Tetris. That counts even if you’ve never played it. In fact, most people would struggle to think of a falling blocks game &lt;em dir="ltr"&gt;other&lt;/em&gt; than Tetris (&lt;a aria-label="sorry Columns (opens in a new tab)" rel="noreferrer noopener" href="https://en.wikipedia.org/wiki/Columns_(video_game)" dir="ltr"&gt;sorry &lt;/a&gt;&lt;em dir="ltr"&gt;&lt;a aria-label="sorry Columns (opens in a new tab)" rel="noreferrer noopener" href="https://en.wikipedia.org/wiki/Columns_(video_game)" dir="ltr"&gt;Columns&lt;/a&gt;&lt;/em&gt;, you tried). &lt;/p&gt;&lt;p&gt;So to mark this particular puzzle game’s anniversary I figured I’d show you how to play Tetris in a terminal emulator of your choice.&lt;/p&gt;&lt;p dir="ltr"&gt;Whether you’re wedded to &lt;em dir="ltr"&gt;Tilix&lt;/em&gt;, cosy with &lt;em dir="ltr"&gt;Guake&lt;/em&gt;, or keeping things vanilla with &lt;em dir="ltr"&gt;GNOME Terminal&lt;/em&gt;, you already everything you need to play command line Tetris on Linux — as you’ll soon see!&lt;/p&gt;&lt;h2&gt;Happy Birthday, Tetris!&lt;/h2&gt;&lt;div class="embed-placeholder" data-type="youtube" data-id="LsqnFf65ANM"&gt;&lt;/div&gt;&lt;figcaption&gt;Nintendo Game Boy, the console which made Tetris famous&lt;/figcaption&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Tetris&lt;/em&gt; is one of the best selling games of all time with estimated &lt;strong dir="ltr"&gt;sales of 170 million&lt;/strong&gt; over the past 35 years, across multiple platforms. Even my beloved &lt;a href="https://harddrop.com/w/images/e/e8/Amstrad1.png" dir="ltr"&gt;Amstrad CPC got a port&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;The first commercially available version of the famed game of falling blocks game was released on June 6, 1984, created by Russian game designer &lt;a href="https://en.wikipedia.org/wiki/Alexey_Pajitnov" dir="ltr"&gt;Alexey Leonidovich Pajitnov&lt;/a&gt;.&amp;nbsp;&lt;/p&gt;&lt;p dir="ltr"&gt;While &lt;em dir="ltr"&gt;Tetris&lt;/em&gt;&amp;nbsp;found success early on it was with the &lt;a href="https://www.nintendo.co.uk/Corporate/Nintendo-History/Game-Boy/Game-Boy-627031.html" rel="noreferrer noopener" aria-label="Nintendo Game Boy (opens in a new tab)" dir="ltr"&gt;Nintendo Game Boy&lt;/a&gt; to which it become a mainstream hit. The handheld console even bundled a free copy of the game for a time, further cementing the puzzle game in the public consciousness.&lt;/p&gt;&lt;p dir="ltr"&gt;The success of the original game meant, inevitably, that imitations soon followed. A veritable stack of would-be and wannabe Tetris clones were (and still are) made, with unofficial recreations even cropping up as &lt;a rel="noreferrer noopener" aria-label=" (opens in a new tab)" href="https://kotaku.com/heres-how-to-play-tetris-and-asteroids-on-lab-equipmen-1560280553" dir="ltr"&gt;playable easter eggs on lab equipment&lt;/a&gt;!&lt;/p&gt;&lt;p dir="ltr"&gt;In all its guises &lt;em dir="ltr"&gt;Tetris&lt;/em&gt; still going strong today. The most recent ‘official’ version is &lt;a aria-label="Tetris 99 (opens in a new tab)" href="https://en.wikipedia.org/wiki/Tetris_99" rel="noreferrer noopener" dir="ltr"&gt;Tetris 99&lt;/a&gt;, a Battle Royale-style multiplayer version, available exclusively on the Nintendo Switch.&lt;/p&gt;&lt;h3&gt;Play Tetris in a Terminal on Linux&lt;/h3&gt;&lt;p&gt;A veritable stack of Tetris clones are available on Linux and other platforms — more than enough to fill several blog posts several times over! Better yet, most of them are playable outside of the Linux terminal, too.&lt;/p&gt;&lt;p dir="ltr"&gt;But since I think there’s something unabashedly nerdy and, yes, cool, about being able to play Tetris in the terminal, that’s what &lt;em dir="ltr"&gt;this&lt;/em&gt; post focuses on.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Hate CLI?&lt;/strong&gt; Check out Quadrapassel. It’s a free GUI Tetris clone that’s available in the repos of most major Linux distributions (as well as &lt;a href="snap://quadrapassel" dir="ltr"&gt;the Snap Store&lt;/a&gt;).&lt;/p&gt;&lt;p&gt;Below, I highlight two different versions of “Tetris” you can play at the command line: one is basic, but easy to install, while the other is more flashy, but requires a binary download. &lt;/p&gt;&lt;p&gt;Nver played Tetris? The concept is this: rotate and reposition blocks as they fall to create horizontal rows (lines) which disappear and score you points when made. The more points you score the faster the blocks fall. When the stack gets too high the game is over.&lt;/p&gt;&lt;h4&gt;Option 1: Tint Tetris&lt;/h4&gt;&lt;figure&gt;&lt;img width="453" height="302" src="https://149366088.v2.pressablecdn.com/wp-content/uploads/2019/06/tint-tetris-gif.gif" alt=""&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;We highlighted the terrific terminal Tetris clone &lt;em dir="ltr"&gt;Tint&lt;/em&gt; &lt;a aria-label=" (opens in a new tab)" rel="noreferrer noopener" href="https://www.omgubuntu.co.uk/2009/10/random-things-to-do-in-a-terminal-play-tetris" dir="ltr"&gt;way back in 2009&lt;/a&gt; (yes, we’ve been around that long) but I’m pleased to say it still stands up today.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Tint tries to stay as close to the original game as possible, but there are a few small differences&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;Tint&lt;/em&gt; tries to veer ‘as close to the original game as possible’, but there are a couple of notable differences. For instance, there’s no ‘preview’ of the next block to drop. This is a basic feature that I find particularly helpful &lt;/p&gt;&lt;p&gt;The play screen does keep track of your score, including how many lines you’ve made. There’s also a statistics section to keep track on the number of specific tetronimoes that fall.&lt;/p&gt;&lt;p dir="ltr"&gt;A (minor) downside to &lt;em dir="ltr"&gt;Tint&lt;/em&gt; is that doesn’t let you use your keyboard’s arrow keys to rotate or speed up blocks, only reposition them.&lt;/p&gt;&lt;p dir="ltr"&gt;To install &lt;em dir="ltr"&gt;Tint&lt;/em&gt; on Ubuntu, Linux Mint, Peppermint OS and other related distros run this command:&lt;/p&gt;&lt;PRE&gt;sudo apt install tint&lt;/PRE&gt;&lt;p&gt;To play the game run:&lt;/p&gt;&lt;PRE&gt;tint&lt;/PRE&gt;&lt;p dir="ltr"&gt;Enter a number from &lt;code dir="ltr"&gt;1-9&lt;/code&gt; to pick a level (1 being easiest, 9 being hardest).&lt;/p&gt;&lt;h4&gt;Option 2: Sam Tay’s Tetris&lt;/h4&gt;&lt;figure&gt;&lt;img width="453" height="302" src="https://149366088.v2.pressablecdn.com/wp-content/uploads/2019/06/tetris-terminal.gif" alt=""&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;Tint is impressive, but it’s &lt;a href="https://github.com/samtay/tetris" dir="ltr"&gt;Sam Tay’s open-source&lt;/a&gt; ASCII implementation of Tetris that is my own personal go-to version.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;The dotted grid behind the play area makes it easier to gauge exactly where tetronimoes will fall&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;His version looks much nicer. It has a cleaner, spacier layout, and the dotted grid behind the play area and use of shadows makes it much easier to gauge exactly where &lt;a rel="noreferrer noopener" aria-label="tetronimoes (opens in a new tab)" href="https://en.wikipedia.org/wiki/Tetromino" dir="ltr"&gt;tetronimoes&lt;/a&gt; will fall.&lt;/p&gt;&lt;p&gt;Like the Game Boy version, there’s a handy “preview” window to see you which block is coming up next (which might inform where you put the current piece). &lt;/p&gt;&lt;p dir="ltr"&gt;I’m pleased to say that in this version you &lt;em dir="ltr"&gt;can&lt;/em&gt; &lt;strong dir="ltr"&gt;use your keyboard arrow keys to reposition and rotate blocks&lt;/strong&gt;. If you need to pee or answer the door during the middle of a round just hit the &lt;code dir="ltr"&gt;p&lt;/code&gt; key to temporarily pause the game.&lt;/p&gt;&lt;p&gt;Source code, a precompiled binary, and instructions for running this game as a Docker image are can be found on GitHub. Ubuntu users may prefer to install the game from the Snap Store:&lt;/p&gt;&lt;PRE&gt;sudo snap install tetris-thefenriswolf&lt;/PRE&gt;&lt;p&gt;To play the game run:&lt;/p&gt;&lt;PRE&gt;tetris-thefenriswolf.tetris&lt;/PRE&gt;&lt;p&gt;Let me know what you think of the game down in the comments!&lt;/p&gt;</description><pubDate>Sat, 22 May 2021 16:32:12 -0500</pubDate></item><item><title>OpenConnect VPN service daemon for FreeBSD rc(8)</title><link>https://lobste.rs/s/7rsuc0</link><description>&lt;h1&gt;OpenConnect FreeBSD Daemon&lt;/h1&gt;&lt;p&gt;A service daemon for the FreeBSD rc(8) framework. It lets the user configure
 OpenConnect VPN in rc.conf(5) and use the standard FreeBSD tools to control the
 daemon.&lt;/p&gt;&lt;p&gt;Features:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Support for starting multiple OpenConnect services.&lt;/LI&gt;&lt;LI&gt;Support for running arbitrary commands for OTP-based authentication.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;See the service files for usage details.&lt;/p&gt;&lt;h2&gt;Installation&lt;/h2&gt;&lt;PRE&gt;% &lt;span dir="ltr"&gt;make&lt;/span&gt;
 % &lt;span dir="ltr"&gt;su&lt;/span&gt;
