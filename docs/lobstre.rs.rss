@@ -492,7 +492,350 @@ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
 AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.&lt;/p&gt;</description><pubDate>Mon, 31 May 2021 04:51:18 -0500</pubDate></item><item><title>A slightly different way to generate strong, memorable passwords</title><link>https://lobste.rs/s/iqvro9</link><description>&lt;div dir="ltr"&gt;
+THE SOFTWARE.&lt;/p&gt;</description><pubDate>Mon, 31 May 2021 04:51:18 -0500</pubDate></item><item><title>Making Wi-Fi serial console adapters with old portable routers</title><link>https://lobste.rs/s/4svghl</link><description>&lt;div dir="ltr"&gt;
+&lt;span dir="ltr"&gt;
+
+&lt;span dir="ltr"&gt;
+&lt;time datetime="2021-05-31T00:00:00Z" dir="ltr"&gt;
+Updated on
+May 31, 2021
+&lt;/time&gt;
+&lt;/span&gt;
+&lt;/span&gt;
+&lt;span dir="ltr"&gt;
+
+&lt;span dir="ltr"&gt;19 min read&lt;/span&gt;
+&lt;/span&gt;
+&lt;/div&gt;&lt;BLOCKQUOTE&gt;
+This post is reconstructed from notes I wrote down in early February back when I did most of the work, so the information might be slightly out of date. I did my best in keeping them up to date and re-tested the firmware builds at the time of writing this post to make sure they all work as intended.
+&lt;/BLOCKQUOTE&gt;&lt;h2&gt;
+Rationale
+&lt;/h2&gt;&lt;p&gt;Serial console is one of the most important ways of communicating with embedded Linux systems. I’ve used a lot of USB serial adapters over the years, but they all seem to have two major drawbacks that are difficult to overcome:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;They are not electrically isolated. Whenever I power up my target boards, there is always a small chance that a power surge will happen due to &lt;a href="https://en.wikipedia.org/wiki/Ground_loop_%28electricity%29" dir="ltr"&gt;ground loop interference&lt;/a&gt;, which causes my connection to be interrupted on power-up:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;FATAL: read zero bytes from port
+term_exitfunc: reset failed for dev UNKNOWN: Input/output error
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;By the time I could reconnect with my terminal software (&lt;code dir="ltr"&gt;picocom&lt;/code&gt; in this case), I would have already missed a lot of critical messages printed by the bootloader. This makes diagnosing and debugging bootloader related problems very unpleasant. To make matters worse, should something bad happens to my board and a high voltage was sent to the tx/rx pins, it can potentially go back to my computer and destroy my PCH, since EHCI/XHCI controllers are typically integrated in the PCH nowadays.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;The UART cable length limit makes it difficult to work with on a messy desk, as I would always need a USB hub or at least an extension cable, further contributing to the clutter, and the bare PCBs have risks of being accidentally sorted out by my other metallic tools if not careful.&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;While talking to some network engineers, I found that some people had Wi-Fi or BLE based wireless console adapters, which allow them to access the RS-232 serial consoles wirelessly. Some research later, a series of products called Airconsole from Cloudstore Limited perked my interests. From the looks of it, most of their Wi-Fi enabled options look extremely similar to a series of older “3G router” products manufactured by HAME. The Mini model looks almost identical to MPR-A5, the Std/Pro one looks almost identical to &lt;a href="https://openwrt.org/toh/hame/mpr-a1" dir="ltr"&gt;MPR-A1&lt;/a&gt;, and the XL looks almost identical to &lt;a href="https://openwrt.org/toh/hame/mpr-a2" dir="ltr"&gt;MPR-A2&lt;/a&gt;. These HAME models are later cloned by other manufacturers and then sold as generic products, and they can still be found to this day on places such as eBay and AliExpress.&lt;/p&gt;&lt;p&gt;With this information in mind, I figured it’s easier for me to make my own wireless serial console adapter with some of the old portable routers I have lying around. I have no need for Bluetooth connectivity or smartphone apps, all I want is something that I can connect to locally and lets me interact with a serial console over a secure connection. Transport security is highly desirable because I don’t want my login credentials to be transmitted in plaintext, not even on my own LAN.&lt;/p&gt;&lt;p dir="ltr"&gt;After some consideration, I have decided running &lt;code dir="ltr"&gt;picocom&lt;/code&gt; over an SSH session, on a battery powered OpenWrt device would be the easiest to implement for me. SSH is the best option for me because the “&lt;a href="https://en.wikipedia.org/wiki/Trust_on_first_use" dir="ltr"&gt;trust on first use&lt;/a&gt;” design has a much lower setup overhead compared to a traditional PKI based TLS/HTTPS setup, while still remaining secure. OpenWrt offers an easy-to-use configuration web interface for setting up the Wi-Fi connection, has (mostly) up to date userspace software, and is pretty much the only Linux distribution that will work on these routers anyway.&lt;/p&gt;&lt;h2&gt;
+Alternatives considered
+&lt;/h2&gt;&lt;p&gt;Here are some alternatives solutions and ideas I have considered or found in my research, and why I did not pick them for this project:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;a href="https://github.com/jeelabs/esp-link" dir="ltr"&gt;esp-link&lt;/a&gt;: While being very affordable, it offers no transport security.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/mdlayher/consrv" dir="ltr"&gt;consrv&lt;/a&gt;: Go binaries are statically linked and too large for the extremely limited amount of storage space available, plus running yet another SSH server while I already have &lt;code dir="ltr"&gt;dropbear&lt;/code&gt; (provided by OpenWrt by default) feels very redundant.&lt;/LI&gt;&lt;LI&gt;Bluetooth based solutions have very limited range, and they are typically much more difficult to work with in general.&lt;/LI&gt;&lt;LI&gt;Proprietary 433MHz/2.4GHz off the shelf serial bridges often have fixed bitrates and lack proper transport encryption.&lt;/LI&gt;&lt;LI&gt;While not being wireless, if only electrical isolation is desired, digital isolators such as the &lt;a href="https://www.analog.com/en/products/adum3201.html" dir="ltr"&gt;ADUM3201&lt;/a&gt; are widely available. The problem with this solution is now eight wires in total would be required, instead of the typical three, since vcc from both sides are needed for the digital isolator to function correctly.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;
+Hardware upgrades
+&lt;/h2&gt;&lt;p dir="ltr"&gt;With the context out of the way, some hardware upgrades are required for me to be able to fit modern OpenWrt onto these devices I have. The &lt;a href="https://openwrt.org/toh/tp-link/tl-mr11u" dir="ltr"&gt;TP-Link TL-MR11U&lt;/a&gt; only has 4MB of NOR flash and 32MB of DRAM. While 32MB is sufficient for what I’m going to run, 4MB is not enough to store the required software anymore. The &lt;a href="https://openwrt.org/toh/hame/mpr-a1" dir="ltr"&gt;HAME MPR-A1&lt;/a&gt; only has 4MB of NOR flash and 16MB of DRAM, neither of which are sufficient for anything I need.&lt;/p&gt;&lt;h3&gt;
+MPR-A1
+&lt;/h3&gt;&lt;p&gt;The MPR-A1 and the MPR-A2 are almost identical devices aside from having less storage, memory and a smaller battery. In fact OpenWrt builds for A2 will work on the A1 if you upgrade its NOR flash and DRAM. I’ll be putting in 8MB of NOR flash and 32MB of DRAM to match the MPR-A2. Disassembling the MPR-A1 was fairly straightforward, so I won’t post images here, as it bogs down the article.&lt;/p&gt;&lt;BLOCKQUOTE&gt;
+The new NOR flash was not soldered back until I spliced the firmware and wrote the new firmware image to the flash. Board images are all placed here for the sake of better organization.
+&lt;/BLOCKQUOTE&gt;&lt;p&gt;I just happened to have an MPR-A2 clone, so I thought I’d put the two PCBs together as a comparison too. It’s interesting to see the clone opted for cheaper parts in some places to cut costs. I won’t be working on the clone as it already has 8MB of NOR flash and 32MB of DRAM.&lt;/p&gt;&lt;figure&gt;&lt;picture&gt;
+&lt;source srcset="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/5350f_pcbs_huceb578e747b069a22fa260a670893d06_2418761_1200x0_resize_q75_box.jpg"&gt;
+&lt;img src="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/5350f_pcbs_huceb578e747b069a22fa260a670893d06_2418761_1800x0_resize_q75_box.jpg" alt="Top: genuine MPR-A1 | Bottom: MPR-A2 clone"&gt;
+&lt;/picture&gt;&lt;figcaption dir="auto"&gt;Top: genuine MPR-A1 | Bottom: MPR-A2 clone&lt;/figcaption&gt;&lt;/figure&gt;&lt;p&gt;According to the RT5350F’s datasheet, DRAM configuration is either set in EEPROM, or configured externally via two bootstrapping pins. In MPR-A1’s case, it’s configured via those two bootstrapping pins. Unfortunately, this SoC cannot properly address one single 64MB DRAM chip (only 32MB*2), so 32MB is as good as it gets.&lt;/p&gt;&lt;figure&gt;&lt;picture&gt;
+&lt;source srcset="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/5350f_bootstrapping_cfg_ds_hu45d8e66648eee905edc67f9e96453126_40028_1200x0_resize_box_2.png"&gt;
+&lt;img src="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/5350f_bootstrapping_cfg_ds_hu45d8e66648eee905edc67f9e96453126_40028_1800x0_resize_box_2.png" alt="Bootstrapping pin configurations from the RT5350F datasheet."&gt;
+&lt;/picture&gt;&lt;figcaption dir="auto"&gt;Bootstrapping pin configurations from the RT5350F datasheet.&lt;/figcaption&gt;&lt;/figure&gt;&lt;figure&gt;&lt;picture&gt;
+&lt;source srcset="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/a1_pcb_clean_hud1a7a19f6085e2bb34fcc220bcb24368_3383267_1200x0_resize_q75_box.jpg"&gt;
+&lt;img src="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/a1_pcb_clean_hud1a7a19f6085e2bb34fcc220bcb24368_3383267_1800x0_resize_q75_box.jpg" alt="MPR-A1's board with DRAM and NOR flash removed."&gt;
+&lt;/picture&gt;&lt;figcaption dir="auto"&gt;MPR-A1's board with DRAM and NOR flash removed.&lt;/figcaption&gt;&lt;/figure&gt;&lt;figure&gt;&lt;picture&gt;
+&lt;source srcset="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/5350f_bootstrapping_cfg_pcb_hu0b8812569cbf4cbf622e3d8df19fcc3c_903841_1200x0_resize_q75_box.jpg"&gt;
+&lt;img src="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/5350f_bootstrapping_cfg_pcb_hu0b8812569cbf4cbf622e3d8df19fcc3c_903841_1800x0_resize_q75_box.jpg" alt="Bootstrapping pins on the PCB. Moving these two resistors to the left flips both bits, from 01 (16MB) to 10 (32MB)."&gt;
+&lt;/picture&gt;&lt;figcaption dir="auto"&gt;Bootstrapping pins on the PCB. Moving these two resistors to the left flips both bits, from 01 (16MB) to 10 (32MB).&lt;/figcaption&gt;&lt;/figure&gt;&lt;figure&gt;&lt;picture&gt;
+&lt;source srcset="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/a1_pcb_upgraded_hu99b98604b0b26b917e8eb4d82d895690_3249083_1200x0_resize_q75_box.jpg"&gt;
+&lt;img src="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/a1_pcb_upgraded_hu99b98604b0b26b917e8eb4d82d895690_3249083_1800x0_resize_q75_box.jpg" alt="Board after the DRAM and NOR flash have been upgraded and bootstrapping pins have been reconfigured."&gt;
+&lt;/picture&gt;&lt;figcaption dir="auto"&gt;Board after the DRAM and NOR flash have been upgraded and bootstrapping pins have been reconfigured.&lt;/figcaption&gt;&lt;/figure&gt;&lt;h3&gt;
+MR11U
+&lt;/h3&gt;&lt;p&gt;For the MR11U, upgrading is much easier, since the bootloader can auto-detect the DRAM configuration and there are no bootstrapping pins to worry about. The datasheet of the SoC says the maximum supported flash size is 16MB, and the maximum supported DRAM size is 64MB, so that’s what I put in.&lt;/p&gt;&lt;figure&gt;&lt;picture&gt;
+&lt;source srcset="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/mr11u_pcb_hubfbcbc9ebec48f2b8db03a96c8ef071a_3005470_1200x0_resize_q75_box.jpg"&gt;
+&lt;img src="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/mr11u_pcb_hubfbcbc9ebec48f2b8db03a96c8ef071a_3005470_1800x0_resize_q75_box.jpg" alt="The upgraded PCB after some cleanup."&gt;
+&lt;/picture&gt;&lt;figcaption dir="auto"&gt;The upgraded PCB after some cleanup.&lt;/figcaption&gt;&lt;/figure&gt;&lt;h2&gt;
+Building OpenWrt
+&lt;/h2&gt;&lt;p dir="ltr"&gt;I won’t go over the &lt;a href="https://openwrt.org/docs/guide-developer/build-system/install-buildsystem" dir="ltr"&gt;setup&lt;/a&gt; process here, the wiki does a pretty good job explaining that. After the source has been cloned, I did the following to build my firmware image:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;&lt;span dir="ltr"&gt;# check out the v19.07.7 branch&lt;/span&gt;
+$ git checkout v19.07.7
+&lt;span dir="ltr"&gt;# clean, update and force install all package feeds&lt;/span&gt;
+&lt;span dir="ltr"&gt;# -f is required because some packages won't show up as they contain files that may &lt;/span&gt;
+&lt;span dir="ltr"&gt;# override built-in packages, and this behavior is typically disallowed by default&lt;/span&gt;
+$ scripts/feeds clean &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; scripts/feeds update -a &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; scripts/feeds install -af
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;
+MPR-A1
+&lt;/h3&gt;&lt;p dir="ltr"&gt;This is the configuration I used for the upgraded MPR-A1. Since I’m borrowing the config for the MPR-A2, no further changes to the source code is required, as the new flash I put in matches the capacity of the MPR-A2. The change in DRAM will get picked up by the bootloader and passed onto the kernel thanks to the new bootstrapping configuration. On top of the defaults, I only enabled ECC and compression support in &lt;code dir="ltr"&gt;dropbear&lt;/code&gt;, added some USB serial drivers, &lt;code dir="ltr"&gt;picocom&lt;/code&gt;, shadow-utils (because I need to add a user to the device) and LuCI (the web configuration interface).&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;CONFIG_TARGET_ramips=y
+CONFIG_TARGET_ramips_rt305x=y
+CONFIG_TARGET_ramips_rt305x_DEVICE_mpr-a2=y
+
+CONFIG_DEVEL=y
+CONFIG_CCACHE=y
+
+# enable ECC and compression support in dropbear
+CONFIG_DROPBEAR_ECC=y
+CONFIG_DROPBEAR_ECC_FULL=y
+CONFIG_DROPBEAR_ZLIB=y
+
+# enable luci
+CONFIG_PACKAGE_luci=y
+
+# USB serial drivers
+CONFIG_PACKAGE_kmod-usb-acm=y
+CONFIG_PACKAGE_kmod-usb-serial=y
+CONFIG_PACKAGE_kmod-usb-serial-ch341=y
+CONFIG_PACKAGE_kmod-usb-serial-cp210x=y
+CONFIG_PACKAGE_kmod-usb-serial-ftdi=y
+CONFIG_PACKAGE_kmod-usb-serial-pl2303=y
+
+# terminal software
+CONFIG_PACKAGE_picocom=y
+
+# enable shadow_utils 
+CONFIG_PACKAGE_shadow-utils=y
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;After writing these to &lt;code dir="ltr"&gt;.config&lt;/code&gt; in the root directory of the source tree, simply running &lt;code dir="ltr"&gt;make defconfig&lt;/code&gt; will tell the build system to automatically resolve dependencies and complete the config file.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;$ make defconfig
+&lt;span dir="ltr"&gt;# download all of the required source archives &lt;/span&gt;
+$ make download -j10
+&lt;span dir="ltr"&gt;# compile the image, running with a high nice value to avoid stalling other applications on the system&lt;/span&gt;
+$ nice -n &lt;span dir="ltr"&gt;19&lt;/span&gt; make -j&lt;span dir="ltr"&gt;$(&lt;/span&gt;nproc&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Unfortunately, the build quickly failed. Running &lt;code dir="ltr"&gt;make V=s -j1&lt;/code&gt; revealed the problem originated from &lt;code dir="ltr"&gt;build_dir/host/mklibs-0.1.35&lt;/code&gt;, whose makefile is &lt;code dir="ltr"&gt;tools/mklibs/Makefile&lt;/code&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;In file included from elf_data.hpp:24,
+                 from elf.cpp:21:
+elf.hpp:52:56: error: ISO C++17 does not allow dynamic exception specifications
+   52 |       const section &amp;amp;get_section(unsigned int i) const throw (std::out_of_range) { return *sections.at(i); };
+      |                                                        ^~~~~
+elf.hpp:62:47: error: ISO C++17 does not allow dynamic exception specifications
+   62 |       static file *open(const char *filename) throw (std::bad_alloc, std::runtime_error);
+      |                                               ^~~~~
+elf.hpp:65:38: error: ISO C++17 does not allow dynamic exception specifications
+   65 |       file(uint8_t *mem, size_t len) throw (std::bad_alloc) : mem(mem), len(len) { }
+      |                                      ^~~~~
+elf.hpp:68:52: error: ISO C++17 does not allow dynamic exception specifications
+   68 |         static file *open_class(uint8_t *, size_t) throw (std::bad_alloc, std::runtime_error);
+      |                                                    ^~~~~
+elf.hpp:131:55: error: ISO C++17 does not allow dynamic exception specifications
+  131 |         std::string get_string(uint32_t offset) const throw (std::bad_alloc)
+      |                                                       ^~~~~
+elf.hpp:266:39: error: ISO C++17 does not allow dynamic exception specifications
+  266 |       std::string get_version() const throw (std::bad_alloc);
+      |                                       ^~~~~
+elf.hpp:267:44: error: ISO C++17 does not allow dynamic exception specifications
+  267 |       std::string get_version_file() const throw (std::bad_alloc);
+      |                                            ^~~~~
+elf.hpp:269:44: error: ISO C++17 does not allow dynamic exception specifications
+  269 |       std::string get_name_version() const throw (std::bad_alloc);
+      |                                            ^~~~~
+elf.hpp:308:29: error: ISO C++17 does not allow dynamic exception specifications
+  308 |       version_requirement() throw (std::bad_alloc);
+      |                             ^~~~~
+----------snip----------
+make[7]: *** [Makefile:382: elf.o] Error 1
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;I checked what the upstream &lt;a href="https://github.com/openwrt/openwrt/blob/openwrt-21.02/tools/mklibs/Makefile#L21" dir="ltr"&gt;Makefile&lt;/a&gt; looks like on 21.02, and it seems like I need &lt;a href="https://github.com/openwrt/openwrt/commit/a1ee0ebbd8e9927a65c5d1e0db497dd118d559a6" dir="ltr"&gt;&lt;code dir="ltr"&gt;HOST_CPPFLAGS += -std=gnu++98&lt;/code&gt;&lt;/a&gt; in my makefile. Further inspection reveals that the 0.1.35 version does not even exist on Debian’s server anymore, so I upgraded the version number, archive extension (.xz instead of .gz) and the hash corresponding to v0.1.44 as well.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="diff" dir="ltr"&gt;&lt;span dir="ltr"&gt;diff --git a/tools/mklibs/Makefile b/tools/mklibs/Makefile
+&lt;/span&gt;&lt;span dir="ltr"&gt;index 507c2fd394..48b1eace40 100644
+&lt;/span&gt;&lt;span dir="ltr"&gt;--- a/tools/mklibs/Makefile
+&lt;/span&gt;&lt;span dir="ltr"&gt;+++ b/tools/mklibs/Makefile
+&lt;/span&gt;&lt;span dir="ltr"&gt;@@ -7,17 +7,18 @@
+&lt;/span&gt; include $(TOPDIR)/rules.mk
+ 
+ PKG_NAME:=mklibs
+&lt;span dir="ltr"&gt;-PKG_VERSION:=0.1.35
+&lt;/span&gt;&lt;span dir="ltr"&gt;+PKG_VERSION:=0.1.44
+&lt;/span&gt; 
+&lt;span dir="ltr"&gt;-PKG_SOURCE:=$(PKG_NAME)_$(PKG_VERSION).tar.gz
+&lt;/span&gt;&lt;span dir="ltr"&gt;+PKG_SOURCE:=$(PKG_NAME)_$(PKG_VERSION).tar.xz
+&lt;/span&gt; PKG_SOURCE_URL:=http://ftp.de.debian.org/debian/pool/main/m/mklibs/
+&lt;span dir="ltr"&gt;-PKG_HASH:=ccb1023dc1729c5a37ca6c3eca8e4bac3491116763c8820dfce8eea4845c8567
+&lt;/span&gt;&lt;span dir="ltr"&gt;+PKG_HASH:=3af0b6bd35e5b6fc58d8b68827fbae2ff6b7e20dd2b238ccb9b49d84722066c2
+&lt;/span&gt; 
+ HOST_FIXUP:=autoreconf
+ 
+ include $(INCLUDE_DIR)/host-build.mk
+ 
+ HOST_CFLAGS += -I$(CURDIR)/include
+&lt;span dir="ltr"&gt;+HOST_CPPFLAGS += -std=gnu++98
+&lt;/span&gt; 
+ define Host/Install
+        $(INSTALL_BIN) \
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;After deleting &lt;code dir="ltr"&gt;build_dir/host/mklibs-0.1.35&lt;/code&gt; and re-running the build process, everything worked out this time, and I was able to generate a system image at &lt;code dir="ltr"&gt;bin/targets/ramips/rt305x/openwrt-ramips-rt305x-mpr-a2-squashfs-sysupgrade.bin&lt;/code&gt;. I’ll put that aside for now and compile an image for the TP-Link device.&lt;/p&gt;&lt;h3&gt;
+TL-MR11U
+&lt;/h3&gt;&lt;p dir="ltr"&gt;For the TP-Link TL-MR11U, a little modification to the source is required. The upgraded DRAM does not require any changes since it’s auto-detected by the bootloader and then passed onto the kernel, but for the flash size, I need to change the build target of this device to make sure I used a 16MB flash layout. For the old &lt;code dir="ltr"&gt;ar71xx&lt;/code&gt; target, it’s as simple as changing which macro this device’s definition points to. My hardware revision is v2, but the v2 definition points to &lt;a href="https://github.com/openwrt/openwrt/blob/openwrt-19.07/target/linux/ar71xx/image/tiny-tp-link.mk#L26-L27" dir="ltr"&gt;v1&lt;/a&gt;, so it’s v1 that I would need to change.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="diff" dir="ltr"&gt;&lt;span dir="ltr"&gt;diff --git a/target/linux/ar71xx/image/tiny-tp-link.mk b/target/linux/ar71xx/image/tiny-tp-link.mk
+&lt;/span&gt;&lt;span dir="ltr"&gt;index 9612694469..a38df7f5af 100644
+&lt;/span&gt;&lt;span dir="ltr"&gt;--- a/target/linux/ar71xx/image/tiny-tp-link.mk
+&lt;/span&gt;&lt;span dir="ltr"&gt;+++ b/target/linux/ar71xx/image/tiny-tp-link.mk
+&lt;/span&gt;&lt;span dir="ltr"&gt;@@ -13,7 +13,7 @@ endef
+&lt;/span&gt; TARGET_DEVICES += tl-mr10u-v1
+ 
+ define Device/tl-mr11u-v1
+&lt;span dir="ltr"&gt;-  $(Device/tplink-4mlzma)
+&lt;/span&gt;&lt;span dir="ltr"&gt;+  $(Device/tplink-16mlzma)
+&lt;/span&gt;   DEVICE_TITLE := TP-LINK TL-MR11U v1
+   DEVICE_PACKAGES := kmod-usb-core kmod-usb2 kmod-usb-ledtrig-usbport
+   BOARDNAME := TL-MR11U
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This is very important for the &lt;code dir="ltr"&gt;ar71xx&lt;/code&gt; target, much more important than the previous device, which was &lt;code dir="ltr"&gt;rampis&lt;/code&gt;, as I will elaborate in the firmware splicing part below.&lt;/p&gt;&lt;BLOCKQUOTE&gt;
+&lt;a href="https://github.com/openwrt/openwrt/commit/4e4ee4649553ab536225060a27fc320bf54e458c" dir="ltr"&gt;The &lt;code dir="ltr"&gt;ar71xx&lt;/code&gt; target has now been dropped&lt;/a&gt; due to it being mostly replaced by the newer, device-tree based &lt;code dir="ltr"&gt;ath79&lt;/code&gt; target. However, not all devices have been ported to &lt;code dir="ltr"&gt;ath79&lt;/code&gt;.
+&lt;/BLOCKQUOTE&gt;&lt;p&gt;The configuration is very similar to the previous device:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;CONFIG_TARGET_ar71xx=y
+CONFIG_TARGET_ar71xx_tiny=y
+CONFIG_TARGET_ar71xx_tiny_DEVICE_tl-mr11u-v2=y
+
+CONFIG_DEVEL=y
+CONFIG_CCACHE=y
+
+# enable ECC and compression support in dropbear
+CONFIG_DROPBEAR_ECC=y
+CONFIG_DROPBEAR_ECC_FULL=y
+CONFIG_DROPBEAR_ZLIB=y
+
+# enable luci
+CONFIG_PACKAGE_luci=y
+
+# USB serial drivers
+CONFIG_PACKAGE_kmod-usb-acm=y
+CONFIG_PACKAGE_kmod-usb-serial=y
+CONFIG_PACKAGE_kmod-usb-serial-ch341=y
+CONFIG_PACKAGE_kmod-usb-serial-cp210x=y
+CONFIG_PACKAGE_kmod-usb-serial-ftdi=y
+CONFIG_PACKAGE_kmod-usb-serial-pl2303=y
+
+# terminal software
+CONFIG_PACKAGE_picocom=y
+
+# enable shadow_utils 
+CONFIG_PACKAGE_shadow-utils=y
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Now to build the firmware:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;&lt;span dir="ltr"&gt;# complete configuration&lt;/span&gt;
+$ make defconfig
+&lt;span dir="ltr"&gt;# clean built artifacts&lt;/span&gt;
+$ make clean
+&lt;span dir="ltr"&gt;# download all of the required source archives &lt;/span&gt;
+$ make download -j10
+&lt;span dir="ltr"&gt;# compile the image, running with a high nice value to avoid stalling other applications on the system&lt;/span&gt;
+$ nice -n &lt;span dir="ltr"&gt;19&lt;/span&gt; make -j&lt;span dir="ltr"&gt;$(&lt;/span&gt;nproc&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Now I have the image at &lt;code dir="ltr"&gt;bin/targets/ar71xx/tiny/openwrt-ar71xx-tiny-tl-mr11u-v2-squashfs-factory.bin&lt;/code&gt;.&lt;/p&gt;&lt;h2&gt;
+Splicing and flashing firmware
+&lt;/h2&gt;&lt;p dir="ltr"&gt;First, I read both chips I took off from the devices with my programmer and &lt;code dir="ltr"&gt;flashrom&lt;/code&gt;. The flash programmer I used is an excellent open-source project: &lt;a href="https://github.com/dword1511/stm32-vserprog" dir="ltr"&gt;stm32-vserprog&lt;/a&gt;. The repository has both hardware and firmware designs. This can read and write chips much faster than the CH341 based programmers, and it’s quite easy to assemble.&lt;/p&gt;&lt;p&gt;These two devices are both MIPS, but that’s pretty much where the similarities end. The firmware setup for these two devices are completely different, so I needed to take different approaches to splice things together and put back onto the new NOR flash.&lt;/p&gt;&lt;p&gt;Generally speaking, a wireless router/access point type embedded Linux system like this would have a couple of partitions:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;bootloader (u-boot in both devices mentioned here)&lt;/LI&gt;&lt;LI&gt;bootloader environment variables (optional, sometimes stored within the bootloader partition)&lt;/LI&gt;&lt;LI&gt;RF calibration data for the Wi-Fi radio (MAC addresses are commonly stored here too)&lt;/LI&gt;&lt;LI&gt;kernel&lt;/LI&gt;&lt;LI&gt;rootfs (typically read-only)&lt;/LI&gt;&lt;LI&gt;overlay (where the user configuration is saved, and mounted as overlay on top of the read-only rootfs)&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;It’s worth noting that wireless calibration data must be preserved, because this is unique on a per-board basis. This is why cross-flashing other people’s full flash dumps as-is is typically not a good idea, because you will end up with subpar RF performance and wrong MAC addresses, not to mention potentially violating FCC (or the local equivalent) regulations, and why it’s always recommended having a full image backup of the flash before tinkering with any devices.&lt;/p&gt;&lt;h3&gt;
+MPR-A1
+&lt;/h3&gt;&lt;p dir="ltr"&gt;First, I need to cut up the stock firmware dump to individual partition images according to the &lt;a href="https://github.com/openwrt/openwrt/blob/openwrt-19.07/target/linux/ramips/dts/MPRA1.dts#L70-L98" dir="ltr"&gt;partition table&lt;/a&gt; for use later. This can be simply accomplished with &lt;code dir="ltr"&gt;dd if=A1_full_dump.bin of=$PARTITION_NAME bs=1 count=$SIZE_IN_BYTES skip=$START_OFFSET_IN_BYTES&lt;/code&gt;, or simply selecting, copying and pasting data in a hex editor.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;partitions {
+			compatible = "fixed-partitions";
+			#address-cells = &amp;lt;1&amp;gt;;
+			#size-cells = &amp;lt;1&amp;gt;;
+
+			partition@0 {
+				label = "u-boot";
+				reg = &amp;lt;0x0 0x30000&amp;gt;;
+				read-only;
+			};
+
+			partition@30000 {
+				label = "u-boot-env";
+				reg = &amp;lt;0x30000 0x10000&amp;gt;;
+				read-only;
+			};
+
+			factory: partition@40000 {
+				label = "factory";
+				reg = &amp;lt;0x40000 0x10000&amp;gt;;
+				read-only;
+			};
+
+			partition@50000 {
+				compatible = "denx,uimage";
+				label = "firmware";
+				reg = &amp;lt;0x50000 0x3b0000&amp;gt;;
+			};
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;For this SoC, a &lt;a href="https://github.com/JiapengLi/OpenWrt-RT5350/blob/master/u-boot/uboot256.img" dir="ltr"&gt;modified bootloader&lt;/a&gt; is also required to make use of the 32MB of DRAM according to old &lt;a href="https://forum.archive.openwrt.org/viewtopic.php?id=37002&amp;amp;p=24" dir="ltr"&gt;forum posts&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;So overall the only two partitions I need from the original flash image would be &lt;code dir="ltr"&gt;u-boot-env&lt;/code&gt; and &lt;code dir="ltr"&gt;factory&lt;/code&gt;. &lt;code dir="ltr"&gt;u-boot-env&lt;/code&gt; contains configuration for the bootloader that I don’t need to modify, &lt;code dir="ltr"&gt;factory&lt;/code&gt; is the conventional radio calibration data and MAC address storage partition for Ralink (and MediaTek MIPS) devices.&lt;/p&gt;&lt;p dir="ltr"&gt;The sysupgrade image I got from the build system is actually a complete uImage directly bootable by the bootloader, with the rootfs squashfs image appended after it. All I need to do is writing this to &lt;code dir="ltr"&gt;0x50000&lt;/code&gt; of the flash. This sysupgrade file does have some trailing metadata, but these will be automatically erased when the overlay partition is automatically reformatted on first boot, thus it can be safely ignored.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;$ file bin/targets/ramips/rt305x/openwrt-ramips-rt305x-mpr-a2-squashfs-sysupgrade.bin
+bin/targets/ramips/rt305x/openwrt-ramips-rt305x-mpr-a2-squashfs-sysupgrade.bin: u-boot legacy uImage, Linux Kernel Image, Linux/MIPS, OS Kernel Image &lt;span dir="ltr"&gt;(&lt;/span&gt;lzma&lt;span dir="ltr"&gt;)&lt;/span&gt;, &lt;span dir="ltr"&gt;1280356&lt;/span&gt; bytes, Mon Feb &lt;span dir="ltr"&gt;15&lt;/span&gt; 15:22:37 2021, Load Address: 0x80000000, Entry Point: 0x80000000, Header CRC: 0x2D529961, Data CRC: 0x804D50B5
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Now that I have all the data, it’s time to reconstruct a bootable full flash image. While this could have been more convenient to do in a GUI hex editor, I thought it would be easier to explain what’s going on if I did it with &lt;code dir="ltr"&gt;dd&lt;/code&gt;. The &lt;code dir="ltr"&gt;firmware&lt;/code&gt; partition of MPR-A2 is &lt;code dir="ltr"&gt;0x7b0000&lt;/code&gt; in size instead of &lt;code dir="ltr"&gt;0x3b0000&lt;/code&gt;, but otherwise they have identical flash layouts.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;&lt;span dir="ltr"&gt;# Take the modified bootloader binary that can use 32MB of DRAM, and generate a padding to pad it to 0x30000 with 0xFF.&lt;/span&gt;
+$ &lt;span dir="ltr"&gt;FILE&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"uboot256.img"&lt;/span&gt; dd &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;/dev/zero &lt;span dir="ltr"&gt;bs&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt; &lt;span dir="ltr"&gt;count&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$((&lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;x30000 &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;$(&lt;/span&gt;stat --format&lt;span dir="ltr"&gt;=&lt;/span&gt;%s &lt;span dir="ltr"&gt;$FILE&lt;/span&gt;&lt;span dir="ltr"&gt;)))&lt;/span&gt; &lt;span dir="ltr"&gt;|&lt;/span&gt;tr &lt;span dir="ltr"&gt;\\&lt;/span&gt;&lt;span dir="ltr"&gt;000&lt;/span&gt; &lt;span dir="ltr"&gt;\\&lt;/span&gt;&lt;span dir="ltr"&gt;377&lt;/span&gt; &amp;gt; u-boot_padding
+91104+0 records in
+91104+0 records out
+&lt;span dir="ltr"&gt;91104&lt;/span&gt; bytes &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;91&lt;/span&gt; kB, &lt;span dir="ltr"&gt;89&lt;/span&gt; KiB&lt;span dir="ltr"&gt;)&lt;/span&gt; copied, 0.0971852 s, &lt;span dir="ltr"&gt;937&lt;/span&gt; kB/s
+
+&lt;span dir="ltr"&gt;# Concatenate the padding with the u-boot image&lt;/span&gt;
+$ cat uboot256.img u-boot_padding &amp;gt; u-boot_partition
+
+&lt;span dir="ltr"&gt;# Concatenate the u-boot partiton (now with the correct size), u-boot environment variable partition the wireless calibration data parition together.&lt;/span&gt;
+$ cat u-boot_partition u-boot-env factory &amp;gt; header
+
+&lt;span dir="ltr"&gt;# Generate a padding filled with 0xFF to pad the frimware partiton to the correct size&lt;/span&gt;
+$ &lt;span dir="ltr"&gt;FILE&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"openwrt-ramips-rt305x-mpr-a2-squashfs-sysupgrade.bin"&lt;/span&gt; dd &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;/dev/zero &lt;span dir="ltr"&gt;bs&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt; &lt;span dir="ltr"&gt;count&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$((&lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;x7b0000 &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;$(&lt;/span&gt;stat --format&lt;span dir="ltr"&gt;=&lt;/span&gt;%s &lt;span dir="ltr"&gt;$FILE&lt;/span&gt;&lt;span dir="ltr"&gt;)))&lt;/span&gt; &lt;span dir="ltr"&gt;|&lt;/span&gt;tr &lt;span dir="ltr"&gt;\\&lt;/span&gt;&lt;span dir="ltr"&gt;000&lt;/span&gt; &lt;span dir="ltr"&gt;\\&lt;/span&gt;&lt;span dir="ltr"&gt;377&lt;/span&gt; &amp;gt; firmware_padding
+3865866+0 records in
+3865866+0 records out
+&lt;span dir="ltr"&gt;3865866&lt;/span&gt; bytes &lt;span dir="ltr"&gt;(&lt;/span&gt;3.9 MB, 3.7 MiB&lt;span dir="ltr"&gt;)&lt;/span&gt; copied, 1.49983 s, 2.6 MB/s
+
+&lt;span dir="ltr"&gt;# Concatenate the sysupgrade image with the padding&lt;/span&gt;
+$ cat openwrt-ramips-rt305x-mpr-a2-squashfs-sysupgrade.bin firmware_padding &amp;gt; firmware_partiton
+
+&lt;span dir="ltr"&gt;# Concatenate everything together&lt;/span&gt;
+$ cat header firmware_padding &amp;gt; full.bin
+
+&lt;span dir="ltr"&gt;# Write the assembled full image to the new flash chip&lt;/span&gt;
+$ flashrom -p serprog:dev&lt;span dir="ltr"&gt;=&lt;/span&gt;/dev/ttyACM1:400000000 -w full.bin
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;With the chip written, I soldered it back. After cleaning up the board, I powered it on and the system came up as expected. Took about 3 minutes to fully initialize the jffs2 overlay as it needed to erase everything in the overlay partition. Subsequent normal boots take about 1 minute, while being a little slow, is still an acceptable trade-off for the convenience.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;[   78.870911] jffs2_scan_eraseblock(): End of filesystem marker found at 0x0
+[   78.926935] jffs2_build_filesystem(): unlocking the mtd device... 
+[   78.927077] done.
+[   78.943362] jffs2_build_filesystem(): erasing all blocks after the end marker... 
+[   80.627250] br-lan: port 1(eth0) entered blocking state
+[   80.652812] br-lan: port 1(eth0) entered disabled state
+[   80.663982] device eth0 entered promiscuous mode
+[   80.838653] br-lan: port 1(eth0) entered blocking state
+[   80.849204] br-lan: port 1(eth0) entered forwarding state
+[   80.860561] IPv6: ADDRCONF(NETDEV_UP): br-lan: link is not ready
+[   82.058579] IPv6: ADDRCONF(NETDEV_CHANGE): br-lan: link becomes ready
+[  177.313272] done.
+[  177.317307] jffs2: notice: (1135) jffs2_build_xattr_subsystem: complete building xattr subsystem, 0 of xdatum (0 unchecked, 0 orphan) and 0 of xref (0 dead, 0 orphan) found.
+[  177.746829] overlayfs: upper fs does not support tmpfile.
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;
+TL-MR11U
+&lt;/h3&gt;&lt;p dir="ltr"&gt;This device requires a different approach. Since the factory bootloader can auto-detect the 64MB of DRAM I put in, and I can simply apply &lt;code dir="ltr"&gt;openwrt-ar71xx-tiny-tl-mr11u-v2-squashfs-factory.bin&lt;/code&gt; from the stock TP-Link firmware, all I really needed to do was mirroring the &lt;code dir="ltr"&gt;ART&lt;/code&gt; (Atheros Radio Test, wireless calibration data) partition to where it should be on a 16MB device. On these Atheros based devices, &lt;code dir="ltr"&gt;ART&lt;/code&gt; is commonly simply located in the last 64KB of the flash, and this device is no exception.&lt;/p&gt;&lt;p dir="ltr"&gt;Doing this one with &lt;code dir="ltr"&gt;dd&lt;/code&gt; would be slightly more difficult than the previous one and would require more messy arithmetic operations, so I didn’t bother with this one and simply used a hex editor to do the job. Basically, the gist is:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Create a new 16MB file filled with 0xFF&lt;/LI&gt;&lt;LI&gt;Open the original 4MB flash dump and copy it to the beginning of the 16MB file in overwrite mode&lt;/LI&gt;&lt;LI&gt;Copy the last 64KB of the original flash dump to the last 64KB of the new 16MB file in overwrite mode&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;After I have the 16MB OpenWrt image flashed onto the device, it will automatically pick up the new &lt;code dir="ltr"&gt;ART&lt;/code&gt; data I placed at the end of the new 16MB flash. Now all I need to do was writing this image to the new 16MB chip and soldering it back to the board.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;# Write the assembled full image to the new flash chip
+$ flashrom -p serprog:dev=/dev/ttyACM1:400000000 -w full.bin
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This board came up and finished erasing the overlay slightly faster than the other device, only taking a little over 2 minutes to initialize the overlay. Just like the previous device, normal boots take about 1 minute, while being a little slow, is still an acceptable trade-off for the convenience.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;[   90.206076] jffs2_scan_eraseblock(): End of filesystem marker found at 0x0
+[   90.211744] jffs2_build_filesystem(): unlocking the mtd device... 
+[   90.211818] done.
+[   90.219575] jffs2_build_filesystem(): erasing all blocks after the end marker... 
+[   90.859188] br-lan: port 1(eth0) entered blocking state
+[   90.870509] br-lan: port 1(eth0) entered disabled state
+[   90.876126] device eth0 entered promiscuous mode
+[   90.927039] IPv6: ADDRCONF(NETDEV_UP): br-lan: link is not ready
+[   94.978202] eth0: link up (100Mbps/Full duplex)
+[   94.981345] br-lan: port 1(eth0) entered blocking state
+[   94.986506] br-lan: port 1(eth0) entered forwarding state
+[   95.026917] IPv6: ADDRCONF(NETDEV_CHANGE): br-lan: link becomes ready
+[  136.089805] done.
+[  136.090335] jffs2: notice: (1205) jffs2_build_xattr_subsystem: complete building xattr subsystem, 0 of xdatum (0 unchecked, 0 orphan) and 0 of xref (0 dead, 0 orphan) found.
+[  136.393070] overlayfs: upper fs does not support tmpfile.
+&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;
+Helper script
+&lt;/h2&gt;&lt;p dir="ltr"&gt;I wrote a simple shell script that prints the current driver used and then calls &lt;code dir="ltr"&gt;picocom&lt;/code&gt; with one of the two possible serial adapter device nodes it finds. This can be set to a user’s login shell, so I won’t have to specify long commands when connecting to the device over ssh.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/bin/sh
+&lt;/span&gt;
+&lt;span dir="ltr"&gt;OPTION1&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;/dev/ttyUSB0
+&lt;span dir="ltr"&gt;OPTION2&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;/dev/ttyACM0
+&lt;span dir="ltr"&gt;DEFAULT_BAUDRATE&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;115200&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt; -c &lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;$OPTION1&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt; &lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;then&lt;/span&gt;
+    &lt;span dir="ltr"&gt;ADAPTER&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$OPTION1&lt;/span&gt;
+&lt;span dir="ltr"&gt;elif&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt; -c &lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;$OPTION2&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt; &lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;then&lt;/span&gt;
+    &lt;span dir="ltr"&gt;ADAPTER&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$OPTION2&lt;/span&gt;
+&lt;span dir="ltr"&gt;else&lt;/span&gt;
+    &lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;"No serial adapter found."&lt;/span&gt;
+    &lt;span dir="ltr"&gt;exit&lt;/span&gt;
+&lt;span dir="ltr"&gt;fi&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;"Using &lt;/span&gt;&lt;span dir="ltr"&gt;$ADAPTER&lt;/span&gt;&lt;span dir="ltr"&gt; at &lt;/span&gt;&lt;span dir="ltr"&gt;$DEFAULT_BAUDRATE&lt;/span&gt;&lt;span dir="ltr"&gt; baud."&lt;/span&gt;
+&lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;"Driver: &lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;basename &lt;span dir="ltr"&gt;$(&lt;/span&gt;readlink /sys/class/tty/&lt;span dir="ltr"&gt;$(&lt;/span&gt;basename &lt;span dir="ltr"&gt;$ADAPTER&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;/device/driver&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;
+&lt;span dir="ltr"&gt;echo&lt;/span&gt; -e &lt;span dir="ltr"&gt;"Press [C-b] to change the baudrate. \n"&lt;/span&gt;
+&lt;span dir="ltr"&gt;exec&lt;/span&gt; /usr/bin/picocom --send-cmd &lt;span dir="ltr"&gt;''&lt;/span&gt; --receive-cmd &lt;span dir="ltr"&gt;''&lt;/span&gt; -b &lt;span dir="ltr"&gt;$DEFAULT_BAUDRATE&lt;/span&gt; &lt;span dir="ltr"&gt;$ADAPTER&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;
+Software setup
+&lt;/h2&gt;&lt;p dir="ltr"&gt;After setting up the root password and wireless credentials, I copied my script to &lt;code dir="ltr"&gt;/usr/bin/serial_terminal&lt;/code&gt; to the device with &lt;code dir="ltr"&gt;scp&lt;/code&gt; and did some basic setup over SSH.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;&lt;span dir="ltr"&gt;# set the script to executable&lt;/span&gt;
+chmod +x /usr/bin/serial_terminal
+
+&lt;span dir="ltr"&gt;# add a user called "uart" in the dialout group, whose login shell is my serial terminal script&lt;/span&gt;
+useradd -g dialout -d /home/uart --create-home --shell /usr/bin/serial_terminal uart
+
+&lt;span dir="ltr"&gt;# set a secure password for the "uart" user&lt;/span&gt;
+passwd uart
+
+&lt;span dir="ltr"&gt;# add new "shell" to the list of allowed shells&lt;/span&gt;
+&lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;"/usr/bin/serial_terminal"&lt;/span&gt; &amp;gt;&amp;gt; /etc/shells
+
+&lt;span dir="ltr"&gt;# add all of the files midified so far to sysupgrade.conf so they persist through factory resets&lt;/span&gt;
+&lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;"/etc/shells"&lt;/span&gt; &amp;gt;&amp;gt; /etc/sysupgrade.conf
+&lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;"/usr/bin/serial_terminal"&lt;/span&gt; &amp;gt;&amp;gt; /etc/sysupgrade.conf
+&lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;"/home"&lt;/span&gt; &amp;gt;&amp;gt; /etc/sysupgrade.conf
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Unfortunately, I was not able to get public key ssh authentication working properly on 19.07. Setting &lt;code dir="ltr"&gt;PubkeyAcceptedKeyTypes +ssh-rsa&lt;/code&gt; with ECC keys or switching to RSA keys silenced &lt;code dir="ltr"&gt;send_pubkey_test: no mutual signature algorithm&lt;/code&gt; from my client, but dropbear is always giving me &lt;code dir="ltr"&gt;authpriv.warn dropbear[1759]: Pubkey auth attempt with unknown algo for 'root' from xxx&lt;/code&gt; no matter what I tried, so I didn’t investigate further and thought dropbear on here is simply too old.&lt;/p&gt;&lt;h2&gt;
+Demo
+&lt;/h2&gt;&lt;p dir="ltr"&gt;After everything has been set up, this is the final result. All of these devices are functionally identical as far as the use case is concerned, so there is only one demo. I connected to the device over ssh, powered up the target board connected to the serial adapter, and then ran &lt;code dir="ltr"&gt;htop&lt;/code&gt; to demonstrate psuedo-GUI applications mostly work pretty well here.&lt;/p&gt;&lt;figure&gt;&lt;picture&gt;
+&lt;source srcset="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/mr11u_hu11ff045a05a7dcecc2892ef3b589611e_3487478_1200x0_resize_q75_box.jpg"&gt;
+&lt;img src="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/mr11u_hu11ff045a05a7dcecc2892ef3b589611e_3487478_1800x0_resize_q75_box.jpg" alt="Testing setup with the TL-MR11U."&gt;
+&lt;/picture&gt;&lt;figcaption dir="auto"&gt;Testing setup with the TL-MR11U.&lt;/figcaption&gt;&lt;/figure&gt;&lt;figure&gt;&lt;picture&gt;
+&lt;source srcset="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/5350f_comparison_huc77ba769ff7e0e48eafc1dbabd1717aa_1830387_1200x0_resize_q75_box.jpg"&gt;
+&lt;img src="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/5350f_comparison_huc77ba769ff7e0e48eafc1dbabd1717aa_1830387_1800x0_resize_q75_box.jpg" alt="The MPR-A2 clone and the genuine MPR-A1 with serial adapters attached."&gt;
+&lt;/picture&gt;&lt;figcaption dir="auto"&gt;The MPR-A2 clone and the genuine MPR-A1 with serial adapters attached.&lt;/figcaption&gt;&lt;/figure&gt;&lt;p&gt;Apologies for the lack of playback control, I have not yet found any way to add playback control widgets for animated SVG.&lt;/p&gt;&lt;img src="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/demo.svg" alt="SVG demo animation" width="453" height="443"&gt;&lt;h2&gt;
+Potential improvements
+&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;Adding Bluetooth serial capabilities. While I don’t have much use for this feature, I can see it being useful for other people.&lt;/LI&gt;&lt;LI&gt;Forwarding the raw character device over SSH instead of running &lt;code dir="ltr"&gt;picocom&lt;/code&gt; on the remote. &lt;a href="https://github.com/b1f6c1c4/ttyssh" dir="ltr"&gt;ttcssh&lt;/a&gt; will do what I want, but setup seems very convoluted for a non-essential feature, so I didn’t feel like setting this up here.&lt;/LI&gt;&lt;LI&gt;Upgrading to OpenWrt v21.02 and hopefully fix SSH public key login.&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Mon, 31 May 2021 16:03:41 -0500</pubDate></item><item><title>A slightly different way to generate strong, memorable passwords</title><link>https://lobste.rs/s/iqvro9</link><description>&lt;div dir="ltr"&gt;
 							&lt;span dir="ltr"&gt;
 					&lt;a href="https://throughascreendarkly.com/category/uncategorized/" rel="category tag" dir="ltr"&gt;Uncategorized&lt;/a&gt;				&lt;/span&gt;
 			
@@ -882,347 +1225,4 @@ response to support request.&lt;/p&gt;&lt;h3&gt;Note: Why current_user.trace_id 
 GDPR. We opt to use a simple &lt;code dir="ltr"&gt;trace_id&lt;/code&gt; that automatically rolled up
 every 7 days. We won’t be able to follow request split between two
 7-days windows but it’s a trade-off we made.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;code dir="ltr"&gt;trace_id&lt;/code&gt; is a simple hash of user id with a salt that is changed
-every 7 days.&lt;/p&gt;&lt;p&gt;I hope you found it userful.&lt;/p&gt;</description><pubDate>Mon, 31 May 2021 02:00:41 -0500</pubDate></item><item><title>Making Wi-Fi serial console adapters with old portable routers</title><link>https://lobste.rs/s/4svghl</link><description>&lt;div dir="ltr"&gt;
-&lt;span dir="ltr"&gt;
-
-&lt;span dir="ltr"&gt;
-&lt;time datetime="2021-05-31T00:00:00Z" dir="ltr"&gt;
-Updated on
-May 31, 2021
-&lt;/time&gt;
-&lt;/span&gt;
-&lt;/span&gt;
-&lt;span dir="ltr"&gt;
-
-&lt;span dir="ltr"&gt;19 min read&lt;/span&gt;
-&lt;/span&gt;
-&lt;/div&gt;&lt;BLOCKQUOTE&gt;
-This post is reconstructed from notes I wrote down in early February back when I did most of the work, so the information might be slightly out of date. I did my best in keeping them up to date and re-tested the firmware builds at the time of writing this post to make sure they all work as intended.
-&lt;/BLOCKQUOTE&gt;&lt;h2&gt;
-Rationale
-&lt;/h2&gt;&lt;p&gt;Serial console is one of the most important ways of communicating with embedded Linux systems. I’ve used a lot of USB serial adapters over the years, but they all seem to have two major drawbacks that are difficult to overcome:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;They are not electrically isolated. Whenever I power up my target boards, there is always a small chance that a power surge will happen due to &lt;a href="https://en.wikipedia.org/wiki/Ground_loop_%28electricity%29" dir="ltr"&gt;ground loop interference&lt;/a&gt;, which causes my connection to be interrupted on power-up:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;FATAL: read zero bytes from port
-term_exitfunc: reset failed for dev UNKNOWN: Input/output error
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;By the time I could reconnect with my terminal software (&lt;code dir="ltr"&gt;picocom&lt;/code&gt; in this case), I would have already missed a lot of critical messages printed by the bootloader. This makes diagnosing and debugging bootloader related problems very unpleasant. To make matters worse, should something bad happens to my board and a high voltage was sent to the tx/rx pins, it can potentially go back to my computer and destroy my PCH, since EHCI/XHCI controllers are typically integrated in the PCH nowadays.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;The UART cable length limit makes it difficult to work with on a messy desk, as I would always need a USB hub or at least an extension cable, further contributing to the clutter, and the bare PCBs have risks of being accidentally sorted out by my other metallic tools if not careful.&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;While talking to some network engineers, I found that some people had Wi-Fi or BLE based wireless console adapters, which allow them to access the RS-232 serial consoles wirelessly. Some research later, a series of products called Airconsole from Cloudstore Limited perked my interests. From the looks of it, most of their Wi-Fi enabled options look extremely similar to a series of older “3G router” products manufactured by HAME. The Mini model looks almost identical to MPR-A5, the Std/Pro one looks almost identical to &lt;a href="https://openwrt.org/toh/hame/mpr-a1" dir="ltr"&gt;MPR-A1&lt;/a&gt;, and the XL looks almost identical to &lt;a href="https://openwrt.org/toh/hame/mpr-a2" dir="ltr"&gt;MPR-A2&lt;/a&gt;. These HAME models are later cloned by other manufacturers and then sold as generic products, and they can still be found to this day on places such as eBay and AliExpress.&lt;/p&gt;&lt;p&gt;With this information in mind, I figured it’s easier for me to make my own wireless serial console adapter with some of the old portable routers I have lying around. I have no need for Bluetooth connectivity or smartphone apps, all I want is something that I can connect to locally and lets me interact with a serial console over a secure connection. Transport security is highly desirable because I don’t want my login credentials to be transmitted in plaintext, not even on my own LAN.&lt;/p&gt;&lt;p dir="ltr"&gt;After some consideration, I have decided running &lt;code dir="ltr"&gt;picocom&lt;/code&gt; over an SSH session, on a battery powered OpenWrt device would be the easiest to implement for me. SSH is the best option for me because the “&lt;a href="https://en.wikipedia.org/wiki/Trust_on_first_use" dir="ltr"&gt;trust on first use&lt;/a&gt;” design has a much lower setup overhead compared to a traditional PKI based TLS/HTTPS setup, while still remaining secure. OpenWrt offers an easy-to-use configuration web interface for setting up the Wi-Fi connection, has (mostly) up to date userspace software, and is pretty much the only Linux distribution that will work on these routers anyway.&lt;/p&gt;&lt;h2&gt;
-Alternatives considered
-&lt;/h2&gt;&lt;p&gt;Here are some alternatives solutions and ideas I have considered or found in my research, and why I did not pick them for this project:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;a href="https://github.com/jeelabs/esp-link" dir="ltr"&gt;esp-link&lt;/a&gt;: While being very affordable, it offers no transport security.&lt;/LI&gt;&lt;LI&gt;&lt;a href="https://github.com/mdlayher/consrv" dir="ltr"&gt;consrv&lt;/a&gt;: Go binaries are statically linked and too large for the extremely limited amount of storage space available, plus running yet another SSH server while I already have &lt;code dir="ltr"&gt;dropbear&lt;/code&gt; (provided by OpenWrt by default) feels very redundant.&lt;/LI&gt;&lt;LI&gt;Bluetooth based solutions have very limited range, and they are typically much more difficult to work with in general.&lt;/LI&gt;&lt;LI&gt;Proprietary 433MHz/2.4GHz off the shelf serial bridges often have fixed bitrates and lack proper transport encryption.&lt;/LI&gt;&lt;LI&gt;While not being wireless, if only electrical isolation is desired, digital isolators such as the &lt;a href="https://www.analog.com/en/products/adum3201.html" dir="ltr"&gt;ADUM3201&lt;/a&gt; are widely available. The problem with this solution is now eight wires in total would be required, instead of the typical three, since vcc from both sides are needed for the digital isolator to function correctly.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;
-Hardware upgrades
-&lt;/h2&gt;&lt;p dir="ltr"&gt;With the context out of the way, some hardware upgrades are required for me to be able to fit modern OpenWrt onto these devices I have. The &lt;a href="https://openwrt.org/toh/tp-link/tl-mr11u" dir="ltr"&gt;TP-Link TL-MR11U&lt;/a&gt; only has 4MB of NOR flash and 32MB of DRAM. While 32MB is sufficient for what I’m going to run, 4MB is not enough to store the required software anymore. The &lt;a href="https://openwrt.org/toh/hame/mpr-a1" dir="ltr"&gt;HAME MPR-A1&lt;/a&gt; only has 4MB of NOR flash and 16MB of DRAM, neither of which are sufficient for anything I need.&lt;/p&gt;&lt;h3&gt;
-MPR-A1
-&lt;/h3&gt;&lt;p&gt;The MPR-A1 and the MPR-A2 are almost identical devices aside from having less storage, memory and a smaller battery. In fact OpenWrt builds for A2 will work on the A1 if you upgrade its NOR flash and DRAM. I’ll be putting in 8MB of NOR flash and 32MB of DRAM to match the MPR-A2. Disassembling the MPR-A1 was fairly straightforward, so I won’t post images here, as it bogs down the article.&lt;/p&gt;&lt;BLOCKQUOTE&gt;
-The new NOR flash was not soldered back until I spliced the firmware and wrote the new firmware image to the flash. Board images are all placed here for the sake of better organization.
-&lt;/BLOCKQUOTE&gt;&lt;p&gt;I just happened to have an MPR-A2 clone, so I thought I’d put the two PCBs together as a comparison too. It’s interesting to see the clone opted for cheaper parts in some places to cut costs. I won’t be working on the clone as it already has 8MB of NOR flash and 32MB of DRAM.&lt;/p&gt;&lt;figure&gt;&lt;picture&gt;
-&lt;source srcset="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/5350f_pcbs_huceb578e747b069a22fa260a670893d06_2418761_1200x0_resize_q75_box.jpg"&gt;
-&lt;img src="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/5350f_pcbs_huceb578e747b069a22fa260a670893d06_2418761_1800x0_resize_q75_box.jpg" alt="Top: genuine MPR-A1 | Bottom: MPR-A2 clone"&gt;
-&lt;/picture&gt;&lt;figcaption dir="auto"&gt;Top: genuine MPR-A1 | Bottom: MPR-A2 clone&lt;/figcaption&gt;&lt;/figure&gt;&lt;p&gt;According to the RT5350F’s datasheet, DRAM configuration is either set in EEPROM, or configured externally via two bootstrapping pins. In MPR-A1’s case, it’s configured via those two bootstrapping pins. Unfortunately, this SoC cannot properly address one single 64MB DRAM chip (only 32MB*2), so 32MB is as good as it gets.&lt;/p&gt;&lt;figure&gt;&lt;picture&gt;
-&lt;source srcset="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/5350f_bootstrapping_cfg_ds_hu45d8e66648eee905edc67f9e96453126_40028_1200x0_resize_box_2.png"&gt;
-&lt;img src="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/5350f_bootstrapping_cfg_ds_hu45d8e66648eee905edc67f9e96453126_40028_1800x0_resize_box_2.png" alt="Bootstrapping pin configurations from the RT5350F datasheet."&gt;
-&lt;/picture&gt;&lt;figcaption dir="auto"&gt;Bootstrapping pin configurations from the RT5350F datasheet.&lt;/figcaption&gt;&lt;/figure&gt;&lt;figure&gt;&lt;picture&gt;
-&lt;source srcset="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/a1_pcb_clean_hud1a7a19f6085e2bb34fcc220bcb24368_3383267_1200x0_resize_q75_box.jpg"&gt;
-&lt;img src="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/a1_pcb_clean_hud1a7a19f6085e2bb34fcc220bcb24368_3383267_1800x0_resize_q75_box.jpg" alt="MPR-A1's board with DRAM and NOR flash removed."&gt;
-&lt;/picture&gt;&lt;figcaption dir="auto"&gt;MPR-A1's board with DRAM and NOR flash removed.&lt;/figcaption&gt;&lt;/figure&gt;&lt;figure&gt;&lt;picture&gt;
-&lt;source srcset="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/5350f_bootstrapping_cfg_pcb_hu0b8812569cbf4cbf622e3d8df19fcc3c_903841_1200x0_resize_q75_box.jpg"&gt;
-&lt;img src="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/5350f_bootstrapping_cfg_pcb_hu0b8812569cbf4cbf622e3d8df19fcc3c_903841_1800x0_resize_q75_box.jpg" alt="Bootstrapping pins on the PCB. Moving these two resistors to the left flips both bits, from 01 (16MB) to 10 (32MB)."&gt;
-&lt;/picture&gt;&lt;figcaption dir="auto"&gt;Bootstrapping pins on the PCB. Moving these two resistors to the left flips both bits, from 01 (16MB) to 10 (32MB).&lt;/figcaption&gt;&lt;/figure&gt;&lt;figure&gt;&lt;picture&gt;
-&lt;source srcset="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/a1_pcb_upgraded_hu99b98604b0b26b917e8eb4d82d895690_3249083_1200x0_resize_q75_box.jpg"&gt;
-&lt;img src="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/a1_pcb_upgraded_hu99b98604b0b26b917e8eb4d82d895690_3249083_1800x0_resize_q75_box.jpg" alt="Board after the DRAM and NOR flash have been upgraded and bootstrapping pins have been reconfigured."&gt;
-&lt;/picture&gt;&lt;figcaption dir="auto"&gt;Board after the DRAM and NOR flash have been upgraded and bootstrapping pins have been reconfigured.&lt;/figcaption&gt;&lt;/figure&gt;&lt;h3&gt;
-MR11U
-&lt;/h3&gt;&lt;p&gt;For the MR11U, upgrading is much easier, since the bootloader can auto-detect the DRAM configuration and there are no bootstrapping pins to worry about. The datasheet of the SoC says the maximum supported flash size is 16MB, and the maximum supported DRAM size is 64MB, so that’s what I put in.&lt;/p&gt;&lt;figure&gt;&lt;picture&gt;
-&lt;source srcset="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/mr11u_pcb_hubfbcbc9ebec48f2b8db03a96c8ef071a_3005470_1200x0_resize_q75_box.jpg"&gt;
-&lt;img src="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/mr11u_pcb_hubfbcbc9ebec48f2b8db03a96c8ef071a_3005470_1800x0_resize_q75_box.jpg" alt="The upgraded PCB after some cleanup."&gt;
-&lt;/picture&gt;&lt;figcaption dir="auto"&gt;The upgraded PCB after some cleanup.&lt;/figcaption&gt;&lt;/figure&gt;&lt;h2&gt;
-Building OpenWrt
-&lt;/h2&gt;&lt;p dir="ltr"&gt;I won’t go over the &lt;a href="https://openwrt.org/docs/guide-developer/build-system/install-buildsystem" dir="ltr"&gt;setup&lt;/a&gt; process here, the wiki does a pretty good job explaining that. After the source has been cloned, I did the following to build my firmware image:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;&lt;span dir="ltr"&gt;# check out the v19.07.7 branch&lt;/span&gt;
-$ git checkout v19.07.7
-&lt;span dir="ltr"&gt;# clean, update and force install all package feeds&lt;/span&gt;
-&lt;span dir="ltr"&gt;# -f is required because some packages won't show up as they contain files that may &lt;/span&gt;
-&lt;span dir="ltr"&gt;# override built-in packages, and this behavior is typically disallowed by default&lt;/span&gt;
-$ scripts/feeds clean &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; scripts/feeds update -a &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; scripts/feeds install -af
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;
-MPR-A1
-&lt;/h3&gt;&lt;p dir="ltr"&gt;This is the configuration I used for the upgraded MPR-A1. Since I’m borrowing the config for the MPR-A2, no further changes to the source code is required, as the new flash I put in matches the capacity of the MPR-A2. The change in DRAM will get picked up by the bootloader and passed onto the kernel thanks to the new bootstrapping configuration. On top of the defaults, I only enabled ECC and compression support in &lt;code dir="ltr"&gt;dropbear&lt;/code&gt;, added some USB serial drivers, &lt;code dir="ltr"&gt;picocom&lt;/code&gt;, shadow-utils (because I need to add a user to the device) and LuCI (the web configuration interface).&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;CONFIG_TARGET_ramips=y
-CONFIG_TARGET_ramips_rt305x=y
-CONFIG_TARGET_ramips_rt305x_DEVICE_mpr-a2=y
-
-CONFIG_DEVEL=y
-CONFIG_CCACHE=y
-
-# enable ECC and compression support in dropbear
-CONFIG_DROPBEAR_ECC=y
-CONFIG_DROPBEAR_ECC_FULL=y
-CONFIG_DROPBEAR_ZLIB=y
-
-# enable luci
-CONFIG_PACKAGE_luci=y
-
-# USB serial drivers
-CONFIG_PACKAGE_kmod-usb-acm=y
-CONFIG_PACKAGE_kmod-usb-serial=y
-CONFIG_PACKAGE_kmod-usb-serial-ch341=y
-CONFIG_PACKAGE_kmod-usb-serial-cp210x=y
-CONFIG_PACKAGE_kmod-usb-serial-ftdi=y
-CONFIG_PACKAGE_kmod-usb-serial-pl2303=y
-
-# terminal software
-CONFIG_PACKAGE_picocom=y
-
-# enable shadow_utils 
-CONFIG_PACKAGE_shadow-utils=y
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;After writing these to &lt;code dir="ltr"&gt;.config&lt;/code&gt; in the root directory of the source tree, simply running &lt;code dir="ltr"&gt;make defconfig&lt;/code&gt; will tell the build system to automatically resolve dependencies and complete the config file.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;$ make defconfig
-&lt;span dir="ltr"&gt;# download all of the required source archives &lt;/span&gt;
-$ make download -j10
-&lt;span dir="ltr"&gt;# compile the image, running with a high nice value to avoid stalling other applications on the system&lt;/span&gt;
-$ nice -n &lt;span dir="ltr"&gt;19&lt;/span&gt; make -j&lt;span dir="ltr"&gt;$(&lt;/span&gt;nproc&lt;span dir="ltr"&gt;)&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Unfortunately, the build quickly failed. Running &lt;code dir="ltr"&gt;make V=s -j1&lt;/code&gt; revealed the problem originated from &lt;code dir="ltr"&gt;build_dir/host/mklibs-0.1.35&lt;/code&gt;, whose makefile is &lt;code dir="ltr"&gt;tools/mklibs/Makefile&lt;/code&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;In file included from elf_data.hpp:24,
-                 from elf.cpp:21:
-elf.hpp:52:56: error: ISO C++17 does not allow dynamic exception specifications
-   52 |       const section &amp;amp;get_section(unsigned int i) const throw (std::out_of_range) { return *sections.at(i); };
-      |                                                        ^~~~~
-elf.hpp:62:47: error: ISO C++17 does not allow dynamic exception specifications
-   62 |       static file *open(const char *filename) throw (std::bad_alloc, std::runtime_error);
-      |                                               ^~~~~
-elf.hpp:65:38: error: ISO C++17 does not allow dynamic exception specifications
-   65 |       file(uint8_t *mem, size_t len) throw (std::bad_alloc) : mem(mem), len(len) { }
-      |                                      ^~~~~
-elf.hpp:68:52: error: ISO C++17 does not allow dynamic exception specifications
-   68 |         static file *open_class(uint8_t *, size_t) throw (std::bad_alloc, std::runtime_error);
-      |                                                    ^~~~~
-elf.hpp:131:55: error: ISO C++17 does not allow dynamic exception specifications
-  131 |         std::string get_string(uint32_t offset) const throw (std::bad_alloc)
-      |                                                       ^~~~~
-elf.hpp:266:39: error: ISO C++17 does not allow dynamic exception specifications
-  266 |       std::string get_version() const throw (std::bad_alloc);
-      |                                       ^~~~~
-elf.hpp:267:44: error: ISO C++17 does not allow dynamic exception specifications
-  267 |       std::string get_version_file() const throw (std::bad_alloc);
-      |                                            ^~~~~
-elf.hpp:269:44: error: ISO C++17 does not allow dynamic exception specifications
-  269 |       std::string get_name_version() const throw (std::bad_alloc);
-      |                                            ^~~~~
-elf.hpp:308:29: error: ISO C++17 does not allow dynamic exception specifications
-  308 |       version_requirement() throw (std::bad_alloc);
-      |                             ^~~~~
-----------snip----------
-make[7]: *** [Makefile:382: elf.o] Error 1
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;I checked what the upstream &lt;a href="https://github.com/openwrt/openwrt/blob/openwrt-21.02/tools/mklibs/Makefile#L21" dir="ltr"&gt;Makefile&lt;/a&gt; looks like on 21.02, and it seems like I need &lt;a href="https://github.com/openwrt/openwrt/commit/a1ee0ebbd8e9927a65c5d1e0db497dd118d559a6" dir="ltr"&gt;&lt;code dir="ltr"&gt;HOST_CPPFLAGS += -std=gnu++98&lt;/code&gt;&lt;/a&gt; in my makefile. Further inspection reveals that the 0.1.35 version does not even exist on Debian’s server anymore, so I upgraded the version number, archive extension (.xz instead of .gz) and the hash corresponding to v0.1.44 as well.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="diff" dir="ltr"&gt;&lt;span dir="ltr"&gt;diff --git a/tools/mklibs/Makefile b/tools/mklibs/Makefile
-&lt;/span&gt;&lt;span dir="ltr"&gt;index 507c2fd394..48b1eace40 100644
-&lt;/span&gt;&lt;span dir="ltr"&gt;--- a/tools/mklibs/Makefile
-&lt;/span&gt;&lt;span dir="ltr"&gt;+++ b/tools/mklibs/Makefile
-&lt;/span&gt;&lt;span dir="ltr"&gt;@@ -7,17 +7,18 @@
-&lt;/span&gt; include $(TOPDIR)/rules.mk
- 
- PKG_NAME:=mklibs
-&lt;span dir="ltr"&gt;-PKG_VERSION:=0.1.35
-&lt;/span&gt;&lt;span dir="ltr"&gt;+PKG_VERSION:=0.1.44
-&lt;/span&gt; 
-&lt;span dir="ltr"&gt;-PKG_SOURCE:=$(PKG_NAME)_$(PKG_VERSION).tar.gz
-&lt;/span&gt;&lt;span dir="ltr"&gt;+PKG_SOURCE:=$(PKG_NAME)_$(PKG_VERSION).tar.xz
-&lt;/span&gt; PKG_SOURCE_URL:=http://ftp.de.debian.org/debian/pool/main/m/mklibs/
-&lt;span dir="ltr"&gt;-PKG_HASH:=ccb1023dc1729c5a37ca6c3eca8e4bac3491116763c8820dfce8eea4845c8567
-&lt;/span&gt;&lt;span dir="ltr"&gt;+PKG_HASH:=3af0b6bd35e5b6fc58d8b68827fbae2ff6b7e20dd2b238ccb9b49d84722066c2
-&lt;/span&gt; 
- HOST_FIXUP:=autoreconf
- 
- include $(INCLUDE_DIR)/host-build.mk
- 
- HOST_CFLAGS += -I$(CURDIR)/include
-&lt;span dir="ltr"&gt;+HOST_CPPFLAGS += -std=gnu++98
-&lt;/span&gt; 
- define Host/Install
-        $(INSTALL_BIN) \
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;After deleting &lt;code dir="ltr"&gt;build_dir/host/mklibs-0.1.35&lt;/code&gt; and re-running the build process, everything worked out this time, and I was able to generate a system image at &lt;code dir="ltr"&gt;bin/targets/ramips/rt305x/openwrt-ramips-rt305x-mpr-a2-squashfs-sysupgrade.bin&lt;/code&gt;. I’ll put that aside for now and compile an image for the TP-Link device.&lt;/p&gt;&lt;h3&gt;
-TL-MR11U
-&lt;/h3&gt;&lt;p dir="ltr"&gt;For the TP-Link TL-MR11U, a little modification to the source is required. The upgraded DRAM does not require any changes since it’s auto-detected by the bootloader and then passed onto the kernel, but for the flash size, I need to change the build target of this device to make sure I used a 16MB flash layout. For the old &lt;code dir="ltr"&gt;ar71xx&lt;/code&gt; target, it’s as simple as changing which macro this device’s definition points to. My hardware revision is v2, but the v2 definition points to &lt;a href="https://github.com/openwrt/openwrt/blob/openwrt-19.07/target/linux/ar71xx/image/tiny-tp-link.mk#L26-L27" dir="ltr"&gt;v1&lt;/a&gt;, so it’s v1 that I would need to change.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="diff" dir="ltr"&gt;&lt;span dir="ltr"&gt;diff --git a/target/linux/ar71xx/image/tiny-tp-link.mk b/target/linux/ar71xx/image/tiny-tp-link.mk
-&lt;/span&gt;&lt;span dir="ltr"&gt;index 9612694469..a38df7f5af 100644
-&lt;/span&gt;&lt;span dir="ltr"&gt;--- a/target/linux/ar71xx/image/tiny-tp-link.mk
-&lt;/span&gt;&lt;span dir="ltr"&gt;+++ b/target/linux/ar71xx/image/tiny-tp-link.mk
-&lt;/span&gt;&lt;span dir="ltr"&gt;@@ -13,7 +13,7 @@ endef
-&lt;/span&gt; TARGET_DEVICES += tl-mr10u-v1
- 
- define Device/tl-mr11u-v1
-&lt;span dir="ltr"&gt;-  $(Device/tplink-4mlzma)
-&lt;/span&gt;&lt;span dir="ltr"&gt;+  $(Device/tplink-16mlzma)
-&lt;/span&gt;   DEVICE_TITLE := TP-LINK TL-MR11U v1
-   DEVICE_PACKAGES := kmod-usb-core kmod-usb2 kmod-usb-ledtrig-usbport
-   BOARDNAME := TL-MR11U
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This is very important for the &lt;code dir="ltr"&gt;ar71xx&lt;/code&gt; target, much more important than the previous device, which was &lt;code dir="ltr"&gt;rampis&lt;/code&gt;, as I will elaborate in the firmware splicing part below.&lt;/p&gt;&lt;BLOCKQUOTE&gt;
-&lt;a href="https://github.com/openwrt/openwrt/commit/4e4ee4649553ab536225060a27fc320bf54e458c" dir="ltr"&gt;The &lt;code dir="ltr"&gt;ar71xx&lt;/code&gt; target has now been dropped&lt;/a&gt; due to it being mostly replaced by the newer, device-tree based &lt;code dir="ltr"&gt;ath79&lt;/code&gt; target. However, not all devices have been ported to &lt;code dir="ltr"&gt;ath79&lt;/code&gt;.
-&lt;/BLOCKQUOTE&gt;&lt;p&gt;The configuration is very similar to the previous device:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;CONFIG_TARGET_ar71xx=y
-CONFIG_TARGET_ar71xx_tiny=y
-CONFIG_TARGET_ar71xx_tiny_DEVICE_tl-mr11u-v2=y
-
-CONFIG_DEVEL=y
-CONFIG_CCACHE=y
-
-# enable ECC and compression support in dropbear
-CONFIG_DROPBEAR_ECC=y
-CONFIG_DROPBEAR_ECC_FULL=y
-CONFIG_DROPBEAR_ZLIB=y
-
-# enable luci
-CONFIG_PACKAGE_luci=y
-
-# USB serial drivers
-CONFIG_PACKAGE_kmod-usb-acm=y
-CONFIG_PACKAGE_kmod-usb-serial=y
-CONFIG_PACKAGE_kmod-usb-serial-ch341=y
-CONFIG_PACKAGE_kmod-usb-serial-cp210x=y
-CONFIG_PACKAGE_kmod-usb-serial-ftdi=y
-CONFIG_PACKAGE_kmod-usb-serial-pl2303=y
-
-# terminal software
-CONFIG_PACKAGE_picocom=y
-
-# enable shadow_utils 
-CONFIG_PACKAGE_shadow-utils=y
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Now to build the firmware:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;&lt;span dir="ltr"&gt;# complete configuration&lt;/span&gt;
-$ make defconfig
-&lt;span dir="ltr"&gt;# clean built artifacts&lt;/span&gt;
-$ make clean
-&lt;span dir="ltr"&gt;# download all of the required source archives &lt;/span&gt;
-$ make download -j10
-&lt;span dir="ltr"&gt;# compile the image, running with a high nice value to avoid stalling other applications on the system&lt;/span&gt;
-$ nice -n &lt;span dir="ltr"&gt;19&lt;/span&gt; make -j&lt;span dir="ltr"&gt;$(&lt;/span&gt;nproc&lt;span dir="ltr"&gt;)&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Now I have the image at &lt;code dir="ltr"&gt;bin/targets/ar71xx/tiny/openwrt-ar71xx-tiny-tl-mr11u-v2-squashfs-factory.bin&lt;/code&gt;.&lt;/p&gt;&lt;h2&gt;
-Splicing and flashing firmware
-&lt;/h2&gt;&lt;p dir="ltr"&gt;First, I read both chips I took off from the devices with my programmer and &lt;code dir="ltr"&gt;flashrom&lt;/code&gt;. The flash programmer I used is an excellent open-source project: &lt;a href="https://github.com/dword1511/stm32-vserprog" dir="ltr"&gt;stm32-vserprog&lt;/a&gt;. The repository has both hardware and firmware designs. This can read and write chips much faster than the CH341 based programmers, and it’s quite easy to assemble.&lt;/p&gt;&lt;p&gt;These two devices are both MIPS, but that’s pretty much where the similarities end. The firmware setup for these two devices are completely different, so I needed to take different approaches to splice things together and put back onto the new NOR flash.&lt;/p&gt;&lt;p&gt;Generally speaking, a wireless router/access point type embedded Linux system like this would have a couple of partitions:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;bootloader (u-boot in both devices mentioned here)&lt;/LI&gt;&lt;LI&gt;bootloader environment variables (optional, sometimes stored within the bootloader partition)&lt;/LI&gt;&lt;LI&gt;RF calibration data for the Wi-Fi radio (MAC addresses are commonly stored here too)&lt;/LI&gt;&lt;LI&gt;kernel&lt;/LI&gt;&lt;LI&gt;rootfs (typically read-only)&lt;/LI&gt;&lt;LI&gt;overlay (where the user configuration is saved, and mounted as overlay on top of the read-only rootfs)&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;It’s worth noting that wireless calibration data must be preserved, because this is unique on a per-board basis. This is why cross-flashing other people’s full flash dumps as-is is typically not a good idea, because you will end up with subpar RF performance and wrong MAC addresses, not to mention potentially violating FCC (or the local equivalent) regulations, and why it’s always recommended having a full image backup of the flash before tinkering with any devices.&lt;/p&gt;&lt;h3&gt;
-MPR-A1
-&lt;/h3&gt;&lt;p dir="ltr"&gt;First, I need to cut up the stock firmware dump to individual partition images according to the &lt;a href="https://github.com/openwrt/openwrt/blob/openwrt-19.07/target/linux/ramips/dts/MPRA1.dts#L70-L98" dir="ltr"&gt;partition table&lt;/a&gt; for use later. This can be simply accomplished with &lt;code dir="ltr"&gt;dd if=A1_full_dump.bin of=$PARTITION_NAME bs=1 count=$SIZE_IN_BYTES skip=$START_OFFSET_IN_BYTES&lt;/code&gt;, or simply selecting, copying and pasting data in a hex editor.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;partitions {
-			compatible = "fixed-partitions";
-			#address-cells = &amp;lt;1&amp;gt;;
-			#size-cells = &amp;lt;1&amp;gt;;
-
-			partition@0 {
-				label = "u-boot";
-				reg = &amp;lt;0x0 0x30000&amp;gt;;
-				read-only;
-			};
-
-			partition@30000 {
-				label = "u-boot-env";
-				reg = &amp;lt;0x30000 0x10000&amp;gt;;
-				read-only;
-			};
-
-			factory: partition@40000 {
-				label = "factory";
-				reg = &amp;lt;0x40000 0x10000&amp;gt;;
-				read-only;
-			};
-
-			partition@50000 {
-				compatible = "denx,uimage";
-				label = "firmware";
-				reg = &amp;lt;0x50000 0x3b0000&amp;gt;;
-			};
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;For this SoC, a &lt;a href="https://github.com/JiapengLi/OpenWrt-RT5350/blob/master/u-boot/uboot256.img" dir="ltr"&gt;modified bootloader&lt;/a&gt; is also required to make use of the 32MB of DRAM according to old &lt;a href="https://forum.archive.openwrt.org/viewtopic.php?id=37002&amp;amp;p=24" dir="ltr"&gt;forum posts&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;So overall the only two partitions I need from the original flash image would be &lt;code dir="ltr"&gt;u-boot-env&lt;/code&gt; and &lt;code dir="ltr"&gt;factory&lt;/code&gt;. &lt;code dir="ltr"&gt;u-boot-env&lt;/code&gt; contains configuration for the bootloader that I don’t need to modify, &lt;code dir="ltr"&gt;factory&lt;/code&gt; is the conventional radio calibration data and MAC address storage partition for Ralink (and MediaTek MIPS) devices.&lt;/p&gt;&lt;p dir="ltr"&gt;The sysupgrade image I got from the build system is actually a complete uImage directly bootable by the bootloader, with the rootfs squashfs image appended after it. All I need to do is writing this to &lt;code dir="ltr"&gt;0x50000&lt;/code&gt; of the flash. This sysupgrade file does have some trailing metadata, but these will be automatically erased when the overlay partition is automatically reformatted on first boot, thus it can be safely ignored.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;$ file bin/targets/ramips/rt305x/openwrt-ramips-rt305x-mpr-a2-squashfs-sysupgrade.bin
-bin/targets/ramips/rt305x/openwrt-ramips-rt305x-mpr-a2-squashfs-sysupgrade.bin: u-boot legacy uImage, Linux Kernel Image, Linux/MIPS, OS Kernel Image &lt;span dir="ltr"&gt;(&lt;/span&gt;lzma&lt;span dir="ltr"&gt;)&lt;/span&gt;, &lt;span dir="ltr"&gt;1280356&lt;/span&gt; bytes, Mon Feb &lt;span dir="ltr"&gt;15&lt;/span&gt; 15:22:37 2021, Load Address: 0x80000000, Entry Point: 0x80000000, Header CRC: 0x2D529961, Data CRC: 0x804D50B5
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Now that I have all the data, it’s time to reconstruct a bootable full flash image. While this could have been more convenient to do in a GUI hex editor, I thought it would be easier to explain what’s going on if I did it with &lt;code dir="ltr"&gt;dd&lt;/code&gt;. The &lt;code dir="ltr"&gt;firmware&lt;/code&gt; partition of MPR-A2 is &lt;code dir="ltr"&gt;0x7b0000&lt;/code&gt; in size instead of &lt;code dir="ltr"&gt;0x3b0000&lt;/code&gt;, but otherwise they have identical flash layouts.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;&lt;span dir="ltr"&gt;# Take the modified bootloader binary that can use 32MB of DRAM, and generate a padding to pad it to 0x30000 with 0xFF.&lt;/span&gt;
-$ &lt;span dir="ltr"&gt;FILE&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"uboot256.img"&lt;/span&gt; dd &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;/dev/zero &lt;span dir="ltr"&gt;bs&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt; &lt;span dir="ltr"&gt;count&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$((&lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;x30000 &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;$(&lt;/span&gt;stat --format&lt;span dir="ltr"&gt;=&lt;/span&gt;%s &lt;span dir="ltr"&gt;$FILE&lt;/span&gt;&lt;span dir="ltr"&gt;)))&lt;/span&gt; &lt;span dir="ltr"&gt;|&lt;/span&gt;tr &lt;span dir="ltr"&gt;\\&lt;/span&gt;&lt;span dir="ltr"&gt;000&lt;/span&gt; &lt;span dir="ltr"&gt;\\&lt;/span&gt;&lt;span dir="ltr"&gt;377&lt;/span&gt; &amp;gt; u-boot_padding
-91104+0 records in
-91104+0 records out
-&lt;span dir="ltr"&gt;91104&lt;/span&gt; bytes &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;91&lt;/span&gt; kB, &lt;span dir="ltr"&gt;89&lt;/span&gt; KiB&lt;span dir="ltr"&gt;)&lt;/span&gt; copied, 0.0971852 s, &lt;span dir="ltr"&gt;937&lt;/span&gt; kB/s
-
-&lt;span dir="ltr"&gt;# Concatenate the padding with the u-boot image&lt;/span&gt;
-$ cat uboot256.img u-boot_padding &amp;gt; u-boot_partition
-
-&lt;span dir="ltr"&gt;# Concatenate the u-boot partiton (now with the correct size), u-boot environment variable partition the wireless calibration data parition together.&lt;/span&gt;
-$ cat u-boot_partition u-boot-env factory &amp;gt; header
-
-&lt;span dir="ltr"&gt;# Generate a padding filled with 0xFF to pad the frimware partiton to the correct size&lt;/span&gt;
-$ &lt;span dir="ltr"&gt;FILE&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;"openwrt-ramips-rt305x-mpr-a2-squashfs-sysupgrade.bin"&lt;/span&gt; dd &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;/dev/zero &lt;span dir="ltr"&gt;bs&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt; &lt;span dir="ltr"&gt;count&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$((&lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;x7b0000 &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;$(&lt;/span&gt;stat --format&lt;span dir="ltr"&gt;=&lt;/span&gt;%s &lt;span dir="ltr"&gt;$FILE&lt;/span&gt;&lt;span dir="ltr"&gt;)))&lt;/span&gt; &lt;span dir="ltr"&gt;|&lt;/span&gt;tr &lt;span dir="ltr"&gt;\\&lt;/span&gt;&lt;span dir="ltr"&gt;000&lt;/span&gt; &lt;span dir="ltr"&gt;\\&lt;/span&gt;&lt;span dir="ltr"&gt;377&lt;/span&gt; &amp;gt; firmware_padding
-3865866+0 records in
-3865866+0 records out
-&lt;span dir="ltr"&gt;3865866&lt;/span&gt; bytes &lt;span dir="ltr"&gt;(&lt;/span&gt;3.9 MB, 3.7 MiB&lt;span dir="ltr"&gt;)&lt;/span&gt; copied, 1.49983 s, 2.6 MB/s
-
-&lt;span dir="ltr"&gt;# Concatenate the sysupgrade image with the padding&lt;/span&gt;
-$ cat openwrt-ramips-rt305x-mpr-a2-squashfs-sysupgrade.bin firmware_padding &amp;gt; firmware_partiton
-
-&lt;span dir="ltr"&gt;# Concatenate everything together&lt;/span&gt;
-$ cat header firmware_padding &amp;gt; full.bin
-
-&lt;span dir="ltr"&gt;# Write the assembled full image to the new flash chip&lt;/span&gt;
-$ flashrom -p serprog:dev&lt;span dir="ltr"&gt;=&lt;/span&gt;/dev/ttyACM1:400000000 -w full.bin
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;With the chip written, I soldered it back. After cleaning up the board, I powered it on and the system came up as expected. Took about 3 minutes to fully initialize the jffs2 overlay as it needed to erase everything in the overlay partition. Subsequent normal boots take about 1 minute, while being a little slow, is still an acceptable trade-off for the convenience.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;[   78.870911] jffs2_scan_eraseblock(): End of filesystem marker found at 0x0
-[   78.926935] jffs2_build_filesystem(): unlocking the mtd device... 
-[   78.927077] done.
-[   78.943362] jffs2_build_filesystem(): erasing all blocks after the end marker... 
-[   80.627250] br-lan: port 1(eth0) entered blocking state
-[   80.652812] br-lan: port 1(eth0) entered disabled state
-[   80.663982] device eth0 entered promiscuous mode
-[   80.838653] br-lan: port 1(eth0) entered blocking state
-[   80.849204] br-lan: port 1(eth0) entered forwarding state
-[   80.860561] IPv6: ADDRCONF(NETDEV_UP): br-lan: link is not ready
-[   82.058579] IPv6: ADDRCONF(NETDEV_CHANGE): br-lan: link becomes ready
-[  177.313272] done.
-[  177.317307] jffs2: notice: (1135) jffs2_build_xattr_subsystem: complete building xattr subsystem, 0 of xdatum (0 unchecked, 0 orphan) and 0 of xref (0 dead, 0 orphan) found.
-[  177.746829] overlayfs: upper fs does not support tmpfile.
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;
-TL-MR11U
-&lt;/h3&gt;&lt;p dir="ltr"&gt;This device requires a different approach. Since the factory bootloader can auto-detect the 64MB of DRAM I put in, and I can simply apply &lt;code dir="ltr"&gt;openwrt-ar71xx-tiny-tl-mr11u-v2-squashfs-factory.bin&lt;/code&gt; from the stock TP-Link firmware, all I really needed to do was mirroring the &lt;code dir="ltr"&gt;ART&lt;/code&gt; (Atheros Radio Test, wireless calibration data) partition to where it should be on a 16MB device. On these Atheros based devices, &lt;code dir="ltr"&gt;ART&lt;/code&gt; is commonly simply located in the last 64KB of the flash, and this device is no exception.&lt;/p&gt;&lt;p dir="ltr"&gt;Doing this one with &lt;code dir="ltr"&gt;dd&lt;/code&gt; would be slightly more difficult than the previous one and would require more messy arithmetic operations, so I didn’t bother with this one and simply used a hex editor to do the job. Basically, the gist is:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Create a new 16MB file filled with 0xFF&lt;/LI&gt;&lt;LI&gt;Open the original 4MB flash dump and copy it to the beginning of the 16MB file in overwrite mode&lt;/LI&gt;&lt;LI&gt;Copy the last 64KB of the original flash dump to the last 64KB of the new 16MB file in overwrite mode&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;After I have the 16MB OpenWrt image flashed onto the device, it will automatically pick up the new &lt;code dir="ltr"&gt;ART&lt;/code&gt; data I placed at the end of the new 16MB flash. Now all I need to do was writing this image to the new 16MB chip and soldering it back to the board.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;# Write the assembled full image to the new flash chip
-$ flashrom -p serprog:dev=/dev/ttyACM1:400000000 -w full.bin
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This board came up and finished erasing the overlay slightly faster than the other device, only taking a little over 2 minutes to initialize the overlay. Just like the previous device, normal boots take about 1 minute, while being a little slow, is still an acceptable trade-off for the convenience.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;[   90.206076] jffs2_scan_eraseblock(): End of filesystem marker found at 0x0
-[   90.211744] jffs2_build_filesystem(): unlocking the mtd device... 
-[   90.211818] done.
-[   90.219575] jffs2_build_filesystem(): erasing all blocks after the end marker... 
-[   90.859188] br-lan: port 1(eth0) entered blocking state
-[   90.870509] br-lan: port 1(eth0) entered disabled state
-[   90.876126] device eth0 entered promiscuous mode
-[   90.927039] IPv6: ADDRCONF(NETDEV_UP): br-lan: link is not ready
-[   94.978202] eth0: link up (100Mbps/Full duplex)
-[   94.981345] br-lan: port 1(eth0) entered blocking state
-[   94.986506] br-lan: port 1(eth0) entered forwarding state
-[   95.026917] IPv6: ADDRCONF(NETDEV_CHANGE): br-lan: link becomes ready
-[  136.089805] done.
-[  136.090335] jffs2: notice: (1205) jffs2_build_xattr_subsystem: complete building xattr subsystem, 0 of xdatum (0 unchecked, 0 orphan) and 0 of xref (0 dead, 0 orphan) found.
-[  136.393070] overlayfs: upper fs does not support tmpfile.
-&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;
-Helper script
-&lt;/h2&gt;&lt;p dir="ltr"&gt;I wrote a simple shell script that prints the current driver used and then calls &lt;code dir="ltr"&gt;picocom&lt;/code&gt; with one of the two possible serial adapter device nodes it finds. This can be set to a user’s login shell, so I won’t have to specify long commands when connecting to the device over ssh.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/bin/sh
-&lt;/span&gt;
-&lt;span dir="ltr"&gt;OPTION1&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;/dev/ttyUSB0
-&lt;span dir="ltr"&gt;OPTION2&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;/dev/ttyACM0
-&lt;span dir="ltr"&gt;DEFAULT_BAUDRATE&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;115200&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt; -c &lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;$OPTION1&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt; &lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;then&lt;/span&gt;
-    &lt;span dir="ltr"&gt;ADAPTER&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$OPTION1&lt;/span&gt;
-&lt;span dir="ltr"&gt;elif&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt; -c &lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;$OPTION2&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt; &lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;then&lt;/span&gt;
-    &lt;span dir="ltr"&gt;ADAPTER&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;$OPTION2&lt;/span&gt;
-&lt;span dir="ltr"&gt;else&lt;/span&gt;
-    &lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;"No serial adapter found."&lt;/span&gt;
-    &lt;span dir="ltr"&gt;exit&lt;/span&gt;
-&lt;span dir="ltr"&gt;fi&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;"Using &lt;/span&gt;&lt;span dir="ltr"&gt;$ADAPTER&lt;/span&gt;&lt;span dir="ltr"&gt; at &lt;/span&gt;&lt;span dir="ltr"&gt;$DEFAULT_BAUDRATE&lt;/span&gt;&lt;span dir="ltr"&gt; baud."&lt;/span&gt;
-&lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;"Driver: &lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;basename &lt;span dir="ltr"&gt;$(&lt;/span&gt;readlink /sys/class/tty/&lt;span dir="ltr"&gt;$(&lt;/span&gt;basename &lt;span dir="ltr"&gt;$ADAPTER&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;/device/driver&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;
-&lt;span dir="ltr"&gt;echo&lt;/span&gt; -e &lt;span dir="ltr"&gt;"Press [C-b] to change the baudrate. \n"&lt;/span&gt;
-&lt;span dir="ltr"&gt;exec&lt;/span&gt; /usr/bin/picocom --send-cmd &lt;span dir="ltr"&gt;''&lt;/span&gt; --receive-cmd &lt;span dir="ltr"&gt;''&lt;/span&gt; -b &lt;span dir="ltr"&gt;$DEFAULT_BAUDRATE&lt;/span&gt; &lt;span dir="ltr"&gt;$ADAPTER&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;
-Software setup
-&lt;/h2&gt;&lt;p dir="ltr"&gt;After setting up the root password and wireless credentials, I copied my script to &lt;code dir="ltr"&gt;/usr/bin/serial_terminal&lt;/code&gt; to the device with &lt;code dir="ltr"&gt;scp&lt;/code&gt; and did some basic setup over SSH.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;&lt;span dir="ltr"&gt;# set the script to executable&lt;/span&gt;
-chmod +x /usr/bin/serial_terminal
-
-&lt;span dir="ltr"&gt;# add a user called "uart" in the dialout group, whose login shell is my serial terminal script&lt;/span&gt;
-useradd -g dialout -d /home/uart --create-home --shell /usr/bin/serial_terminal uart
-
-&lt;span dir="ltr"&gt;# set a secure password for the "uart" user&lt;/span&gt;
-passwd uart
-
-&lt;span dir="ltr"&gt;# add new "shell" to the list of allowed shells&lt;/span&gt;
-&lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;"/usr/bin/serial_terminal"&lt;/span&gt; &amp;gt;&amp;gt; /etc/shells
-
-&lt;span dir="ltr"&gt;# add all of the files midified so far to sysupgrade.conf so they persist through factory resets&lt;/span&gt;
-&lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;"/etc/shells"&lt;/span&gt; &amp;gt;&amp;gt; /etc/sysupgrade.conf
-&lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;"/usr/bin/serial_terminal"&lt;/span&gt; &amp;gt;&amp;gt; /etc/sysupgrade.conf
-&lt;span dir="ltr"&gt;echo&lt;/span&gt; &lt;span dir="ltr"&gt;"/home"&lt;/span&gt; &amp;gt;&amp;gt; /etc/sysupgrade.conf
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Unfortunately, I was not able to get public key ssh authentication working properly on 19.07. Setting &lt;code dir="ltr"&gt;PubkeyAcceptedKeyTypes +ssh-rsa&lt;/code&gt; with ECC keys or switching to RSA keys silenced &lt;code dir="ltr"&gt;send_pubkey_test: no mutual signature algorithm&lt;/code&gt; from my client, but dropbear is always giving me &lt;code dir="ltr"&gt;authpriv.warn dropbear[1759]: Pubkey auth attempt with unknown algo for 'root' from xxx&lt;/code&gt; no matter what I tried, so I didn’t investigate further and thought dropbear on here is simply too old.&lt;/p&gt;&lt;h2&gt;
-Demo
-&lt;/h2&gt;&lt;p dir="ltr"&gt;After everything has been set up, this is the final result. All of these devices are functionally identical as far as the use case is concerned, so there is only one demo. I connected to the device over ssh, powered up the target board connected to the serial adapter, and then ran &lt;code dir="ltr"&gt;htop&lt;/code&gt; to demonstrate psuedo-GUI applications mostly work pretty well here.&lt;/p&gt;&lt;figure&gt;&lt;picture&gt;
-&lt;source srcset="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/mr11u_hu11ff045a05a7dcecc2892ef3b589611e_3487478_1200x0_resize_q75_box.jpg"&gt;
-&lt;img src="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/mr11u_hu11ff045a05a7dcecc2892ef3b589611e_3487478_1800x0_resize_q75_box.jpg" alt="Testing setup with the TL-MR11U."&gt;
-&lt;/picture&gt;&lt;figcaption dir="auto"&gt;Testing setup with the TL-MR11U.&lt;/figcaption&gt;&lt;/figure&gt;&lt;figure&gt;&lt;picture&gt;
-&lt;source srcset="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/5350f_comparison_huc77ba769ff7e0e48eafc1dbabd1717aa_1830387_1200x0_resize_q75_box.jpg"&gt;
-&lt;img src="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/5350f_comparison_huc77ba769ff7e0e48eafc1dbabd1717aa_1830387_1800x0_resize_q75_box.jpg" alt="The MPR-A2 clone and the genuine MPR-A1 with serial adapters attached."&gt;
-&lt;/picture&gt;&lt;figcaption dir="auto"&gt;The MPR-A2 clone and the genuine MPR-A1 with serial adapters attached.&lt;/figcaption&gt;&lt;/figure&gt;&lt;p&gt;Apologies for the lack of playback control, I have not yet found any way to add playback control widgets for animated SVG.&lt;/p&gt;&lt;img src="https://sagacioussuricata.com/posts/openwrt-serial-bridge/images/demo.svg" alt="SVG demo animation" width="453" height="443"&gt;&lt;h2&gt;
-Potential improvements
-&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;Adding Bluetooth serial capabilities. While I don’t have much use for this feature, I can see it being useful for other people.&lt;/LI&gt;&lt;LI&gt;Forwarding the raw character device over SSH instead of running &lt;code dir="ltr"&gt;picocom&lt;/code&gt; on the remote. &lt;a href="https://github.com/b1f6c1c4/ttyssh" dir="ltr"&gt;ttcssh&lt;/a&gt; will do what I want, but setup seems very convoluted for a non-essential feature, so I didn’t feel like setting this up here.&lt;/LI&gt;&lt;LI&gt;Upgrading to OpenWrt v21.02 and hopefully fix SSH public key login.&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Mon, 31 May 2021 16:03:41 -0500</pubDate></item><item><title>What are you doing this week?</title><link>https://lobste.rs/s/io17kr</link><description>&lt;p&gt;What are you doing this week? Feel free to share!&lt;/p&gt;&lt;p&gt;Keep in mind it’s OK to do nothing at all, too.&lt;/p&gt;</description><pubDate>Mon, 31 May 2021 15:50:59 -0500</pubDate></item><item><title>You Can Watch Netflix on FreeBSD</title><link>https://www.youtube.com/watch?v=mBYor4wL62Q</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/dpw0fm/you_can_watch_netflix_on_freebsd"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Mon, 31 May 2021 11:53:40 -0500</pubDate></item><item><title>FreeBSD 13.0 – Virtualization – Part 2 – bhyve – AMD Ryzen 3950X – RTX 2060</title><link>https://www.youtube.com/watch?v=Y1FuxpahDrM</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/tz4sv1/freebsd_13_0_virtualization_part_2_bhyve"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Mon, 31 May 2021 11:52:25 -0500</pubDate></item></channel></rss>
+every 7 days.&lt;/p&gt;&lt;p&gt;I hope you found it userful.&lt;/p&gt;</description><pubDate>Mon, 31 May 2021 02:00:41 -0500</pubDate></item><item><title>What are you doing this week?</title><link>https://lobste.rs/s/io17kr</link><description>&lt;p&gt;What are you doing this week? Feel free to share!&lt;/p&gt;&lt;p&gt;Keep in mind it’s OK to do nothing at all, too.&lt;/p&gt;</description><pubDate>Mon, 31 May 2021 15:50:59 -0500</pubDate></item><item><title>You Can Watch Netflix on FreeBSD</title><link>https://www.youtube.com/watch?v=mBYor4wL62Q</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/dpw0fm/you_can_watch_netflix_on_freebsd"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Mon, 31 May 2021 11:53:40 -0500</pubDate></item><item><title>FreeBSD 13.0 – Virtualization – Part 2 – bhyve – AMD Ryzen 3950X – RTX 2060</title><link>https://www.youtube.com/watch?v=Y1FuxpahDrM</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/tz4sv1/freebsd_13_0_virtualization_part_2_bhyve"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Mon, 31 May 2021 11:52:25 -0500</pubDate></item></channel></rss>
