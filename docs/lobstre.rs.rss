@@ -159,301 +159,7 @@ and
 &lt;/LI&gt;&lt;LI&gt;David Wolfe and Elwyn R Berlekamp, &lt;i dir="ltr"&gt;Mathematical Go: Chilling
 gets the last point&lt;/i&gt;
 &amp;lt;/ul&amp;gt;
-&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Fri, 25 Jun 2021 03:08:19 -0500</pubDate></item><item><title>Lamport Clock</title><link>https://lobste.rs/s/kilnds</link><description>&lt;img src="https://martinfowler.com/articles/patterns-of-distributed-systems/card.png" width="250" height="134"&gt;&lt;p&gt;Use logical timestamps as a version for a value to allow ordering of values across servers&lt;/p&gt;&lt;p&gt;23 June 2021&lt;/p&gt;&lt;h2&gt;Problem&lt;/h2&gt;&lt;p dir="ltr"&gt;
-        When values are stored across multiple servers, 
-        there needs to be a way to know which values were stored before the other. 
-        The system timestamp can not be used, 
-        because &lt;a href="https://martinfowler.com/articles/patterns-of-distributed-systems/time-bound-lease.html#wall-clock-not-monotonic" dir="ltr"&gt;wall clocks are not monotonic&lt;/a&gt; 
-        and clock values from two different servers should not be compared.
-    &lt;/p&gt;&lt;p dir="ltr"&gt;
-      The system timestamp, which represents the time of the day, is measured by a clock machinery generally 
-      built with an crystal oscillator. The known problem with this mechanism is that it can drift away from the actual time of the day, 
-      based on how fast or slow the crystals oscillate. To fix this, computers typically have a service like &lt;a href="https://en.wikipedia.org/wiki/Network_Time_Protocol" dir="ltr"&gt;NTP&lt;/a&gt;
-      which synchronizes computer clocks with well known time sources on the internet.
-      Because of this, two consecutive readings of the system time on a given server can 
-      have time going backwards.
-     &lt;/p&gt;&lt;p&gt;As there is no upper bound on clock drift across servers, it is impossible to compare timestamps on two different servers&lt;/p&gt;&lt;h2&gt;Solution&lt;/h2&gt;&lt;p&gt;    
-        Lamport Clock maintains a single number to represent timestamp as following:
-    &lt;/p&gt;&lt;p&gt;class LamportClock…
-&lt;/p&gt;&lt;PRE&gt;  class LamportClock {
-      int latestTime;
-  
-      public LamportClock(int timestamp) {
-          latestTime = timestamp;
-      }&lt;/PRE&gt;&lt;p&gt;
-        Every cluster node maintains an instance of a Lamport Clock.
-    &lt;/p&gt;&lt;p&gt;class Server…
-&lt;/p&gt;&lt;PRE&gt;  MVCCStore mvccStore;
-  LamportClock clock;
-
-  public Server(MVCCStore mvccStore) {
-      this.clock = new LamportClock(1);
-      this.mvccStore = mvccStore;
-  }&lt;/PRE&gt;&lt;p&gt;
-        Whenever a server carries out any write operation, it should advance the Lamport Clock, using the `tick()` method
-&lt;/p&gt;&lt;p&gt;class LamportClock…
-&lt;/p&gt;&lt;PRE&gt;  public int tick(int requestTime) {
-      latestTime = Integer.max(latestTime, requestTime);
-      latestTime++;
-      return latestTime;
-  }&lt;/PRE&gt;&lt;p&gt;
-       This way, the server can be sure that the write is sequenced after the request
-       and after any other action the server has carried out since the request was
-       initiated by the client. The server returns the timestamp that was used for writing the value to the client. 
-       The requesting client then uses this timestamp to issue any further
-       writes to other set of servers. This way, the causal chain of requests is
-       maintained.
-    &lt;/p&gt;&lt;h2&gt;Causality, Time and Happens-Before&lt;/h2&gt;&lt;p dir="ltr"&gt;
-        When an event A in a system happens before another event B, it might have a
-        causal relationship. Causal relationship means that A might have some role in causing B.
-        This 'A happens before B' relationship is established by attaching a timestamp to each event.
-        If A happens before B, the timestamp attached to A will be lower than the timestamp attached to B.
-        But because we can not rely on system time, we need some way to make sure 
-        that the happens-before relationship is maintained for the timestamp attached to the events.
-        &lt;a href="https://en.wikipedia.org/wiki/Leslie_Lamport" dir="ltr"&gt;Leslie Lamport&lt;/a&gt; suggested a solution to use 
-        logical timestamps to track happens-before relationships, in his seminal paper 
-        &lt;a href="https://lamport.azurewebsites.net/pubs/time-clocks.pdf" dir="ltr"&gt;Time, Clocks and Ordering Of Events&lt;/a&gt;.
-        So this technique of using logical timestamps to track causality is named as the
-        Lamport Timestamp.
-      &lt;/p&gt;&lt;p dir="ltr"&gt;
-        It is useful to note that in a database, events are about storing data. So Lamport Timestamps 
-        are attached to the values stored. This also fits very well with versioned storage mechanism 
-        discussed in &lt;a href="https://martinfowler.com/articles/patterns-of-distributed-systems/versioned-value.html" dir="ltr"&gt;Versioned Value&lt;/a&gt;&lt;/p&gt;&lt;h2&gt; An example key value store &lt;/h2&gt;&lt;p dir="ltr"&gt;
-        Consider an example of a simple key value store with multiple server nodes.
-        There are two servers, Blue and Green. 
-        Each server is responsible for storing a specific set of keys.  
-        This is a typical scenario when data is partitioned across a set of servers.
-        Values are stored as &lt;a href="https://martinfowler.com/articles/patterns-of-distributed-systems/versioned-value.html" dir="ltr"&gt;Versioned Value&lt;/a&gt; with the Lamport Timestamp as a version number. 
-    &lt;/p&gt;&lt;img src="https://martinfowler.com/articles/patterns-of-distributed-systems/two-servers-each-with-specific-key-range.svg" width="465" height="152"&gt;&lt;p&gt;Figure 1: Two servers each responsible for specific keys&lt;/p&gt;&lt;section&gt;
-
-       
-        The receiving server compares and updates its own timestamp and uses it to write a versioned key value.
-        
-&lt;/section&gt;&lt;p&gt;class Server…
-&lt;/p&gt;&lt;PRE&gt;  public int write(String key, String value, int requestTimestamp) {
-      //update own clock to reflect causality
-&lt;span dir="ltr"&gt;      int writeAtTimestamp = clock.tick(requestTimestamp);&lt;/span&gt;
-      mvccStore.put(new VersionedKey(key, writeAtTimestamp), value);
-      return writeAtTimestamp;
-  }&lt;/PRE&gt;&lt;p&gt; 
-        The timestamp used for writing the value is returned to the client. 
-        The client keeps track of the maximum timestamp, by updating its own timestamp.
-        It uses this timestamp to issue any further writes.
-    &lt;/p&gt;&lt;p&gt;class Client…
-&lt;/p&gt;&lt;PRE&gt;  LamportClock clock = new LamportClock(1);
-  public void write() {
-      int server1WrittenAt = server1.write("name", "Alice", clock.getLatestTime());
-      clock.updateTo(server1WrittenAt);
-
-      int server2WrittenAt = server2.write("title", "Microservices", clock.getLatestTime());
-      clock.updateTo(server2WrittenAt);
-
-      assertTrue(server2WrittenAt &amp;gt; server1WrittenAt);
-  }&lt;/PRE&gt;&lt;p&gt;
-      The sequence of requests look like following:
-    &lt;/p&gt;&lt;img src="https://martinfowler.com/articles/patterns-of-distributed-systems/lamport-clock-request-sequence.svg" width="465" height="516"&gt;&lt;p&gt;Figure 2: Two servers each responsible for specific keys&lt;/p&gt;&lt;p dir="ltr"&gt;
-          The same technique works even when the client is communicating with a leader with &lt;a href="https://martinfowler.com/articles/patterns-of-distributed-systems/leader-follower.html" dir="ltr"&gt;Leader and Followers&lt;/a&gt; groups, 
-          with each group responsible for specific keys. 
-          The client sends requests to the leader of the group as detailed above.
-          The Lamport Clock instance is maintained by the leader of the group, 
-          and is updated exactly the same way as discussed in the previous section.
-          &lt;/p&gt;&lt;img src="https://martinfowler.com/articles/patterns-of-distributed-systems/different-keys-different-servers.svg" width="465" height="228"&gt;&lt;p&gt;Figure 3: Different leader follower groups storing different key values&lt;/p&gt;&lt;h2&gt;Partial Order&lt;/h2&gt;&lt;p dir="ltr"&gt;
-       The values stored by Lamport Clock are only &lt;a href="https://en.wikipedia.org/wiki/Partially_ordered_set" dir="ltr"&gt;partially ordered&lt;/a&gt;.
-       If two clients store values in two separate servers, the timestamp values 
-       cannot be used to order the values across servers. In the following example,
-       the title stored by Bob on server Green is at timestamp 2. 
-       But it can not be determined if Bob stored the title before or after Alice stored the name on server Blue.
-      &lt;/p&gt;&lt;img src="https://martinfowler.com/articles/patterns-of-distributed-systems/two-clients-two-separate-servers.svg" width="465" height="146"&gt;&lt;p&gt;Figure 4: Partial Order&lt;/p&gt;&lt;h2&gt; A single server/leader updating values &lt;/h2&gt;&lt;p dir="ltr"&gt;
-           For a single leader-follower group of servers, where a leader is always responsible for storing values,
-           the basic implementation discussed in &lt;a href="https://martinfowler.com/articles/patterns-of-distributed-systems/versioned-value.html" dir="ltr"&gt;Versioned Value&lt;/a&gt; is enough to maintain causality.
-        &lt;/p&gt;&lt;img src="https://martinfowler.com/articles/patterns-of-distributed-systems/single-servergroup-kvstore.svg" width="465" height="280"&gt;&lt;p&gt;Figure 5: Single leader-follower group saving key values&lt;/p&gt;&lt;p&gt;
-          In this case, the key value store keeps an integer version counter. 
-          It increments the version counter every time the key value write command is applied from the Write Ahead Log.
-          It then constructs the new key with the incremented version counter.
-          Only the leader is responsible for incrementing the version counter, 
-          and followers use the same version number.
-        &lt;/p&gt;&lt;p&gt;class ReplicatedKVStore…
-&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;  int version = 0;&lt;/span&gt;
-  MVCCStore mvccStore = new MVCCStore();
-
-  @Override
-  public CompletableFuture&amp;lt;Response&amp;gt; put(String key, String value) {
-      return server.propose(new SetValueCommand(key, value));
-  }
-
-  private Response applySetValueCommand(SetValueCommand setValueCommand) {
-      getLogger().info("Setting key value " + setValueCommand);
-&lt;span dir="ltr"&gt;      version = version + 1;&lt;/span&gt;
-      mvccStore.put(new VersionedKey(setValueCommand.getKey(), version), setValueCommand.getValue());
-      Response response = Response.success(version);
-      return response;
-  }&lt;/PRE&gt;&lt;h2&gt;Examples&lt;/h2&gt;&lt;p dir="ltr"&gt;Databases like &lt;a href="https://www.mongodb.com/" dir="ltr"&gt;[mongodb]&lt;/a&gt; and &lt;a href="https://www.cockroachlabs.com/docs/stable/" dir="ltr"&gt;[cockroachdb]&lt;/a&gt; 
-             use variants of the Lamport Clock to implement &lt;a href="https://en.wikipedia.org/wiki/Multiversion_concurrency_control" dir="ltr"&gt;[mvcc]&lt;/a&gt; storage&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://martinfowler.com/articles/patterns-of-distributed-systems/generation.html" dir="ltr"&gt;Generation Clock&lt;/a&gt; is an example of a Lamport Clock&lt;/p&gt;</description><pubDate>Thu, 24 Jun 2021 06:46:12 -0500</pubDate></item><item><title>Improving Linux Packaging: rinstall</title><link>https://lobste.rs/s/vbevs5</link><description>&lt;p&gt;Let’s face it. Packaging software on Linux is an underappreciated job. If they do their job
-correctly, almost no one will notice them. But the moment they do a mistake, the users of their
-distribution will likely go mad.&lt;/p&gt;&lt;p&gt;They often work with no standard tool for build and install. They have to
-dig into other people source code daily and fix errors regarding build and dependencies.
-Likewise, they also have to discuss and teach developers about how distributions and standard
-works. Knowing Linux hierarchy, where to place files and a lot of unwritten rules to make systems
-work is surely out of the scope for most developers. And I think they have all the rights to skip
-this knowledge. They develop software, they don’t build systems (but there are exceptions too!).&lt;/p&gt;&lt;p&gt;However, developers are (almost) always asked to write the installation target for their software,
-may it be a shell script or a complex C codebase. Here, tools often don’t help the developers,
-as they don’t properly support or enforce the various standards.
-Therefore, package maintainers have to fill the gap themselves. It usually happens in their own
-distribution package specification. How many distributions are there? Tons. And this
-work is duplicated countless times.&lt;/p&gt;&lt;p dir="ltr"&gt;While developing software written in Rust, I have found a gap in &lt;code dir="ltr"&gt;cargo-install&lt;/code&gt;: it doesn’t
-consider any data or file outside of executables and libraries. In spite of that, applications
-usually have many files to install; man pages, documentation, examples, &lt;code dir="ltr"&gt;.desktop&lt;/code&gt;
-files and icons. What do developers do in this case? They either add a &lt;code dir="ltr"&gt;Makefile&lt;/code&gt; or entirely
-skip the installation target. This is something that happens not only to Rust projects, but
-to many others types.&lt;/p&gt;&lt;p dir="ltr"&gt;I have engineered a tool to fill the gap, &lt;strong dir="ltr"&gt;&lt;a href="https://git.sr.ht/~danyspin97/rinstall" dir="ltr"&gt;rinstall&lt;/a&gt;&lt;/strong&gt;, and this post is about its rationale,
-usage and how it could &lt;strong dir="ltr"&gt;improve packaging on Linux&lt;/strong&gt; (and other *nix systems too!).&lt;/p&gt;&lt;h2&gt;rinstall&lt;/h2&gt;&lt;p&gt;rinstall is a small (at the time of writing, just ~600 LOC!) helper tool that has two
-main objectives:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Help developers define which files their program shall install without knowing all the various
-standards, hierarchy and the quirks of writing &lt;em dir="ltr"&gt;Makefiles&lt;/em&gt;.&lt;/LI&gt;&lt;LI&gt;Remove the duplicated code in the distribution packages definitions that manually use &lt;code dir="ltr"&gt;cp&lt;/code&gt; and
-&lt;code dir="ltr"&gt;install&lt;/code&gt; to install files.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;It doesn’t try to replace tools such as &lt;code dir="ltr"&gt;meson&lt;/code&gt;, that already wonderfully covers the installation
-phase. It doesn’t try to replace either &lt;code dir="ltr"&gt;CMake&lt;/code&gt; or &lt;code dir="ltr"&gt;make&lt;/code&gt; when they are already used for
-compiling in C/C++ projects. Although they don’t do any enforcing, they are already used,
-so it doesn’t make a lot of sense to add a new dependency on a new tool.&lt;/p&gt;&lt;p dir="ltr"&gt;I am sure most of you are ready to throw knives at me the moment I said I want to replace
-&lt;code dir="ltr"&gt;Makefiles&lt;/code&gt; in some contexts. I know what you’re feeling, but please hold on and continue reading.
-There will be an in-depth comparison and explanation. If you still aren’t satisfied by then,
-I won’t stop you anymore!&lt;/p&gt;&lt;h3&gt;Install directories&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; supports two installation modes out of the box: &lt;strong dir="ltr"&gt;system-wide&lt;/strong&gt; and &lt;strong dir="ltr"&gt;user&lt;/strong&gt; install.&lt;/p&gt;&lt;p dir="ltr"&gt;The first installs into &lt;code dir="ltr"&gt;/usr/local&lt;/code&gt; by default, making the programs available to all system users.
-It follows the &lt;em dir="ltr"&gt;&lt;a href="https://www.gnu.org/prep/standards/html_node/Directory-Variables.html" dir="ltr"&gt;Directory Variables&lt;/a&gt;&lt;/em&gt; from the &lt;em dir="ltr"&gt;GNU Coding Standard&lt;/em&gt;. Binaries will be installed
-into &lt;code dir="ltr"&gt;/usr/local/bin&lt;/code&gt;, libraries into &lt;code dir="ltr"&gt;/usr/local/lib&lt;/code&gt; and so on. The prefix can be changed by
-passing it into the command line, as well as all the other variables.&lt;/p&gt;&lt;p dir="ltr"&gt;The second installs into the &lt;code dir="ltr"&gt;HOME&lt;/code&gt; folder of the current user, following the
-&lt;em dir="ltr"&gt;&lt;a href="https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html" dir="ltr"&gt;XDG Base Directory Specification&lt;/a&gt;&lt;/em&gt;. Binaries will be installed into &lt;code dir="ltr"&gt;~/.local/bin&lt;/code&gt;,
-libraries into &lt;code dir="ltr"&gt;~/.local/lib&lt;/code&gt;, and all the other variables will use the various &lt;code dir="ltr"&gt;XDG_*&lt;/code&gt; variables
-with default fallback.&lt;/p&gt;&lt;p dir="ltr"&gt;It also reads the configuration from &lt;code dir="ltr"&gt;/etc/rinstall.yml&lt;/code&gt; when running as root and
-&lt;code dir="ltr"&gt;.config/rinstall.yml&lt;/code&gt; when running in user mode. If the configuration file exists,
-the tool will merge said config with the default one.&lt;/p&gt;&lt;p dir="ltr"&gt;In addition, it also supports a &lt;code dir="ltr"&gt;--destdir&lt;/code&gt; argument. Packagers can just call the following
-command to perform the installation phase of a program:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;# rinstall --destdir mydir --prefix /usr --no-config&lt;/span&gt;&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;&lt;code&gt;install.yml&lt;/code&gt;&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; resolves around the per-project file &lt;code dir="ltr"&gt;install.yml&lt;/code&gt;. This file contains the
-list of files to install, divided per category, as well as the name and version of the software.
-For example this is the &lt;code dir="ltr"&gt;install.yml&lt;/code&gt; for &lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; itself:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;name:&lt;/span&gt; &lt;span dir="ltr"&gt;rinstall&lt;/span&gt;
-&lt;span dir="ltr"&gt;version:&lt;/span&gt; &lt;span dir="ltr"&gt;0.1&lt;/span&gt;
-&lt;span dir="ltr"&gt;type:&lt;/span&gt; &lt;span dir="ltr"&gt;rust&lt;/span&gt;
-&lt;span dir="ltr"&gt;exe:&lt;/span&gt;
-  &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;src:&lt;/span&gt; &lt;span dir="ltr"&gt;rinstall&lt;/span&gt;
-&lt;span dir="ltr"&gt;docs:&lt;/span&gt;
-  &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;src:&lt;/span&gt; &lt;span dir="ltr"&gt;LICENSE.md&lt;/span&gt;
-  &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;src:&lt;/span&gt; &lt;span dir="ltr"&gt;README.md&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Each outmost key (&lt;code dir="ltr"&gt;exe&lt;/code&gt; and &lt;code dir="ltr"&gt;docs&lt;/code&gt; in this case) contains a list of sources, abbreviated &lt;code dir="ltr"&gt;src&lt;/code&gt;,
-and optionally the destination, abbreviated &lt;code dir="ltr"&gt;dst&lt;/code&gt;. &lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; will install the source into either
-the folder or file that destination points to, using the respective folder the for key used.
-It supports many keys and common cases, allowing to the developers to write
-as little as possible. In this case, its output would be:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;# rinstall&lt;/span&gt;&lt;/span&gt;
-Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"target/release/rinstall"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/bin/rinstall"&lt;/span&gt;&lt;/span&gt;
-Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"LICENSE.md"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/share/doc/rinstall-0.1/LICENSE.md"&lt;/span&gt;&lt;/span&gt;
-Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"README.md"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/share/doc/rinstall-0.1/README.md"&lt;/span&gt;&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;One of the projects that I stumbled upon which would benefit from using &lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; is the
-widely used terminal emulator &lt;em dir="ltr"&gt;&lt;a href="https://github.com/alacritty/alacritty" dir="ltr"&gt;Alacritty&lt;/a&gt;&lt;/em&gt;. In addition to its static executable (Rust did it
-again!), there is the man page, the example configuration, the &lt;code dir="ltr"&gt;.desktop&lt;/code&gt; file and its logo.
-However, it lacks a &lt;code dir="ltr"&gt;Makefile&lt;/code&gt; and so the packagers (as well as the users) are required to
-manually install these files. The Arch Linux &lt;a href="https://github.com/archlinux/svntogit-community/blob/packages/alacritty/trunk/PKGBUILD#L32" dir="ltr"&gt;alacritty package&lt;/a&gt;
-contains the following instructions:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;  desktop-file-install -m &lt;span dir="ltr"&gt;644&lt;/span&gt; --dir &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$pkgdir&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;/usr/share/applications/"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/linux/Alacritty.desktop"&lt;/span&gt;&lt;/span&gt;
-  install -D -m755 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"target/release/alacritty"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$pkgdir&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;/usr/bin/alacritty"&lt;/span&gt;&lt;/span&gt;
-  install -D -m644 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/alacritty.man"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$pkgdir&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;/usr/share/man/man1/alacritty.1"&lt;/span&gt;&lt;/span&gt;
-  install -D -m644 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/linux/io.alacritty.Alacritty.appdata.xml"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$pkgdir&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;/usr/share/appdata/io.alacritty.Alacritty.appdata.xml"&lt;/span&gt;&lt;/span&gt;
-  install -D -m644 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"alacritty.yml"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$pkgdir&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;/usr/share/doc/alacritty/example/alacritty.yml"&lt;/span&gt;&lt;/span&gt;
-  install -D -m644 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/completions/alacritty.bash"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$pkgdir&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;/usr/share/bash-completion/completions/alacritty"&lt;/span&gt;&lt;/span&gt;
-  install -D -m644 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/completions/_alacritty"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$pkgdir&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;/usr/share/zsh/site-functions/_alacritty"&lt;/span&gt;&lt;/span&gt;
-  install -D -m644 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/completions/alacritty.fish"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$pkgdir&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;/usr/share/fish/vendor_completions.d/alacritty.fish"&lt;/span&gt;&lt;/span&gt;
-  install -D -m644 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/logo/alacritty-term.svg"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$pkgdir&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;/usr/share/pixmaps/Alacritty.svg"&lt;/span&gt;&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Its &lt;code dir="ltr"&gt;install.yml&lt;/code&gt; would be:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;name:&lt;/span&gt; &lt;span dir="ltr"&gt;alacritty&lt;/span&gt;
-&lt;span dir="ltr"&gt;version:&lt;/span&gt; &lt;span dir="ltr"&gt;0.8&lt;/span&gt;&lt;span dir="ltr"&gt;.0&lt;/span&gt;
-&lt;span dir="ltr"&gt;type:&lt;/span&gt; &lt;span dir="ltr"&gt;rust&lt;/span&gt;
-&lt;span dir="ltr"&gt;exe:&lt;/span&gt;
-    &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;src:&lt;/span&gt; &lt;span dir="ltr"&gt;alacritty&lt;/span&gt;
-&lt;span dir="ltr"&gt;man:&lt;/span&gt;
-    &lt;span dir="ltr"&gt;1:&lt;/span&gt;
-      &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;extra/alacritty.man&lt;/span&gt;
-&lt;span dir="ltr"&gt;completions:&lt;/span&gt;
-    &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;bash:&lt;/span&gt; &lt;span dir="ltr"&gt;extra/completions/alacritty.bash&lt;/span&gt;
-    &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;fish:&lt;/span&gt; &lt;span dir="ltr"&gt;extra/completions/alacritty.fish&lt;/span&gt;
-    &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;zsh:&lt;/span&gt; &lt;span dir="ltr"&gt;extra/completions/_alacritty&lt;/span&gt;
-&lt;span dir="ltr"&gt;data:&lt;/span&gt;
-    &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;src:&lt;/span&gt; &lt;span dir="ltr"&gt;extra/logo/alacritty-term.svg&lt;/span&gt;
-      &lt;span dir="ltr"&gt;dst:&lt;/span&gt; &lt;span dir="ltr"&gt;icons/hicolor/scalable/apps/Alacritty.svg&lt;/span&gt;
-&lt;span dir="ltr"&gt;docs:&lt;/span&gt;
-    &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;src:&lt;/span&gt; &lt;span dir="ltr"&gt;alacritty.yml&lt;/span&gt;
-      &lt;span dir="ltr"&gt;dst:&lt;/span&gt; &lt;span dir="ltr"&gt;example/&lt;/span&gt;
-&lt;span dir="ltr"&gt;appdata:&lt;/span&gt;
-    &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;src:&lt;/span&gt; &lt;span dir="ltr"&gt;extra/linux/io.alacritty.Alacritty.appdata.xml&lt;/span&gt;
-&lt;span dir="ltr"&gt;desktop-files:&lt;/span&gt;
-    &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;src:&lt;/span&gt; &lt;span dir="ltr"&gt;extra/linux/Alacritty.desktop&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;And this would be the output from &lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;# rinstall&lt;/span&gt;&lt;/span&gt;
-Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"target/release/alacritty"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/bin/alacritty"&lt;/span&gt;&lt;/span&gt;
-Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/logo/alacritty-term.svg"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/share/icons/hicolor/scalable/apps/Alacritty.svg"&lt;/span&gt;&lt;/span&gt;
-Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/alacritty.man"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/share/man/man1/alacritty.1"&lt;/span&gt;&lt;/span&gt;
-Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"alacritty.yml"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/share/doc/alacritty-0.8.0/example/alacritty.yml"&lt;/span&gt;&lt;/span&gt;
-Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/linux/Alacritty.desktop"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/share/applications/Alacritty.desktop"&lt;/span&gt;&lt;/span&gt;
-Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/linux/io.alacritty.Alacritty.appdata.xml"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/share/appdata/io.alacritty.Alacritty.appdata.xml"&lt;/span&gt;&lt;/span&gt;
-Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/completions/alacritty.bash"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/share/bash-completion/completions/alacritty.bash"&lt;/span&gt;&lt;/span&gt;
-Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/completions/alacritty.fish"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/share/usr/share/fish/vendor_completions.d/alacritty.fish"&lt;/span&gt;&lt;/span&gt;
-Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/completions/_alacritty"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/share/zsh/site-functions/_alacritty"&lt;/span&gt;&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The original Arch Linux package contains 9 hardcoded install instructions that could be
-replaced by 1 single line of a call to &lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt;. That’s 8 lines less. According to &lt;a href="https://repology.org/" dir="ltr"&gt;repology&lt;/a&gt;,
-alacritty is packaged for more than 30 different distributions. That’s 240 lines less gained
-by improving a single package! Yea, the improvement might actually be minor for other packages,
-but it’s still considerable, counting the thousand of packages out there!&lt;/p&gt;&lt;h2&gt;Makefiles comparison&lt;/h2&gt;&lt;p dir="ltr"&gt;I am sure many are asking why not add a &lt;code dir="ltr"&gt;Makefile&lt;/code&gt; for Alacritty instead? That’s a great question.
-In my opinion, these are the various reasons:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;its syntax is complicated and not easy to learn. Learning it as a requirement to install a simple
-shell script seems overkill to me.&lt;/LI&gt;&lt;LI&gt;it is made to track dependencies between sources and objects and correctly compile software.&lt;/LI&gt;&lt;LI&gt;not only &lt;a href="https://www.gnu.org/prep/standards/html_node/Directory-Variables.html" dir="ltr"&gt;Directory Variables&lt;/a&gt; standard is not enforced, the developer has to write support for it
-by himself. Asking the developer to learn an entire standard and the quirks of the
-&lt;a href="https://en.wikipedia.org/wiki/Filesystem_Hierarchy_Standard#:~:text=The%20Filesystem%20Hierarchy%20Standard%20(FHS,released%20on%203%20June%202015." dir="ltr"&gt;Filesystem Hierarchy Standard&lt;/a&gt; seems again overkill.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;While I was discussing &lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; with a developer, he sent me &lt;a href="https://github.com/dylanaraps/fff/blob/master/Makefile" dir="ltr"&gt;this&lt;/a&gt;
-&lt;code dir="ltr"&gt;Makefile&lt;/code&gt; to show me that they are really simple to write and that they support &lt;code dir="ltr"&gt;MANDIR&lt;/code&gt;
-and &lt;code dir="ltr"&gt;DOCDIR&lt;/code&gt; without issues. Let’s review its content:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="makefile" dir="ltr"&gt;    PREFIX ?&lt;span dir="ltr"&gt;=&lt;/span&gt; /usr
-    MANDIR ?&lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;PREFIX&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;/share/man
-    DOCDIR ?&lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;PREFIX&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;/share/doc/fff
-
-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;all&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;
-    @echo Run &lt;span dir="ltr"&gt;\'&lt;/span&gt;make install&lt;span dir="ltr"&gt;\'&lt;/span&gt; to install fff.
-
-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;install&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;
-    @mkdir -p &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DESTDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;PREFIX&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;/bin
-    @mkdir -p &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DESTDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;MANDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;/man1
-    @mkdir -p &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DESTDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DOCDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;
-    @cp -p fff &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DESTDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;PREFIX&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;/bin/fff
-    @cp -p fff.1 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DESTDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;MANDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;/man1
-    @cp -p README.md &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DESTDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DOCDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;
-    @chmod &lt;span dir="ltr"&gt;755&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DESTDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;PREFIX&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;/bin/fff
-
-&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;uninstall&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;
-    @rm -rf &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DESTDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;PREFIX&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;/bin/fff
-    @rm -rf &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DESTDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;MANDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;/man1/fff.1
-    @rm -rf &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DESTDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DOCDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;But, ironically, he sent me a Makefile with an error in it. Did you spot it?
-I am sure that somebody did. For the rest, don’t mind, it’s actually a little (but crucial!)
-detail: the default &lt;code dir="ltr"&gt;PREFIX&lt;/code&gt; is &lt;code dir="ltr"&gt;/usr&lt;/code&gt; instead of &lt;code dir="ltr"&gt;/usr/local&lt;/code&gt;. Not only this is wrong
-according to the standard, but it opens the user to subtle breakage. The user could run &lt;code dir="ltr"&gt;make install&lt;/code&gt; as root and expect to have the newly installed files into &lt;code dir="ltr"&gt;/usr/local&lt;/code&gt;. He would then
-to discover afterwards that it has silently installed into &lt;code dir="ltr"&gt;/usr&lt;/code&gt;. Only the package manager
-should install into &lt;code dir="ltr"&gt;/usr&lt;/code&gt;, as it tracks all the files there. He may have
-overwritten packages installed by the package manager and have potentially broken the system!&lt;/p&gt;&lt;p dir="ltr"&gt;The equivalent &lt;code dir="ltr"&gt;install.yml&lt;/code&gt; is:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="yaml" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;name&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fff&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;version&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;0.1&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;custom&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;exe&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;/span&gt;&lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;src&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fff&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;man&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;    &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fff.1&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;docs&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;/span&gt;&lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;src&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;README.md&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This was pretty a pretty subtle error to spot. More often the error will be easier to catch but
-just as bad, such as a missing &lt;code dir="ltr"&gt;DESTDIR&lt;/code&gt;. I think it’s not the developers mistake, as it is not fair
-to ask them to write such fragile files following a standard that they might not even know that
-well.&lt;/p&gt;&lt;h2&gt;Source based distributions&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; has been written in Rust. It is a language I have been learning recently and
-that I fun to write into. It is also safe and fast, so I didn’t give a second thought to use it
-here. However, there have been an excellent critic regarding &lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; by a Gentoo maintainer:
-does it mean that Rust toolchain will be needed by Gentoo stage3 when performing the base
-installation?&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; aims at projects that are not already using a build system capable of installing
-software. In other words, I don’t want to replace Makefiles when they are already used
-for compiling sources. This already exclude most of the software that needs to be compiled
-in a stage3 or when bootstrapping. Moreover, having an &lt;code dir="ltr"&gt;install.yml&lt;/code&gt; does not enforce anyone to use
-&lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt;; the files could still be installed manually. In alternative, there will be a
-release of &lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; available for anyone to grab; this will allow users to just download
-the static executable of &lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; and use it.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;img src="https://imgs.xkcd.com/comics/standards_2x.png" alt="" width="439" height="249"&gt;&lt;p&gt;This might as well be as introducing a new “standard” way to install files into the system.
-However, I feel like an improvement in that regard is possible and that adding a new standard
-is the only way to do so.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; has been written in just a week and is actually missing some interesting use cases,
-such as installing software from the release tarball. This is something that I am looking
-forward to adding in the near future.&lt;/p&gt;&lt;p dir="ltr"&gt;I want to thank everyone that has provided feedback on both &lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; and this post.&lt;/p&gt;&lt;p&gt;If you liked this post and want to support the blog,
-please donate!&lt;/p&gt;</description><pubDate>Thu, 24 Jun 2021 19:40:51 -0500</pubDate></item><item><title>Constructing the Sierpinski triangle</title><link>https://lobste.rs/s/pjetp7</link><description>&lt;nobr aria-hidden="true"&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;mod&amp;nbsp;&lt;/span&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/nobr&gt;&lt;math xmlns="http://www.w3.org/1998/Math/MathML" display="block" dir="ltr"&gt;&lt;mrow dir="ltr"&gt;&lt;mi mathvariant="fraktur" dir="ltr"&gt;S&lt;/mi&gt;&lt;/mrow&gt;&lt;mo dir="ltr"&gt;≡&lt;/mo&gt;&lt;msup dir="ltr"&gt;&lt;mi dir="ltr"&gt;e&lt;/mi&gt;&lt;mrow dir="ltr"&gt;&lt;mrow dir="ltr"&gt;&lt;mo dir="ltr"&gt;(&lt;/mo&gt;&lt;mtable columnalign="center center center center center" rowspacing="4pt" columnspacing="1em" dir="ltr"&gt;&lt;mtr dir="ltr"&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;mtr dir="ltr"&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;1&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;mtr dir="ltr"&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;2&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;mtr dir="ltr"&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;3&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;mtr dir="ltr"&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mo dir="ltr"&gt;⋱&lt;/mo&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;/mtable&gt;&lt;mo dir="ltr"&gt;)&lt;/mo&gt;&lt;/mrow&gt;&lt;/mrow&gt;&lt;/msup&gt;&lt;mo stretchy="false" dir="ltr"&gt;(&lt;/mo&gt;&lt;mtext dir="ltr"&gt;mod&amp;nbsp;&lt;/mtext&gt;&lt;mn dir="ltr"&gt;2&lt;/mn&gt;&lt;mo stretchy="false" dir="ltr"&gt;)&lt;/mo&gt;&lt;/math&gt;&lt;p&gt;
+&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Fri, 25 Jun 2021 03:08:19 -0500</pubDate></item><item><title>Constructing the Sierpinski triangle</title><link>https://lobste.rs/s/pjetp7</link><description>&lt;nobr aria-hidden="true"&gt;&lt;span&gt;&lt;span&gt;&lt;span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;mod&amp;nbsp;&lt;/span&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/nobr&gt;&lt;math xmlns="http://www.w3.org/1998/Math/MathML" display="block" dir="ltr"&gt;&lt;mrow dir="ltr"&gt;&lt;mi mathvariant="fraktur" dir="ltr"&gt;S&lt;/mi&gt;&lt;/mrow&gt;&lt;mo dir="ltr"&gt;≡&lt;/mo&gt;&lt;msup dir="ltr"&gt;&lt;mi dir="ltr"&gt;e&lt;/mi&gt;&lt;mrow dir="ltr"&gt;&lt;mrow dir="ltr"&gt;&lt;mo dir="ltr"&gt;(&lt;/mo&gt;&lt;mtable columnalign="center center center center center" rowspacing="4pt" columnspacing="1em" dir="ltr"&gt;&lt;mtr dir="ltr"&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;mtr dir="ltr"&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;1&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;mtr dir="ltr"&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;2&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;mtr dir="ltr"&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;3&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;mtr dir="ltr"&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mo dir="ltr"&gt;⋱&lt;/mo&gt;&lt;/mtd&gt;&lt;mtd dir="ltr"&gt;&lt;mn dir="ltr"&gt;0&lt;/mn&gt;&lt;/mtd&gt;&lt;/mtr&gt;&lt;/mtable&gt;&lt;mo dir="ltr"&gt;)&lt;/mo&gt;&lt;/mrow&gt;&lt;/mrow&gt;&lt;/msup&gt;&lt;mo stretchy="false" dir="ltr"&gt;(&lt;/mo&gt;&lt;mtext dir="ltr"&gt;mod&amp;nbsp;&lt;/mtext&gt;&lt;mn dir="ltr"&gt;2&lt;/mn&gt;&lt;mo stretchy="false" dir="ltr"&gt;)&lt;/mo&gt;&lt;/math&gt;&lt;p&gt;
         This equation is in what's called "straight ballin'" form, and it gives us a fancy way of producing the triangle:
         &lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;draw&lt;/span&gt;[&lt;span dir="ltr"&gt;n_&lt;/span&gt;] &lt;span dir="ltr"&gt;:=&lt;/span&gt; &lt;span dir="ltr"&gt;ArrayPlot&lt;/span&gt;[&lt;span dir="ltr"&gt;Mod&lt;/span&gt;[&lt;span dir="ltr"&gt;MatrixExp&lt;/span&gt;[&lt;span dir="ltr"&gt;DiagonalMatrix&lt;/span&gt;[&lt;span dir="ltr"&gt;Range&lt;/span&gt;[n], &lt;span dir="ltr"&gt;-&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;]], &lt;span dir="ltr"&gt;2&lt;/span&gt;]];
 &lt;/PRE&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;div dir="ltr"&gt;&lt;span dir="ltr"&gt;image&lt;/span&gt;&lt;span dir="ltr"&gt;source&lt;/span&gt;&lt;/div&gt;&lt;p&gt;
@@ -942,7 +648,301 @@ If you want to play with large Game of Life constructions, the easiest way is to
         &lt;/p&gt;&lt;p dir="ltr"&gt;Finally, if you're interested in sending me a message, hit me up at the developer email on my little calculator &lt;a href="https://play.google.com/store/apps/details?id=com.projectfancycorn.hudcalc" dir="ltr"&gt;app page&lt;/a&gt;. As I'm generally busy trolling Twitch chat I might not be able to get back to you, but if such possible asymmetry doesn't deter you, feel free!
         &lt;/p&gt;&lt;div dir="ltr"&gt;
             &lt;a href="http://www.oftenpaper.net/" title="home" dir="ltr"&gt;&amp;lt;&amp;lt;&lt;/a&gt;
-        &lt;/div&gt;</description><pubDate>Thu, 24 Jun 2021 09:58:47 -0500</pubDate></item><item><title>Syncretism, an option search engine in Clojure</title><link>https://lobste.rs/s/q1ox1y</link><description>&lt;h1&gt;Syncretism&lt;/h1&gt;&lt;p dir="ltr"&gt;&lt;a href="https://ops.syncretism.io/" rel="nofollow" dir="ltr"&gt;Ops.Syncretism&lt;/a&gt; is an open source options search engine based on &lt;a href="https://finance.yahoo.com/" rel="nofollow" dir="ltr"&gt;Yahoo! Finance&lt;/a&gt; market data.&lt;/p&gt;&lt;p dir="ltr"&gt;Dependencies are &lt;a href="https://clojure.org/" rel="nofollow" dir="ltr"&gt;Clojure&lt;/a&gt;, &lt;a href="https://leiningen.org/" rel="nofollow" dir="ltr"&gt;Leiningen&lt;/a&gt;, &lt;a href="https://nodejs.org/en/" rel="nofollow" dir="ltr"&gt;NodeJS&lt;/a&gt;, and &lt;a href="https://mariadb.org/" rel="nofollow" dir="ltr"&gt;MariaDB&lt;/a&gt;.
+        &lt;/div&gt;</description><pubDate>Thu, 24 Jun 2021 09:58:47 -0500</pubDate></item><item><title>Lamport Clock</title><link>https://lobste.rs/s/kilnds</link><description>&lt;img src="https://martinfowler.com/articles/patterns-of-distributed-systems/card.png" width="250" height="134"&gt;&lt;p&gt;Use logical timestamps as a version for a value to allow ordering of values across servers&lt;/p&gt;&lt;p&gt;23 June 2021&lt;/p&gt;&lt;h2&gt;Problem&lt;/h2&gt;&lt;p dir="ltr"&gt;
+        When values are stored across multiple servers, 
+        there needs to be a way to know which values were stored before the other. 
+        The system timestamp can not be used, 
+        because &lt;a href="https://martinfowler.com/articles/patterns-of-distributed-systems/time-bound-lease.html#wall-clock-not-monotonic" dir="ltr"&gt;wall clocks are not monotonic&lt;/a&gt; 
+        and clock values from two different servers should not be compared.
+    &lt;/p&gt;&lt;p dir="ltr"&gt;
+      The system timestamp, which represents the time of the day, is measured by a clock machinery generally 
+      built with an crystal oscillator. The known problem with this mechanism is that it can drift away from the actual time of the day, 
+      based on how fast or slow the crystals oscillate. To fix this, computers typically have a service like &lt;a href="https://en.wikipedia.org/wiki/Network_Time_Protocol" dir="ltr"&gt;NTP&lt;/a&gt;
+      which synchronizes computer clocks with well known time sources on the internet.
+      Because of this, two consecutive readings of the system time on a given server can 
+      have time going backwards.
+     &lt;/p&gt;&lt;p&gt;As there is no upper bound on clock drift across servers, it is impossible to compare timestamps on two different servers&lt;/p&gt;&lt;h2&gt;Solution&lt;/h2&gt;&lt;p&gt;    
+        Lamport Clock maintains a single number to represent timestamp as following:
+    &lt;/p&gt;&lt;p&gt;class LamportClock…
+&lt;/p&gt;&lt;PRE&gt;  class LamportClock {
+      int latestTime;
+  
+      public LamportClock(int timestamp) {
+          latestTime = timestamp;
+      }&lt;/PRE&gt;&lt;p&gt;
+        Every cluster node maintains an instance of a Lamport Clock.
+    &lt;/p&gt;&lt;p&gt;class Server…
+&lt;/p&gt;&lt;PRE&gt;  MVCCStore mvccStore;
+  LamportClock clock;
+
+  public Server(MVCCStore mvccStore) {
+      this.clock = new LamportClock(1);
+      this.mvccStore = mvccStore;
+  }&lt;/PRE&gt;&lt;p&gt;
+        Whenever a server carries out any write operation, it should advance the Lamport Clock, using the `tick()` method
+&lt;/p&gt;&lt;p&gt;class LamportClock…
+&lt;/p&gt;&lt;PRE&gt;  public int tick(int requestTime) {
+      latestTime = Integer.max(latestTime, requestTime);
+      latestTime++;
+      return latestTime;
+  }&lt;/PRE&gt;&lt;p&gt;
+       This way, the server can be sure that the write is sequenced after the request
+       and after any other action the server has carried out since the request was
+       initiated by the client. The server returns the timestamp that was used for writing the value to the client. 
+       The requesting client then uses this timestamp to issue any further
+       writes to other set of servers. This way, the causal chain of requests is
+       maintained.
+    &lt;/p&gt;&lt;h2&gt;Causality, Time and Happens-Before&lt;/h2&gt;&lt;p dir="ltr"&gt;
+        When an event A in a system happens before another event B, it might have a
+        causal relationship. Causal relationship means that A might have some role in causing B.
+        This 'A happens before B' relationship is established by attaching a timestamp to each event.
+        If A happens before B, the timestamp attached to A will be lower than the timestamp attached to B.
+        But because we can not rely on system time, we need some way to make sure 
+        that the happens-before relationship is maintained for the timestamp attached to the events.
+        &lt;a href="https://en.wikipedia.org/wiki/Leslie_Lamport" dir="ltr"&gt;Leslie Lamport&lt;/a&gt; suggested a solution to use 
+        logical timestamps to track happens-before relationships, in his seminal paper 
+        &lt;a href="https://lamport.azurewebsites.net/pubs/time-clocks.pdf" dir="ltr"&gt;Time, Clocks and Ordering Of Events&lt;/a&gt;.
+        So this technique of using logical timestamps to track causality is named as the
+        Lamport Timestamp.
+      &lt;/p&gt;&lt;p dir="ltr"&gt;
+        It is useful to note that in a database, events are about storing data. So Lamport Timestamps 
+        are attached to the values stored. This also fits very well with versioned storage mechanism 
+        discussed in &lt;a href="https://martinfowler.com/articles/patterns-of-distributed-systems/versioned-value.html" dir="ltr"&gt;Versioned Value&lt;/a&gt;&lt;/p&gt;&lt;h2&gt; An example key value store &lt;/h2&gt;&lt;p dir="ltr"&gt;
+        Consider an example of a simple key value store with multiple server nodes.
+        There are two servers, Blue and Green. 
+        Each server is responsible for storing a specific set of keys.  
+        This is a typical scenario when data is partitioned across a set of servers.
+        Values are stored as &lt;a href="https://martinfowler.com/articles/patterns-of-distributed-systems/versioned-value.html" dir="ltr"&gt;Versioned Value&lt;/a&gt; with the Lamport Timestamp as a version number. 
+    &lt;/p&gt;&lt;img src="https://martinfowler.com/articles/patterns-of-distributed-systems/two-servers-each-with-specific-key-range.svg" width="465" height="152"&gt;&lt;p&gt;Figure 1: Two servers each responsible for specific keys&lt;/p&gt;&lt;section&gt;
+
+       
+        The receiving server compares and updates its own timestamp and uses it to write a versioned key value.
+        
+&lt;/section&gt;&lt;p&gt;class Server…
+&lt;/p&gt;&lt;PRE&gt;  public int write(String key, String value, int requestTimestamp) {
+      //update own clock to reflect causality
+&lt;span dir="ltr"&gt;      int writeAtTimestamp = clock.tick(requestTimestamp);&lt;/span&gt;
+      mvccStore.put(new VersionedKey(key, writeAtTimestamp), value);
+      return writeAtTimestamp;
+  }&lt;/PRE&gt;&lt;p&gt; 
+        The timestamp used for writing the value is returned to the client. 
+        The client keeps track of the maximum timestamp, by updating its own timestamp.
+        It uses this timestamp to issue any further writes.
+    &lt;/p&gt;&lt;p&gt;class Client…
+&lt;/p&gt;&lt;PRE&gt;  LamportClock clock = new LamportClock(1);
+  public void write() {
+      int server1WrittenAt = server1.write("name", "Alice", clock.getLatestTime());
+      clock.updateTo(server1WrittenAt);
+
+      int server2WrittenAt = server2.write("title", "Microservices", clock.getLatestTime());
+      clock.updateTo(server2WrittenAt);
+
+      assertTrue(server2WrittenAt &amp;gt; server1WrittenAt);
+  }&lt;/PRE&gt;&lt;p&gt;
+      The sequence of requests look like following:
+    &lt;/p&gt;&lt;img src="https://martinfowler.com/articles/patterns-of-distributed-systems/lamport-clock-request-sequence.svg" width="465" height="516"&gt;&lt;p&gt;Figure 2: Two servers each responsible for specific keys&lt;/p&gt;&lt;p dir="ltr"&gt;
+          The same technique works even when the client is communicating with a leader with &lt;a href="https://martinfowler.com/articles/patterns-of-distributed-systems/leader-follower.html" dir="ltr"&gt;Leader and Followers&lt;/a&gt; groups, 
+          with each group responsible for specific keys. 
+          The client sends requests to the leader of the group as detailed above.
+          The Lamport Clock instance is maintained by the leader of the group, 
+          and is updated exactly the same way as discussed in the previous section.
+          &lt;/p&gt;&lt;img src="https://martinfowler.com/articles/patterns-of-distributed-systems/different-keys-different-servers.svg" width="465" height="228"&gt;&lt;p&gt;Figure 3: Different leader follower groups storing different key values&lt;/p&gt;&lt;h2&gt;Partial Order&lt;/h2&gt;&lt;p dir="ltr"&gt;
+       The values stored by Lamport Clock are only &lt;a href="https://en.wikipedia.org/wiki/Partially_ordered_set" dir="ltr"&gt;partially ordered&lt;/a&gt;.
+       If two clients store values in two separate servers, the timestamp values 
+       cannot be used to order the values across servers. In the following example,
+       the title stored by Bob on server Green is at timestamp 2. 
+       But it can not be determined if Bob stored the title before or after Alice stored the name on server Blue.
+      &lt;/p&gt;&lt;img src="https://martinfowler.com/articles/patterns-of-distributed-systems/two-clients-two-separate-servers.svg" width="465" height="146"&gt;&lt;p&gt;Figure 4: Partial Order&lt;/p&gt;&lt;h2&gt; A single server/leader updating values &lt;/h2&gt;&lt;p dir="ltr"&gt;
+           For a single leader-follower group of servers, where a leader is always responsible for storing values,
+           the basic implementation discussed in &lt;a href="https://martinfowler.com/articles/patterns-of-distributed-systems/versioned-value.html" dir="ltr"&gt;Versioned Value&lt;/a&gt; is enough to maintain causality.
+        &lt;/p&gt;&lt;img src="https://martinfowler.com/articles/patterns-of-distributed-systems/single-servergroup-kvstore.svg" width="465" height="280"&gt;&lt;p&gt;Figure 5: Single leader-follower group saving key values&lt;/p&gt;&lt;p&gt;
+          In this case, the key value store keeps an integer version counter. 
+          It increments the version counter every time the key value write command is applied from the Write Ahead Log.
+          It then constructs the new key with the incremented version counter.
+          Only the leader is responsible for incrementing the version counter, 
+          and followers use the same version number.
+        &lt;/p&gt;&lt;p&gt;class ReplicatedKVStore…
+&lt;/p&gt;&lt;PRE&gt;&lt;span dir="ltr"&gt;  int version = 0;&lt;/span&gt;
+  MVCCStore mvccStore = new MVCCStore();
+
+  @Override
+  public CompletableFuture&amp;lt;Response&amp;gt; put(String key, String value) {
+      return server.propose(new SetValueCommand(key, value));
+  }
+
+  private Response applySetValueCommand(SetValueCommand setValueCommand) {
+      getLogger().info("Setting key value " + setValueCommand);
+&lt;span dir="ltr"&gt;      version = version + 1;&lt;/span&gt;
+      mvccStore.put(new VersionedKey(setValueCommand.getKey(), version), setValueCommand.getValue());
+      Response response = Response.success(version);
+      return response;
+  }&lt;/PRE&gt;&lt;h2&gt;Examples&lt;/h2&gt;&lt;p dir="ltr"&gt;Databases like &lt;a href="https://www.mongodb.com/" dir="ltr"&gt;[mongodb]&lt;/a&gt; and &lt;a href="https://www.cockroachlabs.com/docs/stable/" dir="ltr"&gt;[cockroachdb]&lt;/a&gt; 
+             use variants of the Lamport Clock to implement &lt;a href="https://en.wikipedia.org/wiki/Multiversion_concurrency_control" dir="ltr"&gt;[mvcc]&lt;/a&gt; storage&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;a href="https://martinfowler.com/articles/patterns-of-distributed-systems/generation.html" dir="ltr"&gt;Generation Clock&lt;/a&gt; is an example of a Lamport Clock&lt;/p&gt;</description><pubDate>Thu, 24 Jun 2021 06:46:12 -0500</pubDate></item><item><title>Improving Linux Packaging: rinstall</title><link>https://lobste.rs/s/vbevs5</link><description>&lt;p&gt;Let’s face it. Packaging software on Linux is an underappreciated job. If they do their job
+correctly, almost no one will notice them. But the moment they do a mistake, the users of their
+distribution will likely go mad.&lt;/p&gt;&lt;p&gt;They often work with no standard tool for build and install. They have to
+dig into other people source code daily and fix errors regarding build and dependencies.
+Likewise, they also have to discuss and teach developers about how distributions and standard
+works. Knowing Linux hierarchy, where to place files and a lot of unwritten rules to make systems
+work is surely out of the scope for most developers. And I think they have all the rights to skip
+this knowledge. They develop software, they don’t build systems (but there are exceptions too!).&lt;/p&gt;&lt;p&gt;However, developers are (almost) always asked to write the installation target for their software,
+may it be a shell script or a complex C codebase. Here, tools often don’t help the developers,
+as they don’t properly support or enforce the various standards.
+Therefore, package maintainers have to fill the gap themselves. It usually happens in their own
+distribution package specification. How many distributions are there? Tons. And this
+work is duplicated countless times.&lt;/p&gt;&lt;p dir="ltr"&gt;While developing software written in Rust, I have found a gap in &lt;code dir="ltr"&gt;cargo-install&lt;/code&gt;: it doesn’t
+consider any data or file outside of executables and libraries. In spite of that, applications
+usually have many files to install; man pages, documentation, examples, &lt;code dir="ltr"&gt;.desktop&lt;/code&gt;
+files and icons. What do developers do in this case? They either add a &lt;code dir="ltr"&gt;Makefile&lt;/code&gt; or entirely
+skip the installation target. This is something that happens not only to Rust projects, but
+to many others types.&lt;/p&gt;&lt;p dir="ltr"&gt;I have engineered a tool to fill the gap, &lt;strong dir="ltr"&gt;&lt;a href="https://git.sr.ht/~danyspin97/rinstall" dir="ltr"&gt;rinstall&lt;/a&gt;&lt;/strong&gt;, and this post is about its rationale,
+usage and how it could &lt;strong dir="ltr"&gt;improve packaging on Linux&lt;/strong&gt; (and other *nix systems too!).&lt;/p&gt;&lt;h2&gt;rinstall&lt;/h2&gt;&lt;p&gt;rinstall is a small (at the time of writing, just ~600 LOC!) helper tool that has two
+main objectives:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Help developers define which files their program shall install without knowing all the various
+standards, hierarchy and the quirks of writing &lt;em dir="ltr"&gt;Makefiles&lt;/em&gt;.&lt;/LI&gt;&lt;LI&gt;Remove the duplicated code in the distribution packages definitions that manually use &lt;code dir="ltr"&gt;cp&lt;/code&gt; and
+&lt;code dir="ltr"&gt;install&lt;/code&gt; to install files.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;It doesn’t try to replace tools such as &lt;code dir="ltr"&gt;meson&lt;/code&gt;, that already wonderfully covers the installation
+phase. It doesn’t try to replace either &lt;code dir="ltr"&gt;CMake&lt;/code&gt; or &lt;code dir="ltr"&gt;make&lt;/code&gt; when they are already used for
+compiling in C/C++ projects. Although they don’t do any enforcing, they are already used,
+so it doesn’t make a lot of sense to add a new dependency on a new tool.&lt;/p&gt;&lt;p dir="ltr"&gt;I am sure most of you are ready to throw knives at me the moment I said I want to replace
+&lt;code dir="ltr"&gt;Makefiles&lt;/code&gt; in some contexts. I know what you’re feeling, but please hold on and continue reading.
+There will be an in-depth comparison and explanation. If you still aren’t satisfied by then,
+I won’t stop you anymore!&lt;/p&gt;&lt;h3&gt;Install directories&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; supports two installation modes out of the box: &lt;strong dir="ltr"&gt;system-wide&lt;/strong&gt; and &lt;strong dir="ltr"&gt;user&lt;/strong&gt; install.&lt;/p&gt;&lt;p dir="ltr"&gt;The first installs into &lt;code dir="ltr"&gt;/usr/local&lt;/code&gt; by default, making the programs available to all system users.
+It follows the &lt;em dir="ltr"&gt;&lt;a href="https://www.gnu.org/prep/standards/html_node/Directory-Variables.html" dir="ltr"&gt;Directory Variables&lt;/a&gt;&lt;/em&gt; from the &lt;em dir="ltr"&gt;GNU Coding Standard&lt;/em&gt;. Binaries will be installed
+into &lt;code dir="ltr"&gt;/usr/local/bin&lt;/code&gt;, libraries into &lt;code dir="ltr"&gt;/usr/local/lib&lt;/code&gt; and so on. The prefix can be changed by
+passing it into the command line, as well as all the other variables.&lt;/p&gt;&lt;p dir="ltr"&gt;The second installs into the &lt;code dir="ltr"&gt;HOME&lt;/code&gt; folder of the current user, following the
+&lt;em dir="ltr"&gt;&lt;a href="https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html" dir="ltr"&gt;XDG Base Directory Specification&lt;/a&gt;&lt;/em&gt;. Binaries will be installed into &lt;code dir="ltr"&gt;~/.local/bin&lt;/code&gt;,
+libraries into &lt;code dir="ltr"&gt;~/.local/lib&lt;/code&gt;, and all the other variables will use the various &lt;code dir="ltr"&gt;XDG_*&lt;/code&gt; variables
+with default fallback.&lt;/p&gt;&lt;p dir="ltr"&gt;It also reads the configuration from &lt;code dir="ltr"&gt;/etc/rinstall.yml&lt;/code&gt; when running as root and
+&lt;code dir="ltr"&gt;.config/rinstall.yml&lt;/code&gt; when running in user mode. If the configuration file exists,
+the tool will merge said config with the default one.&lt;/p&gt;&lt;p dir="ltr"&gt;In addition, it also supports a &lt;code dir="ltr"&gt;--destdir&lt;/code&gt; argument. Packagers can just call the following
+command to perform the installation phase of a program:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;# rinstall --destdir mydir --prefix /usr --no-config&lt;/span&gt;&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;&lt;code&gt;install.yml&lt;/code&gt;&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; resolves around the per-project file &lt;code dir="ltr"&gt;install.yml&lt;/code&gt;. This file contains the
+list of files to install, divided per category, as well as the name and version of the software.
+For example this is the &lt;code dir="ltr"&gt;install.yml&lt;/code&gt; for &lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; itself:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;name:&lt;/span&gt; &lt;span dir="ltr"&gt;rinstall&lt;/span&gt;
+&lt;span dir="ltr"&gt;version:&lt;/span&gt; &lt;span dir="ltr"&gt;0.1&lt;/span&gt;
+&lt;span dir="ltr"&gt;type:&lt;/span&gt; &lt;span dir="ltr"&gt;rust&lt;/span&gt;
+&lt;span dir="ltr"&gt;exe:&lt;/span&gt;
+  &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;src:&lt;/span&gt; &lt;span dir="ltr"&gt;rinstall&lt;/span&gt;
+&lt;span dir="ltr"&gt;docs:&lt;/span&gt;
+  &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;src:&lt;/span&gt; &lt;span dir="ltr"&gt;LICENSE.md&lt;/span&gt;
+  &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;src:&lt;/span&gt; &lt;span dir="ltr"&gt;README.md&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Each outmost key (&lt;code dir="ltr"&gt;exe&lt;/code&gt; and &lt;code dir="ltr"&gt;docs&lt;/code&gt; in this case) contains a list of sources, abbreviated &lt;code dir="ltr"&gt;src&lt;/code&gt;,
+and optionally the destination, abbreviated &lt;code dir="ltr"&gt;dst&lt;/code&gt;. &lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; will install the source into either
+the folder or file that destination points to, using the respective folder the for key used.
+It supports many keys and common cases, allowing to the developers to write
+as little as possible. In this case, its output would be:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;# rinstall&lt;/span&gt;&lt;/span&gt;
+Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"target/release/rinstall"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/bin/rinstall"&lt;/span&gt;&lt;/span&gt;
+Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"LICENSE.md"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/share/doc/rinstall-0.1/LICENSE.md"&lt;/span&gt;&lt;/span&gt;
+Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"README.md"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/share/doc/rinstall-0.1/README.md"&lt;/span&gt;&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;One of the projects that I stumbled upon which would benefit from using &lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; is the
+widely used terminal emulator &lt;em dir="ltr"&gt;&lt;a href="https://github.com/alacritty/alacritty" dir="ltr"&gt;Alacritty&lt;/a&gt;&lt;/em&gt;. In addition to its static executable (Rust did it
+again!), there is the man page, the example configuration, the &lt;code dir="ltr"&gt;.desktop&lt;/code&gt; file and its logo.
+However, it lacks a &lt;code dir="ltr"&gt;Makefile&lt;/code&gt; and so the packagers (as well as the users) are required to
+manually install these files. The Arch Linux &lt;a href="https://github.com/archlinux/svntogit-community/blob/packages/alacritty/trunk/PKGBUILD#L32" dir="ltr"&gt;alacritty package&lt;/a&gt;
+contains the following instructions:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;  desktop-file-install -m &lt;span dir="ltr"&gt;644&lt;/span&gt; --dir &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$pkgdir&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;/usr/share/applications/"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/linux/Alacritty.desktop"&lt;/span&gt;&lt;/span&gt;
+  install -D -m755 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"target/release/alacritty"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$pkgdir&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;/usr/bin/alacritty"&lt;/span&gt;&lt;/span&gt;
+  install -D -m644 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/alacritty.man"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$pkgdir&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;/usr/share/man/man1/alacritty.1"&lt;/span&gt;&lt;/span&gt;
+  install -D -m644 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/linux/io.alacritty.Alacritty.appdata.xml"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$pkgdir&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;/usr/share/appdata/io.alacritty.Alacritty.appdata.xml"&lt;/span&gt;&lt;/span&gt;
+  install -D -m644 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"alacritty.yml"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$pkgdir&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;/usr/share/doc/alacritty/example/alacritty.yml"&lt;/span&gt;&lt;/span&gt;
+  install -D -m644 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/completions/alacritty.bash"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$pkgdir&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;/usr/share/bash-completion/completions/alacritty"&lt;/span&gt;&lt;/span&gt;
+  install -D -m644 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/completions/_alacritty"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$pkgdir&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;/usr/share/zsh/site-functions/_alacritty"&lt;/span&gt;&lt;/span&gt;
+  install -D -m644 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/completions/alacritty.fish"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$pkgdir&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;/usr/share/fish/vendor_completions.d/alacritty.fish"&lt;/span&gt;&lt;/span&gt;
+  install -D -m644 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/logo/alacritty-term.svg"&lt;/span&gt;&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$pkgdir&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;/usr/share/pixmaps/Alacritty.svg"&lt;/span&gt;&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Its &lt;code dir="ltr"&gt;install.yml&lt;/code&gt; would be:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;name:&lt;/span&gt; &lt;span dir="ltr"&gt;alacritty&lt;/span&gt;
+&lt;span dir="ltr"&gt;version:&lt;/span&gt; &lt;span dir="ltr"&gt;0.8&lt;/span&gt;&lt;span dir="ltr"&gt;.0&lt;/span&gt;
+&lt;span dir="ltr"&gt;type:&lt;/span&gt; &lt;span dir="ltr"&gt;rust&lt;/span&gt;
+&lt;span dir="ltr"&gt;exe:&lt;/span&gt;
+    &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;src:&lt;/span&gt; &lt;span dir="ltr"&gt;alacritty&lt;/span&gt;
+&lt;span dir="ltr"&gt;man:&lt;/span&gt;
+    &lt;span dir="ltr"&gt;1:&lt;/span&gt;
+      &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;extra/alacritty.man&lt;/span&gt;
+&lt;span dir="ltr"&gt;completions:&lt;/span&gt;
+    &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;bash:&lt;/span&gt; &lt;span dir="ltr"&gt;extra/completions/alacritty.bash&lt;/span&gt;
+    &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;fish:&lt;/span&gt; &lt;span dir="ltr"&gt;extra/completions/alacritty.fish&lt;/span&gt;
+    &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;zsh:&lt;/span&gt; &lt;span dir="ltr"&gt;extra/completions/_alacritty&lt;/span&gt;
+&lt;span dir="ltr"&gt;data:&lt;/span&gt;
+    &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;src:&lt;/span&gt; &lt;span dir="ltr"&gt;extra/logo/alacritty-term.svg&lt;/span&gt;
+      &lt;span dir="ltr"&gt;dst:&lt;/span&gt; &lt;span dir="ltr"&gt;icons/hicolor/scalable/apps/Alacritty.svg&lt;/span&gt;
+&lt;span dir="ltr"&gt;docs:&lt;/span&gt;
+    &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;src:&lt;/span&gt; &lt;span dir="ltr"&gt;alacritty.yml&lt;/span&gt;
+      &lt;span dir="ltr"&gt;dst:&lt;/span&gt; &lt;span dir="ltr"&gt;example/&lt;/span&gt;
+&lt;span dir="ltr"&gt;appdata:&lt;/span&gt;
+    &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;src:&lt;/span&gt; &lt;span dir="ltr"&gt;extra/linux/io.alacritty.Alacritty.appdata.xml&lt;/span&gt;
+&lt;span dir="ltr"&gt;desktop-files:&lt;/span&gt;
+    &lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;src:&lt;/span&gt; &lt;span dir="ltr"&gt;extra/linux/Alacritty.desktop&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;And this would be the output from &lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;# rinstall&lt;/span&gt;&lt;/span&gt;
+Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"target/release/alacritty"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/bin/alacritty"&lt;/span&gt;&lt;/span&gt;
+Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/logo/alacritty-term.svg"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/share/icons/hicolor/scalable/apps/Alacritty.svg"&lt;/span&gt;&lt;/span&gt;
+Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/alacritty.man"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/share/man/man1/alacritty.1"&lt;/span&gt;&lt;/span&gt;
+Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"alacritty.yml"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/share/doc/alacritty-0.8.0/example/alacritty.yml"&lt;/span&gt;&lt;/span&gt;
+Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/linux/Alacritty.desktop"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/share/applications/Alacritty.desktop"&lt;/span&gt;&lt;/span&gt;
+Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/linux/io.alacritty.Alacritty.appdata.xml"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/share/appdata/io.alacritty.Alacritty.appdata.xml"&lt;/span&gt;&lt;/span&gt;
+Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/completions/alacritty.bash"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/share/bash-completion/completions/alacritty.bash"&lt;/span&gt;&lt;/span&gt;
+Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/completions/alacritty.fish"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/share/usr/share/fish/vendor_completions.d/alacritty.fish"&lt;/span&gt;&lt;/span&gt;
+Installing &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"extra/completions/_alacritty"&lt;/span&gt;&lt;/span&gt; to &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;"/usr/local/share/zsh/site-functions/_alacritty"&lt;/span&gt;&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The original Arch Linux package contains 9 hardcoded install instructions that could be
+replaced by 1 single line of a call to &lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt;. That’s 8 lines less. According to &lt;a href="https://repology.org/" dir="ltr"&gt;repology&lt;/a&gt;,
+alacritty is packaged for more than 30 different distributions. That’s 240 lines less gained
+by improving a single package! Yea, the improvement might actually be minor for other packages,
+but it’s still considerable, counting the thousand of packages out there!&lt;/p&gt;&lt;h2&gt;Makefiles comparison&lt;/h2&gt;&lt;p dir="ltr"&gt;I am sure many are asking why not add a &lt;code dir="ltr"&gt;Makefile&lt;/code&gt; for Alacritty instead? That’s a great question.
+In my opinion, these are the various reasons:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;its syntax is complicated and not easy to learn. Learning it as a requirement to install a simple
+shell script seems overkill to me.&lt;/LI&gt;&lt;LI&gt;it is made to track dependencies between sources and objects and correctly compile software.&lt;/LI&gt;&lt;LI&gt;not only &lt;a href="https://www.gnu.org/prep/standards/html_node/Directory-Variables.html" dir="ltr"&gt;Directory Variables&lt;/a&gt; standard is not enforced, the developer has to write support for it
+by himself. Asking the developer to learn an entire standard and the quirks of the
+&lt;a href="https://en.wikipedia.org/wiki/Filesystem_Hierarchy_Standard#:~:text=The%20Filesystem%20Hierarchy%20Standard%20(FHS,released%20on%203%20June%202015." dir="ltr"&gt;Filesystem Hierarchy Standard&lt;/a&gt; seems again overkill.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;While I was discussing &lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; with a developer, he sent me &lt;a href="https://github.com/dylanaraps/fff/blob/master/Makefile" dir="ltr"&gt;this&lt;/a&gt;
+&lt;code dir="ltr"&gt;Makefile&lt;/code&gt; to show me that they are really simple to write and that they support &lt;code dir="ltr"&gt;MANDIR&lt;/code&gt;
+and &lt;code dir="ltr"&gt;DOCDIR&lt;/code&gt; without issues. Let’s review its content:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="makefile" dir="ltr"&gt;    PREFIX ?&lt;span dir="ltr"&gt;=&lt;/span&gt; /usr
+    MANDIR ?&lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;PREFIX&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;/share/man
+    DOCDIR ?&lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;PREFIX&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;/share/doc/fff
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;all&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;
+    @echo Run &lt;span dir="ltr"&gt;\'&lt;/span&gt;make install&lt;span dir="ltr"&gt;\'&lt;/span&gt; to install fff.
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;install&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;
+    @mkdir -p &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DESTDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;PREFIX&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;/bin
+    @mkdir -p &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DESTDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;MANDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;/man1
+    @mkdir -p &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DESTDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DOCDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;
+    @cp -p fff &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DESTDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;PREFIX&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;/bin/fff
+    @cp -p fff.1 &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DESTDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;MANDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;/man1
+    @cp -p README.md &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DESTDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DOCDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;
+    @chmod &lt;span dir="ltr"&gt;755&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DESTDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;PREFIX&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;/bin/fff
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;uninstall&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;
+    @rm -rf &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DESTDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;PREFIX&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;/bin/fff
+    @rm -rf &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DESTDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;MANDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;/man1/fff.1
+    @rm -rf &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DESTDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;$(&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;DOCDIR&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;But, ironically, he sent me a Makefile with an error in it. Did you spot it?
+I am sure that somebody did. For the rest, don’t mind, it’s actually a little (but crucial!)
+detail: the default &lt;code dir="ltr"&gt;PREFIX&lt;/code&gt; is &lt;code dir="ltr"&gt;/usr&lt;/code&gt; instead of &lt;code dir="ltr"&gt;/usr/local&lt;/code&gt;. Not only this is wrong
+according to the standard, but it opens the user to subtle breakage. The user could run &lt;code dir="ltr"&gt;make install&lt;/code&gt; as root and expect to have the newly installed files into &lt;code dir="ltr"&gt;/usr/local&lt;/code&gt;. He would then
+to discover afterwards that it has silently installed into &lt;code dir="ltr"&gt;/usr&lt;/code&gt;. Only the package manager
+should install into &lt;code dir="ltr"&gt;/usr&lt;/code&gt;, as it tracks all the files there. He may have
+overwritten packages installed by the package manager and have potentially broken the system!&lt;/p&gt;&lt;p dir="ltr"&gt;The equivalent &lt;code dir="ltr"&gt;install.yml&lt;/code&gt; is:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="yaml" dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;name&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fff&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;version&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;0.1&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;type&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;custom&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;exe&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;/span&gt;&lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;src&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fff&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;man&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;    &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;fff.1&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;docs&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;span dir="ltr"&gt;  &lt;/span&gt;&lt;span dir="ltr"&gt;-&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;src&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;README.md&lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;
+&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This was pretty a pretty subtle error to spot. More often the error will be easier to catch but
+just as bad, such as a missing &lt;code dir="ltr"&gt;DESTDIR&lt;/code&gt;. I think it’s not the developers mistake, as it is not fair
+to ask them to write such fragile files following a standard that they might not even know that
+well.&lt;/p&gt;&lt;h2&gt;Source based distributions&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; has been written in Rust. It is a language I have been learning recently and
+that I fun to write into. It is also safe and fast, so I didn’t give a second thought to use it
+here. However, there have been an excellent critic regarding &lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; by a Gentoo maintainer:
+does it mean that Rust toolchain will be needed by Gentoo stage3 when performing the base
+installation?&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; aims at projects that are not already using a build system capable of installing
+software. In other words, I don’t want to replace Makefiles when they are already used
+for compiling sources. This already exclude most of the software that needs to be compiled
+in a stage3 or when bootstrapping. Moreover, having an &lt;code dir="ltr"&gt;install.yml&lt;/code&gt; does not enforce anyone to use
+&lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt;; the files could still be installed manually. In alternative, there will be a
+release of &lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; available for anyone to grab; this will allow users to just download
+the static executable of &lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; and use it.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;img src="https://imgs.xkcd.com/comics/standards_2x.png" alt="" width="439" height="249"&gt;&lt;p&gt;This might as well be as introducing a new “standard” way to install files into the system.
+However, I feel like an improvement in that regard is possible and that adding a new standard
+is the only way to do so.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; has been written in just a week and is actually missing some interesting use cases,
+such as installing software from the release tarball. This is something that I am looking
+forward to adding in the near future.&lt;/p&gt;&lt;p dir="ltr"&gt;I want to thank everyone that has provided feedback on both &lt;strong dir="ltr"&gt;rinstall&lt;/strong&gt; and this post.&lt;/p&gt;&lt;p&gt;If you liked this post and want to support the blog,
+please donate!&lt;/p&gt;</description><pubDate>Thu, 24 Jun 2021 19:40:51 -0500</pubDate></item><item><title>Syncretism, an option search engine in Clojure</title><link>https://lobste.rs/s/q1ox1y</link><description>&lt;h1&gt;Syncretism&lt;/h1&gt;&lt;p dir="ltr"&gt;&lt;a href="https://ops.syncretism.io/" rel="nofollow" dir="ltr"&gt;Ops.Syncretism&lt;/a&gt; is an open source options search engine based on &lt;a href="https://finance.yahoo.com/" rel="nofollow" dir="ltr"&gt;Yahoo! Finance&lt;/a&gt; market data.&lt;/p&gt;&lt;p dir="ltr"&gt;Dependencies are &lt;a href="https://clojure.org/" rel="nofollow" dir="ltr"&gt;Clojure&lt;/a&gt;, &lt;a href="https://leiningen.org/" rel="nofollow" dir="ltr"&gt;Leiningen&lt;/a&gt;, &lt;a href="https://nodejs.org/en/" rel="nofollow" dir="ltr"&gt;NodeJS&lt;/a&gt;, and &lt;a href="https://mariadb.org/" rel="nofollow" dir="ltr"&gt;MariaDB&lt;/a&gt;.
 We try to minimize dependencies to make it easy to install and run locally.&lt;/p&gt;&lt;p dir="ltr"&gt;Join us on &lt;a href="https://discord.gg/qBWD5Sus3d" rel="nofollow" dir="ltr"&gt;Discord&lt;/a&gt; for any question you might have.
 Use &lt;a href="https://github.com/Tyruiop/syncretism/issues" dir="ltr"&gt;Github Issues&lt;/a&gt; for bug reports &amp;amp; feature requests.&lt;/p&gt;&lt;h2 dir="ltr"&gt;Crawler &lt;code dir="ltr"&gt;/datops-crawler&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;This crawlers targets &lt;strong dir="ltr"&gt;Yahoo Finance&lt;/strong&gt; market data to extract options related information.&lt;/p&gt;&lt;h3&gt;Running it&lt;/h3&gt;&lt;p dir="ltr"&gt;Dependency on MariaDB or MySQL. Set parameters in &lt;code dir="ltr"&gt;datops-crawler/resources/db.edn&lt;/code&gt; as illustrated &lt;a href="https://github.com/clojure/java.jdbc/" dir="ltr"&gt;Here&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;For example, if your user is &lt;code dir="ltr"&gt;datops&lt;/code&gt; and the created database is &lt;code dir="ltr"&gt;opts&lt;/code&gt;, the &lt;code dir="ltr"&gt;db.edn&lt;/code&gt; becomes:&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;{:dbtype "mysql"
  :dbname "opts"
