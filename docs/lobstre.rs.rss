@@ -551,7 +551,117 @@ bpftrace has a similar plan to produce a small dependency-less binary using the 
 &lt;/tbody&gt;&lt;/table&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;This is based on my &lt;a href="https://github.com/iovisor/bcc/blob/master/docs/tutorial.md" dir="ltr"&gt;bcc Tutorial&lt;/a&gt;, and many also exist in bpftrace. I chose these to find the most performance wins with the fewest tools.&lt;/p&gt;&lt;p&gt;Note that runqlat and profile can have noticable overheads, so I'd run these tools for between 10 and 60 seconds only and generate a report. Some are low enough overhead to be run 24x7 if desired (e.g., execsnoop, biolatency, tcplife, tcpretrans).&lt;/p&gt;&lt;p dir="ltr"&gt;There is already documentation as man pages and example files in the bcc and bpftrace repositories that you can link to, to help your customers understand the tool output. E.g., here's the execsnoop(8) example files in &lt;a href="https://github.com/iovisor/bcc/blob/master/tools/execsnoop_example.txt" dir="ltr"&gt;bcc&lt;/a&gt; and &lt;a href="https://github.com/iovisor/bpftrace/blob/master/tools/execsnoop_example.txt" dir="ltr"&gt;bpftrace&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;Once you have this all working, you have version 1! &lt;/p&gt;&lt;h2&gt;Case study: Netflix&lt;/h2&gt;&lt;p&gt;Netflix is building a new GUI that does this tool dashboard and more, based on the bpftrace versions of these tools. The architecture is:&lt;/p&gt;&lt;img src="https://brendangregg.com/blog/images/2021/flamecommander-bpf.png" width="350" height="269"&gt;&lt;p&gt;While the bpftrace binary is installed on all the target systems, the bpftrace tools (text files) live on a web server and are pushed out when needed. This means we can ensure we're always running the latest version of the tools by updating them in one place.&lt;/p&gt;&lt;p dir="ltr"&gt;This is currently part of our FlameCommander UI, which also runs flame graphs across the cloud. Our previous BPF GUI was part of &lt;a href="https://github.com/Netflix/vector" dir="ltr"&gt;Vector&lt;/a&gt;, and used bcc, but we've since deprecated that. We'll likely open source the new one at some point and have a post about it on the Netflix tech blog.&lt;/p&gt;&lt;h2&gt;Case study: Facebook&lt;/h2&gt;&lt;p&gt;Facebook are advanced users of BPF, but deep details of how they run the tools fleet-wide aren't fully public. Based on the activity in bcc, and their development of the BTF and CO-RE technologies, I'd strongly suspect their solution is based on the bcc libbpf-tool versions.&lt;/p&gt;&lt;h2&gt;Think like a sysadmin, not like a programmer&lt;/h2&gt;&lt;p dir="ltr"&gt;In summary, what we're doing here is installing the tools and building upon them, rather than rewriting everything from scratch. This is thinking like a sysadmin who installs and maintains software, and not like a programmer who codes everything.
 Install the &lt;a href="https://github.com/iovisor/bcc" dir="ltr"&gt;bcc&lt;/a&gt; or &lt;a href="https://github.com/iovisor/bpftrace" dir="ltr"&gt;bpftrace&lt;/a&gt; tools, add them to your observability product, and pull package updates as needed. That will be a quick and useful version 1. BPF up and running!&lt;/p&gt;&lt;p&gt;I see people think like a programmer instead and feel they must start by learning bcc and BPF programming in depth. Then, having discovered everything is C or Python, some rewrite it all in a different language.&lt;/p&gt;&lt;p&gt;First, learning bcc and BPF well takes weeks; Learning the subtleties and pitfalls of system tracing can take months or years. If you really want to do this and have the time, you certainly can (you'll probably wind up at tracing conferences and bumping into me: See you at Linux Plumber's or the Tracing Summit!) But if you're under some deadline to add BPF observability, try thinking like a sysadmin instead and just build upon the existing tools. That's the fast way. Think like a programmer later, if or when you have the time.&lt;/p&gt;&lt;p dir="ltr"&gt;Second, the BPF software, especially certain kprobe-based tools, require ongoing maintenance. A tool may work on Linux 5.3 but break on 5.4, as a traced function was renamed or a new code path added. The BPF libraries are also evolving rapidly. I'd try not to rewrite any of these and build upon them, so you can just pull updated versions. In a previous blog post, &lt;a href="https://brendangregg.com/blog/2021-06-04/an-unbelievable-demo.html" dir="ltr"&gt;An Unbelievable Demo&lt;/a&gt;, I talked about how something similar happened many years ago where old tracing tool versions were used without updates.&lt;/p&gt;&lt;p dir="ltr"&gt;For a more recent example, I wrote cachestat(8) while on vacation in 2014 for use on the Netflix cloud, which was a mix of Linux 3.2 and 3.13 at the time. BPF didn't exist on those versions, so I used basic Ftrace capabilities that were available on Linux 3.2. I described this approach as &lt;a href="https://brendangregg.com/blog/2014-12-31/linux-page-cache-hit-ratio.html" dir="ltr"&gt;brittle&lt;/a&gt; and a &lt;a href="https://github.com/brendangregg/perf-tools/blob/master/fs/cachestat" dir="ltr"&gt;sandcastle&lt;/a&gt; that would need maintenance as the kernel changed. It was later ported to BPF with kprobes, and has now been rewritten and included in commercial observability products. Unsurprisingly, I've heard it has problems on newer kernels. Note that I also wouldn't have even coded it this way had BPF been available on my target environment at the time. It really needs an overhaul. When I (or someone) does, anyone pulling updates from bcc will automatically get the fixed version, no effort. Those that have rewritten it will need to rewrite theirs. I fear they won't, and customers will be running a broken version of cachestat(8) for years.&lt;/p&gt;&lt;p dir="ltr"&gt;The problems I'm describing are specific to BPF software and kernel tracing. As a different example, my flame graph software has been rewritten over a dozen times, and since it's a simple and finished algorithm I don't see a big problem with that. I prefer people help with the newer &lt;a href="https://github.com/spiermar/d3-flame-graph" dir="ltr"&gt;d3 version&lt;/a&gt;, but if people do their own it's no big deal. You can code it and it'll work forever. That's not the case with the kprobe-based BPF tools, because they do need maintenance. I'd rewrite these tools using tracepoints instead, as they have a stable API which in theory would alleviate this issue, but tracepoints aren't always available where you need them.&lt;/p&gt;&lt;p&gt;The BPF libraries and frameworks are also changing and evolving, most recently with the BTF and CO-RE support. This is something I hope people consider before choosing to rewrite them: Do you have a plan to rewrite all the updates as well, or will you end up stuck on an old port of the library?&lt;/p&gt;&lt;p dir="ltr"&gt;What if you have a great idea for a &lt;em dir="ltr"&gt;better&lt;/em&gt; BPF library or framework than what we're using in bcc and bpftrace? Talk to us, try it out, innovate. We're at the start of the BPF era and there's lots more to explore. But please understand what exists first, and understand the maintenance burden you are taking on. Your energies may be better spent creating something new, on top of what exists, than porting something old.&lt;/p&gt;&lt;p&gt;&lt;i&gt;You can comment here, but I can't guarantee your comment will remain here forever: I might switch comment systems at some point (eg, if disqus add advertisements).&lt;/i&gt;&lt;/p&gt;&lt;center&gt;Site Navigation&lt;/center&gt;&lt;img src="https://brendangregg.com/Images/sysperf2nd_bookcover_500.png" width="180" height="235"&gt;</description><pubDate>Sun, 11 Jul 2021 08:40:24 -0500</pubDate></item><item><title>My proposal for scaling open source: don’t</title><link>https://lobste.rs/s/vjzty7</link><description>&lt;img src="https://www.sicpers.info/wp-content/uploads/2021/04/cropped-F7D14238-8296-418F-924B-5CAB0BF65AD9.jpeg" width="940" height="198" alt=""&gt;&lt;p&gt;I’ve had a number of conversations about what “we” in the “free software community” “need” to do to combat the growth in proprietary, user-hostile and customer-hostile business models like cloud user-generated content hosts, social media platforms, hosted payment platforms, videoconferencing services etc. Questions can often be summarised as “what can we do to get everyone off of Facebook groups”, “how do we get businesses to adopt Jitsi Meet instead of Teams” or “how do we convince everyone that Mattermost is better for community chat than Slack”.&lt;/p&gt;&lt;p dir="ltr"&gt;My answer is “we don’t”, which is very different from “we do nothing about those things”. Scaled software platforms introduce all sorts of problems that are &lt;em dir="ltr"&gt;only caused by trying to operate the software at scale&lt;/em&gt;, and the reason the big Silicon Valley companies &lt;em dir="ltr"&gt;are&lt;/em&gt; that big is that they have to spend a load of resources just to tread water because they’ve made everything so complex for themselves.&lt;/p&gt;&lt;p&gt;This scale problem has two related effects: firstly the companies are hyper-concerned about “growth” because when you’ve got a billion users, your shareholders want to know where the next hundred million are coming from, not the next twenty. Secondly the companies are overly-focused on lowest common denominator solutions, because Jennifer Miggins from South Shields is a rounding error and anything that’s good enough for Scott Zablowski from Los Angeles will have to be good enough for her too, and the millions of people on the flight path between them.&lt;/p&gt;&lt;p dir="ltr"&gt;Growth hacking and lowest common denominator experiences are &lt;em dir="ltr"&gt;their&lt;/em&gt; problems, so we should avoid making them &lt;em dir="ltr"&gt;our&lt;/em&gt; problems, too. We already have various tools for enabling growth: the freedom to use the software for any purpose being one of the most powerful. We can go the other way and provide deeply-specific experiences that solve a small collection of problems &lt;em dir="ltr"&gt;incredibly well&lt;/em&gt; for a small number of people. Then those people become super-committed fans because no other thing works as well for them as our thing, and they tell their small number of friends, who can not only use this great thing but have the freedom to study how the program works, and change it so it does their computing as they wish—or to get someone to change it for them. Thus the snowball turns into an avalanche.&lt;/p&gt;&lt;p&gt;Each of these massive corporations with their non-free platforms that we’re trying to displace started as a small corporation solving a small problem for a small number of people. Facebook was internal to one university. Apple sold 500 computers to a single reseller. Google was a research project for one supervisor. This is a view of the world that’s been heavily skewed by the seemingly ready access to millions of dollars in venture capital for disruptive platforms, but many endeavours don’t have access to that capital and many that do don’t succeed. It is ludicrous to try and compete on the same terms without the same resources, so throw Marc Andreessen’s rulebook away and write a different one.&lt;/p&gt;&lt;p&gt;We get freedom to a billion people a handful at a time. That reddit-killing distributed self-hosted tool you’re building probably won’t kill reddit, sorry. Design for that one farmer’s cooperative in Skåne, and other farmers and other cooperatives will notice. Design for that one town government in Nordrhein-Westfalen, and other towns and other governments will notice. Design for that one biochemistry research group in Brasilia, and other biochemists and other researchers will notice. Make something personal for a dozen people, because that’s the one thing those massive vendors will never do and never even understand that they could do.&lt;/p&gt;&lt;img alt="" src="https://secure.gravatar.com/avatar/563290c0c1b776a315b36e863b388a0c?s=60&amp;amp;d=retro&amp;amp;r=r" srcset="https://secure.gravatar.com/avatar/563290c0c1b776a315b36e863b388a0c?s=120&amp;amp;d=retro&amp;amp;r=r 2x" height="60" width="60"&gt;&lt;h2&gt;
 							About Graham							&lt;/h2&gt;&lt;div&gt;
-							I make it faster and easier for you to create high-quality code.							&lt;/div&gt;</description><pubDate>Sun, 11 Jul 2021 03:36:01 -0500</pubDate></item><item><title>25 Gigabit Linux internet router PC build</title><link>https://lobste.rs/s/l3yaaw</link><description>&lt;div&gt;published 2021-07-10&lt;/div&gt;&lt;div dir="ltr"&gt;
+							I make it faster and easier for you to create high-quality code.							&lt;/div&gt;</description><pubDate>Sun, 11 Jul 2021 03:36:01 -0500</pubDate></item><item><title>Best of .bashrc</title><link>https://lobste.rs/s/oev1k1</link><description>&lt;p&gt;&lt;b&gt;Or, actually, .bash_aliases - but that's not as fun to say&lt;/b&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;
+On this page I've gathered some selected bits and pieces from
+my &lt;code dir="ltr"&gt;.bash_aliases&lt;/code&gt; file. Apart from the selection of
+&lt;a href="https://www.datagubbe.se/#software" dir="ltr"&gt;hacks and scripts&lt;/a&gt; available on this site,
+these are the homemade contraptions I use most frequently when farting
+around with my computer.
+&lt;/p&gt;&lt;h3&gt;Putting the computer to sleep&lt;/h3&gt;&lt;PRE&gt;# suspend (sleep)
+alias zzz="systemctl suspend"
+&lt;/PRE&gt;&lt;p&gt;
+A nifty little piece I believe to be stolen from the *BSD world.
+On a systemd Linux installation, this will put the computer to sleep.
+&lt;/p&gt;&lt;h3&gt;Getting system information&lt;/h3&gt;&lt;PRE&gt;# system health information
+alias inf="uname -sr &amp;amp;&amp;amp; uptime| sed 's/ //' &amp;amp;&amp;amp; sensors|grep Pack &amp;amp;&amp;amp; \
+           lscpu|grep 'CPU MHz:' &amp;amp;&amp;amp; acpi &amp;amp;&amp;amp; \
+           echo -n 'Memory in use: ' &amp;amp;&amp;amp; free -m|grep Mem|\
+           awk '{print \$3+\$5\" megs\"}'"
+&lt;/PRE&gt;&lt;p&gt;
+This will show the uptime, CPU temperature, current CPU frequency,
+battery status and RAM usage. The various commands used will differ
+somewhat between platforms and distributions. Example output:
+&lt;/p&gt;&lt;PRE&gt;Linux 5.4.0-72-generic
+00:05:42 up 3 days,  9:36,  4 users,  load average: 0,05, 0,10, 0,09
+Package id 0:  +39.0°C  (high = +105.0°C, crit = +105.0°C)
+CPU MHz:             1152.108
+Battery 0: Not charging, 100%
+Memory in use: 947 megs
+&lt;/PRE&gt;&lt;h3&gt;Listing directories&lt;/h3&gt;&lt;PRE&gt;alias lsd="ls -d */"
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+This lists just the directories in the current working directory.
+Coming from the &lt;a href="https://www.datagubbe.se/ltmag" dir="ltr"&gt;Amiga&lt;/a&gt; side of things,
+it's preposterous how unintuitive this is. &lt;code dir="ltr"&gt;dir dirs&lt;/code&gt;,
+&lt;a href="https://wiki.amigaos.net/wiki/AmigaOS_Manual:_AmigaDOS_Command_Reference#DIR" dir="ltr"&gt;anyone&lt;/a&gt;?
+But you know how the saying goes: "There are two major products to come out of Berkeley: LSD and UNIX. We don't believe this to be a coincidence."
+Now I have managed to combine them!
+&lt;/p&gt;&lt;h3&gt;Working with archives&lt;/h3&gt;&lt;PRE&gt;# archives
+alias ltar="tar -ztvf"
+alias untar="tar -zxvf"
+alias atar="tar -cvzf"
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+&lt;b dir="ltr"&gt;L&lt;/b&gt;ists, &lt;b dir="ltr"&gt;un&lt;/b&gt;packs and cre&lt;b dir="ltr"&gt;a&lt;/b&gt;tes .tgz archives.
+Why &lt;code dir="ltr"&gt;atar&lt;/code&gt;? I don't remember, but now I'm used to it.
+&lt;/p&gt;&lt;h3&gt;Calculations with decimals&lt;/h3&gt;&lt;PRE&gt;# bc calc shorthand
+function cl {
+  echo "scale=5; $@" | bc
+}
+&lt;/PRE&gt;&lt;h3&gt;POSIX reference documentation&lt;/h3&gt;&lt;PRE&gt;# show posix command reference
+function posix {
+  if [ -z "$1" ]; then
+    (dillo "$HOME/docs/posix-2018/idx/utilities.html" &amp;gt;/dev/null &amp;amp;)
+  else
+    HTMLFILE="$HOME/docs/posix-2018/utilities/$1.html"
+    if [ -s "$HTMLFILE" ]; then
+      (dillo "$HTMLFILE" &amp;gt;/dev/null &amp;amp;)
+    else
+      echo "No matching file for '$1'"
+    fi
+  fi
+}
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+Use &lt;a href="https://www.dillo.org/" dir="ltr"&gt;Dillo&lt;/a&gt; to view either
+a list of all POSIX shell commands, or the POSIX documentation for
+a single command. I've downloaded the official documentation
+&lt;a href="https://pubs.opengroup.org/onlinepubs/9699919799/download/index.html" dir="ltr"&gt;from here&lt;/a&gt;
+(it's free for personal use) and keep it unpacked in my home directory,
+so I can just use &lt;code dir="ltr"&gt;posix awk&lt;/code&gt; to read a very comprehensive
+description of awk. This documentation is often much better than man pages
+and contains actually useful examples.
+&lt;/p&gt;&lt;h3&gt;Taking notes&lt;/h3&gt;&lt;PRE&gt;# take a note
+function note {
+  if [ -z "$1" ]; then
+    echo "No note entered."
+  else
+    echo "$@" &amp;gt;&amp;gt; "$HOME/docs/_line_notes"
+  fi
+}
+
+# display notes
+function notes {
+  FN="$HOME/docs/_line_notes"
+  if [ ! -f "$FN" ]; then
+    echo "No notes (file missing)."
+    return
+  fi
+
+  if [ -z "$1" ]; then
+    LINECOUNT="10"
+  else
+    LINECOUNT="$1"
+  fi
+  LNUM=$(wc -l "$FN"|cut -d " " -f1)
+  echo "Showing max $LINECOUNT of $LNUM notes."
+  tail "$FN" -n "$LINECOUNT"
+}
+
+# clear all notes
+function clearnotes {
+  rm "$HOME/docs/_line_notes"
+  touch "$HOME/docs/_line_notes"
+}
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+Using &lt;code dir="ltr"&gt;note&lt;/code&gt;, I can make a quick note like so:&lt;br dir="ltr"&gt;
+&lt;code dir="ltr"&gt;$ note hjalfi asm 1:20&lt;/code&gt;&lt;br dir="ltr"&gt;
+which will indicate that I've watched one hour and twenty minutes
+of &lt;a href="https://www.youtube.com/watch?v=wlMz6n2eISs" dir="ltr"&gt;Hjalfi writes an assembler and emulator for a spaceship&lt;/a&gt;,
+so that I know where to &lt;a href="https://www.datagubbe.se/yt/" dir="ltr"&gt;continue watching&lt;/a&gt; next time
+by simply typing:&lt;br dir="ltr"&gt;
+&lt;code dir="ltr"&gt;$ notes&lt;/code&gt;&lt;br dir="ltr"&gt;
+Pretty nifty!
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+privacy notice: datagubbe.se uses neither cookies nor javascript. | &lt;a href="https://www.datagubbe.se/atom.xml" dir="ltr"&gt;rss feed&lt;/a&gt;&lt;br dir="ltr"&gt;
+&lt;/p&gt;</description><pubDate>Sat, 10 Jul 2021 23:18:17 -0500</pubDate></item><item><title>25 Gigabit Linux internet router PC build</title><link>https://lobste.rs/s/l3yaaw</link><description>&lt;div&gt;published 2021-07-10&lt;/div&gt;&lt;div dir="ltr"&gt;
   
   in tag
   
@@ -966,117 +1076,7 @@ devices.&lt;/p&gt;&lt;p dir="ltr"&gt;I won’t know for sure until the &lt;a hre
 Presence (POP, German Anschlusszentrale) close to my home is upgraded to support
 25 Gbit/s “Fiber7-X2” connections. As I mentioned, unfortunately &lt;a href="https://twitter.com/init7/status/1403287499175235584" dir="ltr"&gt;the upgrade
 plan is delayed&lt;/a&gt; due to
-the component shortage. I’ll keep you posted!&lt;/p&gt;</description><pubDate>Sat, 10 Jul 2021 06:49:21 -0500</pubDate></item><item><title>Best of .bashrc</title><link>https://lobste.rs/s/oev1k1</link><description>&lt;p&gt;&lt;b&gt;Or, actually, .bash_aliases - but that's not as fun to say&lt;/b&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;
-On this page I've gathered some selected bits and pieces from
-my &lt;code dir="ltr"&gt;.bash_aliases&lt;/code&gt; file. Apart from the selection of
-&lt;a href="https://www.datagubbe.se/#software" dir="ltr"&gt;hacks and scripts&lt;/a&gt; available on this site,
-these are the homemade contraptions I use most frequently when farting
-around with my computer.
-&lt;/p&gt;&lt;h3&gt;Putting the computer to sleep&lt;/h3&gt;&lt;PRE&gt;# suspend (sleep)
-alias zzz="systemctl suspend"
-&lt;/PRE&gt;&lt;p&gt;
-A nifty little piece I believe to be stolen from the *BSD world.
-On a systemd Linux installation, this will put the computer to sleep.
-&lt;/p&gt;&lt;h3&gt;Getting system information&lt;/h3&gt;&lt;PRE&gt;# system health information
-alias inf="uname -sr &amp;amp;&amp;amp; uptime| sed 's/ //' &amp;amp;&amp;amp; sensors|grep Pack &amp;amp;&amp;amp; \
-           lscpu|grep 'CPU MHz:' &amp;amp;&amp;amp; acpi &amp;amp;&amp;amp; \
-           echo -n 'Memory in use: ' &amp;amp;&amp;amp; free -m|grep Mem|\
-           awk '{print \$3+\$5\" megs\"}'"
-&lt;/PRE&gt;&lt;p&gt;
-This will show the uptime, CPU temperature, current CPU frequency,
-battery status and RAM usage. The various commands used will differ
-somewhat between platforms and distributions. Example output:
-&lt;/p&gt;&lt;PRE&gt;Linux 5.4.0-72-generic
-00:05:42 up 3 days,  9:36,  4 users,  load average: 0,05, 0,10, 0,09
-Package id 0:  +39.0°C  (high = +105.0°C, crit = +105.0°C)
-CPU MHz:             1152.108
-Battery 0: Not charging, 100%
-Memory in use: 947 megs
-&lt;/PRE&gt;&lt;h3&gt;Listing directories&lt;/h3&gt;&lt;PRE&gt;alias lsd="ls -d */"
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-This lists just the directories in the current working directory.
-Coming from the &lt;a href="https://www.datagubbe.se/ltmag" dir="ltr"&gt;Amiga&lt;/a&gt; side of things,
-it's preposterous how unintuitive this is. &lt;code dir="ltr"&gt;dir dirs&lt;/code&gt;,
-&lt;a href="https://wiki.amigaos.net/wiki/AmigaOS_Manual:_AmigaDOS_Command_Reference#DIR" dir="ltr"&gt;anyone&lt;/a&gt;?
-But you know how the saying goes: "There are two major products to come out of Berkeley: LSD and UNIX. We don't believe this to be a coincidence."
-Now I have managed to combine them!
-&lt;/p&gt;&lt;h3&gt;Working with archives&lt;/h3&gt;&lt;PRE&gt;# archives
-alias ltar="tar -ztvf"
-alias untar="tar -zxvf"
-alias atar="tar -cvzf"
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-&lt;b dir="ltr"&gt;L&lt;/b&gt;ists, &lt;b dir="ltr"&gt;un&lt;/b&gt;packs and cre&lt;b dir="ltr"&gt;a&lt;/b&gt;tes .tgz archives.
-Why &lt;code dir="ltr"&gt;atar&lt;/code&gt;? I don't remember, but now I'm used to it.
-&lt;/p&gt;&lt;h3&gt;Calculations with decimals&lt;/h3&gt;&lt;PRE&gt;# bc calc shorthand
-function cl {
-  echo "scale=5; $@" | bc
-}
-&lt;/PRE&gt;&lt;h3&gt;POSIX reference documentation&lt;/h3&gt;&lt;PRE&gt;# show posix command reference
-function posix {
-  if [ -z "$1" ]; then
-    (dillo "$HOME/docs/posix-2018/idx/utilities.html" &amp;gt;/dev/null &amp;amp;)
-  else
-    HTMLFILE="$HOME/docs/posix-2018/utilities/$1.html"
-    if [ -s "$HTMLFILE" ]; then
-      (dillo "$HTMLFILE" &amp;gt;/dev/null &amp;amp;)
-    else
-      echo "No matching file for '$1'"
-    fi
-  fi
-}
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-Use &lt;a href="https://www.dillo.org/" dir="ltr"&gt;Dillo&lt;/a&gt; to view either
-a list of all POSIX shell commands, or the POSIX documentation for
-a single command. I've downloaded the official documentation
-&lt;a href="https://pubs.opengroup.org/onlinepubs/9699919799/download/index.html" dir="ltr"&gt;from here&lt;/a&gt;
-(it's free for personal use) and keep it unpacked in my home directory,
-so I can just use &lt;code dir="ltr"&gt;posix awk&lt;/code&gt; to read a very comprehensive
-description of awk. This documentation is often much better than man pages
-and contains actually useful examples.
-&lt;/p&gt;&lt;h3&gt;Taking notes&lt;/h3&gt;&lt;PRE&gt;# take a note
-function note {
-  if [ -z "$1" ]; then
-    echo "No note entered."
-  else
-    echo "$@" &amp;gt;&amp;gt; "$HOME/docs/_line_notes"
-  fi
-}
-
-# display notes
-function notes {
-  FN="$HOME/docs/_line_notes"
-  if [ ! -f "$FN" ]; then
-    echo "No notes (file missing)."
-    return
-  fi
-
-  if [ -z "$1" ]; then
-    LINECOUNT="10"
-  else
-    LINECOUNT="$1"
-  fi
-  LNUM=$(wc -l "$FN"|cut -d " " -f1)
-  echo "Showing max $LINECOUNT of $LNUM notes."
-  tail "$FN" -n "$LINECOUNT"
-}
-
-# clear all notes
-function clearnotes {
-  rm "$HOME/docs/_line_notes"
-  touch "$HOME/docs/_line_notes"
-}
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-Using &lt;code dir="ltr"&gt;note&lt;/code&gt;, I can make a quick note like so:&lt;br dir="ltr"&gt;
-&lt;code dir="ltr"&gt;$ note hjalfi asm 1:20&lt;/code&gt;&lt;br dir="ltr"&gt;
-which will indicate that I've watched one hour and twenty minutes
-of &lt;a href="https://www.youtube.com/watch?v=wlMz6n2eISs" dir="ltr"&gt;Hjalfi writes an assembler and emulator for a spaceship&lt;/a&gt;,
-so that I know where to &lt;a href="https://www.datagubbe.se/yt/" dir="ltr"&gt;continue watching&lt;/a&gt; next time
-by simply typing:&lt;br dir="ltr"&gt;
-&lt;code dir="ltr"&gt;$ notes&lt;/code&gt;&lt;br dir="ltr"&gt;
-Pretty nifty!
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-privacy notice: datagubbe.se uses neither cookies nor javascript. | &lt;a href="https://www.datagubbe.se/atom.xml" dir="ltr"&gt;rss feed&lt;/a&gt;&lt;br dir="ltr"&gt;
-&lt;/p&gt;</description><pubDate>Sat, 10 Jul 2021 23:18:17 -0500</pubDate></item><item><title>What I learned from Erlang about Resiliency in Systems Design</title><link>https://lobste.rs/s/wjceku</link><description>&lt;div dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&lt;time datetime="2019-03-28" dir="ltr"&gt;2019-03-28&lt;/time&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;2499 words
+the component shortage. I’ll keep you posted!&lt;/p&gt;</description><pubDate>Sat, 10 Jul 2021 06:49:21 -0500</pubDate></item><item><title>What I learned from Erlang about Resiliency in Systems Design</title><link>https://lobste.rs/s/wjceku</link><description>&lt;div dir="ltr"&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&lt;time datetime="2019-03-28" dir="ltr"&gt;2019-03-28&lt;/time&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;2499 words
                             &amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;12 minutes&lt;/div&gt;&lt;img src="https://www.mgasch.com/2019/03/crash/featured-image.jpg" width="472" height="295"&gt;&lt;div&gt;&lt;span&gt;Contents&lt;/span&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;Part of our daily business as developers, architects and operators is dealing with failure in computer systems. Even though you might be tempted to achieve 100% availability, this would be like trying to travel at the speed of light: &lt;em dir="ltr"&gt;just impossible&lt;/em&gt;. The effort, energy and resources you need to put into building such a system outweighs the benefits, ultimately leading to an unusable, i.e. too constrained, system.&lt;/p&gt;&lt;p&gt;That’s why we have to accept that fact that, like everything in life, nothing is perfect and will eventually fail.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;&lt;em&gt;“Expect the unexpected. Failures are a given and everything will eventually fail over time."&lt;/em&gt;&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;This might sound obvious. But not too long ago, when I was in operations, I was
 taught that we should always use components with the highest &lt;em dir="ltr"&gt;mean time between
 failure (MTBF)&lt;/em&gt; rate. This is contrary to the current design principle to focus
@@ -1686,7 +1686,154 @@ public void contains_randomizeElementsSizeAndPosition() {
   &lt;span dir="ltr"&gt;runs&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"./foo.sh"&lt;/span&gt; &lt;span dir="ltr"&gt;# ...and run `foo.sh` in this repo.&lt;/span&gt;
 &lt;span dir="ltr"&gt;}&lt;/span&gt;
 &lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Sure enough, when I committed that file to the repository and added a comment to an issue, it started a build that executed &lt;code dir="ltr"&gt;foo.sh&lt;/code&gt; in a Docker container.&lt;/p&gt;&lt;p dir="ltr"&gt;I was a bit confused about the &lt;code dir="ltr"&gt;uses = "actions/docker/cli@76ff57a"&lt;/code&gt; line in the config file, so I looked at the build log. Near the top of the log, I saw that the build had downloaded and unzipped a tarball from &lt;code dir="ltr"&gt;https://api.github.com/repos/actions/docker/tarball/76ff57a&lt;/code&gt;. Eventually, I figured out that:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;https://github.com/actions/docker&lt;/code&gt; was a repository containing integration code for GitHub Actions in a directory called &lt;code dir="ltr"&gt;cli&lt;/code&gt;. (Unfortunately, it seems to have been deleted sometime in the last year.)&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;76ff57a&lt;/code&gt; was the most recent commit hash on master for the &lt;code dir="ltr"&gt;actions/docker&lt;/code&gt; repository. That commit hash was auto-inserted by the config wizard when I created the config file.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;So the runner for GitHub Actions would see the string &lt;code dir="ltr"&gt;actions/docker/cli@76ff57a&lt;/code&gt; in the config file, and then parse out the individual components: it would clone the &lt;code dir="ltr"&gt;actions/docker&lt;/code&gt; repository at commit &lt;code dir="ltr"&gt;76ff57a&lt;/code&gt;, enter the &lt;code dir="ltr"&gt;cli&lt;/code&gt; directory, and execute some setup code located there.&lt;/p&gt;&lt;p dir="ltr"&gt;The commit hash &lt;code dir="ltr"&gt;76ff57a&lt;/code&gt; got my attention, because it was an abbreviated commit &lt;em dir="ltr"&gt;shorthash&lt;/em&gt; (only 7 hex characters) rather than a full commit hash (40 hex characters).&lt;/p&gt;&lt;h2&gt;Commit Hash Collisions&lt;/h2&gt;&lt;p dir="ltr"&gt;A &lt;em dir="ltr"&gt;commit hash&lt;/em&gt; is a pseudorandom 40-character hex string that identifies a git commit. An example of a commit hash is &lt;code dir="ltr"&gt;76ff57a6c3d817840574a98950b0c7bc4e8a13a8&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Since a string that long can be unwieldy, git sometimes shows an &lt;em dir="ltr"&gt;abbreviated&lt;/em&gt; commit hash (sometimes called a “shorthash”) consisting of the first seven characters of the full commit hash. This is why GitHub generated the string &lt;code dir="ltr"&gt;76ff57a&lt;/code&gt; in my config file.&lt;/p&gt;&lt;p dir="ltr"&gt;Commit shorthashes have a major problem: As a repository accumulates a large number of commits, eventually it will contain two commit hashes that start with the same seven characters (and have the same shorthash). After this happens, tools that use shorthashes will start to break because the commit shorthash is ambiguous (it’s no longer a pointer to a single commit). Due to the &lt;a href="https://en.wikipedia.org/wiki/Birthday_problem" dir="ltr"&gt;birthday problem&lt;/a&gt;, any repository that has at least 19291 commits is likely to have a pair of ambiguous commits somewhere. So if we waited for the &lt;code dir="ltr"&gt;actions/docker&lt;/code&gt; repo to have tens of thousands of commits, one of the shorthashes would eventually become ambiguous and break someone’s build.&lt;/p&gt;&lt;h2&gt;Commit Hash Collisions, Faster&lt;/h2&gt;&lt;p dir="ltr"&gt;I didn’t really feel like waiting for a low-activity repo to accumulate tens of thousands of commits. Luckily, we only have to wait that long if commit hashes are generated pseudorandomly. If we’re creating commits while &lt;em dir="ltr"&gt;trying&lt;/em&gt; to generate collisions, then it’s a lot easier – we can just create a single commit, then keep amending the commit message locally until it creates a commit hash that we want.&lt;/p&gt;&lt;p dir="ltr"&gt;By coincidence, I had created a &lt;a href="https://github.com/not-an-aardvark/lucky-commit" dir="ltr"&gt;tool&lt;/a&gt; a couple years earlier that does exactly this as a practical joke. So I cloned the &lt;code dir="ltr"&gt;actions/docker&lt;/code&gt; repo (which had &lt;code dir="ltr"&gt;76ff57a6c3d817840574a98950b0c7bc4e8a13a8&lt;/code&gt; as the latest commit), created a new commit with some changes, and ran the tool. Two minutes later, I had different commit (&lt;code dir="ltr"&gt;76ff57aa21370794040cd0caafd84d8a7aa0927c&lt;/code&gt;) that also had the shorthash &lt;code dir="ltr"&gt;76ff57a&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;To get the collision to affect anything on GitHub, I needed to push it to the &lt;code dir="ltr"&gt;actions/docker&lt;/code&gt; repo. This posed a problem, because I didn’t have write access to the &lt;code dir="ltr"&gt;actions/docker&lt;/code&gt; repo. However, I realized I could get around that issue by forking the &lt;code dir="ltr"&gt;actions/docker&lt;/code&gt; repo and pushing a commit to my fork (since GitHub shares commits between forks and parent repositories).&lt;/p&gt;&lt;h2&gt;GitHub Actions vs. Commit Hash Collisions&lt;/h2&gt;&lt;p dir="ltr"&gt;So I created a fork and pushed my commit to it. I wasn’t quite sure what GitHub would do if someone tried to download &lt;code dir="ltr"&gt;https://api.github.com/repos/actions/docker/tarball/76ff57a&lt;/code&gt; when the hash &lt;code dir="ltr"&gt;76ff57a&lt;/code&gt; was ambiguous. My best guess was that it would just pick one of the commits (either the original commit from &lt;code dir="ltr"&gt;actions/docker&lt;/code&gt;, or my new duplicate commit).&lt;/p&gt;&lt;p dir="ltr"&gt;Instead, that URL just started returning a 404 error, causing my Actions build (and also everyone else’s build that used the latest commit from &lt;code dir="ltr"&gt;actions/docker&lt;/code&gt;) to break.&lt;/p&gt;&lt;p&gt;So the good news was that I’d found a security issue which could allow any GitHub user to DoS GitHub Actions builds globally. The bad news was that I’d accidentally just DoSed a part of GitHub Actions globally.&lt;/p&gt;&lt;p dir="ltr"&gt;I had considered that this might happen, so I was ready to delete my fork as soon as I pushed the commit. (I thought deleting the fork would remove the ambiguity and cause everyone’s builds to start working again.) Unfortunately, even after I deleted my fork, the tarball URL &lt;em dir="ltr"&gt;still&lt;/em&gt; returned a 404, meaning that I’d accidentally broken everyone’s builds with no way to fix them. Oops.&lt;/p&gt;&lt;p dir="ltr"&gt;(In hindsight, I should have been more careful here. I could have tested out the tarball behavior on a test repo before using &lt;code dir="ltr"&gt;actions/docker&lt;/code&gt;. Luckily, at this point GitHub Actions was still in very early beta, so I’m hoping not too many people were affected.)&lt;/p&gt;&lt;p dir="ltr"&gt;Anyway, I pinged someone on GitHub’s security team about the issue. After a few minutes, they were able to get the outage fixed by running a pass of &lt;a href="https://git-scm.com/docs/git-gc" dir="ltr"&gt;git garbage collection&lt;/a&gt;. The root cause was fixed a few weeks later by updating the config wizard to generate full 40-character commit hashes in config files.&lt;/p&gt;&lt;h2&gt;Takeaways on Commit Shorthashes&lt;/h2&gt;&lt;p&gt;This issue has had an effect on how I use commit shorthashes to refer to commits generally, when accounting for the possibility that someone could maliciously generate shorthash collisions.&lt;/p&gt;&lt;p dir="ltr"&gt;Shorthashes &lt;em dir="ltr"&gt;can&lt;/em&gt; safely be used for:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Identifying commits now or in the very near future (e.g. asking someone to take a look at your commit in the next few minutes)&lt;/LI&gt;&lt;LI&gt;Displaying commit hashes to users, if the full commit hash is also included somewhere. (For example, it’s okay to show a shorthash as the visible text in a link, as long as the target URL of the link includes the full 40-character hash).&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Shorthashes &lt;em dir="ltr"&gt;should not&lt;/em&gt; be used to identify commits for any extended period of time. This includes:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Build scripts (use full 40-character hashes instead)&lt;/LI&gt;&lt;LI&gt;Links in documentation (you can still use shorthashes for display if the full hash is included in the link target)&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Again, the risk is that if you include a shorthash in your build script, any random troll (or careless security researcher) could decide to break your build script by generating a different commit with the same shorthash, and pushing it to a fork.&lt;/p&gt;&lt;p&gt;This issue would be somewhat mitigated if commit hashes on GitHub weren’t shared with forks. (As such, the risk is smaller for private repositories.) However, even if that were the case, someone without write access could still subtly introduce a collision by getting a PR accepted, or a shorthash could become ambiguous by chance over time. Personally, I think it’s better to just always follow the advice above to avoid a potential headache later.&lt;/p&gt;&lt;h2&gt;Making every shorthash collide&lt;/h2&gt;&lt;p dir="ltr"&gt;Finally, I thought it would be funny to create a git branch that uses &lt;em dir="ltr"&gt;every&lt;/em&gt; 7-character commit shorthash (so every other commit in that repository would be guaranteed to have a shorthash collision).&lt;/p&gt;&lt;p dir="ltr"&gt;Surprisingly, this is feasible. There are 16&lt;sup dir="ltr"&gt;7&lt;/sup&gt; total 7-character commit shorthashes, so by the &lt;a href="https://en.wikipedia.org/wiki/Coupon_collector%27s_problem" dir="ltr"&gt;coupon collector’s problem&lt;/a&gt;, we would need to hash something like 28 ⋅ 16&lt;sup dir="ltr"&gt;7&lt;/sup&gt; ≈ 7.5 billion test commits. This would take about 90 minutes on my laptop. In terms of storage space, the smallest git commit is about 175 bytes before compression, so the repository would weigh in at around (175 bytes) ⋅ 16&lt;sup dir="ltr"&gt;7&lt;/sup&gt; ≈ 47 GB.&lt;/p&gt;&lt;p dir="ltr"&gt;Unfortunately, 47 GB is more space than I have left on my hard drive, so I didn’t go through with this. However, 47 GB is within &lt;a href="https://help.github.com/en/github/managing-large-files/what-is-my-disk-quota#file-and-repository-size-limitations" dir="ltr"&gt;GitHub’s 100GB hard limit on repo size&lt;/a&gt;. I can imagine an attack scenario where someone creates that branch once, and then just forks a bunch of popular repos and pushes the same branch to all of the forks, breaking all shortlinks in the documentation/build scripts of lots of repos at once. (Please don’t actually do this – it probably violates GitHub’s ToS, and it’s possible GitHub has some protection against it anyway.)&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Update, several years later:&lt;/strong&gt; I went ahead and implemented a &lt;a href="https://github.com/not-an-aardvark/every-git-commit-shorthash" dir="ltr"&gt;proof-of-concept for this idea&lt;/a&gt;. In total it’s only 24GB, but pushing it to GitHub would probably be a tall order.&lt;/p&gt;&lt;h2&gt;Timeline&lt;/h2&gt;&lt;p&gt;(Some of these times are approximate due to limited logs/information from a year later.)&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;2018-12-19, around 22:00:00 UTC:&lt;/strong&gt; I pushed a new &lt;code dir="ltr"&gt;76ff57a&lt;/code&gt; commit to my fork of &lt;code dir="ltr"&gt;actions/docker&lt;/code&gt;, inadvertently causing builds to start breaking.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;(about a minute later):&lt;/strong&gt; I deleted my fork of &lt;code dir="ltr"&gt;actions/docker&lt;/code&gt; in an unsuccessful attempt to fix the broken builds.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;2018-12-19 22:09:33 UTC:&lt;/strong&gt; I pinged someone from GitHub’s security team in a Slack that had been set up for the private bounty program.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;2018-12-19 22:13:08 UTC:&lt;/strong&gt; Initial response from GitHub on Slack. A short discussion about the issue ensued.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;2018-12-19, around 22:45:00 UTC:&lt;/strong&gt; GitHub ran GC on the &lt;code dir="ltr"&gt;actions/docker&lt;/code&gt; repo, which cleaned up the commit from my fork and resolved the immediate outage.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;2018-12-19 22:53:46 UTC:&lt;/strong&gt; Follow-up report about the issue submitted on HackerOne&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;2018-12-19 23:11:30 UTC:&lt;/strong&gt; Initial response from GitHub on HackerOne&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;2019-01-04 00:20:13 UTC:&lt;/strong&gt; $5000 bounty awarded from GitHub on HackerOne. Root cause fix was WIP at this point.&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;(Sometime in the following week):&lt;/strong&gt; GitHub Actions config wizard updated to include full 40-character commit hash in generated config files, rather than 7-character shorthash.&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Fri, 09 Jul 2021 16:16:55 -0500</pubDate></item><item><title>A Git repository with 2^28 commits—one for every 7-character shorthash</title><link>https://lobste.rs/s/j8daok</link><description>&lt;h1&gt;every-git-commit-shorthash&lt;/h1&gt;&lt;p dir="ltr"&gt;A git repository with a commit for &lt;em dir="ltr"&gt;every&lt;/em&gt; seven-character git commit shorthash (all 2&lt;sup dir="ltr"&gt;28&lt;/sup&gt; of them).&lt;/p&gt;&lt;p dir="ltr"&gt;If you have a commit shorthash, or any seven-character hex string, you can find a commit for it here! It's like a dictionary, but much less useful. Also see &lt;a href="https://github.com/not-an-aardvark/lucky-commit" dir="ltr"&gt;lucky-commit&lt;/a&gt; if you'd like to generate commits with arbitrary shorthashes on the fly instead.&lt;/p&gt;&lt;h2&gt;FAQ&lt;/h2&gt;&lt;h3&gt;Where can I see all the commits?&lt;/h3&gt;&lt;p&gt;This repository contains code for generating a repository with every shorthash locally.&lt;/p&gt;&lt;p dir="ltr"&gt;The repository has so many commits that &lt;code dir="ltr"&gt;git push&lt;/code&gt; hangs and runs out of memory, presumably because it tries to regenerate a packfile on the fly. As a result, there isn't a GitHub-hosted interactive demo. Sorry.&lt;/p&gt;&lt;p dir="ltr"&gt;This problem might be tractable in theory. &lt;code dir="ltr"&gt;git&lt;/code&gt; uses the same packfile format for network transport as it does for storage, so it might be possible to convince it to use the packfile from the filesystem directly rather than generating a new one. However, I have some doubts that GitHub would accept the push without timing out or hitting a memory limit somewhere.&lt;/p&gt;&lt;p dir="ltr"&gt;If you want to get the commits without running the tool yourself, you can download a pregenerated packfile and index by following the instructions on the &lt;a href="https://github.com/not-an-aardvark/every-git-commit-shorthash/releases" dir="ltr"&gt;releases page&lt;/a&gt;.&lt;/p&gt;&lt;h3&gt;How much space does this take up?&lt;/h3&gt;&lt;p dir="ltr"&gt;The commits are stored in a 14.7 GB &lt;a href="https://git-scm.com/docs/pack-format" rel="nofollow" dir="ltr"&gt;git packfile&lt;/a&gt;, as well as an associated 9.35 GB pack index file. This is the result of significant optimization to reduce the file sizes.&lt;/p&gt;&lt;p&gt;Specifically, two major strategies are used:&lt;/p&gt;&lt;h4&gt;Almost all of the commits are stored as deltas&lt;/h4&gt;&lt;p&gt;Git packfiles support a delta format, where a git object is stored as a diff from another git object, then reassembled at runtime. Normally, this delta format is used for file contents (i.e. blobs), so that git doesn't need to store two copies of a file for a one-line change. However, it's supported for all types of git objects, including commits themselves. Git commits contain a lot of metadata, so storing a commit as e.g. "the same as this other commit, plus one space at the end of the commit message" saves a lot of space over inlining the entire commit.&lt;/p&gt;&lt;h4&gt;The commit graph is arranged to take advantage of compression&lt;/h4&gt;&lt;p dir="ltr"&gt;It's worth noting a design goal of the tool here: it should be possible to place all 2&lt;sup dir="ltr"&gt;28&lt;/sup&gt; commits in a single git branch, such that they won't be immediately garbage-collected by git.&lt;/p&gt;&lt;p dir="ltr"&gt;This design goal requires the commit layout to use more space. Without this requirement, it would be possible to simply create 2&lt;sup dir="ltr"&gt;28&lt;/sup&gt; root commits (i.e. commits without parents). However, with this requirement, for each non-branch-tip commit there needs to be at least one child commit whose body contains &lt;code dir="ltr"&gt;parent &amp;lt;40-character hex commit hash&amp;gt;&lt;/code&gt; in the commit metadata. Since all of the 40-character commit hashes are different, this requires a minimum storage cost of of 40 uncompressed bytes per commit, regardless of how the commits are arranged. There's also a flat cost of 20 bytes per commit since the packfile format inlines each commit hash, along with a few bytes of overhead to specify the delta itself.&lt;/p&gt;&lt;p dir="ltr"&gt;With that aside, there is still a significant amount of flexibility in how the commits can be arranged. For example, it would be possible to create a linear commit history of 2&lt;sup dir="ltr"&gt;28&lt;/sup&gt; commits, or to create 2&lt;sup dir="ltr"&gt;28&lt;/sup&gt; root commits and one massive merge commit with 2&lt;sup dir="ltr"&gt;28&lt;/sup&gt; parents, or anything in between.&lt;/p&gt;&lt;p&gt;Emperically, using a linear commit history resulted in an amortized size of 73 compressed bytes per commit in the packfile, whereas using big merge commits resulted an amortized size of only 46 compressed bytes per commit. This is because giant merge commits are much more easily compressible, since they consist almost entirely of hex characters from the parent hashes.&lt;/p&gt;&lt;p dir="ltr"&gt;I suspected git wouldn't really like having a single merge commit with 2&lt;sup dir="ltr"&gt;28&lt;/sup&gt; parents, so I compromised and created 2&lt;sup dir="ltr"&gt;14&lt;/sup&gt; merge commits, each with 2&lt;sup dir="ltr"&gt;14&lt;/sup&gt; root-commit parents, and one top-level merge commit with each of the 2&lt;sup dir="ltr"&gt;14&lt;/sup&gt; merge commits as parents. It's worth noting that while the merge commits account for 0.0061% of the total number of commits, they account for about 46% of the total storage space. I think the total size is close to optimal given the requirement that all the commits be reachable, but removing that requirement would result in almost a 50% packfile size reduction.&lt;/p&gt;&lt;h3&gt;How long does it take to generate the commits?&lt;/h3&gt;&lt;p&gt;About 5 hours on my laptop (a 2015 MacBook Pro).&lt;/p&gt;&lt;p&gt;The tool was designed for one-time use, so I haven't spent a lot of time optimizing its performance. There is some significant low-hanging fruit:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Currently, it's single-threaded for simplicity. The performance could be sped up by a significant factor by using multiple cores or running on a GPU.&lt;/LI&gt;&lt;LI&gt;Generating the index file currently involves a lot of cache thrashing, which could be fixed with only a bit of added complexity.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;When the tool starts running, the main bottleneck is zlib compression (which is run on each commit, using the maximum compression ratio). This continues to be the main bottleneck until the tool reaches the last million commits or so, at which point SHA1 throughput becomes the main bottleneck. (For each of the last few commits, the tool has to try a large number of commit possibilities in order to find a shorthash that hasn't already been used.)&lt;/p&gt;&lt;p&gt;Note that the tool is currently very memory-constrained; in order to generate the packfile index, the tool needs to keep track of a sorted index of all of the commit hashes generated so far. As a result of this and a few other pieces of metadata, it uses 11GB of memory, which is just small enough to run on my laptop. Some plausible-seeming performance improvements would result in OOM, and some memory usage improvements (e.g. saving state to the filesystem) could result in slower performance.&lt;/p&gt;&lt;h3 dir="ltr"&gt;How many commits does the tool need to go through to find 2&lt;sup dir="ltr"&gt;28&lt;/sup&gt; unique shorthashes?&lt;/h3&gt;&lt;p dir="ltr"&gt;Due to the &lt;a href="https://en.wikipedia.org/wiki/Coupon_collector%27s_problem" rel="nofollow" dir="ltr"&gt;coupon collector's problem&lt;/a&gt;, the expected number of commit attempts is 2&lt;sup dir="ltr"&gt;28&lt;/sup&gt;(ln(2&lt;sup dir="ltr"&gt;28&lt;/sup&gt;) + 0.577...), or about 5.4 billion.&lt;/p&gt;&lt;h3&gt;Does git actually work in such a big repository?&lt;/h3&gt;&lt;p dir="ltr"&gt;Sort of. You can view any particular commit and check out files at that commit. (You can run &lt;code dir="ltr"&gt;git checkout&lt;/code&gt; and keyboard-mash seven random hex characters, and it will go to that commit, which is neat.) Anything that requires stepping through history in order, such as &lt;code dir="ltr"&gt;git log&lt;/code&gt;, seems to stall and run out of memory.&lt;/p&gt;&lt;h3&gt;Why would someone want to use this?&lt;/h3&gt;&lt;p&gt;¯\_(ツ)_/¯&lt;/p&gt;&lt;h3&gt;No, really, is it useful for anything?&lt;/h3&gt;&lt;p&gt;Probably not, but maybe.&lt;/p&gt;&lt;p dir="ltr"&gt;I originally created &lt;a href="https://github.com/not-an-aardvark/lucky-commit" dir="ltr"&gt;lucky-commit&lt;/a&gt;, the companion project to this one, as a practical joke. However, it turned out to be &lt;a href="https://blog.teddykatz.com/2019/11/12/github-actions-dos.html" rel="nofollow" dir="ltr"&gt;unexpectedly useful for security research&lt;/a&gt; as a way to generate targeted commit hash collisions.&lt;/p&gt;&lt;p dir="ltr"&gt;In theory, this project could also be used to &lt;a href="https://blog.teddykatz.com/2019/11/12/github-actions-dos.html#:~:text=Making%20every%20shorthash%20collide" rel="nofollow" dir="ltr"&gt;generate commit hash collisions in bulk&lt;/a&gt;. However, it seems like using &lt;code dir="ltr"&gt;lucky-commit&lt;/code&gt; to generate a targeted collision would be more useful in almost all circumstances, especially since &lt;code dir="ltr"&gt;lucky-commit&lt;/code&gt; allows you to amend your own commits rather than creating useless commits from scratch. This is particularly true because the branch with bulk commits from this project can't really be pushed anywhere.&lt;/p&gt;&lt;p&gt;Then run:&lt;/p&gt;&lt;PRE&gt;$ git clone https://github.com/not-an-aardvark/every-git-commit-shorthash.git
-$ &lt;span dir="ltr"&gt;cd&lt;/span&gt; every-git-commit-shorthash&lt;/PRE&gt;&lt;p dir="ltr"&gt;Optionally, update the hardcoded commit templates in &lt;code dir="ltr"&gt;src/main.rs&lt;/code&gt;, e.g. to update the author to yourself or change the commit message.&lt;/p&gt;&lt;p&gt;Then run:&lt;/p&gt;&lt;PRE&gt;$ cargo run --release&lt;/PRE&gt;</description><pubDate>Fri, 09 Jul 2021 15:40:39 -0500</pubDate></item><item><title>No more DSLs: Implement and deploy a distributed system with a single program</title><link>https://lobste.rs/s/yf2k8f</link><description>&lt;h2 dir="ltr"&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt; Introduction&lt;/h2&gt;&lt;p dir="ltr"&gt;
+$ &lt;span dir="ltr"&gt;cd&lt;/span&gt; every-git-commit-shorthash&lt;/PRE&gt;&lt;p dir="ltr"&gt;Optionally, update the hardcoded commit templates in &lt;code dir="ltr"&gt;src/main.rs&lt;/code&gt;, e.g. to update the author to yourself or change the commit message.&lt;/p&gt;&lt;p&gt;Then run:&lt;/p&gt;&lt;PRE&gt;$ cargo run --release&lt;/PRE&gt;</description><pubDate>Fri, 09 Jul 2021 15:40:39 -0500</pubDate></item><item><title>Oil Summer Blog Backlog: Understanding and Using Shell</title><link>https://lobste.rs/s/rc2mn8</link><description>&lt;div&gt;
+  2021-07-08
+&lt;/div&gt;&lt;p dir="ltr"&gt;Last month, I published &lt;a href="https://www.oilshell.org/blog/2021/06/oil-language.html" dir="ltr"&gt;Recent Progress on the Oil
+Language&lt;/a&gt;, which enumerated #&lt;a href="https://www.oilshell.org/blog/tags.html?tag=blog-topics#blog-topics" dir="ltr"&gt;blog-topics&lt;/a&gt;
+on the &lt;a href="https://www.oilshell.org/cross-ref.html?tag=oil-language#oil-language" dir="ltr"&gt;Oil language&lt;/a&gt;.  It outlined posts on Oil's
+improvements over shell, as well as educational posts on concepts like &lt;em dir="ltr"&gt;string
+safety&lt;/em&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;I started this post with remaining topics that aren't about the Oil language,
+and it ended with a focus on &lt;strong dir="ltr"&gt;understanding and using shell&lt;/strong&gt; in general.  I
+list drafts and other topics as well.&lt;/p&gt;&lt;p dir="ltr"&gt;As you can see, the blog is backlogged by 10 to 20 posts.  This has
+&lt;a href="https://www.oilshell.org/blog/2020/02/recap.html" dir="ltr"&gt;happened&lt;/a&gt;
+&lt;a href="https://www.oilshell.org/blog/2020/03/recap.html" dir="ltr"&gt;before&lt;/a&gt;, so I think it makes sense
+to "declare bankruptcy" every year :-)&lt;/p&gt;&lt;p dir="ltr"&gt;Let's go through the topics, and then I'll figure out what I can realistically
+write.  If I have time in the future, I can return to some of them .  In the
+meantime, I can &lt;strong dir="ltr"&gt;refer&lt;/strong&gt; to this post in the future, so the blog remains
+coherently &lt;strong dir="ltr"&gt;connected&lt;/strong&gt;.&lt;/p&gt;&lt;div&gt;Table of Contents&lt;/div&gt;&lt;h2&gt;Spoiler&lt;/h2&gt;&lt;p&gt;This post will meander through many ideas, so I'll state the conclusion up
+front.  These are the two most important posts to write:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Five Years of Oil Milestones (And Some Wrong Turns)&lt;/strong&gt;.  It's past time to
+take stock of the project!  How did we get here, and what did we learn?&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;The Perlis-Thompson Principle&lt;/strong&gt;.  A #&lt;a href="https://www.oilshell.org/blog/tags.html?tag=software-architecture#software-architecture" dir="ltr"&gt;software-architecture&lt;/a&gt;
+principle that I've been hinting at in #&lt;a href="https://www.oilshell.org/blog/tags.html?tag=comments#comments" dir="ltr"&gt;comments&lt;/a&gt;.  I've come up
+with a &lt;strong dir="ltr"&gt;name&lt;/strong&gt;, but not yet explained it.  It has &lt;strong dir="ltr"&gt;practical
+consequences&lt;/strong&gt;: not just for Oil's design, but also for the design of
+languages, OSes, and distributed systems.
+&lt;UL&gt;&lt;LI&gt;I elaborate on this post below, as it relates to many future posts.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;Now let's see what else belongs on the Oil blog.&lt;/p&gt;&lt;h2&gt;Drafts Written&lt;/h2&gt;&lt;p&gt;These two posts are fairly close to done:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Oil Starts Fewer Processes than Other Shells&lt;/strong&gt;.  A worthwhile
+demonstration of how the #&lt;a href="https://www.oilshell.org/blog/tags.html?tag=shell-runtime#shell-runtime" dir="ltr"&gt;shell-runtime&lt;/a&gt; does basic
+optimizations.  Surprisingly, all Bourne shells I tested do them!  This
+draft is over a year old now, and I've already mentioned it in
+#&lt;a href="https://www.oilshell.org/blog/tags.html?tag=blog-topics#blog-topics" dir="ltr"&gt;blog-topics&lt;/a&gt; :-(&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Shell History and Trivia&lt;/strong&gt;.  This post links to #&lt;a href="https://www.oilshell.org/blog/tags.html?tag=comments#comments" dir="ltr"&gt;comments&lt;/a&gt;,
+including ones on  Ken Thompson's original paper on Unix shell.  &lt;a href="https://github.com/susam/tucl" dir="ltr"&gt;The paper
+popped up&lt;/a&gt; in a few places recently, which is
+great, because it will form part of the explanation for the &lt;em dir="ltr"&gt;Perlis-Thompson
+Principle&lt;/em&gt;.&lt;/LI&gt;&lt;/OL&gt;&lt;h2&gt;Wiki: How to Understand Shell&lt;/h2&gt;&lt;p dir="ltr"&gt;Readers have praised this blog over the years, but there's still a big
+&lt;strong dir="ltr"&gt;explanatory gap&lt;/strong&gt; regarding Unix shell.  I say this because I see repetitive
+arguments for and against shell erupt on many discussion threads, like
+announcements for Oil and other &lt;a href="https://github.com/oilshell/oil/wiki/Alternative-Shells" dir="ltr"&gt;alternative
+shells&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;As another anecdote, this &lt;a href="https://www.oilshell.org/blog/2021/06/oil-language.html#real-problems-from-chris-siebenmann" dir="ltr"&gt;post from last
+month&lt;/a&gt;
+links to &lt;a href="https://utcc.utoronto.ca/~cks/space/blog/programming/BourneShellLimitation" dir="ltr"&gt;The Bourne Shell Is Not a Programming
+Language&lt;/a&gt;.
+It sounds like it could have been written today, but it's from 2008.&lt;/p&gt;&lt;p dir="ltr"&gt;So I've been thinking of ways to &lt;strong dir="ltr"&gt;advocate shell&lt;/strong&gt;.  I want users to enjoy it.
+I've tried to do that with #&lt;a href="https://www.oilshell.org/blog/tags.html?tag=shell-the-good-parts#shell-the-good-parts" dir="ltr"&gt;shell-the-good-parts&lt;/a&gt; posts, but I
+haven't published enough of them.&lt;/p&gt;&lt;p dir="ltr"&gt;Maybe I should start a Twitter account for &lt;strong dir="ltr"&gt;pithy&lt;/strong&gt; explanations of shell.
+This wiki page has ideas:&lt;/p&gt;&lt;p dir="ltr"&gt;The following sections &lt;strong dir="ltr"&gt;sketch selected ideas&lt;/strong&gt; I like.&lt;/p&gt;&lt;h3&gt;Slogans&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Shell Is Now a Good Language&lt;/strong&gt;. There are a number of users who avoid Oil
+specifically &lt;em dir="ltr"&gt;because&lt;/em&gt; it's a shell!  This ironic because Oil is supposed to
+fix the things about shell that make you avoid it.  :-)&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Shell Is the Language of Heterogeneity and Diversity&lt;/strong&gt;.  &lt;a href="https://www.oilshell.org/blog/2018/11/30.html" dir="ltr"&gt;Data
+analysis&lt;/a&gt;, &lt;a href="https://www.oilshell.org/blog/2018/01/15.html" dir="ltr"&gt;building Linux
+distros&lt;/a&gt;, and &lt;a href="https://www.oilshell.org/blog/2021/04/build-ci-comments.html" dir="ltr"&gt;distributed
+systems&lt;/a&gt; are inherently
+heterogeneous problems.  This trend will only increase in the future.  We'll
+never be able to express these problems under a single type system.  (Feel free
+to &lt;a href="https://old.reddit.com/r/oilshell/comments/ogfh1a/blog_bankruptcy_part_1_of_2/?" dir="ltr"&gt;argue with me&lt;/a&gt;.)&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Oil Is the Shitty Language Rehabilitation Project&lt;/strong&gt;.  Related: this &lt;a href="https://old.reddit.com/r/ProgrammingLanguages/comments/o0bxzd/cue_is_an_exciting_configuration_language/h1vny6s/" dir="ltr"&gt;comment
+on the YAML
+Problem&lt;/a&gt;.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Old sludge: &lt;a href="https://www.oilshell.org/cross-ref.html?tag=Make#Make" dir="ltr"&gt;Make&lt;/a&gt; embeds shell on every line, &lt;a href="https://www.oilshell.org/cross-ref.html?tag=awk#awk" dir="ltr"&gt;Awk&lt;/a&gt;
+embedded in shell, &lt;a href="https://www.oilshell.org/cross-ref.html?tag=M4#M4" dir="ltr"&gt;M4&lt;/a&gt; generating shell (&lt;a href="https://www.oilshell.org/cross-ref.html?tag=autotools#autotools" dir="ltr"&gt;autotools&lt;/a&gt;), etc.&lt;/LI&gt;&lt;LI&gt;New sludge.  There are actually &lt;strong dir="ltr"&gt;two&lt;/strong&gt; distinct problems with YAML!
+&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Unix Programming Is Like Woodworking&lt;/strong&gt;.  Not everyone will get this &lt;a href="https://lobste.rs/s/vs5nxu/embrace_grind#c_4kfzq5" dir="ltr"&gt;lobste.rs
+comment&lt;/a&gt;, but I think it's
+worthwhile.  Unix programmers and woodworkers &lt;strong dir="ltr"&gt;make their own tools&lt;/strong&gt;.  Tools
+are made of wood; tools are made of text.  You can make bespoke tools in IDEs,
+but in practice individual programmers don't do it.&lt;/p&gt;&lt;h3&gt;Fallacies&lt;/h3&gt;&lt;p dir="ltr"&gt;Sometimes an inverted explanation of a concept is more memorable.   That is,
+&lt;strong dir="ltr"&gt;fallacies&lt;/strong&gt; are a form of "negative knowledge".&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Fallacy: Python Is A Good Shell Replacement&lt;/strong&gt;.  It's not either-or.  I
+&lt;a href="https://www.oilshell.org/blog/2021/06/oil-language.html#more-blog-updates" dir="ltr"&gt;sketched a new answer in a post last
+month&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Fallacy: Unix Processes are Slow&lt;/strong&gt;.  They're often the &lt;em dir="ltr"&gt;only&lt;/em&gt; way to make use
+of your whole machine!  &lt;em dir="ltr"&gt;Process-based concurrency&lt;/em&gt; is underrated.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Fallacy: Programming With Strings Is Slow&lt;/strong&gt;.  It's often much faster.  The
+&lt;strong dir="ltr"&gt;kernel&lt;/strong&gt; natively deals with strings (byte streams), and the kernel is fast.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Pointers are surprisingly &lt;strong dir="ltr"&gt;big&lt;/strong&gt;: I experienced this first hand with
+structured representations of textual source code like the &lt;a href="https://www.oilshell.org/cross-ref.html?tag=LST#LST" dir="ltr"&gt;lossless syntax
+tree&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;Garbage collection is &lt;strong dir="ltr"&gt;expensive&lt;/strong&gt;.  &lt;a href="https://www.oilshell.org/blog/2021/03/release-0.8.8.html#the-garbage-collector-works-on-a-variety-of-examples" dir="ltr"&gt;Implementing a garbage
+collector&lt;/a&gt;
+improved my intuition for this.&lt;/LI&gt;&lt;LI&gt;Textual/serialized representations don't have pointers and don't require
+garbage collection.  You can perform a surprising number of operations
+&lt;strong dir="ltr"&gt;directly&lt;/strong&gt; on them.  Or you can deserialize lazily.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Fallacy: You Can Extend Your Type System Across the Network&lt;/strong&gt;.  Large
+distributed systems can't be &lt;em dir="ltr"&gt;atomically upgraded&lt;/em&gt;.  (Example: the entire
+Internet, although it's also true at much smaller scales.)  This conflicts with
+type safety as a &lt;em dir="ltr"&gt;global property&lt;/em&gt; of a program.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Tomorrow's post will mention this related &lt;a href="https://old.reddit.com/r/ProgrammingLanguages/comments/nqm6rf/on_the_merits_of_low_hanging_fruit/h0cqvuy/" dir="ltr"&gt;comment on REPLs as Debuggers for
+Distributed
+Systems&lt;/a&gt;.
+Distributed systems are &lt;em dir="ltr"&gt;inherently dynamic&lt;/em&gt;.  To see this, think of
+administrators / SREs as people who &lt;strong dir="ltr"&gt;fix the bugs that escaped the type
+system&lt;/strong&gt;.  Their job revolves around a dynamic view of software.&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;Concepts&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;The Perlis-Thompson Principle&lt;/strong&gt;.  I figured out a good way to explain this
+crucial idea in software architecture: by coining a name that refers to &lt;a href="https://en.wikipedia.org/wiki/Alan_Perlis" dir="ltr"&gt;Alan
+Perlis&lt;/a&gt; and &lt;a href="https://en.wikipedia.org/wiki/Ken_Thompson" dir="ltr"&gt;Ken
+Thompson&lt;/a&gt;!  (Incidentally, they're
+both early Turing Award winners.)&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Alan Perlis: &lt;em dir="ltr"&gt;It is better to have 100 functions operate on one data
+structure than 10 functions on 10 data structures.&lt;/em&gt;&lt;/LI&gt;&lt;LI&gt;Ken Thompson: &lt;em dir="ltr"&gt;A program is generally exponentially complicated by the number
+of notions that it invents for itself ... [It] is my belief that you should
+base systems on a single notion.&lt;/em&gt;&lt;/LI&gt;&lt;LI&gt;I claim that these two statements are reaching for the &lt;strong dir="ltr"&gt;same&lt;/strong&gt; fundamental
+truth.  &lt;strong dir="ltr"&gt;&lt;a href="https://old.reddit.com/r/oilshell/comments/ogfh1a/blog_bankruptcy_part_1_of_2/?" dir="ltr"&gt;Let me know&lt;/a&gt;&lt;/strong&gt; if you know of an existing name for
+this principle.&lt;/LI&gt;&lt;LI&gt;It's also related to the idea of &lt;strong dir="ltr"&gt;narrow waist&lt;/strong&gt;.  Here's a &lt;a href="https://lobste.rs/s/vl9o4z/case_against_text_protocols#c_wsdhsm" dir="ltr"&gt;comment about
+text as a narrow
+waist&lt;/a&gt;
+(mentioned at &lt;a href="https://www.oilshell.org/blog/2021/06/hotos-shell-panel.html#conclusion" dir="ltr"&gt;the end of the HotOS
+Notes&lt;/a&gt;).
+The single notion/data structure often &lt;strong dir="ltr"&gt;is&lt;/strong&gt; the narrow waist, although
+there's subtlety I hope to tease out.&lt;/LI&gt;&lt;LI&gt;Unix, Plan 9, and the World Wide Web all benefit from their use of the
+Perlis-Thompson Principle.   Here's a &lt;a href="https://lobste.rs/s/izpz2n/on_missed_opportunities_static_types" dir="ltr"&gt;thread about Go / Plan
+9&lt;/a&gt; and &lt;a href="https://lobste.rs/s/izpz2n/on_missed_opportunities_static_types#c_pbfxpy" dir="ltr"&gt;a
+comment on how &lt;strong dir="ltr"&gt;fewer types&lt;/strong&gt; lead to more
+composition&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;I'll go as far as to say that the degree to which systems adhere to the
+Perlis-Thompson Principle &lt;strong dir="ltr"&gt;biggest force&lt;/strong&gt; in practical software
+architecture.  It determines how far you can scale, and the most scalable
+systems are the most important (Unix and the Web).&lt;/LI&gt;&lt;LI&gt;It also has many practical implications for the Oil project:
+&lt;UL&gt;&lt;LI&gt;With respect to to processes, coprocesses, procs, and functions&lt;/LI&gt;&lt;LI&gt;With respect to byte streams and &lt;a href="https://github.com/oilshell/oil/wiki/Structured-Data-in-Oil" dir="ltr"&gt;the design for structured
+data&lt;/a&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;This post will take awhile to write because I want to give a solid
+definition, and answer expected objections.  It's a &lt;strong dir="ltr"&gt;design principle&lt;/strong&gt;, not
+a hard theory or categorization.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Concept: String Hygiene&lt;/strong&gt; (aka String Safety).&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;You should see Shell injection, SQL injection, and HTML injection (XSS) as
+instances of the &lt;strong dir="ltr"&gt;same&lt;/strong&gt; pattern.&lt;/LI&gt;&lt;LI&gt;The infamous
+&lt;a href="https://en.wikipedia.org/wiki/Shellshock_(software_bug)" dir="ltr"&gt;ShellShock&lt;/a&gt; bash
+security hole of 2014 also relates to string hygiene in the &lt;a href="https://www.oilshell.org/cross-ref.html?tag=bash#bash" dir="ltr"&gt;bash&lt;/a&gt;
+&lt;em dir="ltr"&gt;interpreter itself&lt;/em&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Concept: Process-Based Concurrency&lt;/strong&gt; (e.g. with &lt;code dir="ltr"&gt;fork()&lt;/code&gt;, &lt;code dir="ltr"&gt;exec()&lt;/code&gt;,
+&lt;code dir="ltr"&gt;wait()&lt;/code&gt;).  As mentioned above, it's underrated.  It's also the &lt;strong dir="ltr"&gt;oldest&lt;/strong&gt; form
+of concurrency, and we can contrast it with threads and async.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Concepts: Policy vs. Mechanism; Control Plane vs. Data Plane&lt;/strong&gt;.  Last year, I
+&lt;a href="https://www.oilshell.org/blog/2020/11/metrics.html#appendix-blog-roadmap" dir="ltr"&gt;mentioned
+that&lt;/a&gt;
+&lt;strong dir="ltr"&gt;factoring into processes&lt;/strong&gt; is an underrated design skill.  These related
+ideas may help you determine where draw the line between processes.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Guideline: Python and C programs shouldn't mention any concrete file system
+paths or port numbers.  Such names are &lt;strong dir="ltr"&gt;policy&lt;/strong&gt;, not mechanism. &lt;strong dir="ltr"&gt;Shell
+scripts&lt;/strong&gt; should contain all of that knowledge, which you can also think of
+as &lt;em dir="ltr"&gt;wiring&lt;/em&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Wiki: How to Use Shell&lt;/h2&gt;&lt;p dir="ltr"&gt;Not only do I want to help users &lt;strong dir="ltr"&gt;understand shell&lt;/strong&gt;, I also want to show practical ways to use it.  I started this wiki page:&lt;/p&gt;&lt;p dir="ltr"&gt;As with the &lt;strong dir="ltr"&gt;fallacies&lt;/strong&gt;, the negative knowledge of &lt;strong dir="ltr"&gt;anti-patterns&lt;/strong&gt; is also useful.&lt;/p&gt;&lt;h3&gt;Shell Programming Patterns&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;The &lt;code dir="ltr"&gt;$0&lt;/code&gt; Dispatch Pattern&lt;/strong&gt;.  I sketched this in &lt;a href="https://www.oilshell.org/blog/2020/02/good-parts-sketch.html" dir="ltr"&gt;Four More Posts in "Shell:
+The Good Parts"&lt;/a&gt; (February 2020), but I
+haven't written a post that explains and &lt;strong dir="ltr"&gt;demonstrates&lt;/strong&gt; it.  Nearly all my
+shell scripts are written like this.  Example: the &lt;a href="https://github.com/oilshell/blog-code/tree/master/forth-like/demo.sh" dir="ltr"&gt;sample
+code&lt;/a&gt; in
+&lt;a href="https://www.oilshell.org/blog/2017/01/13.html" dir="ltr"&gt;Shell Has a Forth-Like Quality&lt;/a&gt;.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Brief explanation: Suppose &lt;em dir="ltr"&gt;all&lt;/em&gt; your shell code is in a function (rather
+than at the top level), and the script containing those functions ends with
+&lt;code dir="ltr"&gt;"$@"&lt;/code&gt;.  Then you can invoke functions with &lt;code dir="ltr"&gt;$0 myfunc&lt;/code&gt;.  It's a recursive
+invocation of &lt;code dir="ltr"&gt;$0&lt;/code&gt;, &lt;em dir="ltr"&gt;dispatched&lt;/em&gt; on the function name.&lt;/LI&gt;&lt;LI&gt;It's useful whenever you have an external command that invokes a command
+(somewhat related to #&lt;a href="https://www.oilshell.org/blog/tags.html?tag=bernstein-chaining#bernstein-chaining" dir="ltr"&gt;bernstein-chaining&lt;/a&gt;).  Examples: &lt;code dir="ltr"&gt;sudo&lt;/code&gt;,
+&lt;code dir="ltr"&gt;xargs -P&lt;/code&gt;, &lt;code dir="ltr"&gt;find -exec&lt;/code&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;The PPPT Pattern: Parameterized Parallel Process Table&lt;/strong&gt;.  This pattern helps
+you invoke parallel processes and collect their results.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Another mnemonic for it is &lt;strong dir="ltr"&gt;rows are processes; results are columns&lt;/strong&gt;.
+Each &lt;em dir="ltr"&gt;row&lt;/em&gt; in a table contains the &lt;em dir="ltr"&gt;parameters&lt;/em&gt; for a process.  Running the
+processes gives you new &lt;em dir="ltr"&gt;columns&lt;/em&gt; with &lt;em dir="ltr"&gt;results&lt;/em&gt;.&lt;/LI&gt;&lt;LI&gt;It's frequently combined with the &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;$0&lt;/code&gt; Dispatch Pattern&lt;/strong&gt;, as it's more
+flexible when the processes are shell functions, not external binaries.&lt;/LI&gt;&lt;LI&gt;In 2013, I used this pattern for &lt;strong dir="ltr"&gt;dumb parallelism&lt;/strong&gt; for a cluster
+management task.  Recently, I used &lt;a href="https://www.oilshell.org/cross-ref.html?tag=ninja#ninja" dir="ltr"&gt;Ninja&lt;/a&gt; to specify
+&lt;strong dir="ltr"&gt;dependencies&lt;/strong&gt; for the &lt;a href="https://www.oilshell.org/cross-ref.html?tag=mycpp#mycpp" dir="ltr"&gt;mycpp&lt;/a&gt; benchmarks and test cases, which
+makes it even more powerful.&lt;/LI&gt;&lt;LI&gt;More examples: the "wild tests" that &lt;a href="https://www.oilshell.org/blog/2017/11/10.html" dir="ltr"&gt;parse one million lines of
+shell&lt;/a&gt; on every release, as well as
+several other tests and benchmarks of shell and Oil.&lt;/LI&gt;&lt;LI&gt;Oil will embrace this pattern with &lt;a href="https://www.oilshell.org/cross-ref.html?tag=QTT#QTT" dir="ltr"&gt;QTT: Quoted, Typed Tables&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;Trivial detail: The table is technically an (unordered) &lt;strong dir="ltr"&gt;relation&lt;/strong&gt;, because
+the processes complete asynchronously.&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;Anti-Patterns&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Generating Code with Raw String Concatenation&lt;/strong&gt;: Again, &lt;a href="https://www.oilshell.org/blog/2021/06/oil-language.html#the-yaml-problem" dir="ltr"&gt;the
+Shell-in-{YAML,Docker,systemd,Chef,Vagrant,Python} Anti-Pattern&lt;/a&gt;
+is a primary example of this.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;The Whitespace Joining Anti-Pattern&lt;/strong&gt;.  This came up recently in &lt;a href="https://www.chiark.greenend.org.uk/~cjwatson/blog/ssh-quoting.html" dir="ltr"&gt;SSH
+quoting&lt;/a&gt;.
+Oil solves the analogous issue with &lt;code dir="ltr"&gt;echo&lt;/code&gt; and &lt;code dir="ltr"&gt;eval&lt;/code&gt; with &lt;code dir="ltr"&gt;shopt --set simple_echo simple_eval_builtin&lt;/code&gt;, which are on in option group &lt;code dir="ltr"&gt;oil:all&lt;/code&gt;.&lt;/p&gt;&lt;h2&gt;Continued Tomorrow&lt;/h2&gt;&lt;p dir="ltr"&gt;This post got too big!  There are still more #&lt;a href="https://www.oilshell.org/cross-ref.html?tag=blog-topics#blog-topics" dir="ltr"&gt;blog-topics&lt;/a&gt; to
+enumerate:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;More observations on &lt;strong dir="ltr"&gt;distributed systems&lt;/strong&gt; and the &lt;em dir="ltr"&gt;Perlis-Thompson
+Principle&lt;/em&gt;.  I have problems with the state of the art in "the cloud".
+(Unfortunately, testing these theories with Oil is far in the future).&lt;/LI&gt;&lt;LI&gt;Posts about the design of the &lt;a href="https://www.oilshell.org/cross-ref.html?tag=oil-language#oil-language" dir="ltr"&gt;Oil language&lt;/a&gt;.  I've been
+saving comments related to Oil's design on the &lt;a href="https://www.oilshell.org/cross-ref.html?tag=Zulip#Zulip" dir="ltr"&gt;Zulip&lt;/a&gt; stream
+&lt;code dir="ltr"&gt;#blog-ideas&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;Odds and Ends.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;In the meantime, &lt;a href="https://old.reddit.com/r/oilshell/comments/ogfh1a/blog_bankruptcy_part_1_of_2/?" dir="ltr"&gt;let me know&lt;/a&gt; if there are particular posts that
+caught your interest.  Or let me know if none of this made sense!&lt;/p&gt;&lt;p dir="ltr"&gt;The wiki pages &lt;a href="https://github.com/oilshell/oil/wiki/Slogans,-Fallacies,-and-Concepts" dir="ltr"&gt;Slogans, Fallacies, and Concepts&lt;/a&gt; and &lt;a href="https://github.com/oilshell/oil/wiki/Patterns-andAnti-Patterns" dir="ltr"&gt;Patterns and
+Anti-Patterns&lt;/a&gt; are rough, but I expect that they'll grow into a central
+part of the project in the future.  It's hard to explain &lt;strong dir="ltr"&gt;why and how&lt;/strong&gt; to use
+shell!&lt;/p&gt;</description><pubDate>Fri, 09 Jul 2021 22:30:53 -0500</pubDate></item><item><title>No more DSLs: Implement and deploy a distributed system with a single program</title><link>https://lobste.rs/s/yf2k8f</link><description>&lt;h2 dir="ltr"&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt; Introduction&lt;/h2&gt;&lt;p dir="ltr"&gt;
 Given a collection of component libraries,
 one can write a distributed system as a single conventional program in a general-purpose language,
 and run that program to directly &lt;a href="http://catern.com/run.html" dir="ltr"&gt;run the full system&lt;/a&gt;
@@ -2018,154 +2165,7 @@ With those techniques,
 and with the open source libraries &lt;a href="https://github.com/catern/rsyscall" dir="ltr"&gt;rsyscall&lt;/a&gt; and &lt;a href="https://trio.readthedocs.io/" dir="ltr"&gt;trio&lt;/a&gt;,
 anyone can write their own component libraries,
 and combine them with other libraries to write a distributed system in one program.
-&lt;/p&gt;&lt;p&gt;Created: 2021-07-07 Wed 09:59&lt;/p&gt;</description><pubDate>Fri, 09 Jul 2021 08:16:18 -0500</pubDate></item><item><title>Oil Summer Blog Backlog: Understanding and Using Shell</title><link>https://lobste.rs/s/rc2mn8</link><description>&lt;div&gt;
-  2021-07-08
-&lt;/div&gt;&lt;p dir="ltr"&gt;Last month, I published &lt;a href="https://www.oilshell.org/blog/2021/06/oil-language.html" dir="ltr"&gt;Recent Progress on the Oil
-Language&lt;/a&gt;, which enumerated #&lt;a href="https://www.oilshell.org/blog/tags.html?tag=blog-topics#blog-topics" dir="ltr"&gt;blog-topics&lt;/a&gt;
-on the &lt;a href="https://www.oilshell.org/cross-ref.html?tag=oil-language#oil-language" dir="ltr"&gt;Oil language&lt;/a&gt;.  It outlined posts on Oil's
-improvements over shell, as well as educational posts on concepts like &lt;em dir="ltr"&gt;string
-safety&lt;/em&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;I started this post with remaining topics that aren't about the Oil language,
-and it ended with a focus on &lt;strong dir="ltr"&gt;understanding and using shell&lt;/strong&gt; in general.  I
-list drafts and other topics as well.&lt;/p&gt;&lt;p dir="ltr"&gt;As you can see, the blog is backlogged by 10 to 20 posts.  This has
-&lt;a href="https://www.oilshell.org/blog/2020/02/recap.html" dir="ltr"&gt;happened&lt;/a&gt;
-&lt;a href="https://www.oilshell.org/blog/2020/03/recap.html" dir="ltr"&gt;before&lt;/a&gt;, so I think it makes sense
-to "declare bankruptcy" every year :-)&lt;/p&gt;&lt;p dir="ltr"&gt;Let's go through the topics, and then I'll figure out what I can realistically
-write.  If I have time in the future, I can return to some of them .  In the
-meantime, I can &lt;strong dir="ltr"&gt;refer&lt;/strong&gt; to this post in the future, so the blog remains
-coherently &lt;strong dir="ltr"&gt;connected&lt;/strong&gt;.&lt;/p&gt;&lt;div&gt;Table of Contents&lt;/div&gt;&lt;h2&gt;Spoiler&lt;/h2&gt;&lt;p&gt;This post will meander through many ideas, so I'll state the conclusion up
-front.  These are the two most important posts to write:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Five Years of Oil Milestones (And Some Wrong Turns)&lt;/strong&gt;.  It's past time to
-take stock of the project!  How did we get here, and what did we learn?&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;The Perlis-Thompson Principle&lt;/strong&gt;.  A #&lt;a href="https://www.oilshell.org/blog/tags.html?tag=software-architecture#software-architecture" dir="ltr"&gt;software-architecture&lt;/a&gt;
-principle that I've been hinting at in #&lt;a href="https://www.oilshell.org/blog/tags.html?tag=comments#comments" dir="ltr"&gt;comments&lt;/a&gt;.  I've come up
-with a &lt;strong dir="ltr"&gt;name&lt;/strong&gt;, but not yet explained it.  It has &lt;strong dir="ltr"&gt;practical
-consequences&lt;/strong&gt;: not just for Oil's design, but also for the design of
-languages, OSes, and distributed systems.
-&lt;UL&gt;&lt;LI&gt;I elaborate on this post below, as it relates to many future posts.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;Now let's see what else belongs on the Oil blog.&lt;/p&gt;&lt;h2&gt;Drafts Written&lt;/h2&gt;&lt;p&gt;These two posts are fairly close to done:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Oil Starts Fewer Processes than Other Shells&lt;/strong&gt;.  A worthwhile
-demonstration of how the #&lt;a href="https://www.oilshell.org/blog/tags.html?tag=shell-runtime#shell-runtime" dir="ltr"&gt;shell-runtime&lt;/a&gt; does basic
-optimizations.  Surprisingly, all Bourne shells I tested do them!  This
-draft is over a year old now, and I've already mentioned it in
-#&lt;a href="https://www.oilshell.org/blog/tags.html?tag=blog-topics#blog-topics" dir="ltr"&gt;blog-topics&lt;/a&gt; :-(&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Shell History and Trivia&lt;/strong&gt;.  This post links to #&lt;a href="https://www.oilshell.org/blog/tags.html?tag=comments#comments" dir="ltr"&gt;comments&lt;/a&gt;,
-including ones on  Ken Thompson's original paper on Unix shell.  &lt;a href="https://github.com/susam/tucl" dir="ltr"&gt;The paper
-popped up&lt;/a&gt; in a few places recently, which is
-great, because it will form part of the explanation for the &lt;em dir="ltr"&gt;Perlis-Thompson
-Principle&lt;/em&gt;.&lt;/LI&gt;&lt;/OL&gt;&lt;h2&gt;Wiki: How to Understand Shell&lt;/h2&gt;&lt;p dir="ltr"&gt;Readers have praised this blog over the years, but there's still a big
-&lt;strong dir="ltr"&gt;explanatory gap&lt;/strong&gt; regarding Unix shell.  I say this because I see repetitive
-arguments for and against shell erupt on many discussion threads, like
-announcements for Oil and other &lt;a href="https://github.com/oilshell/oil/wiki/Alternative-Shells" dir="ltr"&gt;alternative
-shells&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;As another anecdote, this &lt;a href="https://www.oilshell.org/blog/2021/06/oil-language.html#real-problems-from-chris-siebenmann" dir="ltr"&gt;post from last
-month&lt;/a&gt;
-links to &lt;a href="https://utcc.utoronto.ca/~cks/space/blog/programming/BourneShellLimitation" dir="ltr"&gt;The Bourne Shell Is Not a Programming
-Language&lt;/a&gt;.
-It sounds like it could have been written today, but it's from 2008.&lt;/p&gt;&lt;p dir="ltr"&gt;So I've been thinking of ways to &lt;strong dir="ltr"&gt;advocate shell&lt;/strong&gt;.  I want users to enjoy it.
-I've tried to do that with #&lt;a href="https://www.oilshell.org/blog/tags.html?tag=shell-the-good-parts#shell-the-good-parts" dir="ltr"&gt;shell-the-good-parts&lt;/a&gt; posts, but I
-haven't published enough of them.&lt;/p&gt;&lt;p dir="ltr"&gt;Maybe I should start a Twitter account for &lt;strong dir="ltr"&gt;pithy&lt;/strong&gt; explanations of shell.
-This wiki page has ideas:&lt;/p&gt;&lt;p dir="ltr"&gt;The following sections &lt;strong dir="ltr"&gt;sketch selected ideas&lt;/strong&gt; I like.&lt;/p&gt;&lt;h3&gt;Slogans&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Shell Is Now a Good Language&lt;/strong&gt;. There are a number of users who avoid Oil
-specifically &lt;em dir="ltr"&gt;because&lt;/em&gt; it's a shell!  This ironic because Oil is supposed to
-fix the things about shell that make you avoid it.  :-)&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Shell Is the Language of Heterogeneity and Diversity&lt;/strong&gt;.  &lt;a href="https://www.oilshell.org/blog/2018/11/30.html" dir="ltr"&gt;Data
-analysis&lt;/a&gt;, &lt;a href="https://www.oilshell.org/blog/2018/01/15.html" dir="ltr"&gt;building Linux
-distros&lt;/a&gt;, and &lt;a href="https://www.oilshell.org/blog/2021/04/build-ci-comments.html" dir="ltr"&gt;distributed
-systems&lt;/a&gt; are inherently
-heterogeneous problems.  This trend will only increase in the future.  We'll
-never be able to express these problems under a single type system.  (Feel free
-to &lt;a href="https://old.reddit.com/r/oilshell/comments/ogfh1a/blog_bankruptcy_part_1_of_2/?" dir="ltr"&gt;argue with me&lt;/a&gt;.)&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Oil Is the Shitty Language Rehabilitation Project&lt;/strong&gt;.  Related: this &lt;a href="https://old.reddit.com/r/ProgrammingLanguages/comments/o0bxzd/cue_is_an_exciting_configuration_language/h1vny6s/" dir="ltr"&gt;comment
-on the YAML
-Problem&lt;/a&gt;.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Old sludge: &lt;a href="https://www.oilshell.org/cross-ref.html?tag=Make#Make" dir="ltr"&gt;Make&lt;/a&gt; embeds shell on every line, &lt;a href="https://www.oilshell.org/cross-ref.html?tag=awk#awk" dir="ltr"&gt;Awk&lt;/a&gt;
-embedded in shell, &lt;a href="https://www.oilshell.org/cross-ref.html?tag=M4#M4" dir="ltr"&gt;M4&lt;/a&gt; generating shell (&lt;a href="https://www.oilshell.org/cross-ref.html?tag=autotools#autotools" dir="ltr"&gt;autotools&lt;/a&gt;), etc.&lt;/LI&gt;&lt;LI&gt;New sludge.  There are actually &lt;strong dir="ltr"&gt;two&lt;/strong&gt; distinct problems with YAML!
-&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Unix Programming Is Like Woodworking&lt;/strong&gt;.  Not everyone will get this &lt;a href="https://lobste.rs/s/vs5nxu/embrace_grind#c_4kfzq5" dir="ltr"&gt;lobste.rs
-comment&lt;/a&gt;, but I think it's
-worthwhile.  Unix programmers and woodworkers &lt;strong dir="ltr"&gt;make their own tools&lt;/strong&gt;.  Tools
-are made of wood; tools are made of text.  You can make bespoke tools in IDEs,
-but in practice individual programmers don't do it.&lt;/p&gt;&lt;h3&gt;Fallacies&lt;/h3&gt;&lt;p dir="ltr"&gt;Sometimes an inverted explanation of a concept is more memorable.   That is,
-&lt;strong dir="ltr"&gt;fallacies&lt;/strong&gt; are a form of "negative knowledge".&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Fallacy: Python Is A Good Shell Replacement&lt;/strong&gt;.  It's not either-or.  I
-&lt;a href="https://www.oilshell.org/blog/2021/06/oil-language.html#more-blog-updates" dir="ltr"&gt;sketched a new answer in a post last
-month&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Fallacy: Unix Processes are Slow&lt;/strong&gt;.  They're often the &lt;em dir="ltr"&gt;only&lt;/em&gt; way to make use
-of your whole machine!  &lt;em dir="ltr"&gt;Process-based concurrency&lt;/em&gt; is underrated.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Fallacy: Programming With Strings Is Slow&lt;/strong&gt;.  It's often much faster.  The
-&lt;strong dir="ltr"&gt;kernel&lt;/strong&gt; natively deals with strings (byte streams), and the kernel is fast.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Pointers are surprisingly &lt;strong dir="ltr"&gt;big&lt;/strong&gt;: I experienced this first hand with
-structured representations of textual source code like the &lt;a href="https://www.oilshell.org/cross-ref.html?tag=LST#LST" dir="ltr"&gt;lossless syntax
-tree&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;Garbage collection is &lt;strong dir="ltr"&gt;expensive&lt;/strong&gt;.  &lt;a href="https://www.oilshell.org/blog/2021/03/release-0.8.8.html#the-garbage-collector-works-on-a-variety-of-examples" dir="ltr"&gt;Implementing a garbage
-collector&lt;/a&gt;
-improved my intuition for this.&lt;/LI&gt;&lt;LI&gt;Textual/serialized representations don't have pointers and don't require
-garbage collection.  You can perform a surprising number of operations
-&lt;strong dir="ltr"&gt;directly&lt;/strong&gt; on them.  Or you can deserialize lazily.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Fallacy: You Can Extend Your Type System Across the Network&lt;/strong&gt;.  Large
-distributed systems can't be &lt;em dir="ltr"&gt;atomically upgraded&lt;/em&gt;.  (Example: the entire
-Internet, although it's also true at much smaller scales.)  This conflicts with
-type safety as a &lt;em dir="ltr"&gt;global property&lt;/em&gt; of a program.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Tomorrow's post will mention this related &lt;a href="https://old.reddit.com/r/ProgrammingLanguages/comments/nqm6rf/on_the_merits_of_low_hanging_fruit/h0cqvuy/" dir="ltr"&gt;comment on REPLs as Debuggers for
-Distributed
-Systems&lt;/a&gt;.
-Distributed systems are &lt;em dir="ltr"&gt;inherently dynamic&lt;/em&gt;.  To see this, think of
-administrators / SREs as people who &lt;strong dir="ltr"&gt;fix the bugs that escaped the type
-system&lt;/strong&gt;.  Their job revolves around a dynamic view of software.&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;Concepts&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;The Perlis-Thompson Principle&lt;/strong&gt;.  I figured out a good way to explain this
-crucial idea in software architecture: by coining a name that refers to &lt;a href="https://en.wikipedia.org/wiki/Alan_Perlis" dir="ltr"&gt;Alan
-Perlis&lt;/a&gt; and &lt;a href="https://en.wikipedia.org/wiki/Ken_Thompson" dir="ltr"&gt;Ken
-Thompson&lt;/a&gt;!  (Incidentally, they're
-both early Turing Award winners.)&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Alan Perlis: &lt;em dir="ltr"&gt;It is better to have 100 functions operate on one data
-structure than 10 functions on 10 data structures.&lt;/em&gt;&lt;/LI&gt;&lt;LI&gt;Ken Thompson: &lt;em dir="ltr"&gt;A program is generally exponentially complicated by the number
-of notions that it invents for itself ... [It] is my belief that you should
-base systems on a single notion.&lt;/em&gt;&lt;/LI&gt;&lt;LI&gt;I claim that these two statements are reaching for the &lt;strong dir="ltr"&gt;same&lt;/strong&gt; fundamental
-truth.  &lt;strong dir="ltr"&gt;&lt;a href="https://old.reddit.com/r/oilshell/comments/ogfh1a/blog_bankruptcy_part_1_of_2/?" dir="ltr"&gt;Let me know&lt;/a&gt;&lt;/strong&gt; if you know of an existing name for
-this principle.&lt;/LI&gt;&lt;LI&gt;It's also related to the idea of &lt;strong dir="ltr"&gt;narrow waist&lt;/strong&gt;.  Here's a &lt;a href="https://lobste.rs/s/vl9o4z/case_against_text_protocols#c_wsdhsm" dir="ltr"&gt;comment about
-text as a narrow
-waist&lt;/a&gt;
-(mentioned at &lt;a href="https://www.oilshell.org/blog/2021/06/hotos-shell-panel.html#conclusion" dir="ltr"&gt;the end of the HotOS
-Notes&lt;/a&gt;).
-The single notion/data structure often &lt;strong dir="ltr"&gt;is&lt;/strong&gt; the narrow waist, although
-there's subtlety I hope to tease out.&lt;/LI&gt;&lt;LI&gt;Unix, Plan 9, and the World Wide Web all benefit from their use of the
-Perlis-Thompson Principle.   Here's a &lt;a href="https://lobste.rs/s/izpz2n/on_missed_opportunities_static_types" dir="ltr"&gt;thread about Go / Plan
-9&lt;/a&gt; and &lt;a href="https://lobste.rs/s/izpz2n/on_missed_opportunities_static_types#c_pbfxpy" dir="ltr"&gt;a
-comment on how &lt;strong dir="ltr"&gt;fewer types&lt;/strong&gt; lead to more
-composition&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;I'll go as far as to say that the degree to which systems adhere to the
-Perlis-Thompson Principle &lt;strong dir="ltr"&gt;biggest force&lt;/strong&gt; in practical software
-architecture.  It determines how far you can scale, and the most scalable
-systems are the most important (Unix and the Web).&lt;/LI&gt;&lt;LI&gt;It also has many practical implications for the Oil project:
-&lt;UL&gt;&lt;LI&gt;With respect to to processes, coprocesses, procs, and functions&lt;/LI&gt;&lt;LI&gt;With respect to byte streams and &lt;a href="https://github.com/oilshell/oil/wiki/Structured-Data-in-Oil" dir="ltr"&gt;the design for structured
-data&lt;/a&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;LI&gt;This post will take awhile to write because I want to give a solid
-definition, and answer expected objections.  It's a &lt;strong dir="ltr"&gt;design principle&lt;/strong&gt;, not
-a hard theory or categorization.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Concept: String Hygiene&lt;/strong&gt; (aka String Safety).&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;You should see Shell injection, SQL injection, and HTML injection (XSS) as
-instances of the &lt;strong dir="ltr"&gt;same&lt;/strong&gt; pattern.&lt;/LI&gt;&lt;LI&gt;The infamous
-&lt;a href="https://en.wikipedia.org/wiki/Shellshock_(software_bug)" dir="ltr"&gt;ShellShock&lt;/a&gt; bash
-security hole of 2014 also relates to string hygiene in the &lt;a href="https://www.oilshell.org/cross-ref.html?tag=bash#bash" dir="ltr"&gt;bash&lt;/a&gt;
-&lt;em dir="ltr"&gt;interpreter itself&lt;/em&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Concept: Process-Based Concurrency&lt;/strong&gt; (e.g. with &lt;code dir="ltr"&gt;fork()&lt;/code&gt;, &lt;code dir="ltr"&gt;exec()&lt;/code&gt;,
-&lt;code dir="ltr"&gt;wait()&lt;/code&gt;).  As mentioned above, it's underrated.  It's also the &lt;strong dir="ltr"&gt;oldest&lt;/strong&gt; form
-of concurrency, and we can contrast it with threads and async.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Concepts: Policy vs. Mechanism; Control Plane vs. Data Plane&lt;/strong&gt;.  Last year, I
-&lt;a href="https://www.oilshell.org/blog/2020/11/metrics.html#appendix-blog-roadmap" dir="ltr"&gt;mentioned
-that&lt;/a&gt;
-&lt;strong dir="ltr"&gt;factoring into processes&lt;/strong&gt; is an underrated design skill.  These related
-ideas may help you determine where draw the line between processes.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Guideline: Python and C programs shouldn't mention any concrete file system
-paths or port numbers.  Such names are &lt;strong dir="ltr"&gt;policy&lt;/strong&gt;, not mechanism. &lt;strong dir="ltr"&gt;Shell
-scripts&lt;/strong&gt; should contain all of that knowledge, which you can also think of
-as &lt;em dir="ltr"&gt;wiring&lt;/em&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;Wiki: How to Use Shell&lt;/h2&gt;&lt;p dir="ltr"&gt;Not only do I want to help users &lt;strong dir="ltr"&gt;understand shell&lt;/strong&gt;, I also want to show practical ways to use it.  I started this wiki page:&lt;/p&gt;&lt;p dir="ltr"&gt;As with the &lt;strong dir="ltr"&gt;fallacies&lt;/strong&gt;, the negative knowledge of &lt;strong dir="ltr"&gt;anti-patterns&lt;/strong&gt; is also useful.&lt;/p&gt;&lt;h3&gt;Shell Programming Patterns&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;The &lt;code dir="ltr"&gt;$0&lt;/code&gt; Dispatch Pattern&lt;/strong&gt;.  I sketched this in &lt;a href="https://www.oilshell.org/blog/2020/02/good-parts-sketch.html" dir="ltr"&gt;Four More Posts in "Shell:
-The Good Parts"&lt;/a&gt; (February 2020), but I
-haven't written a post that explains and &lt;strong dir="ltr"&gt;demonstrates&lt;/strong&gt; it.  Nearly all my
-shell scripts are written like this.  Example: the &lt;a href="https://github.com/oilshell/blog-code/tree/master/forth-like/demo.sh" dir="ltr"&gt;sample
-code&lt;/a&gt; in
-&lt;a href="https://www.oilshell.org/blog/2017/01/13.html" dir="ltr"&gt;Shell Has a Forth-Like Quality&lt;/a&gt;.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Brief explanation: Suppose &lt;em dir="ltr"&gt;all&lt;/em&gt; your shell code is in a function (rather
-than at the top level), and the script containing those functions ends with
-&lt;code dir="ltr"&gt;"$@"&lt;/code&gt;.  Then you can invoke functions with &lt;code dir="ltr"&gt;$0 myfunc&lt;/code&gt;.  It's a recursive
-invocation of &lt;code dir="ltr"&gt;$0&lt;/code&gt;, &lt;em dir="ltr"&gt;dispatched&lt;/em&gt; on the function name.&lt;/LI&gt;&lt;LI&gt;It's useful whenever you have an external command that invokes a command
-(somewhat related to #&lt;a href="https://www.oilshell.org/blog/tags.html?tag=bernstein-chaining#bernstein-chaining" dir="ltr"&gt;bernstein-chaining&lt;/a&gt;).  Examples: &lt;code dir="ltr"&gt;sudo&lt;/code&gt;,
-&lt;code dir="ltr"&gt;xargs -P&lt;/code&gt;, &lt;code dir="ltr"&gt;find -exec&lt;/code&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;The PPPT Pattern: Parameterized Parallel Process Table&lt;/strong&gt;.  This pattern helps
-you invoke parallel processes and collect their results.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Another mnemonic for it is &lt;strong dir="ltr"&gt;rows are processes; results are columns&lt;/strong&gt;.
-Each &lt;em dir="ltr"&gt;row&lt;/em&gt; in a table contains the &lt;em dir="ltr"&gt;parameters&lt;/em&gt; for a process.  Running the
-processes gives you new &lt;em dir="ltr"&gt;columns&lt;/em&gt; with &lt;em dir="ltr"&gt;results&lt;/em&gt;.&lt;/LI&gt;&lt;LI&gt;It's frequently combined with the &lt;strong dir="ltr"&gt;&lt;code dir="ltr"&gt;$0&lt;/code&gt; Dispatch Pattern&lt;/strong&gt;, as it's more
-flexible when the processes are shell functions, not external binaries.&lt;/LI&gt;&lt;LI&gt;In 2013, I used this pattern for &lt;strong dir="ltr"&gt;dumb parallelism&lt;/strong&gt; for a cluster
-management task.  Recently, I used &lt;a href="https://www.oilshell.org/cross-ref.html?tag=ninja#ninja" dir="ltr"&gt;Ninja&lt;/a&gt; to specify
-&lt;strong dir="ltr"&gt;dependencies&lt;/strong&gt; for the &lt;a href="https://www.oilshell.org/cross-ref.html?tag=mycpp#mycpp" dir="ltr"&gt;mycpp&lt;/a&gt; benchmarks and test cases, which
-makes it even more powerful.&lt;/LI&gt;&lt;LI&gt;More examples: the "wild tests" that &lt;a href="https://www.oilshell.org/blog/2017/11/10.html" dir="ltr"&gt;parse one million lines of
-shell&lt;/a&gt; on every release, as well as
-several other tests and benchmarks of shell and Oil.&lt;/LI&gt;&lt;LI&gt;Oil will embrace this pattern with &lt;a href="https://www.oilshell.org/cross-ref.html?tag=QTT#QTT" dir="ltr"&gt;QTT: Quoted, Typed Tables&lt;/a&gt;.&lt;/LI&gt;&lt;LI&gt;Trivial detail: The table is technically an (unordered) &lt;strong dir="ltr"&gt;relation&lt;/strong&gt;, because
-the processes complete asynchronously.&lt;/LI&gt;&lt;/UL&gt;&lt;h3&gt;Anti-Patterns&lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Generating Code with Raw String Concatenation&lt;/strong&gt;: Again, &lt;a href="https://www.oilshell.org/blog/2021/06/oil-language.html#the-yaml-problem" dir="ltr"&gt;the
-Shell-in-{YAML,Docker,systemd,Chef,Vagrant,Python} Anti-Pattern&lt;/a&gt;
-is a primary example of this.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;The Whitespace Joining Anti-Pattern&lt;/strong&gt;.  This came up recently in &lt;a href="https://www.chiark.greenend.org.uk/~cjwatson/blog/ssh-quoting.html" dir="ltr"&gt;SSH
-quoting&lt;/a&gt;.
-Oil solves the analogous issue with &lt;code dir="ltr"&gt;echo&lt;/code&gt; and &lt;code dir="ltr"&gt;eval&lt;/code&gt; with &lt;code dir="ltr"&gt;shopt --set simple_echo simple_eval_builtin&lt;/code&gt;, which are on in option group &lt;code dir="ltr"&gt;oil:all&lt;/code&gt;.&lt;/p&gt;&lt;h2&gt;Continued Tomorrow&lt;/h2&gt;&lt;p dir="ltr"&gt;This post got too big!  There are still more #&lt;a href="https://www.oilshell.org/cross-ref.html?tag=blog-topics#blog-topics" dir="ltr"&gt;blog-topics&lt;/a&gt; to
-enumerate:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;More observations on &lt;strong dir="ltr"&gt;distributed systems&lt;/strong&gt; and the &lt;em dir="ltr"&gt;Perlis-Thompson
-Principle&lt;/em&gt;.  I have problems with the state of the art in "the cloud".
-(Unfortunately, testing these theories with Oil is far in the future).&lt;/LI&gt;&lt;LI&gt;Posts about the design of the &lt;a href="https://www.oilshell.org/cross-ref.html?tag=oil-language#oil-language" dir="ltr"&gt;Oil language&lt;/a&gt;.  I've been
-saving comments related to Oil's design on the &lt;a href="https://www.oilshell.org/cross-ref.html?tag=Zulip#Zulip" dir="ltr"&gt;Zulip&lt;/a&gt; stream
-&lt;code dir="ltr"&gt;#blog-ideas&lt;/code&gt;.&lt;/LI&gt;&lt;LI&gt;Odds and Ends.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;In the meantime, &lt;a href="https://old.reddit.com/r/oilshell/comments/ogfh1a/blog_bankruptcy_part_1_of_2/?" dir="ltr"&gt;let me know&lt;/a&gt; if there are particular posts that
-caught your interest.  Or let me know if none of this made sense!&lt;/p&gt;&lt;p dir="ltr"&gt;The wiki pages &lt;a href="https://github.com/oilshell/oil/wiki/Slogans,-Fallacies,-and-Concepts" dir="ltr"&gt;Slogans, Fallacies, and Concepts&lt;/a&gt; and &lt;a href="https://github.com/oilshell/oil/wiki/Patterns-andAnti-Patterns" dir="ltr"&gt;Patterns and
-Anti-Patterns&lt;/a&gt; are rough, but I expect that they'll grow into a central
-part of the project in the future.  It's hard to explain &lt;strong dir="ltr"&gt;why and how&lt;/strong&gt; to use
-shell!&lt;/p&gt;</description><pubDate>Fri, 09 Jul 2021 22:30:53 -0500</pubDate></item><item><title>ICFP Programming Contest 2021 is running this weekend</title><link>https://lobste.rs/s/s8d2ke</link><description>&lt;p dir="ltr"&gt;
+&lt;/p&gt;&lt;p&gt;Created: 2021-07-07 Wed 09:59&lt;/p&gt;</description><pubDate>Fri, 09 Jul 2021 08:16:18 -0500</pubDate></item><item><title>ICFP Programming Contest 2021 is running this weekend</title><link>https://lobste.rs/s/s8d2ke</link><description>&lt;p dir="ltr"&gt;
   ICFP Contest 2021 will take place&lt;br dir="ltr"&gt;
   12:00 PM (noon) Friday 9 July - 12:00 PM (noon) Monday 12 July UTC.
 &lt;/p&gt;&lt;img alt="ICFP Contest 2021" src="https://icfpcontest2021.github.io/logo.svg" width="200" height="200"&gt;&lt;h2&gt;ICFPC2021 has started&lt;/h2&gt;&lt;section dir="ltr"&gt;
