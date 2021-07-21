@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0"><channel><title>lobstre.rs rss with inlined content</title><link>http://n-gate.com</link><description>webshit condom</description><lastBuildDate>Wed, 21 Jul 2021 17:11:18 -0500</lastBuildDate><item><title>No Cost Data Scraping With GitHub Actions And Neo4j Aura</title><link>https://lobste.rs/s/jvxel0</link><description>&lt;img src="https://lyonwj.com/static/images/will.jpeg" alt="William Lyon" width="24" height="24"&gt;&lt;p dir="ltr"&gt;William Lyon / July 20, 2021&lt;/p&gt;&lt;p dir="ltr"&gt;11 min read • &lt;/p&gt;&lt;p dir="ltr"&gt;When working with data a common task is fetching data from some external source on a recurring basis and importing into a database for further analysis or as part of our application. Setting up servers to handle this can be time consuming and error prone. I recently came across a workflow using &lt;a rel="noopener noreferrer" href="https://github.com/features/actions" dir="ltr"&gt;GitHub Actions&lt;/a&gt; and &lt;a rel="noopener noreferrer" href="https://dev.neo4j.com/neo4j-aura" dir="ltr"&gt;Neo4j Aura&lt;/a&gt; that makes this a breeze and with the free tiers of both GitHub Actions and Neo4j Aura is free to set up and run forever - great for side projects!&lt;/p&gt;&lt;p dir="ltr"&gt;In this post we'll take a look at setting up this workflow to scrape data from the &lt;a rel="noopener noreferrer" href="https://lobste.rs/" dir="ltr"&gt;Lobsters&lt;/a&gt; news aggregator and import into a &lt;a rel="noopener noreferrer" href="https://dev.neo4j.com/aura-landing" dir="ltr"&gt;Neo4j Aura Free&lt;/a&gt; instance using GitHub Actions. We built this on the &lt;a rel="noopener noreferrer" href="https://twitch.tv/neo4j" dir="ltr"&gt;Neo4j livestream&lt;/a&gt; so check out the recording if you prefer video:&lt;/p&gt;&lt;div&gt;A Look At The Data - Lobsters&lt;/div&gt;&lt;p dir="ltr"&gt;&lt;a rel="noopener noreferrer" href="https://lobste.rs/" dir="ltr"&gt;Lobsters&lt;/a&gt; is a social news aggregator. Users post links to articles and the community votes and comments on them in a discussion thread. An algorithm determines the ranking of the submissions, with the most recent and noteworthy articles floating to the front page. To be able to submit and comment users must be invited by an existing user and this user-invite graph is publicly available, helping to keep discussions civil and avoid fraudulent upvoting to game submission rankings.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;1902&amp;quot; height=&amp;quot;1904&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="421"&gt;&lt;p dir="ltr"&gt;I've been thinking about social networks recently and want to build an application to help explore relevant news articles using graph visualization so building something using data from Lobsters seems like a great fit. We want to import data about users and article submissions into Neo4j as the basis of our application, but how to get started? Fortunately, Lobsters makes two JSON endpoints available to fetch data about the &lt;a rel="noopener noreferrer" href="https://lobste.rs/newest.json" dir="ltr"&gt;newest&lt;/a&gt; and the &lt;a rel="noopener noreferrer" href="https://lobste.rs/hottest.json" dir="ltr"&gt;"hottest"&lt;/a&gt; submissions. Each has a similar format and looks like this.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;1628&amp;quot; height=&amp;quot;1782&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="461"&gt;&lt;p&gt;Now that we know what our JSON data looks like we can think about how to start importing this data into Neo4j Aura as a graph.&lt;/p&gt;&lt;div&gt;Neo4j Aura&lt;/div&gt;&lt;p dir="ltr"&gt;&lt;a rel="noopener noreferrer" href="https://dev.neo4j.com/neo4j-aura" dir="ltr"&gt;Neo4j Aura&lt;/a&gt; is a managed cloud service from Neo4j allowing us to run Neo4j clusters in the cloud with a few clicks and handles things like backups, upgrades, and administration so we don't have to worry about it. Best of all for our purposes, Neo4j Aura has a free tier that will allow us to build this project without even putting in a credit card.&lt;/p&gt;&lt;p dir="ltr"&gt;Let's &lt;a rel="noopener noreferrer" href="https://dev.neo4j.com/aura" dir="ltr"&gt;sign-in to Neo4j Aura&lt;/a&gt; and create an Aura Free instance:&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;2282&amp;quot; height=&amp;quot;1924&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="355"&gt;&lt;p&gt;We'll immediately be given a generated password that we'll need to save to access our Neo4j Aura instance. We can change this later.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;1332&amp;quot; height=&amp;quot;1114&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="352"&gt;&lt;p&gt;Next, our Aura instance will take a few moments to be provisioned.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;2318&amp;quot; height=&amp;quot;478&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="87"&gt;&lt;p&gt;Once our Neo4j Aura instance is ready we'll see the connection string in the dashboard. Let's open up Neo4j Browser to start working with our data.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;2286&amp;quot; height=&amp;quot;418&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="77"&gt;&lt;p dir="ltr"&gt;Since we're working with JSON data we can make use of the &lt;a rel="noopener noreferrer" href="https://neo4j.com/labs/apoc/4.1/import/load-json/" dir="ltr"&gt;&lt;code dir="ltr"&gt;apoc.load.json&lt;/code&gt;&lt;/a&gt; procedure from the &lt;a rel="noopener noreferrer" href="https://neo4j.com/labs/apoc/" dir="ltr"&gt;APOC standard library&lt;/a&gt; to import a JSON file using Cypher. First, let's just pull this file in to make sure we can parse it. This Cypher statement will parse the newest Lobsters submissions and return an array of objects that we can work with in Cypher:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;CALL&lt;/span&gt; apoc&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;load&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;json&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"https://lobste.rs/newest.json"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;YIELD&lt;/span&gt; value
+<rss version="2.0"><channel><title>lobstre.rs rss with inlined content</title><link>http://n-gate.com</link><description>webshit condom</description><lastBuildDate>Wed, 21 Jul 2021 18:17:16 -0500</lastBuildDate><item><title>No Cost Data Scraping With GitHub Actions And Neo4j Aura</title><link>https://lobste.rs/s/jvxel0</link><description>&lt;img src="https://lyonwj.com/static/images/will.jpeg" alt="William Lyon" width="24" height="24"&gt;&lt;p dir="ltr"&gt;William Lyon / July 20, 2021&lt;/p&gt;&lt;p dir="ltr"&gt;11 min read • &lt;/p&gt;&lt;p dir="ltr"&gt;When working with data a common task is fetching data from some external source on a recurring basis and importing into a database for further analysis or as part of our application. Setting up servers to handle this can be time consuming and error prone. I recently came across a workflow using &lt;a rel="noopener noreferrer" href="https://github.com/features/actions" dir="ltr"&gt;GitHub Actions&lt;/a&gt; and &lt;a rel="noopener noreferrer" href="https://dev.neo4j.com/neo4j-aura" dir="ltr"&gt;Neo4j Aura&lt;/a&gt; that makes this a breeze and with the free tiers of both GitHub Actions and Neo4j Aura is free to set up and run forever - great for side projects!&lt;/p&gt;&lt;p dir="ltr"&gt;In this post we'll take a look at setting up this workflow to scrape data from the &lt;a rel="noopener noreferrer" href="https://lobste.rs/" dir="ltr"&gt;Lobsters&lt;/a&gt; news aggregator and import into a &lt;a rel="noopener noreferrer" href="https://dev.neo4j.com/aura-landing" dir="ltr"&gt;Neo4j Aura Free&lt;/a&gt; instance using GitHub Actions. We built this on the &lt;a rel="noopener noreferrer" href="https://twitch.tv/neo4j" dir="ltr"&gt;Neo4j livestream&lt;/a&gt; so check out the recording if you prefer video:&lt;/p&gt;&lt;div&gt;A Look At The Data - Lobsters&lt;/div&gt;&lt;p dir="ltr"&gt;&lt;a rel="noopener noreferrer" href="https://lobste.rs/" dir="ltr"&gt;Lobsters&lt;/a&gt; is a social news aggregator. Users post links to articles and the community votes and comments on them in a discussion thread. An algorithm determines the ranking of the submissions, with the most recent and noteworthy articles floating to the front page. To be able to submit and comment users must be invited by an existing user and this user-invite graph is publicly available, helping to keep discussions civil and avoid fraudulent upvoting to game submission rankings.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;1902&amp;quot; height=&amp;quot;1904&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="421"&gt;&lt;p dir="ltr"&gt;I've been thinking about social networks recently and want to build an application to help explore relevant news articles using graph visualization so building something using data from Lobsters seems like a great fit. We want to import data about users and article submissions into Neo4j as the basis of our application, but how to get started? Fortunately, Lobsters makes two JSON endpoints available to fetch data about the &lt;a rel="noopener noreferrer" href="https://lobste.rs/newest.json" dir="ltr"&gt;newest&lt;/a&gt; and the &lt;a rel="noopener noreferrer" href="https://lobste.rs/hottest.json" dir="ltr"&gt;"hottest"&lt;/a&gt; submissions. Each has a similar format and looks like this.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;1628&amp;quot; height=&amp;quot;1782&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="461"&gt;&lt;p&gt;Now that we know what our JSON data looks like we can think about how to start importing this data into Neo4j Aura as a graph.&lt;/p&gt;&lt;div&gt;Neo4j Aura&lt;/div&gt;&lt;p dir="ltr"&gt;&lt;a rel="noopener noreferrer" href="https://dev.neo4j.com/neo4j-aura" dir="ltr"&gt;Neo4j Aura&lt;/a&gt; is a managed cloud service from Neo4j allowing us to run Neo4j clusters in the cloud with a few clicks and handles things like backups, upgrades, and administration so we don't have to worry about it. Best of all for our purposes, Neo4j Aura has a free tier that will allow us to build this project without even putting in a credit card.&lt;/p&gt;&lt;p dir="ltr"&gt;Let's &lt;a rel="noopener noreferrer" href="https://dev.neo4j.com/aura" dir="ltr"&gt;sign-in to Neo4j Aura&lt;/a&gt; and create an Aura Free instance:&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;2282&amp;quot; height=&amp;quot;1924&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="355"&gt;&lt;p&gt;We'll immediately be given a generated password that we'll need to save to access our Neo4j Aura instance. We can change this later.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;1332&amp;quot; height=&amp;quot;1114&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="352"&gt;&lt;p&gt;Next, our Aura instance will take a few moments to be provisioned.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;2318&amp;quot; height=&amp;quot;478&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="87"&gt;&lt;p&gt;Once our Neo4j Aura instance is ready we'll see the connection string in the dashboard. Let's open up Neo4j Browser to start working with our data.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;2286&amp;quot; height=&amp;quot;418&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="77"&gt;&lt;p dir="ltr"&gt;Since we're working with JSON data we can make use of the &lt;a rel="noopener noreferrer" href="https://neo4j.com/labs/apoc/4.1/import/load-json/" dir="ltr"&gt;&lt;code dir="ltr"&gt;apoc.load.json&lt;/code&gt;&lt;/a&gt; procedure from the &lt;a rel="noopener noreferrer" href="https://neo4j.com/labs/apoc/" dir="ltr"&gt;APOC standard library&lt;/a&gt; to import a JSON file using Cypher. First, let's just pull this file in to make sure we can parse it. This Cypher statement will parse the newest Lobsters submissions and return an array of objects that we can work with in Cypher:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;CALL&lt;/span&gt; apoc&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;load&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;json&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"https://lobste.rs/newest.json"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;YIELD&lt;/span&gt; value
 &lt;span dir="ltr"&gt;RETURN&lt;/span&gt; value
 &lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;If we run this in Neo4j Browser we'll see the parsed array of objects returned. We haven't actually created any data in the database yet - we're just parsing the JSON file and returning the results.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;2178&amp;quot; height=&amp;quot;1144&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="221"&gt;&lt;p&gt;We'll use Cypher to define the graph structure we want to create from this data, but we first need to think a bit about how we want to model this data as a graph. I think of graph modeling as a multi-step process, at the highest level the steps are:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Identify the entities in our data - these become nodes.&lt;/LI&gt;&lt;LI&gt;Identify how these entities are connected - these connections become relationships.&lt;/LI&gt;&lt;LI&gt;Identify the pieces of data that describe the entities or connections - these become properties.&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;&lt;a rel="noopener noreferrer" href="https://arrows.app/" dir="ltr"&gt;Arrows.app&lt;/a&gt; is a great tool for drawing and storing these graph models. Here's what our graph model for the Lobsters data looks like in Arrows:&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;1858&amp;quot; height=&amp;quot;1354&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="307"&gt;&lt;p dir="ltr"&gt;Now we can write the Cypher to import our data according to this model. We'll use &lt;code dir="ltr"&gt;apoc.load.json&lt;/code&gt; to parse the JSON file, then use &lt;code dir="ltr"&gt;UNWIND&lt;/code&gt; to iterate over this array of objects. We'll then use the &lt;code dir="ltr"&gt;MERGE&lt;/code&gt; Cypher clause to add users, articles, and tags to the database. The &lt;code dir="ltr"&gt;MERGE&lt;/code&gt; statement allows us to avoid creating duplicates in the graph - with &lt;code dir="ltr"&gt;MERGE&lt;/code&gt; only patterns that don't already exist in the graph are created.&lt;/p&gt;&lt;p&gt;This makes our import statement idempotent - we can run it over and over again on the same data and we won't make any changes to the database unless the data changes.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;CALL&lt;/span&gt; apoc&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;load&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;json&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"https://lobste.rs/newest.json"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;YIELD&lt;/span&gt; value
 &lt;span dir="ltr"&gt;UNWIND&lt;/span&gt; value &lt;span dir="ltr"&gt;AS&lt;/span&gt; article
@@ -2031,7 +2031,1496 @@ device:
 &lt;/PRE&gt;&lt;p&gt;Finally use "adb shell" to get a shell prompt on the Android device,
 cd into the /data/local/tmp directory, and begin running the tests
 as with any other unix host.
-&lt;/p&gt;</description><pubDate>Tue, 20 Jul 2021 13:32:39 -0500</pubDate></item><item><title>Why does the New menu even exist for creating new empty files?</title><link>https://lobste.rs/s/tynoun</link><description>&lt;img src="https://devblogs.microsoft.com/oldnewthing/wp-content/uploads/sites/38/2019/02/RaymondChen_5in-150x150.jpg" width="58" height="58" alt="Raymond Chen"&gt;&lt;p&gt;Raymond&lt;/p&gt;&lt;p&gt;July 20th, 2021&lt;/p&gt;&lt;p dir="ltr"&gt;What’s the point of having a New menu anyway? “&lt;a href="https://devblogs.microsoft.com/oldnewthing/20190611-00/?p=102581#comments-134970" dir="ltr"&gt;Why would anybody create a new BMP file by right-clicking an empty space in a folder&lt;/a&gt;? You still need a BMP editor to put anything meaningful in there. The same is true for a PowerPoint presentation, and an Access database. Although, creating an empty Access database and then opening it will presumably get you the Access program. But if I want to create a new PowerPoint presentation, I will… um… open PowerPoint.”&lt;/p&gt;&lt;p&gt;Sure, maybe that’s what you do, but that’s not what everybody does.&lt;/p&gt;&lt;p dir="ltr"&gt;Not everybody knows that the way to create a new BMP file is to open this program called &lt;i dir="ltr"&gt;Paint&lt;/i&gt; that is hidden in the &lt;i dir="ltr"&gt;Accessories&lt;/i&gt; folder of your Start menu. User research shows that for many users, the way they create a new file is to find an existing file of the same type, copy it, then open the copy and delete everything in it.¹&lt;/p&gt;&lt;p dir="ltr"&gt;In fact, in the Xerox Star (the precursor to our modern GUI interfaces), &lt;a href="https://www.youtube.com/watch?v=Cn4vC80Pv6Q&amp;amp;t=4m5s" dir="ltr"&gt; creating a new document is done by copying an existing one&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;For people with a document-centric view of the world, programs aren’t really things that you think about. What you really work on are documents.&lt;/p&gt;&lt;p&gt;It’s like making a telephone call in the United States. You don’t think about which telecommunications company serves that number. You just dial the number and let the telephone network figure out which telecommunications company is responsible for that number. You don’t really care which company gets used, as long as you get connected.&lt;/p&gt;&lt;p dir="ltr"&gt;As other people noted in the comments, having a &lt;i dir="ltr"&gt;New&lt;/i&gt; menu is handy because it lets you create the file directly where you want it, saving you the trouble of having to navigate through the &lt;i dir="ltr"&gt;Save As&lt;/i&gt; dialog just to get back to where you started.&lt;/p&gt;&lt;p&gt;¹ And who among us can say they never created a new class or project by copying an existing one, and then deleting everything inside?&lt;/p&gt;&lt;img src="https://devblogs.microsoft.com/oldnewthing/wp-content/uploads/sites/38/2019/02/RaymondChen_5in-150x150.jpg" width="96" height="96" alt="Raymond Chen"&gt;</description><pubDate>Tue, 20 Jul 2021 09:54:42 -0500</pubDate></item><item><title>Planning &amp; estimating large-scale software projects</title><link>https://lobste.rs/s/howzf7</link><description>&lt;p dir="ltr"&gt;
+&lt;/p&gt;</description><pubDate>Tue, 20 Jul 2021 13:32:39 -0500</pubDate></item><item><title>Our Machinery Design Principles</title><link>https://lobste.rs/s/f2f45c</link><description>&lt;h1&gt;OMG-META: About this guidebook&lt;/h1&gt;&lt;h2&gt;OMG-META-1: Guidelines are identified by unique identifiers&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+Each guideline in this document is identified by a unique identifier (&lt;code dir="ltr"&gt;OMG-META-1&lt;/code&gt;) as well as
+a name (&lt;code dir="ltr"&gt;Guidelines are identified by unique identifiers&lt;/code&gt;). Names may change, but identifiers are
+permanent and can be used to permanently and uniquely refer to a specific guideline.
+
+&lt;/p&gt;&lt;p&gt;
+
+If a guideline is retired, its identifier will be removed and not used again for other purposes.
+
+&lt;/p&gt;&lt;h2&gt;OMG-META-2: Prefer to have things in writing&lt;/h2&gt;&lt;p&gt;
+
+
+Rules, guidelines, and work processes should be written down instead of being kept in people's
+heads. This makes it easier to refer to them, and discuss them and it makes it easier to onboard
+new people to the project.
+
+&lt;/p&gt;&lt;p&gt;
+
+In addition to these guidelines, here are other useful resources:
+
+&lt;/p&gt;&lt;h2&gt;OMG-META-3: Purpose of the guidelines&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+The purpose of this guide is to help programmers who are new to &lt;em dir="ltr"&gt;The Machinery&lt;/em&gt; write code in &lt;em dir="ltr"&gt;The
+Machinery&lt;/em&gt; style and to answer questions programmers might face about how to design or implement
+certain things.
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;These guidelines are intended to be a practical help, not to cover every possible situation. We
+  want to keep this document succinct, so we avoid discussing minutiae or things that are already
+  widely known. If something isn't covered by the guidelines and you are uncertain about the best
+  approach, look at the surrounding code and follow its example or talk it through with a colleague.
+
+&lt;/LI&gt;&lt;LI&gt;This is not intended to be a static document. If we notice a problematic pattern in the code or
+  think of new advice that will be helpful, we will extend this document with that information.
+
+&lt;/LI&gt;&lt;LI&gt;Some of the guidelines in this document have good rationales behind them, others are just
+  arbitrary choices, but it's better to pick one alternative and be consistent than to have different
+  choices all over the code.
+
+&lt;/LI&gt;&lt;LI&gt;You may find existing code in the codebase that conflicts with the guidelines. That is usually
+  because the code was written before the guideline. Resist the urge to go in and “fix” all that
+  code. Such fixes do not add much value by themselves and risk introducing new bugs. Instead, only
+  fix the code that needs to be updated for other reasons (bug fixes, new features, etc). Fixing
+  code that you are already working on anyway is a lot safer because you already have a good
+  understanding of the code which makes you less likely to introduce bugs. Also, since you are
+  actively working on the code, chances are that if you introduce a bug you will spot it quickly.&lt;/LI&gt;&lt;/UL&gt;&lt;h1&gt;OMG-DESIGN: Design Principles&lt;/h1&gt;&lt;h2&gt;OMG-DESIGN-1: Code must be easy to change&lt;/h2&gt;&lt;p&gt;
+
+
+The primary purpose of these guidelines is to design code that is easy to change
+and adapt to various situations and circumstances.
+
+&lt;/p&gt;&lt;p&gt;
+
+Being easy to change is the most important property of a codebase as it is the
+basis for everything else we want to do with the code. Code that is easy to
+change can adapt to new technical requirements or business goals with ease. Code
+that can’t change is doomed to stagnate, become technically irrelevant and then
+die (when it is easier to throw everything away and start from scratch than to
+keep modifying it).
+
+&lt;/p&gt;&lt;h2&gt;OMG-DESIGN-2: Less is more&lt;/h2&gt;&lt;p&gt;
+
+
+Code is not an asset, it is a liability. The more code you have, the more you have to optimize,
+debug, modernize, refactor, understand. In short, the more code you have — the harder it is to
+change. A smaller and simpler codebase is easier to understand, improve and extend.
+
+&lt;/p&gt;&lt;p&gt;
+
+Strategies for keeping the codebase small:
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Be minimalistic: Implement the tiniest thing that solves the current problem. Don’t expect future
+  needs. If the code is flexible you can add the functionality when the need occurs.
+
+&lt;/LI&gt;&lt;LI&gt;Build more advanced things out of a few simple building blocks. Arrays and hash tables should
+  cover almost all of your data type needs.
+
+&lt;/LI&gt;&lt;LI&gt;Actively prune unused code paths.
+
+&lt;/LI&gt;&lt;LI&gt;Refactor out unneeded complexity whenever you can. Strive to make the code as small and simple as
+  possible.
+
+&lt;/LI&gt;&lt;LI&gt;Never leave commented out code in the project. That’s what version history is for.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
+
+“Less is more” is not just about physical lines of code, it is also about adding other unnecessary
+stuff. An external library does not add any code to the repository, but it adds dependencies and
+conceptual complexity — more things that you need to understand and more things that can go wrong.
+
+&lt;/p&gt;&lt;p&gt;
+
+Strategies for keeping conceptual complexity down:
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Don’t introduce unnecessary abstraction layers, prefer simpler concepts (&lt;code dir="ltr"&gt;char *&lt;/code&gt; over
+  &lt;code dir="ltr"&gt;std::string&lt;/code&gt;). Only abstract when it brings clear value.
+
+&lt;/LI&gt;&lt;LI&gt;Don’t add new programming languages to the codebase. We strive to do everything with C, so
+  developers only need to learn one language, one debugger, etc.
+
+&lt;/LI&gt;&lt;LI&gt;Minimize the use of external libraries. Prefer minimalistic one-file libraries over bigger ones.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
+
+It can be tempting to rely on an external library as a quick way of implementing a feature. But be
+wary. Code in external libraries is hard to modify, which violates our first principle. First, you
+have to understand the external codebase, which can be daunting, and then you either have to fork,
+which means you take over the maintenance burden or deal with the politics of pushing the changes
+upstream. The bigger and more complicated the library is, the harder this problem gets.
+
+&lt;/p&gt;&lt;p&gt;
+
+If you only need a small functionality, consider just implementing that instead of adding a library
+dependency.
+
+&lt;/p&gt;&lt;h2&gt;OMG-DESIGN-3: Keep it simple&lt;/h2&gt;&lt;p&gt;
+
+
+Simpler solutions are easier to understand, easier to reason about, and easier
+to modify.
+
+&lt;/p&gt;&lt;p&gt;
+
+What is “simple” can be discussed. From our perspective it means:
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Fewer levels of abstraction.
+&lt;/LI&gt;&lt;LI&gt;Easier to understand &lt;em dir="ltr"&gt;completely&lt;/em&gt; (performance implications, threading implications, etc).
+&lt;/LI&gt;&lt;LI&gt;Easier to debug.
+&lt;/LI&gt;&lt;LI&gt;More straightforward and easier to follow logic.
+&lt;/LI&gt;&lt;LI&gt;Closer to the metal.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
+
+Examples:
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;C is simpler than C++.
+&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;const char *&lt;/code&gt; is simpler than &lt;code dir="ltr"&gt;std::string&lt;/code&gt;.
+&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;int[]&lt;/code&gt; is simpler than &lt;code dir="ltr"&gt;std::vector&amp;lt;int&amp;gt;&lt;/code&gt;.
+&lt;/LI&gt;&lt;LI&gt;Immutable is simpler than mutable.
+&lt;/LI&gt;&lt;LI&gt;Non-template code is simpler than template code.
+&lt;/LI&gt;&lt;LI&gt;Single-threaded is simpler than multi-threaded.
+&lt;/LI&gt;&lt;LI&gt;boost libraries are not simple.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
+
+Sometimes complexity is needed. For example, you can’t get good performance on
+modern hardware without multi-threading and some mutability. The point is to
+keep things as simple &lt;em dir="ltr"&gt;as possible.&lt;/em&gt;
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Use a limited set of core data structures and concepts. Use established
+standards &lt;em dir="ltr"&gt;when they are simple:&lt;/em&gt;
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Simple standards: JSON, Web sockets, UTF-8.
+&lt;/LI&gt;&lt;LI&gt;Complicated standards: XML, Corba, UTF-16.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;OMG-DESIGN-4: Explicit is better than implicit&lt;/h2&gt;&lt;p&gt;
+
+
+It is better when programmers can see what is going on than when it is hidden. Avoid doing cute
+tricks with templates and macros. Think about code that is easy to understand and step through in a
+debugger.
+
+&lt;/p&gt;&lt;h2&gt;OMG-DESIGN-5: Design with performance in mind&lt;/h2&gt;&lt;p&gt;
+
+
+The performance of a system is a part of its design. When you design a new
+system you should have clear performance goals in mind — how many objects the
+system should be able to handle, how many milliseconds it should take to update,
+etc. A system that doesn’t live up to its performance goals is not finished.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Remember that the performance of a platform such as &lt;em dir="ltr"&gt;The Machinery&lt;/em&gt; is
+significantly different from the performance of an end-user application.
+Application software only has to be “fast enough” for the user not to become
+annoyed. In contrast, a platform needs to stay performant across a wide range of
+use cases, as we cannot predict what the end users will want to do with the
+platform.
+
+&lt;/p&gt;&lt;p&gt;
+
+In other words, performance is a primary feature of the engine and should always
+be in the back of your mind. Avoid hidden, unexpected costs — the users should
+only pay for the features they use. System update costs should be linear in the
+number of active objects. Profile your code so you know where time is being
+spent.
+
+&lt;/p&gt;&lt;h2&gt;OMG-DESIGN-6: Design for fast iterations&lt;/h2&gt;&lt;p&gt;
+
+
+For modifications to be easy, the modify-build-test cycle must be fast.
+
+&lt;/p&gt;&lt;p&gt;
+
+Minimizing build times ensures that programmers stay productive. This is accomplished by minimizing
+header inclusion and avoiding known costly constructs, such as heavy use of C++ templates.
+
+&lt;/p&gt;&lt;p&gt;
+
+Unit tests should be used as much as possible to verify the correctness of the code. This allows
+changes to be made with greater confidence and less manual testing, which means changes can be made
+faster. These unit tests should be fast enough to run as a part of the standard build.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Unit tests provide the most value for &lt;em dir="ltr"&gt;complicated low-level code&lt;/em&gt;, such as JSON parsing and
+complicated data structures (&lt;em dir="ltr"&gt;The Truth&lt;/em&gt;). &lt;em dir="ltr"&gt;Simple&lt;/em&gt; low-level code (e.g., vec3 addition) is unlikely
+to be changed a lot and see regression bugs. And even if it does have bugs, they are usually easy to
+spot and fix. Thus, unit tests provide limited value. &lt;em dir="ltr"&gt;High-level&lt;/em&gt; code (e.g., UI) is hard to test
+with unit tests and usually better tested in other ways (hands-on or through recorded UI interaction
+sessions).
+
+&lt;/p&gt;&lt;p&gt;
+
+Hot-reloading of DLLs should be supported to provide quick testing of changes in a running
+application.
+
+&lt;/p&gt;&lt;p&gt;
+
+Be mindful of the application's boot time. The boot time is a fixed cost that everyone has to pay
+whenever they want to test anything in the application. Faster boot times means faster iterations.
+
+&lt;/p&gt;&lt;h2&gt;OMG-DESIGN-7: Deliver changes quickly&lt;/h2&gt;&lt;p&gt;
+
+
+The path from implementing a feature to delivering it to the end user should be short.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Regardless of the benefits to end users, there are also many advantages to delivering changes fast
+&lt;em dir="ltr"&gt;internally.&lt;/em&gt; When we integrate often and quickly, designs can be validated earlier, bugs can be
+discovered sooner and everybody gets on the same page about the current status of the project.
+
+&lt;/p&gt;&lt;p&gt;
+
+To achieve fast delivery we discourage long-lived branches. Users should be working against the
+trunk as much as possible. Instead of using branches, experimental and unfinished features should be
+protected by feature flags. Such feature flags can also be used for quick rollback if critical bugs
+are discovered.
+
+&lt;/p&gt;&lt;h2&gt;OMG-DESIGN-8: Avoid coupling&lt;/h2&gt;&lt;p&gt;
+
+
+Avoid complicated dependencies between systems. These make the codebase harder
+to understand and modify. It should be possible to modify, optimize or replace
+each system on its own.
+
+&lt;/p&gt;&lt;p&gt;
+
+Use abstract interfaces to access shared services such as logging, file systems,
+memory allocation, etc. That way, these systems can be replaced or mocked for
+unit tests.
+
+&lt;/p&gt;&lt;h2&gt;OMG-DESIGN-9: Everything is a plugin&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+&lt;em dir="ltr"&gt;The Machinery&lt;/em&gt; is a platform built from a toolbox of collaborating plugins.
+Each plugin is defined by a pure C11 API and a common mechanism is provided for
+querying for and using these APIs. The plugins are built on a common
+minimalistic foundation layer that provides useful utility functions (math,
+containers, etc) as well as interfaces for reasoning about core concepts such as
+memory, threading, logging, error handling, etc.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+A product built on top of &lt;em dir="ltr"&gt;The Machinery&lt;/em&gt; can freely mix and match from existing
+plugins to create an adaptable and custom tailored user experience without extra
+bloat. It also allows teams to work in isolation on a plugin without having to
+worry about breaking things for other teams. Plugins can be shared without the
+need for merging code bases.
+
+&lt;/p&gt;&lt;p&gt;
+
+New functionality should almost always be added as a plugin — be wary about
+extending the foundation. Also, take care to minimize the dependencies between
+your plugin and other plugins. Each such dependency is a coupling that will, in
+the long run, make the code harder to modify.
+
+&lt;/p&gt;&lt;h2&gt;OMG-DESIGN-10: Follow Data Oriented Design principles&lt;/h2&gt;&lt;p&gt;
+
+
+Design your systems around data layouts and data flows first. Memory throughput
+is often the limiting factor of software performance. Make sure your data
+layouts and access patterns are cache friendly. Don’t abstract away the nature
+of the hardware.
+
+&lt;/p&gt;&lt;p&gt;
+
+Avoid object-oriented design principles. They encourage heap allocated
+individual objects with data hidden behind accessor functions. This leads to bad
+data access patterns and code flows that are hard to optimize and multi-thread.
+Instead, lay out the data in the most efficient way and then write functions to
+operate on that data.
+
+&lt;/p&gt;&lt;p&gt;
+
+Multi-threaded, job-based parallelism should be considered the norm for any
+high-throughput system.
+
+&lt;/p&gt;&lt;h2&gt;OMG-DESIGN-11: Take advantage of modern rendering architecture features&lt;/h2&gt;&lt;p&gt;
+
+
+All core rendering APIs in The Machinery are architected to run on top of
+explicit graphics APIs such as Vulkan or DX12. The graphics API agnostic
+building blocks exposed are more minimalistic than what you typically would find
+in engines built on top of older generation graphics APIs.
+
+&lt;/p&gt;&lt;p&gt;
+
+A few examples:
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Instead of exposing a bunch of different domain-specific resource types for
+  reasoning about buffers (e.g vertex, index buffers, etc.) we only have two
+  types: buffer &amp;amp; image buffer.
+
+&lt;/LI&gt;&lt;LI&gt;Instead of using a slot based binding model for exposing resources to a
+  shader, you bind sets of resources to a resource binder that later gets bound
+  to the shader.
+
+&lt;/LI&gt;&lt;LI&gt;Resource state transitions are the responsibility of the user.
+
+&lt;/LI&gt;&lt;LI&gt;All APIs are Multi-GPU aware allowing them to broadcast commands to any
+  configuration of active devices in a render backend using a device affinity
+  bit-mask.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
+
+When designing new rendering features it is important to keep this in mind:
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Instead of thinking about traditional concepts such as vertex, index and
+  constant buffers think “raw memory”.
+
+&lt;/LI&gt;&lt;LI&gt;Design around update frequency and data flows. Keep shuffling memory over
+  PCI-E to a minimum.
+
+&lt;/LI&gt;&lt;LI&gt;Utilize “bindless” concepts, avoid unnecessary updates of resource binders.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;OMG-DESIGN-12: Shared responsibility&lt;/h2&gt;&lt;p&gt;
+
+
+The codebase should be the shared responsibility and pride of every developer
+that works on it.
+
+&lt;/p&gt;&lt;p&gt;
+
+If you see a problem, it is your problem. Don’t wait for somebody else to fix
+it. Fixing issues in parts of the code you’re not familiar with is a good way of
+understanding more of the codebase. Of course, reach out to the people who know
+that part of the code, to help you understand it better, and verify that your
+fix is the right one.
+
+&lt;/p&gt;&lt;p&gt;
+
+When you deliver a feature or a new system, you are responsible for the whole
+delivery. Design, clean code, documentation, testing, performance, knowledge
+sharing, etc. A feature is not done just because it works. When you go in to
+make a change, you should always leave the code in a better state than you found
+it: cleaner, simpler, faster, easier to understand.
+
+&lt;/p&gt;&lt;p&gt;
+
+When you are fixing a bug, don’t just fix the bug. Ask yourself what the
+underlying cause was that made the bug slip through compilation, unit tests,
+developer tests, and QA. Can you somehow write the code so that bugs like this
+can be detected at compile time? Can you add a unit test that detects the bug?
+Can you add an assert that prevents misuse of the functions? Can you improve the
+function names and/or the documentation to make misuse less likely?
+
+&lt;/p&gt;&lt;p&gt;
+
+When you are responding to questions, consider adding them to an FAQ or
+clarifying the code documentation, so that you won’t have to answer the same
+question again.
+
+&lt;/p&gt;&lt;h2&gt;OMG-DESIGN-13: Write for readability&lt;/h2&gt;&lt;p&gt;
+
+
+Code is read more often than it is written. Write your code so that it is easy to read and
+understand for a new programmer (or for yourself coming back to the code later).
+
+&lt;/p&gt;&lt;p&gt;
+
+Code should aim to be plain and straight forward. Avoid tricky constructs, trying to be clever and
+showing off your programming skills.
+
+&lt;/p&gt;&lt;p&gt;
+
+It is not always 100 % clear cut what is an “unreadable clever hack” and what is a “common
+programming idiom”. For example, consider this code for setting a bit in an integer:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;&lt;span dir="ltr"&gt;flags |= (&lt;span dir="ltr"&gt;1ULL&lt;/span&gt; &amp;lt;&amp;lt; TM_RENDER_FLAG__CAST_SHADOWS);&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+
+For someone not used to bit twiddling this may seem like a “hack”. However, for someone used to bit
+twiddling, this is just the standard way of setting a bit and adding an abstraction around it (such
+as a &lt;code dir="ltr"&gt;SET_BIT()&lt;/code&gt; macro) is just obfuscating things.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Familiarize yourself with the idioms that are commonly used in &lt;em dir="ltr"&gt;The Machinery&lt;/em&gt; by reading the code.
+
+&lt;/p&gt;&lt;h1&gt;OMG-CODEORG: Code organization&lt;/h1&gt;&lt;h2&gt;OMG-CODEORG-1: All repository code should be written in C&lt;/h2&gt;&lt;p&gt;
+
+
+At Our Machinery, we use C/C++ for everything. This includes things like command-line tools and
+documentation generators which would be tempting to write in a scripting language, such as Ruby
+or Python.
+
+&lt;/p&gt;&lt;p&gt;
+
+The reason we are using C/C++ for everything is:
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Anybody can work on any part of the code.
+&lt;/LI&gt;&lt;LI&gt;The same debugger can be used for everything.
+&lt;/LI&gt;&lt;LI&gt;Minimize dependencies and version hell.
+&lt;/LI&gt;&lt;LI&gt;It's a good test run of our C APIs — they should be easy to work with, if not, something is wrong.
+&lt;/LI&gt;&lt;LI&gt;Avoid writing the same code multiple times in different languages.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
+
+The only exception to this rule is when a platform requires us to use a specific language. E.g.
+Cocoa on OS X requires us to use Objective-C, while Android requires us to use Java. We will minimize
+the interface code written in these languages and write the bulk of the code in C/C++.
+
+&lt;/p&gt;&lt;h2&gt;OMG-CODEORG-2: Header files (.h) should be written in C11&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+Header files (&lt;code dir="ltr"&gt;.h&lt;/code&gt;) define public interfaces between modules. All header files
+should be strict C11 (not C++).
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+We use C rather than C++ as our &lt;em dir="ltr"&gt;interface&lt;/em&gt; language for multiple reasons:
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;C is a lot simpler than C++. Reading a C header file is easier than reading a C++ header file.
+&lt;/LI&gt;&lt;LI&gt;C has a smaller design space than C++. C++ can be written in lots of different “styles”, which
+  leads to confusion and fragmentation.
+&lt;/LI&gt;&lt;LI&gt;We want to support developing in C — i.e. it should be possible to write modules entirely in C.
+&lt;/LI&gt;&lt;LI&gt;C has a stable ABI. Our system is plugin-based and using C interfaces allows us to compile DLLs
+  without worrying about which compiler version and flags we are using.
+&lt;/LI&gt;&lt;LI&gt;Most scripting languages are easy to bind to a C API. In contrast, when trying to bind to a C++
+  API, you can end up with the C++ object model and the scripting language object model fighting
+  each other.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
+
+To allow header files to be loaded both from C and C++ they should follow the pattern:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;pragma&lt;/span&gt; once&lt;/span&gt;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;ifdef&lt;/span&gt; __cpluspus&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;extern&lt;/span&gt; &lt;span dir="ltr"&gt;"C"&lt;/span&gt; {&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;endif&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;include&lt;/span&gt; &lt;span dir="ltr"&gt;"api_types.h"&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// ...&lt;/span&gt;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;ifdef&lt;/span&gt; __cplusplus&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;endif&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+
+We use &lt;code dir="ltr"&gt;#pragma once&lt;/code&gt; rather than include guards because it is simpler to write and works with all modern compilers.
+
+&lt;/p&gt;&lt;h2 dir="ltr"&gt;OMG-CODEORG-3: Header files can only include &lt;code dir="ltr"&gt;"api_types.h"&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+Header files (.h) should not be dependent on other header files and there should be no &lt;code dir="ltr"&gt;#include&lt;/code&gt; statements in header files.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+The only exception to this is &lt;code dir="ltr"&gt;"api_types.h"&lt;/code&gt; that may be included in header files in order to
+get access to standard API types (&lt;code dir="ltr"&gt;bool&lt;/code&gt;, &lt;code dir="ltr"&gt;uint32_t&lt;/code&gt;, etc).
+
+&lt;/p&gt;&lt;p&gt;
+
+The reasons for this rule are:
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Better modularity — each header file can be understood in isolation.
+&lt;/LI&gt;&lt;LI&gt;Faster compile times — headers including other headers can create massive amounts of code
+  to compile.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
+
+Look at some of the &lt;code dir="ltr"&gt;.h&lt;/code&gt; files in the project to see how to write headers in this style. Some of
+the techniques used are:
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Forward declared opaque structs:&lt;/strong&gt; (&lt;code dir="ltr"&gt;struct tm_allocator_i;&lt;/code&gt;). This is used to refer to objects
+  defined in other modules. Since we only refer to them by pointers, the header file does not
+  need the full struct definition.
+
+&lt;/LI&gt;&lt;LI&gt;&lt;strong dir="ltr"&gt;Opaque data blobs:&lt;/strong&gt; (&lt;code dir="ltr"&gt;struct tm_file_o { uint8_t opaque[64]; }&lt;/code&gt;). This is used to represent things
+  like file handles, that we want to keep on the stack but that use different types on different
+  platforms. We use an opaque data blob that is big enough to hold the largest type size and then
+  &lt;code dir="ltr"&gt;memcpy()&lt;/code&gt; data between the opaque type and the platform-specific types.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
+
+One tricky construct is when you want to implement some form of “inheritance” in C. I.e., something
+like this:
+
+&lt;/p&gt;&lt;p&gt;
+
+a.h:
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;foo_base&lt;/span&gt; {&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;int&lt;/span&gt; x;&lt;/span&gt;
+&lt;span dir="ltr"&gt;};&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+
+b.h:
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;foo_impl&lt;/span&gt; {&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;foo_base&lt;/span&gt;;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;int&lt;/span&gt; y;&lt;/span&gt;
+&lt;span dir="ltr"&gt;};&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+
+In this case &lt;code dir="ltr"&gt;b.h&lt;/code&gt; cannot be compiled without the definition in &lt;code dir="ltr"&gt;a.h&lt;/code&gt; and it might be tempting to
+put &lt;code dir="ltr"&gt;#include "a.h"&lt;/code&gt; in &lt;code dir="ltr"&gt;b.h&lt;/code&gt;. Instead, you should make sure that you include &lt;code dir="ltr"&gt;a.h&lt;/code&gt; before &lt;code dir="ltr"&gt;b.h&lt;/code&gt; in
+any &lt;code dir="ltr"&gt;*.c&lt;/code&gt; file that uses &lt;code dir="ltr"&gt;b.h&lt;/code&gt;. Like this:
+
+&lt;/p&gt;&lt;p&gt;
+
+c.c:
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;include&lt;/span&gt; &lt;span dir="ltr"&gt;"a.h"&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;include&lt;/span&gt; &lt;span dir="ltr"&gt;"b.h"&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;...&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+
+This might seem overly complicated, but we believe it is preferable to opening the door to header
+inclusion. Virtual inheritance should be a rare thing and there are advantages to exposing its
+complexity.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+To make sure the user gets better error messages if she forgets to include &lt;code dir="ltr"&gt;a.h&lt;/code&gt; you can do
+something like this:
+
+&lt;/p&gt;&lt;p&gt;
+
+a.h:
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;define&lt;/span&gt; FOO_BASE&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;foo_base&lt;/span&gt; {&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;int&lt;/span&gt; x;&lt;/span&gt;
+&lt;span dir="ltr"&gt;};&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+
+b.h:
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;ifndef&lt;/span&gt; FOO_BASE&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;error&lt;/span&gt; &lt;span dir="ltr"&gt;"You must include \"a.h\" before including \"b.h\"."&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;endif&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;foo_impl&lt;/span&gt; {&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;foo_base&lt;/span&gt;;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;int&lt;/span&gt; y;&lt;/span&gt;
+&lt;span dir="ltr"&gt;};&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;OMG-CODEORG-4: Implementation files (.c) should be written in C, but C++ can be used in rare cases&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+Interfaces &lt;em dir="ltr"&gt;must&lt;/em&gt; be written in C. Implementations &lt;em dir="ltr"&gt;should&lt;/em&gt; be written in C. It is a smaller and
+simpler language and writing the code in C probably makes it easier to understand. Programmers
+working in &lt;em dir="ltr"&gt;The Machinery&lt;/em&gt; codebase should not have to learn C++.
+
+&lt;/p&gt;&lt;p&gt;
+
+However, we acknowledge that there are a few rare cases where the greater expressive power of C++
+can simplify the code, or where C++ code is needed to interface with an external C++ based library.
+In those few, very rare cases, we allow the implementation to be written in C++.
+
+&lt;/p&gt;&lt;p&gt;
+
+Currently the code base constists of is 98.9 % C and 1.1 % C++. We feel that this is a good balance.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Note that this rule about prefering C only applies to our &lt;em dir="ltr"&gt;internal&lt;/em&gt; code. Clients and customers
+may have many good reasons to prefer other languages (for example consistency with an existing code
+base). They can use any language that can interface with our C ABI: C, C++, D, Rust, ML, etc.
+
+&lt;/p&gt;&lt;h2 dir="ltr"&gt;OMG-CODEORG-5: Shared non-API code goes in &lt;code dir="ltr"&gt;.inl&lt;/code&gt; files&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+Header files (&lt;code dir="ltr"&gt;.h&lt;/code&gt;) are only allowed to contain public C11 interfaces. However, there is often
+a need for other kinds of shared code.
+
+&lt;/p&gt;&lt;p&gt;
+
+One example is internal headers within a large module. These headers are not intended for
+public use, just for the different parts of the module to communicate with each other.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+For this kind of shared code, that is not a part of the public APIs we use the &lt;code dir="ltr"&gt;.inl&lt;/code&gt; extension,
+to keep them physically distinct from the public &lt;code dir="ltr"&gt;.h&lt;/code&gt; files. &lt;code dir="ltr"&gt;.inl&lt;/code&gt; files may include &lt;code dir="ltr"&gt;.h&lt;/code&gt; files
+and other &lt;code dir="ltr"&gt;.inl&lt;/code&gt; files but you should use this sparingly in order to avoid increasing compile times.
+
+&lt;/p&gt;&lt;h2&gt;OMG-CODEORG-6: Most functionality should be built as plugins&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+The design of The Machinery is to have a small core (the &lt;code dir="ltr"&gt;foundation&lt;/code&gt;) that can be easily extended
+with plugins. Most functionality added to The Machinery should be written as a plugin rather than
+as a part of the &lt;code dir="ltr"&gt;foundation&lt;/code&gt; since it gives better modularity.
+
+&lt;/p&gt;&lt;h2&gt;OMG-CODEORG-7: File names should be unique&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+Avoid having files with the same name in different directories. (For example &lt;code dir="ltr"&gt;math/types.h&lt;/code&gt; and
+&lt;code dir="ltr"&gt;config/types.h&lt;/code&gt;.) Unique file names are easier to search for.
+
+&lt;/p&gt;&lt;h2&gt;OMG-CODEORG-8: Document third-party code&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+All use of third-party code should be documented in the &lt;code dir="ltr"&gt;third-party-code.md&lt;/code&gt; file.
+
+&lt;/p&gt;&lt;h1&gt;OMG-API: API design&lt;/h1&gt;&lt;h2 dir="ltr"&gt;OMG-API-1: Externally visible names should start with &lt;code dir="ltr"&gt;tm_&lt;/code&gt; or &lt;code dir="ltr"&gt;TM_&lt;/code&gt;&lt;/h2&gt;&lt;p&gt;
+
+
+This is our namespace prefix and is used to avoid name clashes.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+&lt;code dir="ltr"&gt;tm_&lt;/code&gt; should be followed by the system name. So functions related to input should be prefixed
+by &lt;code dir="ltr"&gt;tm_input_&lt;/code&gt; while enums related to input are prefixed &lt;code dir="ltr"&gt;TM_INPUT_&lt;/code&gt;.
+
+&lt;/p&gt;&lt;p&gt;
+
+Static functions and other objects that don't have global visibility don't need to be and shouldn't
+be prefixed.
+
+&lt;/p&gt;&lt;h2&gt;OMG-API-2: APIs should use explicit width integers&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+APIs should use &lt;code dir="ltr"&gt;uint16_t&lt;/code&gt;, &lt;code dir="ltr"&gt;uint32_t&lt;/code&gt;, etc rather than &lt;code dir="ltr"&gt;int&lt;/code&gt;, &lt;code dir="ltr"&gt;short&lt;/code&gt;, etc.
+
+&lt;/p&gt;&lt;p&gt;
+
+We want to always know the exact integer sizes and have them be consistent across platforms.
+
+&lt;/p&gt;&lt;h2&gt;OMG-API-3: Unsigned integers are preferred over signed&lt;/h2&gt;&lt;p&gt;
+
+
+Signed integers should only be used for values that can be negative. Values that can only be
+positive should be represented by unsigned integers.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Be careful when using subtraction operations on unsigned integers — it is easy to slip up and
+underflow the integer into &lt;code dir="ltr"&gt;0xffffffff&lt;/code&gt;, for example with code like this:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;for&lt;/span&gt; (&lt;span dir="ltr"&gt;uint32_t&lt;/span&gt; i = n&lt;span dir="ltr"&gt;-1&lt;/span&gt;; i&amp;gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;; --i)&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;// Do stuff&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+
+When you are doing stuff like this, onsider casting to signed integers unless you're 100 % sure the
+subtraction won't underflow.
+
+&lt;/p&gt;&lt;h2 dir="ltr"&gt;OMG-API-4: &lt;code dir="ltr"&gt;bool&lt;/code&gt; from &lt;code dir="ltr"&gt;stdbool.h&lt;/code&gt; should be used for boolean types&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+Using an explicit &lt;code dir="ltr"&gt;bool&lt;/code&gt; type for boolean values is clearer than representing them by an integer
+value. You should include &lt;code dir="ltr"&gt;api_types.h&lt;/code&gt; to get access to &lt;code dir="ltr"&gt;bool&lt;/code&gt; and other standard types.
+
+&lt;/p&gt;&lt;h2&gt;OMG-API-6: Strings should be UTF-8 encoded&lt;/h2&gt;&lt;p&gt;
+
+
+All strings used in APIs should be UTF-8 encoded.
+
+&lt;/p&gt;&lt;h2 dir="ltr"&gt;OMG-API-7: Unchanged pointers should be &lt;code dir="ltr"&gt;const&lt;/code&gt; declared&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+If an API function takes a pointer and doesn't modify the value pointed to, the pointer should be
+declared &lt;code dir="ltr"&gt;const&lt;/code&gt; in the API.
+
+&lt;/p&gt;&lt;h2&gt;OMG-API-8: Use 0 to indicate “no value”&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+API functions that return an integer or a floating point value and want to indicate “no result”
+should do so by returning &lt;code dir="ltr"&gt;0&lt;/code&gt; and not some other value, such as &lt;code dir="ltr"&gt;-1&lt;/code&gt; or &lt;code dir="ltr"&gt;0xffffffff&lt;/code&gt;. Using &lt;code dir="ltr"&gt;0&lt;/code&gt;
+for “no value” is less ambiguous and makes it easy to test the value with a simple if-statement.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+A useful technique is to reserve the first slot in arrays of objects, etc, so that the index
+&lt;code dir="ltr"&gt;0&lt;/code&gt; will never be used. That way we can use it for the &lt;code dir="ltr"&gt;null&lt;/code&gt; value.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+If you are unable to use &lt;code dir="ltr"&gt;0&lt;/code&gt; to mean “no value” because it is a valid result of the function you
+are writing, use a second &lt;code dir="ltr"&gt;bool&lt;/code&gt; return value to indicate whether the value returned is valid
+or not.
+
+&lt;/p&gt;&lt;h2&gt;OMG-API-9: memset(0) should be a valid data initialization&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+Aim to design data structures so that &lt;code dir="ltr"&gt;0&lt;/code&gt; represents the default value. This makes it possible to
+initialize structs with a simple memory clear or by a &lt;code dir="ltr"&gt;= {0}&lt;/code&gt; assignment.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+There are some situations where this is not possible. For example, a &lt;code dir="ltr"&gt;tm_vec3_t&lt;/code&gt; representing scale
+has a natural default value of &lt;code dir="ltr"&gt;{1,1,1}&lt;/code&gt; and a &lt;code dir="ltr"&gt;tm_vec4_t&lt;/code&gt; representing a quaternion has a natural
+default of &lt;code dir="ltr"&gt;{0,0,0,1}&lt;/code&gt;. Don't try to fight this by adding a weird bias to the values. Just accept
+that in these cases we cannot achieve our goal of zero-initialization.
+
+&lt;/p&gt;&lt;h2&gt;OMG-API-10: Prefer polling over callbacks&lt;/h2&gt;&lt;p&gt;
+
+
+If your system needs to notify other parts of the code when events occur, it should do so through
+polling rather than callbacks.
+
+&lt;/p&gt;&lt;p&gt;
+
+Callbacks often create subtle problems because it is hard to know which state the system is in
+when the callback occurs, what it is safe to do from within the callback, what thread the callback
+occurs on, etc. Polling does not have these issues.
+
+&lt;/p&gt;&lt;p&gt;
+
+In a real-time application, there is always an update loop, so polling can be done without incurring
+any big overhead.
+
+&lt;/p&gt;&lt;p&gt;
+
+In cases where you have a lot of objects that might need to be polled, use aggregate polling to
+reduce the cost. E.g., to avoid having to poll thousands of individual physics objects to see if
+they collided, expose a single aggregated polling function that returns an array of the physics
+objects that collided during the last physics update.
+
+&lt;/p&gt;&lt;h2&gt;OMG-API-11: Modules are structs with function pointers&lt;/h2&gt;&lt;p&gt;
+
+
+The Machinery is built as a number of interacting but independent modules. A module is defined by
+its name and its API. The API is a struct that can contain variables and function pointers:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;define&lt;/span&gt; TM_LOGGER_API_NAME &lt;span dir="ltr"&gt;"tm_logger_api"&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// The logger registry stores a list of active loggers. You can register&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// more loggers to add more backend outputs for log messages.&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;tm_logger_api&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;// Adds a new logger to the registry.&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;void&lt;/span&gt; (*add_logger)(tm_logger_i *logger);&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;// Removes a previously added logger from the registry.&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;void&lt;/span&gt; (*remove_logger)(tm_logger_i *logger);&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;// Sends a log message to all registered loggers.&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;void&lt;/span&gt; (*print)(&lt;span dir="ltr"&gt;enum&lt;/span&gt; tm_log_type log_type, &lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;char&lt;/span&gt; *msg);&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;// Convenience function for printing a formatted string (using `printf` syntax)&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;// to the default logger registry.&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;int&lt;/span&gt; (*&lt;span dir="ltr"&gt;printf&lt;/span&gt;)(&lt;span dir="ltr"&gt;enum&lt;/span&gt; tm_log_type log_type, &lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;char&lt;/span&gt; *format, ...);&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;// A default logger that will print log messages using `printf(...)`.&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    tm_logger_i *printf_logger;&lt;/span&gt;
+&lt;span dir="ltr"&gt;};&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;div class="caption"&gt;Sample module.&lt;/div&gt;&lt;p dir="ltr"&gt;
+
+
+The API registry keeps track of all current modules. You can query the registry for a module with
+a specific name. The registry will return a &lt;code dir="ltr"&gt;void *&lt;/code&gt; which can be cast to a struct of the appropriate
+type.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Note that the &lt;code dir="ltr"&gt;void *&lt;/code&gt; returned is permanent. If the module is reloaded, the function pointers in
+the module will change, but the pointer to the module is still the same. This means it is legal to
+query for the API of a module before it is even loaded. Later, when it is loaded, the API will be
+filled in.
+
+&lt;/p&gt;&lt;h2&gt;OMG-API-12: create_xxx(), destroy_xxx()&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+Functions for creating objects that allocate the object's memory should be called &lt;code dir="ltr"&gt;create_xxx()&lt;/code&gt;.
+The corresponding function for destroying the object should be called &lt;code dir="ltr"&gt;destroy_xxx()&lt;/code&gt;.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+If the functions don't allocate memory, but just initialize an object that already exists, they
+should be called &lt;code dir="ltr"&gt;init_xxx()&lt;/code&gt; and &lt;code dir="ltr"&gt;shutdown_xxx()&lt;/code&gt; instead.
+
+&lt;/p&gt;&lt;h2 dir="ltr"&gt;OMG-API-13: Counting functions are prefixed with &lt;code dir="ltr"&gt;num_&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+Functions that return a count should be prefixed with &lt;code dir="ltr"&gt;num_&lt;/code&gt;, for example, &lt;code dir="ltr"&gt;num_buckets()&lt;/code&gt;.
+
+&lt;/p&gt;&lt;h2&gt;OMG-API-14: Type naming conventions&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;Externally visible objects must be named with &lt;code dir="ltr"&gt;tm_&lt;/code&gt; prefix.
+&lt;/LI&gt;&lt;LI&gt;Internal objects should not have &lt;code dir="ltr"&gt;tm_&lt;/code&gt; prefix (to avoid confusion).&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
+
+Every type should have a suffix. We use the following suffixes:
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;_api&lt;/code&gt; — API with function pointers that can be queried through the API registry.
+&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;_i&lt;/code&gt; — object interface — struct with function pointers and an &lt;code dir="ltr"&gt;inst&lt;/code&gt; member.
+&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;_vt&lt;/code&gt; — vtable, for objects using vtables in their interface
+&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;_t&lt;/code&gt; — simple/raw/POD data that you can copy freely and create on the stack.
+&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;_o&lt;/code&gt; — classes, opaque data, structs that need initialization, etc.&lt;/LI&gt;&lt;/UL&gt;&lt;h2 dir="ltr"&gt;OMG-API-15: Use of &lt;code dir="ltr"&gt;char *&lt;/code&gt;, &lt;code dir="ltr"&gt;unsigned char *&lt;/code&gt;, &lt;code dir="ltr"&gt;uint8_t *&lt;/code&gt;, &lt;code dir="ltr"&gt;void *&lt;/code&gt;&lt;/h2&gt;&lt;UL&gt;&lt;LI&gt;An API parameter representing a traditional string (zero-terminated, UTF-8 literal)
+  should use &lt;code dir="ltr"&gt;char *&lt;/code&gt; (for compatibility with C literals).
+
+&lt;/LI&gt;&lt;LI&gt;String processing code may want to cast from &lt;code dir="ltr"&gt;char *&lt;/code&gt; to &lt;code dir="ltr"&gt;uint8_t *&lt;/code&gt; to deal with bytes
+  outside the 0—127 range.
+
+&lt;/LI&gt;&lt;LI&gt;An API parameter representing a block of bytes (not a string) should use &lt;code dir="ltr"&gt;uint8_t *&lt;/code&gt;.
+
+&lt;/LI&gt;&lt;LI&gt;An API parameter representing an untyped pointer to memory should use &lt;code dir="ltr"&gt;void *&lt;/code&gt;.
+
+&lt;/LI&gt;&lt;LI&gt;The internal storage format for arbitrary data buffers should be &lt;code dir="ltr"&gt;uint8_t[]&lt;/code&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;OMG-API-16: Parameter order for functions&lt;/h2&gt;&lt;p&gt;
+
+
+The typical parameter order for a function should look something like this:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;&lt;span dir="ltr"&gt;return_value = f(&lt;span dir="ltr"&gt;object&lt;/span&gt;, parameters, options, helpers, more_return_values)&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;UL&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;object&lt;/code&gt; is the “object” (if any) that the function operates on (e.g. for &lt;code dir="ltr"&gt;fread&lt;/code&gt;, its the file
+  handle).
+
+&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;parameters&lt;/code&gt; are the primary parameters that the function uses (e.g. for &lt;code dir="ltr"&gt;fopen&lt;/code&gt;, its the file
+  name).
+
+&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;options&lt;/code&gt; are any options that modify how the function operates (e.g. open for reading or
+  writing).
+
+&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;helpers&lt;/code&gt; are any additional helper objects needed by the function to do its job (e.g. memory
+   allocators).
+
+&lt;/LI&gt;&lt;LI&gt;&lt;code dir="ltr"&gt;more_return_values&lt;/code&gt; — if the function needs to return more than one value, the extra return
+  values are passed as pointers at the end of the parameter list.
+
+&lt;p dir="ltr"&gt;
+
+  Note that often readability is improved by returning multiple values as a &lt;code dir="ltr"&gt;struct&lt;/code&gt; instead of
+  using output parameters. However, adding that extra struct increases the cognitive load a little
+  bit, especially if it is only used in one place. You have to decide on a case-by-case basis
+  whether returning a struct or using return value pointers makes more sense.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
+
+When passing pointers and sizes we use the &lt;code dir="ltr"&gt;memcpy&lt;/code&gt; parameter order:
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Destination pointer comes before source pointer.
+&lt;/LI&gt;&lt;LI&gt;Pointer comes before byte counter.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;OMG-API-17: Use SI units&lt;/h2&gt;&lt;p&gt;
+
+
+Units in APIs should be SI units: seconds, meters, kilograms, etc.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+I.e., use a &lt;code dir="ltr"&gt;double&lt;/code&gt; parameter that specifies seconds, instead of an &lt;code dir="ltr"&gt;uint32_t&lt;/code&gt; that
+specifies milliseconds.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Buffer sizes should be specified in bytes (not kilobytes or megabytes). Prefer to use &lt;code dir="ltr"&gt;_bytes&lt;/code&gt; rather
+than &lt;code dir="ltr"&gt;_size&lt;/code&gt; in the name to indicate byte count rather than element count.
+
+&lt;/p&gt;&lt;h2&gt;OMG-API-18: API Documentation&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+API documentation is automatically generated using the &lt;code dir="ltr"&gt;docgen&lt;/code&gt; executable — it is built automatically
+by &lt;code dir="ltr"&gt;tmbuild&lt;/code&gt;.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+&lt;code dir="ltr"&gt;docgen&lt;/code&gt; parses &lt;code dir="ltr"&gt;.h&lt;/code&gt; files and finds &lt;code dir="ltr"&gt;//&lt;/code&gt; comment blocks that precede code blocks (&lt;code dir="ltr"&gt;#define&lt;/code&gt;,
+&lt;code dir="ltr"&gt;struct&lt;/code&gt; or function definitions) and turns those comment blocks into comments for the code.
+Freestanding comment blocks become freestanding text in the documentation.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Tips for using &lt;code dir="ltr"&gt;docgen&lt;/code&gt;:
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Quote variables using backticks.
+&lt;/LI&gt;&lt;LI&gt;If you want to exclude something from the documentation, use &lt;code dir="ltr"&gt;#pragma tm_docgen(off)&lt;/code&gt; to turn
+  off documentation generation and &lt;code dir="ltr"&gt;#pragma tm_docgen(on)&lt;/code&gt; to turn it back on again.
+&lt;/LI&gt;&lt;LI&gt;Use H3 headings (&lt;code dir="ltr"&gt;###&lt;/code&gt;) for sections within a &lt;code dir="ltr"&gt;.h&lt;/code&gt; file.
+&lt;/LI&gt;&lt;LI&gt;Use bold (&lt;code dir="ltr"&gt;**&lt;/code&gt;) for sections within a &lt;code dir="ltr"&gt;struct&lt;/code&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
+
+API documentation should aim to be succinct and provide the user with just the information that they
+need. Avoid documentation boilerplate.
+
+&lt;/p&gt;&lt;h2&gt;OMG-API-19: Opaque object representations&lt;/h2&gt;&lt;p&gt;
+
+
+Some modules are capable of creating opaque objects. We support four different kinds of object
+representations.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+&lt;strong dir="ltr"&gt;Simple objects&lt;/strong&gt; are represented by an opaque forward declared struct pointer:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;typedef&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;tm_object_o&lt;/span&gt; &lt;span dir="ltr"&gt;tm_object_o&lt;/span&gt;;&lt;/span&gt;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;tm_api&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    tm_object_o *(*create)();&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;void&lt;/span&gt; (*do_stuff)(tm_object_o *o);&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;void&lt;/span&gt; (*destroy)(tm_object_o *o);&lt;/span&gt;
+&lt;span dir="ltr"&gt;};&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+
+Functions in the API allow you to manipulate the object.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+A variation on simple objects, &lt;strong dir="ltr"&gt;simple POD objects&lt;/strong&gt; are used for objects that are manipulated by
+value rather than by pointer. It looks something like this:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;typedef&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;tm_object_o&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;uint8_t&lt;/span&gt; bytes[&lt;span dir="ltr"&gt;32&lt;/span&gt;];&lt;/span&gt;
+&lt;span dir="ltr"&gt;} tm_object_o;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;tm_api&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;void&lt;/span&gt; (*init)(tm_object_o *o);&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;void&lt;/span&gt; (*do_stuff)(tm_object_o o);&lt;/span&gt;
+&lt;span dir="ltr"&gt;};&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+
+With this approach, the caller is responsible for managing the memory of the object and the object
+can live on the stack. It can be compared and copied with &lt;code dir="ltr"&gt;memcmp()&lt;/code&gt; and &lt;code dir="ltr"&gt;memcpy()&lt;/code&gt;. On the inside,
+the API implementation will cast the raw bytes to a concrete &lt;code dir="ltr"&gt;object_t&lt;/code&gt; representation of the
+object. This representation is not exposed in the API either because it is platform-specific,
+contains types that we don't want to expose, etc.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+&lt;strong dir="ltr"&gt;Object interfaces&lt;/strong&gt; are used when we want several different implementations that implement the
+same interface. They look like this:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;typedef&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;tm_allocator_i&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    tm_allocator_o *inst;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;void&lt;/span&gt; *(*&lt;span dir="ltr"&gt;realloc&lt;/span&gt;)(tm_allocator_o *inst, &lt;span dir="ltr"&gt;void&lt;/span&gt; *ptr,&lt;/span&gt;
+&lt;span dir="ltr"&gt;        &lt;span dir="ltr"&gt;uint64_t&lt;/span&gt; old_size, &lt;span dir="ltr"&gt;uint64_t&lt;/span&gt; new_size,&lt;/span&gt;
+&lt;span dir="ltr"&gt;        &lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;char&lt;/span&gt; *file, &lt;span dir="ltr"&gt;uint32_t&lt;/span&gt; line, &lt;span dir="ltr"&gt;uint32_t&lt;/span&gt; scope);&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;tm_memory_tracker_i&lt;/span&gt; *(*&lt;span dir="ltr"&gt;tracker&lt;/span&gt;)(&lt;span dir="ltr"&gt;tm_allocator_o&lt;/span&gt; *&lt;span dir="ltr"&gt;inst&lt;/span&gt;);&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;} tm_allocator_i;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+
+Here &lt;code dir="ltr"&gt;tm_allocator_o *&lt;/code&gt; is an opaque implementation-specific representation of the data for the
+object. Each implementation of the interface will cast this pointer to a specific type for that
+implementation. In addition to the data pointer, the interface also contains (implementation
+specific) function pointers that manipulate the data. Note that these functions all take the
+instance data as an argument. You would use the interface like this:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;tm_allocator_i *a;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt; *p = a-&amp;gt;&lt;span dir="ltr"&gt;realloc&lt;/span&gt;(a-&amp;gt;inst, &lt;span dir="ltr"&gt;0&lt;/span&gt;, &lt;span dir="ltr"&gt;0&lt;/span&gt;, &lt;span dir="ltr"&gt;1024&lt;/span&gt;, __FILE__, __LINE__, scope);&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+
+Note that with this approach, each object contains all the function pointers of the interface, which
+consumes a bit of memory (not a lot, since interfaces should typically be small). A more serious
+drawback is that reloading code is tricky with this approach because all the function pointers in
+all the objects must be replaced to point to the new reloaded version.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+&lt;strong dir="ltr"&gt;Object interfaces with vtables&lt;/strong&gt; can be used to address this. They work as object interfaces,
+except they put all the function definitions in a vtable, so they can be shared by multiple objects:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;typedef&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;tm_allocator_vt&lt;/span&gt; &lt;span dir="ltr"&gt;tm_allocator_vt&lt;/span&gt;;&lt;/span&gt;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;typedef&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;tm_allocator_i&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    tm_allocator_o *inst;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    tm_allocator_vt *vt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;} tm_allocator_i;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;tm_allocator_vt&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;void&lt;/span&gt; *(*&lt;span dir="ltr"&gt;realloc&lt;/span&gt;)(tm_allocator_o *inst, &lt;span dir="ltr"&gt;void&lt;/span&gt; *ptr,&lt;/span&gt;
+&lt;span dir="ltr"&gt;        &lt;span dir="ltr"&gt;uint64_t&lt;/span&gt; old_size, &lt;span dir="ltr"&gt;uint64_t&lt;/span&gt; new_size,&lt;/span&gt;
+&lt;span dir="ltr"&gt;        &lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;char&lt;/span&gt; *file, &lt;span dir="ltr"&gt;uint32_t&lt;/span&gt; line, &lt;span dir="ltr"&gt;uint32_t&lt;/span&gt; scope);&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;tm_memory_tracker_i&lt;/span&gt; *(*&lt;span dir="ltr"&gt;tracker&lt;/span&gt;)(&lt;span dir="ltr"&gt;tm_allocator_o&lt;/span&gt; *&lt;span dir="ltr"&gt;inst&lt;/span&gt;);&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;};&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+
+And using it becomes:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt; *p = a-&amp;gt;vt-&amp;gt;&lt;span dir="ltr"&gt;realloc&lt;/span&gt;(a-&amp;gt;inst, &lt;span dir="ltr"&gt;0&lt;/span&gt;, &lt;span dir="ltr"&gt;0&lt;/span&gt;, &lt;span dir="ltr"&gt;1024&lt;/span&gt;, __FILE__, __LINE__, scope);&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+
+Vtables also allow an object to implement an interface and extend it with additional functionality:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;tm_my_allocator_vt&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;tm_allocator_vt&lt;/span&gt;;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;void&lt;/span&gt; (*set_chunk_size)(tm_allocator_o *inst, &lt;span dir="ltr"&gt;uint64_t&lt;/span&gt; chunk_size);&lt;/span&gt;
+&lt;span dir="ltr"&gt;};&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+
+This kind of inheritance should be used &lt;em dir="ltr"&gt;very sparingly&lt;/em&gt; as it can create complicated couplings,
+bad cache behavior and hard to read code. Prefer composition over inheritance. However, there are
+a few special cases where inheritance can be a good solution.
+
+&lt;/p&gt;&lt;h2&gt;OMG-API-20: Enum types should be named&lt;/h2&gt;&lt;p&gt;
+
+
+Enum types in APIs should be named. Note that since we are using C, this does not provide a
+namespace for the constants, the constant names still need to be fully qualified:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;enum&lt;/span&gt; &lt;span dir="ltr"&gt;tm_log_type&lt;/span&gt; {&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    TM_LOG_TYPE_INFO,&lt;/span&gt;
+&lt;span dir="ltr"&gt;    TM_LOG_TYPE_DEBUG,&lt;/span&gt;
+&lt;span dir="ltr"&gt;    TM_LOG_TYPE_ERROR&lt;/span&gt;
+&lt;span dir="ltr"&gt;};&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+
+If an enum is used just to define a constant, the enum does not need to be named. In this case the
+enum should be written on a single line, or a &lt;code dir="ltr"&gt;#define&lt;/code&gt; statement should be used:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;enum&lt;/span&gt; {&lt;/span&gt; TM_UI_MAX_TEXT_INPUT = &lt;span dir="ltr"&gt;32&lt;/span&gt; };&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;define&lt;/span&gt; TM_UI_MAX_TEXT_INPUT 32&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+
+Functions that take an enum are recommended to take the enum type rather than an &lt;code dir="ltr"&gt;uint32_t&lt;/code&gt;,
+however, structs that include an enum should specify an integer type for the struct member:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt; &lt;span dir="ltr"&gt;f&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;enum&lt;/span&gt; tm_log_type log_type)&lt;/span&gt;&lt;/span&gt;;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;data_t&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;/* enum tm_log_type */&lt;/span&gt; &lt;span dir="ltr"&gt;uint32_t&lt;/span&gt; log_type;&lt;/span&gt;
+&lt;span dir="ltr"&gt;};&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+
+If we use the &lt;code dir="ltr"&gt;enum&lt;/code&gt; type in the struct what integer width it actually ends up with depends on
+the platform/compiler, and this means that the layout of the struct is no longer ABI compatible
+across different platforms and compilers. Having a predictable binary layout of the struct and ABI
+compatibility is more important than the type safety you get from using the &lt;code dir="ltr"&gt;enum&lt;/code&gt; type in the
+struct.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+When passing an enum as an argument, smaller types are promoted to ints anyway, which means ABI
+compatibility is conserved. So, in this case, the type safety and clarity of using the &lt;code dir="ltr"&gt;enum&lt;/code&gt; type
+is worth it.
+
+&lt;/p&gt;&lt;h2&gt;OMG-API-21: Stable interfaces&lt;/h2&gt;&lt;p&gt;
+
+
+With our module architecture, changing an API interface will break compatibility with DLLs and plugins
+using the old interface. You should be conservative and not change the interfaces more than
+necessary. For example, add new functions at the end of the interface rather than at the beginning,
+that way existing users are unaffected by the change.
+
+&lt;/p&gt;&lt;p&gt;
+
+However, in a long term perspective, making sure the code can evolve, improve and adapt is more
+important than keeping backward compatibility with really old code.
+
+&lt;/p&gt;&lt;p&gt;
+
+Currently, since the project is in early development, we don't attempt to keep the APIs stable and
+you may change them freely.
+
+&lt;/p&gt;&lt;h1&gt;OMG-STYLE: Source code style rules&lt;/h1&gt;&lt;h2 dir="ltr"&gt;OMG-STYLE-1: Source code should be formatted using &lt;code dir="ltr"&gt;clang-format&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+The formatting done by our &lt;code dir="ltr"&gt;clang-format&lt;/code&gt; rules is not perfect, but having an automatic formatting
+system is more important than having a perfect one. It allows developers to focus on the code rather
+than formatting issues.
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Set up your editor to automatically run &lt;code dir="ltr"&gt;clang-format&lt;/code&gt; on save (both Atom and Visual Studio Code
+  have plugins for this).
+
+&lt;/LI&gt;&lt;LI&gt;Install the pre-commit hook &lt;code dir="ltr"&gt;utils/githooks/pre-commit&lt;/code&gt; to format the source code automatically
+  on commit (this is done automatically by &lt;code dir="ltr"&gt;tmbuild&lt;/code&gt;).&lt;/LI&gt;&lt;/UL&gt;&lt;div&gt; Note&lt;/div&gt;&lt;p dir="ltr"&gt;
+
+    The most annoying thing about &lt;code dir="ltr"&gt;clang-format&lt;/code&gt; is that it left-flushes &lt;code dir="ltr"&gt;#if&lt;/code&gt; statements
+    rather than indenting them. This makes the code harder to read — especially when there are
+    multiple nested statements. We should consider patching &lt;code dir="ltr"&gt;clang-format&lt;/code&gt; to fix this in the future.
+
+&lt;/p&gt;&lt;p&gt;
+
+    I.e. instead of this:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;div dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;if&lt;/span&gt; defined(TM_OS_WINDOWS)&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;define&lt;/span&gt; DIRSEP &lt;span dir="ltr"&gt;"\\"&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;else&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;define&lt;/span&gt; DIRSEP &lt;span dir="ltr"&gt;"/"&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;endif&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt; &lt;span dir="ltr"&gt;void&lt;/span&gt; &lt;span dir="ltr"&gt;log_output_debug_string&lt;/span&gt;&lt;span dir="ltr"&gt;(struct tm_logger_o *inst,&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;enum&lt;/span&gt; tm_log_type log_type, &lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;char&lt;/span&gt; *msg)&lt;/span&gt;&lt;/span&gt;
+{&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;if&lt;/span&gt; defined(TM_OS_WINDOWS)&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt; &lt;span dir="ltr"&gt;OutputDebugStringA&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;char&lt;/span&gt; *s)&lt;/span&gt;&lt;/span&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    OutputDebugStringA(msg);&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;endif&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/div&gt;&lt;/PRE&gt;&lt;p&gt;
+
+    We want this:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;if&lt;/span&gt; defined(TM_OS_WINDOWS)&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;define&lt;/span&gt; DIRSEP &lt;span dir="ltr"&gt;"\\"&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;else&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;define&lt;/span&gt; DIRSEP &lt;span dir="ltr"&gt;"/"&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;endif&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;static&lt;/span&gt; &lt;span dir="ltr"&gt;void&lt;/span&gt; &lt;span dir="ltr"&gt;log_output_debug_string&lt;/span&gt;&lt;span dir="ltr"&gt;(struct tm_logger_o *inst,&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;enum&lt;/span&gt; tm_log_type log_type, &lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;char&lt;/span&gt; *msg)&lt;/span&gt;&lt;/span&gt;
+{&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;if&lt;/span&gt; defined(TM_OS_WINDOWS)&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;        &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt; &lt;span dir="ltr"&gt;OutputDebugStringA&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;char&lt;/span&gt; *s)&lt;/span&gt;&lt;/span&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;        OutputDebugStringA(msg);&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;endif&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+
+Tips if you find yourself fighting with &lt;code dir="ltr"&gt;clang-format&lt;/code&gt;:
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;When formatting inlined struct initializers, you can make clang-format split it over multiple
+  lines by putting a &lt;code dir="ltr"&gt;,&lt;/code&gt; after the last element, or keep it as one line by omitting the last &lt;code dir="ltr"&gt;,&lt;/code&gt;:
+
+&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;a = { .x = &lt;span dir="ltr"&gt;1&lt;/span&gt;, .y = &lt;span dir="ltr"&gt;2&lt;/span&gt; };&lt;/span&gt;
+&lt;span dir="ltr"&gt;b = {&lt;/span&gt;
+&lt;span dir="ltr"&gt;    .x = &lt;span dir="ltr"&gt;1&lt;/span&gt;,&lt;/span&gt;
+&lt;span dir="ltr"&gt;    .y = &lt;span dir="ltr"&gt;2&lt;/span&gt;,&lt;/span&gt;
+&lt;span dir="ltr"&gt;};&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;/LI&gt;&lt;LI&gt;If you can't get the line breaking you want, you can prevent clang-format from merging your lines
+  by putting an empty comment &lt;code dir="ltr"&gt;//&lt;/code&gt; at the end of the line.&lt;/LI&gt;&lt;/UL&gt;&lt;h2&gt;OMG-STYLE-2: If you are writing C++, prefer simple C++&lt;/h2&gt;&lt;p&gt;
+
+
+If you are writing code in C++ (C is preferred) you should use a simple style. Avoid class
+hierarchies, multiple inheritance, template metaprogramming, virtual functions, operator overloading
+etc.
+
+&lt;/p&gt;&lt;p&gt;
+
+Prefer public data members over accessor functions. In most cases, accessor functions are
+unnecessary boilerplate and the “encapsulation” they provide does not add any real value.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Avoid using &lt;code dir="ltr"&gt;auto&lt;/code&gt;. &lt;code dir="ltr"&gt;auto&lt;/code&gt; makes it harder to see what types are actually being used in the code and
+leads to more cryptic error messages. Only use &lt;code dir="ltr"&gt;auto&lt;/code&gt; for complicated types, such as lambdas or
+iterators.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Prefer using &lt;code dir="ltr"&gt;static&lt;/code&gt; rather than anonymous namespaces (&lt;code dir="ltr"&gt;namespace { }&lt;/code&gt;) to prevent external
+linkage. The reason we prefer &lt;code dir="ltr"&gt;static&lt;/code&gt; is that it doesn't create huge namespace scopes that make it
+difficult to see where the scope begins and ends. For local classes and other things that have
+external linkage in C++, but cannot use the &lt;code dir="ltr"&gt;static&lt;/code&gt; keyword, use a small &lt;code dir="ltr"&gt;namespace {}&lt;/code&gt; scope
+wrapped around just that object.
+
+&lt;/p&gt;&lt;h2&gt;OMG-STYLE-4: Line length is up to the discretion of the programmer&lt;/h2&gt;&lt;p&gt;
+
+
+Monitors are wider these days and nobody prints source code, so there is no need to enforce a line
+width of 80 characters. Long lines can be hard to read, but using short variable names and chopping
+up a line with line breaks can also make it hard to read — we leave it up to each programmer to
+find the right balance. Try to avoid super long lines, but don't religiously line break your code at
+a fixed width at the cost of readability.
+
+&lt;/p&gt;&lt;p&gt;
+
+If you want a guide for line length — we think line breaking at 100 characters makes more sense
+than line breaking at 80. 80 is unnecessarily restrictive and 100 gives a bit more room for longer
+variables.
+
+&lt;/p&gt;&lt;p&gt;
+
+Documentation should always be line-broken at 100 characters. Reading text is different than reading
+source code. Source code is read line by line, while text is read as continuous paragraphs. Column
+widths greater than 100 characters makes text really hard to read.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Make use of editor features to line break the documentation at 100 characters. For example, in
+&lt;em dir="ltr"&gt;Visual Studio Code&lt;/em&gt;, set &lt;em dir="ltr"&gt;Word Wrap Column&lt;/em&gt; to 100, install the &lt;em dir="ltr"&gt;Rewrap&lt;/em&gt; extension and press
+&lt;em dir="ltr"&gt;Alt-Q&lt;/em&gt; to wrap a paragraph.
+
+&lt;/p&gt;&lt;div&gt; Note&lt;/div&gt;&lt;p dir="ltr"&gt;
+
+    We belive that the &lt;em dir="ltr"&gt;right&lt;/em&gt; way to handle long code lines is for the &lt;em dir="ltr"&gt;editor&lt;/em&gt; to word wrap
+    automatically &lt;em dir="ltr"&gt;with intelligent indentation&lt;/em&gt;. I.e., when you enable word wrap in the editor, the
+    indentation should look similar to what you would get with hand-inserted line breaks.
+
+&lt;/p&gt;&lt;p&gt;
+
+    This way, each user can use the editor width that they prefer, and the code will look good
+    everywhere. Unfortunately, editors are still pretty bad at doing this.&lt;/p&gt;&lt;h2 dir="ltr"&gt;OMG-STYLE-7: Unexposed functions and variables should be declared &lt;code dir="ltr"&gt;static&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+Everything that is not part of the public API should be declared &lt;code dir="ltr"&gt;static&lt;/code&gt; so that it doesn't have
+external linkage.
+
+&lt;/p&gt;&lt;h2&gt;OMG-STYLE-9: Naming&lt;/h2&gt;&lt;p&gt;
+
+
+Use short names for local variables. Use longer descriptive names for things with bigger scopes
+(functions, structs, global variables).
+
+&lt;/p&gt;&lt;p&gt;
+
+Outside of local variables, you should not use abbreviations in variable names.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Most things are named with &lt;code dir="ltr"&gt;lower_case&lt;/code&gt;. Enums and define constants are named with &lt;code dir="ltr"&gt;UPPER_CASE&lt;/code&gt;.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Functions private to a source file can be given the prefix &lt;code dir="ltr"&gt;private__&lt;/code&gt; to emphasize their private
+nature.
+
+&lt;/p&gt;&lt;h2&gt;OMG-STYLE-10: Typedefs&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+Use typedefs to define names for structs and unions that can be used without the &lt;code dir="ltr"&gt;struct&lt;/code&gt; keyword.
+These names should always be the same as the name of the struct:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;typedef&lt;/span&gt; &lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;struct&lt;/span&gt; &lt;span dir="ltr"&gt;tm_vec2_t&lt;/span&gt; &lt;span dir="ltr"&gt;tm_vec2_t&lt;/span&gt;;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+
+Don't use typedefs for other things. In particular, don't typedef pointer types (hiding the fact
+that they are pointers).
+
+&lt;/p&gt;&lt;h2&gt;OMG-STYLE-11: Goto&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+Use of &lt;code dir="ltr"&gt;goto&lt;/code&gt; should be limited to early exiting of functions that need to do some cleanup before
+returning.
+
+&lt;/p&gt;&lt;h2&gt;OMG-STYLE-12: Commenting&lt;/h2&gt;&lt;p&gt;
+
+
+Exposed API functions need documentation comments, other code only needs to be commented as
+necessary. Write your code clearly and use sensible names to reduce the need for comments.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+&lt;code dir="ltr"&gt;//&lt;/code&gt; comments should be used for all comments. &lt;code dir="ltr"&gt;/*&lt;/code&gt; should only be used to temporarily disable code.
+
+&lt;/p&gt;&lt;h2&gt;OMG-STYLE-13: No dead code&lt;/h2&gt;&lt;p&gt;
+
+
+Unused code, commented out code, functions that are never called, etc, should be removed from the
+project to reduce the cognitive load of reading the source code. Old code is available in the source
+history if it is needed.
+
+&lt;/p&gt;&lt;h2&gt;OMG-STYLE-14: Macros&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+Macros should be &lt;code dir="ltr"&gt;CAPITALIZED&lt;/code&gt;.
+
+&lt;/p&gt;&lt;p&gt;
+
+Consider using inline functions instead of macros.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Macros with multiple statements should be enclosed in a &lt;code dir="ltr"&gt;do {...} while (0)&lt;/code&gt; block so that they can
+be used as part of the normal control flow.
+
+&lt;/p&gt;&lt;h2&gt;OMG-STYLE-15: Conditional compilation&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+Prefer &lt;code dir="ltr"&gt;#if defined(X)&lt;/code&gt; to &lt;code dir="ltr"&gt;#ifdef X&lt;/code&gt;.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Avoid use of &lt;code dir="ltr"&gt;#if&lt;/code&gt; and &lt;code dir="ltr"&gt;#ifdef&lt;/code&gt; as much as possible. Source code is easier to reason about if
+every compiler on every platform sees the same code.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Don't sprinkle the code with platform-specific &lt;code dir="ltr"&gt;#ifdef&lt;/code&gt;s. Instead, put all the platform-specific
+stuff in its own files, one per platform: &lt;code dir="ltr"&gt;os.win.c&lt;/code&gt;, &lt;code dir="ltr"&gt;os.osx.c&lt;/code&gt;, etc
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Use the &lt;code dir="ltr"&gt;TM_IS_DEFINED&lt;/code&gt; macro and a regular &lt;code dir="ltr"&gt;if&lt;/code&gt; statement instead of &lt;code dir="ltr"&gt;#if&lt;/code&gt; whenever possible:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;if&lt;/span&gt; (TM_IS_DEFINED(TM_OS_WINDOWS))&lt;/span&gt;
+&lt;span dir="ltr"&gt;    do_some_stuff();&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;else&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    do_some_other_stuff();&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+
+instead of:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;div dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;if&lt;/span&gt; defined(TM_OS_WINDOWS)&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;do_some_stuff();&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;else&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;do_some_other_stuff();&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;#&lt;span dir="ltr"&gt;endif&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/div&gt;&lt;/PRE&gt;&lt;p&gt;
+
+This is preferable, because when we compile, all code paths are checked for syntax errors, not just
+the platform that we are compiling for.
+
+&lt;/p&gt;&lt;h2 dir="ltr"&gt;OMG-STYLE-16: Use &lt;code dir="ltr"&gt;TM_STATIC_HASH()&lt;/code&gt; for static hash values&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+To create a static hash value, you should use the &lt;code dir="ltr"&gt;TM_STATIC_HASH()&lt;/code&gt; macro, like this:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;uint64_t&lt;/span&gt; name_hash = TM_STATIC_HASH(&lt;span dir="ltr"&gt;"name"&lt;/span&gt;, &lt;span dir="ltr"&gt;0xd4c943cba60c270b&lt;/span&gt;ULL);&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+
+The macro resoves to its second argument, so when compiled this will just be:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;uint64_t&lt;/span&gt; name_hash = &lt;span dir="ltr"&gt;0xd4c943cba60c270b&lt;/span&gt;ULL;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+
+&lt;code dir="ltr"&gt;TM_STATIC_HASH()&lt;/code&gt; is defined in &lt;code dir="ltr"&gt;foundation/api_types.h&lt;/code&gt;, so it can be used  to define macros in
+header files.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+The &lt;code dir="ltr"&gt;hash.exe&lt;/code&gt; utility program can be used to automatically check and patch the arguments of all
+&lt;code dir="ltr"&gt;TM_STATIC_HASH()&lt;/code&gt; macros in the codebase. So instead of trying to figure out what the right murmur
+hash value is for a particular string, you can just write:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;uint64_t&lt;/span&gt; name_hash = TM_STATIC_HASH(&lt;span dir="ltr"&gt;"name"&lt;/span&gt;,);&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+
+And then run:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;&lt;span&gt;bin/Debug/hash.exe&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+
+in the root of your project, and the code will automatically be patched to:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;uint64_t&lt;/span&gt; name_hash = TM_STATIC_HASH(&lt;span dir="ltr"&gt;"name"&lt;/span&gt;, &lt;span dir="ltr"&gt;0xd4c943cba60c270b&lt;/span&gt;ULL);&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;h2 dir="ltr"&gt;OMG-STYLE-17: Use &lt;code dir="ltr"&gt;TM_LOCALIZE()&lt;/code&gt; for localization&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+Every string that is visible in the UI should be wrapped in a &lt;code dir="ltr"&gt;TM_LOCALIZE()&lt;/code&gt; macro for
+localization. Example:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;tm_ui_menu_item_t&lt;/span&gt; items[] = {&lt;/span&gt;
+&lt;span dir="ltr"&gt;    { .text = TM_LOCALIZE(&lt;span dir="ltr"&gt;"File"&lt;/span&gt;), .item_id = MENU_FILE },&lt;/span&gt;
+&lt;span dir="ltr"&gt;    { .text = TM_LOCALIZE(&lt;span dir="ltr"&gt;"Edit"&lt;/span&gt;), .item_id = MENU_EDIT },&lt;/span&gt;
+&lt;span dir="ltr"&gt;    { .text = TM_LOCALIZE(&lt;span dir="ltr"&gt;"View"&lt;/span&gt;), .item_id = MENU_VIEW },&lt;/span&gt;
+&lt;span dir="ltr"&gt;    { .text = TM_LOCALIZE(&lt;span dir="ltr"&gt;"Tools"&lt;/span&gt;), .item_id = MENU_TOOLS },&lt;/span&gt;
+&lt;span dir="ltr"&gt;};&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+
+The macro will call out to the localize system to translate the string to the current UI language.
+If there is no translation for the string, or the UI language is English, the original string will
+be returned. Thus, wrapping strings in &lt;code dir="ltr"&gt;TM_LOCALIZE()&lt;/code&gt; allows them to be localized.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+The Machinery editor includes a &lt;em dir="ltr"&gt;Gibberish&lt;/em&gt; translation option to test localization. When you set
+the UI language to &lt;em dir="ltr"&gt;Gibberish&lt;/em&gt;, all localized strings will be translated to slightly longer
+randomized strings. This serves two purposes. First, it allows you to check that you have properly
+used &lt;code dir="ltr"&gt;TM_LOCALIZE()&lt;/code&gt; everywhere. If you still see any English text after switching to Gibberish,
+that text has not been localized. Second, it allows you to check that the UI doesn't break if the
+translated strings are slightly longer than the original.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+The &lt;code dir="ltr"&gt;localize.exe&lt;/code&gt; program can be used for translation. It will find all the &lt;code dir="ltr"&gt;TM_LOCALIZE()&lt;/code&gt; macros
+in the project, check them against a list of translations and print out any translations that are
+still missing.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Since we scan for &lt;code dir="ltr"&gt;TM_LOCALIZE()&lt;/code&gt; macros &lt;em dir="ltr"&gt;statically&lt;/em&gt;, &lt;code dir="ltr"&gt;TM_LOCALIZE()&lt;/code&gt; can only use &lt;em dir="ltr"&gt;static&lt;/em&gt;
+strings. I.e., this is an error:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;div dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// Don't do this.&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;sprintf&lt;/span&gt;(msg, &lt;span dir="ltr"&gt;"Thanks %s!"&lt;/span&gt;);&lt;/span&gt;
+&lt;span dir="ltr"&gt;msg = TM_LOCALIZE(msg);&lt;/span&gt;&lt;/div&gt;&lt;/PRE&gt;&lt;p&gt;
+
+Instead of trying to localize dynamic strings like this, compose dynamic strings out of localized
+static parts:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;sprintf&lt;/span&gt;(msg, TM_LOCALIZE(&lt;span dir="ltr"&gt;"Thanks %s!"&lt;/span&gt;), name);&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;div&gt; Localization tips&lt;/div&gt;&lt;UL&gt;&lt;LI&gt;Be wary of concatenating strings out of too many individual parts. Word order might differ between
+          languages and the way you put the string together might not make sense. E.g.:
+
+&lt;PRE&gt;&lt;div dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// Not ideal: This locks down the sentence structure and depends on&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// "great" and "good" being  translated the same way in this sentence&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// as in all other possible sentences.&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;sprintf&lt;/span&gt;(msg, TM_LOCALIZE(&lt;span dir="ltr"&gt;"Thanks %s, you did %s!"&lt;/span&gt;), name,&lt;/span&gt;
+&lt;span dir="ltr"&gt;    score &amp;gt; &lt;span dir="ltr"&gt;100&lt;/span&gt; ? TM_LOCALIZE(&lt;span dir="ltr"&gt;"great"&lt;/span&gt;) : TM_LOCALIZE(&lt;span dir="ltr"&gt;"good"&lt;/span&gt;));&lt;/span&gt;&lt;/div&gt;&lt;/PRE&gt;&lt;p&gt;
+    
+            Better:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;sprintf&lt;/span&gt;(msg, score &amp;gt; &lt;span dir="ltr"&gt;100&lt;/span&gt; ? TM_LOCALIZE(&lt;span dir="ltr"&gt;"Thanks %s, you did great!"&lt;/span&gt;) :&lt;/span&gt;
+&lt;span dir="ltr"&gt;    TM_LOCALIZE(&lt;span dir="ltr"&gt;"Thanks %s, you did good!"&lt;/span&gt;, name));&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;/LI&gt;&lt;LI&gt;Make sure to clearly mark in your APIs which function return localized vs non-localized strings.
+          E.g., if you just see a function:
+
+&lt;PRE&gt;&lt;code&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;char&lt;/span&gt; *&lt;span dir="ltr"&gt;name&lt;/span&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt;&lt;/span&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+    
+            it is hard to know if it returns a localized name (suitable for displaying the UI), or a
+            non-localized string for internal use. In some cases, you might need two separate functions for
+            the two different purposes:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;char&lt;/span&gt; *&lt;span dir="ltr"&gt;name&lt;/span&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt;&lt;/span&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;char&lt;/span&gt; *&lt;span dir="ltr"&gt;display_name&lt;/span&gt;&lt;span dir="ltr"&gt;()&lt;/span&gt;&lt;/span&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;h2 dir="ltr"&gt;OMG-STYLE-18: All variables that are not modified should be declared &lt;code dir="ltr"&gt;const&lt;/code&gt;&lt;/h2&gt;&lt;p&gt;
+
+
+Any variable in the code that is not mutated should be const-declared:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt; &lt;span dir="ltr"&gt;uint32_t&lt;/span&gt; x = y + &lt;span dir="ltr"&gt;3&lt;/span&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+
+Using &lt;code dir="ltr"&gt;const&lt;/code&gt; this way makes it easier for readers to understand the code. They know that &lt;code dir="ltr"&gt;x&lt;/code&gt; will
+always have the value that was set on initialization and do not have to scan the code for places
+where &lt;code dir="ltr"&gt;x&lt;/code&gt; might be modified.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Value parameters passed to a function are always assumed to be &lt;code dir="ltr"&gt;const&lt;/code&gt;. However, we do not explicitly
+declare them as const. Never modify value parameters in your function implementation:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;div dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;// Don't do this:&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;uint32_t&lt;/span&gt; &lt;span dir="ltr"&gt;add&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;span dir="ltr"&gt;uint32_t&lt;/span&gt; a, &lt;span dir="ltr"&gt;uint32_t&lt;/span&gt; b)&lt;/span&gt;&lt;/span&gt;
+{&lt;/span&gt;
+&lt;span dir="ltr"&gt;    a += b;&lt;/span&gt;
+&lt;span dir="ltr"&gt;    &lt;span dir="ltr"&gt;return&lt;/span&gt; a;&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;&lt;/div&gt;&lt;/PRE&gt;&lt;h1&gt;OMG-BUILD: Build process&lt;/h1&gt;&lt;h2 dir="ltr"&gt;OMG-BUILD-1: Single button builds through &lt;code dir="ltr"&gt;tmbuild&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+Running the &lt;code dir="ltr"&gt;tmbuild&lt;/code&gt; executable on a fresh machine should be enough to build the project.
+
+&lt;/p&gt;&lt;h2 dir="ltr"&gt;OMG-BUILD-2: Distribution packages through &lt;code dir="ltr"&gt;tmbuild -p&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+To build a package of the engine for distribution, use the &lt;code dir="ltr"&gt;-p&lt;/code&gt; option, such as:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;&lt;span&gt;tmbuild -p pre-alpha&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+
+Packages should be defined in the &lt;code dir="ltr"&gt;utils/tmbuild/packages.json&lt;/code&gt; file.
+
+&lt;/p&gt;&lt;h1&gt;OMG-GIT: Git workflow&lt;/h1&gt;&lt;h2&gt;OMG-GIT-1: Use trunk-based development&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+At Our Machinery, we use a &lt;a href="https://trunkbaseddevelopment.com/" dir="ltr"&gt;trunk-based development&lt;/a&gt; workflow.
+The basic idea behind trunk-based development is to not have long-lived feature branches. Instead,
+work should be merged incrementally to the &lt;code dir="ltr"&gt;master&lt;/code&gt; trunk, typically at least daily. The workflow
+is:
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Work on your change directly in &lt;code dir="ltr"&gt;master&lt;/code&gt; (you can create a branch if you feel you need it).
+&lt;/LI&gt;&lt;LI&gt;Work on a small isolated feature in a single commit.
+&lt;/LI&gt;&lt;LI&gt;When you have something to share, write a commit message that is as descriptive as possible and
+  push it.
+&lt;/LI&gt;&lt;LI&gt;Typically the process for this is: &lt;code dir="ltr"&gt;git fetch&lt;/code&gt;, &lt;code dir="ltr"&gt;git rebase origin/master&lt;/code&gt;, &lt;code dir="ltr"&gt;git push&lt;/code&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
+
+The advantages of using this workflow are:
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Everybody sees the same codebase — people are not off on separate branches.
+&lt;/LI&gt;&lt;LI&gt;Merge conflicts are reduced.
+&lt;/LI&gt;&lt;LI&gt;Integration happens sooner rather than later — problems are discovered sooner.
+&lt;/LI&gt;&lt;LI&gt;Commits are smaller and easier to grasp, two months of code doesn't come in as a single chunk.
+&lt;/LI&gt;&lt;LI&gt;Trunk history is branch free which simplifies the use of tools like &lt;code dir="ltr"&gt;git-bisect&lt;/code&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
+
+A disadvantage often claimed against this workflow is that the master branch becomes more unstable
+when more people are committing into it. This is true. However, the stability you get with long
+feature branches is often deceptive — you are just delaying the instability until the feature
+branches get integrated. Usually, that happens near a release — everybody integrates their feature
+branches at the same time, and you suddenly have a lot of instability. But near a release is exactly
+when you don't want a lot of instability.
+
+&lt;/p&gt;&lt;p&gt;
+
+To make sure that you can commit often, break bigger work into smaller steps that can be worked on
+and tested independently. (That is usually the only way to tackle bigger projects anyway.) Each
+single step should be something that adds value to the project by moving it forward in the right
+direction. This makes it easy to course-correct early if we are moving in the wrong direction.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+For features that are tricky to enable incrementally, consider the use of &lt;em dir="ltr"&gt;feature flags&lt;/em&gt; — compiler
+or runtime flags that enable or disable the new feature. This allows the feature to be tested as it
+is being developed, instead of “after integration”, as in a feature-branch workflow. But note that
+developing the feature incrementally is even better than using feature flags, as feature flags
+segment the developers and can hide integration problems. (Only the developers with certain feature
+flags set will test your code changes.)
+
+&lt;/p&gt;&lt;p&gt;
+
+In the current setup, developers test and merge their branches to the trunk as soon as they are done.
+Code review happens before and after:
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Code review before — make sure that the feature plan is sound.
+&lt;/LI&gt;&lt;LI&gt;Code review after merge — review the changes and look for any problems.
+&lt;/LI&gt;&lt;LI&gt;Code review of completed system — does it match the plan, are there changes that need to be made?&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
+
+Code does not need to pass code review to get merged. Requiring code reviews before merge slows down
+the merge process to take several days. This discourages the main principle of trunk-based
+development — to merge often and deliver changes quickly. Lack of pre-approval code review shouldn't
+be seen as a free-for-all encouragement of sloppy coding. Rather, the trust and responsibility to
+produce high-quality code is put on each developer.
+
+&lt;/p&gt;&lt;h2&gt;OMG-GIT-2: Prefer rebase to merge&lt;/h2&gt;&lt;p dir="ltr"&gt;
+
+
+The advantage of &lt;code dir="ltr"&gt;rebase&lt;/code&gt; is that it gives a cleaner, more linear commit history than relying on
+&lt;code dir="ltr"&gt;merge&lt;/code&gt;, especially when there are many contributors. A more linear commit history makes it easier
+to tell what is going on in the project and use tools such as &lt;code dir="ltr"&gt;git bisect&lt;/code&gt;.
+
+&lt;/p&gt;&lt;p&gt;
+
+The basic rebase workflow is, instead of doing this to push your changes:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;div dir="ltr"&gt;&lt;span dir="ltr"&gt;git pull&lt;/span&gt;
+&lt;span dir="ltr"&gt;git push&lt;/span&gt;&lt;/div&gt;&lt;/PRE&gt;&lt;p&gt;
+
+Do this:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;git fetch&lt;/span&gt;
+&lt;span dir="ltr"&gt;git rebase origin/master&lt;/span&gt;
+&lt;span dir="ltr"&gt;git push&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+
+Conflicts can be trickier to handle in rebase, but if you follow the rule of pushing often you
+shouldn't run into conflicts too often.
+
+&lt;/p&gt;&lt;p&gt;
+
+Sometimes change history can get messy. For example, you work on a branch, make multiple commits,
+merge in changes from the master etc. To clean it up, I suggest the following:
+
+&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;# Merge master into your branch, to make sure you have the latest changes&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;# and fix any issues.&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;git merge master&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;# Create a patch with your changes against the master.&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;git diff master &amp;gt; branch.patch&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;# Switch back to master and apply the patch&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;git checkout master&lt;/span&gt;
+&lt;span dir="ltr"&gt;git apply branch.patch&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;# Commit the changes&lt;/span&gt;&lt;/span&gt;
+&lt;span dir="ltr"&gt;git commit&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+
+Now you have all your messy changes and merges applied as a single clean commit on top of master.
+
+&lt;/p&gt;&lt;p&gt;
+
+This technique can also be used in case you get a conflict when using the regular rebase workflow.
+
+&lt;/p&gt;</description><pubDate>Wed, 21 Jul 2021 18:17:16 -0500</pubDate></item><item><title>Why does the New menu even exist for creating new empty files?</title><link>https://lobste.rs/s/tynoun</link><description>&lt;img src="https://devblogs.microsoft.com/oldnewthing/wp-content/uploads/sites/38/2019/02/RaymondChen_5in-150x150.jpg" width="58" height="58" alt="Raymond Chen"&gt;&lt;p&gt;Raymond&lt;/p&gt;&lt;p&gt;July 20th, 2021&lt;/p&gt;&lt;p dir="ltr"&gt;What’s the point of having a New menu anyway? “&lt;a href="https://devblogs.microsoft.com/oldnewthing/20190611-00/?p=102581#comments-134970" dir="ltr"&gt;Why would anybody create a new BMP file by right-clicking an empty space in a folder&lt;/a&gt;? You still need a BMP editor to put anything meaningful in there. The same is true for a PowerPoint presentation, and an Access database. Although, creating an empty Access database and then opening it will presumably get you the Access program. But if I want to create a new PowerPoint presentation, I will… um… open PowerPoint.”&lt;/p&gt;&lt;p&gt;Sure, maybe that’s what you do, but that’s not what everybody does.&lt;/p&gt;&lt;p dir="ltr"&gt;Not everybody knows that the way to create a new BMP file is to open this program called &lt;i dir="ltr"&gt;Paint&lt;/i&gt; that is hidden in the &lt;i dir="ltr"&gt;Accessories&lt;/i&gt; folder of your Start menu. User research shows that for many users, the way they create a new file is to find an existing file of the same type, copy it, then open the copy and delete everything in it.¹&lt;/p&gt;&lt;p dir="ltr"&gt;In fact, in the Xerox Star (the precursor to our modern GUI interfaces), &lt;a href="https://www.youtube.com/watch?v=Cn4vC80Pv6Q&amp;amp;t=4m5s" dir="ltr"&gt; creating a new document is done by copying an existing one&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;For people with a document-centric view of the world, programs aren’t really things that you think about. What you really work on are documents.&lt;/p&gt;&lt;p&gt;It’s like making a telephone call in the United States. You don’t think about which telecommunications company serves that number. You just dial the number and let the telephone network figure out which telecommunications company is responsible for that number. You don’t really care which company gets used, as long as you get connected.&lt;/p&gt;&lt;p dir="ltr"&gt;As other people noted in the comments, having a &lt;i dir="ltr"&gt;New&lt;/i&gt; menu is handy because it lets you create the file directly where you want it, saving you the trouble of having to navigate through the &lt;i dir="ltr"&gt;Save As&lt;/i&gt; dialog just to get back to where you started.&lt;/p&gt;&lt;p&gt;¹ And who among us can say they never created a new class or project by copying an existing one, and then deleting everything inside?&lt;/p&gt;&lt;img src="https://devblogs.microsoft.com/oldnewthing/wp-content/uploads/sites/38/2019/02/RaymondChen_5in-150x150.jpg" width="96" height="96" alt="Raymond Chen"&gt;</description><pubDate>Tue, 20 Jul 2021 09:54:42 -0500</pubDate></item><item><title>Planning &amp; estimating large-scale software projects</title><link>https://lobste.rs/s/howzf7</link><description>&lt;p dir="ltr"&gt;
 &lt;time dir="ltr"&gt;July 19, 2021&lt;/time&gt;
 &lt;/p&gt;&lt;p dir="ltr"&gt;This weekend I was talking with a friend about how I'd planned and estimated a
 &lt;em dir="ltr"&gt;huge&lt;/em&gt; software project in one of my previous jobs. By that I mean not something
@@ -3756,8 +5245,4 @@ Cronic isn't the only cure for cron. Cronic's main advantage it is small, simple
 
 &lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;a href="http://web.taranis.org/shush/" dir="ltr"&gt;Shush&lt;/a&gt;: a C-based cron wrapper, with multiple report formats, syslogging, etc.
 &lt;/LI&gt;&lt;LI&gt;&lt;a href="https://web.archive.org/web/20161031205943/http://www.uow.edu.au/~sah/" dir="ltr"&gt;Cronwrap&lt;/a&gt;: a C-based cron wrapper, with time-out control, logging, etc.
-&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Tue, 20 Jul 2021 10:34:17 -0500</pubDate></item><item><title>Clojure - Source Libs and Builds</title><link>https://lobste.rs/s/mrwn8l</link><description>&lt;p dir="ltr"&gt;&lt;em dir="ltr"&gt;09 July 2021&lt;/em&gt;&lt;br dir="ltr"&gt;
-         &lt;em dir="ltr"&gt;Fogus&lt;/em&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;Several years ago, Clojure introduced &lt;a href="https://clojure.org/reference/deps_and_cli#_deps_edn" dir="ltr"&gt;deps.edn&lt;/a&gt; (a data definition for dependencies), &lt;a href="https://github.com/clojure/tools.deps.alpha/" dir="ltr"&gt;tools.deps&lt;/a&gt; (a library for computing classpaths), and the
-&lt;a href="https://clojure.org/reference/deps_and_cli" dir="ltr"&gt;Clojure CLI&lt;/a&gt; to run programs. The Clojure community has widely adopted these and we are excited today to provide a clear path for users looking to use these same tools to build their projects:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/clojure/tools.build/" dir="ltr"&gt;tools.build&lt;/a&gt; - a library for building artifacts&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;CLI updates to make working with source repos as libs easier&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;CLI updates for installing, introspecting, and using custom tools&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Builds are processes and are best represented as programs. The tools.build library provides building blocks to write build programs - this is a modular and compositional approach to artifact building, making the best use of Clojure itself as the language.&lt;/p&gt;&lt;p&gt;We take advantage of Clojure’s dynamic nature to use source repositories directly as libraries, avoiding the overhead of building, deploying, and consuming artifacts. While most Clojure libraries can be consumed directly as source, sometimes they require a preparation step (like compiling Java in mixed source projects). We’ve added support for this as well.&lt;/p&gt;&lt;p&gt;Finally, we’ve enhanced making, installing, and running custom tools that run independently of the project classpath. Tools embrace all of the ideas above and require only a git repository for others to install and run.&lt;/p&gt;&lt;h2&gt;Builds are Programs&lt;/h2&gt;&lt;p dir="ltr"&gt;The new &lt;a href="https://github.com/clojure/tools.build" dir="ltr"&gt;tools.build&lt;/a&gt; library is a set of helper functions for writing build programs. To add a build for your deps.edn project, you will:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;Write a Clojure program that uses tools.build to build your project&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Provide function entry points in your program for whatever targets make sense (things like &lt;code dir="ltr"&gt;clean&lt;/code&gt;, &lt;code dir="ltr"&gt;compile&lt;/code&gt; or &lt;code dir="ltr"&gt;jar&lt;/code&gt;)&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Add an alias to your deps.edn that invokes your build program and includes tools.build as a dependency&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Invoke the build as a tool using &lt;code dir="ltr"&gt;-T&lt;/code&gt;. &lt;code dir="ltr"&gt;-T&lt;/code&gt; is similar to &lt;code dir="ltr"&gt;-X&lt;/code&gt; but omits the project classpath and includes the root of the project as one of the &lt;code dir="ltr"&gt;:paths&lt;/code&gt;.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;For more details and full examples, see the following:&lt;/p&gt;&lt;h2&gt;Source Repos as Libs&lt;/h2&gt;&lt;p dir="ltr"&gt;Due to Clojure’s dynamic nature, we can directly use source repositories as libraries without the overhead of making, distributing, and consuming artifacts. This release provides some &lt;a href="https://clojure.org/reference/deps_and_cli#_git" dir="ltr"&gt;updates for git libraries&lt;/a&gt;:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;Git repository urls are now optional and inferred if the library name follows a naming convention&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;Git tag and short git sha prefix are now sufficient to identify a git lib version. The prefix is included to verify that the tag has not moved (both must point to the same commit).&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;Occasionally, source dependencies will require preparation (e.g. compilation, resource text replacement, code gen, etc.) to use them on the classpath. A common case is needing to compile Java source in a mixed source library. A source-based lib declares how it should be prepped in its deps.edn:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="clojure" dir="ltr"&gt;{&lt;span dir="ltr"&gt;:deps/prep-lib&lt;/span&gt; {&lt;span dir="ltr"&gt;:alias&lt;/span&gt; &lt;span dir="ltr"&gt;:build&lt;/span&gt;
-                 &lt;span dir="ltr"&gt;:fn&lt;/span&gt; compile
-                 &lt;span dir="ltr"&gt;:ensure&lt;/span&gt; &lt;span dir="ltr"&gt;"target/classes"&lt;/span&gt;}}&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The Clojure CLI library checks that the &lt;code dir="ltr"&gt;:ensure&lt;/code&gt; directory exists and if it’s not found, program execution will not proceed. To tell the CLI to prepare this (and any other libraries), you can run the command:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="shell"&gt;clj -X:deps prep&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This command will find the unprepped libs, and run the &lt;code dir="ltr"&gt;compile&lt;/code&gt; function using the &lt;code dir="ltr"&gt;:build&lt;/code&gt; alias, presumably filling the &lt;code dir="ltr"&gt;target/classes&lt;/code&gt; directory with necessary classes to put on the classpath (&lt;code dir="ltr"&gt;"target/classes"&lt;/code&gt; should be in the project &lt;code dir="ltr"&gt;:paths&lt;/code&gt;). More information on supporting unprepped dependencies is available in the &lt;a href="https://clojure.org/reference/deps_and_cli#prep" dir="ltr"&gt;Clojure CLI reference&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;Tools&lt;/h2&gt;&lt;p dir="ltr"&gt;We have also enhanced the Clojure CLI to explore, install, invoke, and introspect tools based on a set of conventions for tool creators. Installing a new tool such as &lt;a href="https://github.com/clojure/tools.deps.graph" dir="ltr"&gt;tools.deps.graph&lt;/a&gt; can be done as follows:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="shell"&gt;clj -Ttools install io.github.clojure/tools.deps.graph '{:git/tag "v1.0.63"}' :as graph&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The use of a Git library name &lt;code dir="ltr"&gt;io.github.clojure/tools.deps.graph&lt;/code&gt; and the git tag &lt;code dir="ltr"&gt;v1.0.63&lt;/code&gt; allows the CLI to find and install the tool as &lt;code dir="ltr"&gt;graph&lt;/code&gt;, which is the name that used for invocation, a la &lt;code dir="ltr"&gt;clj -Tgraph &amp;lt;function&amp;gt; &amp;lt;args&amp;gt;&lt;/code&gt;. In this one case, a &lt;code dir="ltr"&gt;:sha&lt;/code&gt; is not required (but it will be resolved and recorded to check for a match in the future).&lt;/p&gt;&lt;p dir="ltr"&gt;The command above uses &lt;code dir="ltr"&gt;-Ttools&lt;/code&gt; which is invoking the &lt;code dir="ltr"&gt;tools&lt;/code&gt; tool, which is automatically installed by the Clojure CLI.&lt;/p&gt;&lt;p dir="ltr"&gt;The CLI also provides a way to explore the available versions of tools with the &lt;code dir="ltr"&gt;clj -X:deps find-versions&lt;/code&gt; command to list the tags available for a tool (also works for Maven versions).&lt;/p&gt;&lt;p dir="ltr"&gt;Finally, there are new &lt;code dir="ltr"&gt;help/doc&lt;/code&gt; and &lt;code dir="ltr"&gt;help/dir&lt;/code&gt; functions available in the &lt;code dir="ltr"&gt;:deps&lt;/code&gt; alias for introspecting what functions are available and how to use them. For example, you can run:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="shell"&gt;clj -X:deps help/doc :ns help&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;To look at the documentation for the &lt;code dir="ltr"&gt;clojure.tools.cli.help&lt;/code&gt; namespace.&lt;/p&gt;&lt;p dir="ltr"&gt;More information on the new &lt;a href="https://clojure.org/reference/deps_and_cli#tool_install" dir="ltr"&gt;tools support in the CLI&lt;/a&gt; is available in the reference docs.&lt;/p&gt;&lt;h2&gt;Installation&lt;/h2&gt;&lt;p&gt;A prerelease version of the CLI is now available: 1.10.3.905.&lt;/p&gt;&lt;p dir="ltr"&gt;On Mac or Linux, you can install the prerelease &lt;a href="https://github.com/clojure/homebrew-tools#version-archive-tool-releases" dir="ltr"&gt;using brew&lt;/a&gt;. On Linux or Windows you can use the installer per the instructions in &lt;a href="https://clojure.org/guides/getting_started" dir="ltr"&gt;Getting Started&lt;/a&gt; to install the specific version above.&lt;/p&gt;&lt;h2&gt;What’s New&lt;/h2&gt;&lt;p&gt;All items below are additive updates, there should be no changes required for existing deps.edn projects or CLI usage.&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;&lt;a href="https://github.com/clojure/tools.build" dir="ltr"&gt;tools.build&lt;/a&gt; - a new library for builds&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;deps.edn:&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Tue, 20 Jul 2021 20:26:23 -0500</pubDate></item></channel></rss>
+&lt;/LI&gt;&lt;/UL&gt;</description><pubDate>Tue, 20 Jul 2021 10:34:17 -0500</pubDate></item></channel></rss>
