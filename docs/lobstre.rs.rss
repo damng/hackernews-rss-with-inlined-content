@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0"><channel><title>lobstre.rs rss with inlined content</title><link>http://n-gate.com</link><description>webshit condom</description><lastBuildDate>Wed, 21 Jul 2021 21:15:14 -0500</lastBuildDate><item><title>No Cost Data Scraping With GitHub Actions And Neo4j Aura</title><link>https://lobste.rs/s/jvxel0</link><description>&lt;img src="https://lyonwj.com/static/images/will.jpeg" alt="William Lyon" width="24" height="24"&gt;&lt;p dir="ltr"&gt;William Lyon / July 20, 2021&lt;/p&gt;&lt;p dir="ltr"&gt;11 min read • &lt;/p&gt;&lt;p dir="ltr"&gt;When working with data a common task is fetching data from some external source on a recurring basis and importing into a database for further analysis or as part of our application. Setting up servers to handle this can be time consuming and error prone. I recently came across a workflow using &lt;a rel="noopener noreferrer" href="https://github.com/features/actions" dir="ltr"&gt;GitHub Actions&lt;/a&gt; and &lt;a rel="noopener noreferrer" href="https://dev.neo4j.com/neo4j-aura" dir="ltr"&gt;Neo4j Aura&lt;/a&gt; that makes this a breeze and with the free tiers of both GitHub Actions and Neo4j Aura is free to set up and run forever - great for side projects!&lt;/p&gt;&lt;p dir="ltr"&gt;In this post we'll take a look at setting up this workflow to scrape data from the &lt;a rel="noopener noreferrer" href="https://lobste.rs/" dir="ltr"&gt;Lobsters&lt;/a&gt; news aggregator and import into a &lt;a rel="noopener noreferrer" href="https://dev.neo4j.com/aura-landing" dir="ltr"&gt;Neo4j Aura Free&lt;/a&gt; instance using GitHub Actions. We built this on the &lt;a rel="noopener noreferrer" href="https://twitch.tv/neo4j" dir="ltr"&gt;Neo4j livestream&lt;/a&gt; so check out the recording if you prefer video:&lt;/p&gt;&lt;div&gt;A Look At The Data - Lobsters&lt;/div&gt;&lt;p dir="ltr"&gt;&lt;a rel="noopener noreferrer" href="https://lobste.rs/" dir="ltr"&gt;Lobsters&lt;/a&gt; is a social news aggregator. Users post links to articles and the community votes and comments on them in a discussion thread. An algorithm determines the ranking of the submissions, with the most recent and noteworthy articles floating to the front page. To be able to submit and comment users must be invited by an existing user and this user-invite graph is publicly available, helping to keep discussions civil and avoid fraudulent upvoting to game submission rankings.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;1902&amp;quot; height=&amp;quot;1904&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="421"&gt;&lt;p dir="ltr"&gt;I've been thinking about social networks recently and want to build an application to help explore relevant news articles using graph visualization so building something using data from Lobsters seems like a great fit. We want to import data about users and article submissions into Neo4j as the basis of our application, but how to get started? Fortunately, Lobsters makes two JSON endpoints available to fetch data about the &lt;a rel="noopener noreferrer" href="https://lobste.rs/newest.json" dir="ltr"&gt;newest&lt;/a&gt; and the &lt;a rel="noopener noreferrer" href="https://lobste.rs/hottest.json" dir="ltr"&gt;"hottest"&lt;/a&gt; submissions. Each has a similar format and looks like this.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;1628&amp;quot; height=&amp;quot;1782&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="461"&gt;&lt;p&gt;Now that we know what our JSON data looks like we can think about how to start importing this data into Neo4j Aura as a graph.&lt;/p&gt;&lt;div&gt;Neo4j Aura&lt;/div&gt;&lt;p dir="ltr"&gt;&lt;a rel="noopener noreferrer" href="https://dev.neo4j.com/neo4j-aura" dir="ltr"&gt;Neo4j Aura&lt;/a&gt; is a managed cloud service from Neo4j allowing us to run Neo4j clusters in the cloud with a few clicks and handles things like backups, upgrades, and administration so we don't have to worry about it. Best of all for our purposes, Neo4j Aura has a free tier that will allow us to build this project without even putting in a credit card.&lt;/p&gt;&lt;p dir="ltr"&gt;Let's &lt;a rel="noopener noreferrer" href="https://dev.neo4j.com/aura" dir="ltr"&gt;sign-in to Neo4j Aura&lt;/a&gt; and create an Aura Free instance:&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;2282&amp;quot; height=&amp;quot;1924&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="355"&gt;&lt;p&gt;We'll immediately be given a generated password that we'll need to save to access our Neo4j Aura instance. We can change this later.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;1332&amp;quot; height=&amp;quot;1114&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="352"&gt;&lt;p&gt;Next, our Aura instance will take a few moments to be provisioned.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;2318&amp;quot; height=&amp;quot;478&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="87"&gt;&lt;p&gt;Once our Neo4j Aura instance is ready we'll see the connection string in the dashboard. Let's open up Neo4j Browser to start working with our data.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;2286&amp;quot; height=&amp;quot;418&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="77"&gt;&lt;p dir="ltr"&gt;Since we're working with JSON data we can make use of the &lt;a rel="noopener noreferrer" href="https://neo4j.com/labs/apoc/4.1/import/load-json/" dir="ltr"&gt;&lt;code dir="ltr"&gt;apoc.load.json&lt;/code&gt;&lt;/a&gt; procedure from the &lt;a rel="noopener noreferrer" href="https://neo4j.com/labs/apoc/" dir="ltr"&gt;APOC standard library&lt;/a&gt; to import a JSON file using Cypher. First, let's just pull this file in to make sure we can parse it. This Cypher statement will parse the newest Lobsters submissions and return an array of objects that we can work with in Cypher:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;CALL&lt;/span&gt; apoc&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;load&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;json&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"https://lobste.rs/newest.json"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;YIELD&lt;/span&gt; value
+<rss version="2.0"><channel><title>lobstre.rs rss with inlined content</title><link>http://n-gate.com</link><description>webshit condom</description><lastBuildDate>Wed, 21 Jul 2021 21:37:53 -0500</lastBuildDate><item><title>No Cost Data Scraping With GitHub Actions And Neo4j Aura</title><link>https://lobste.rs/s/jvxel0</link><description>&lt;img src="https://lyonwj.com/static/images/will.jpeg" alt="William Lyon" width="24" height="24"&gt;&lt;p dir="ltr"&gt;William Lyon / July 20, 2021&lt;/p&gt;&lt;p dir="ltr"&gt;11 min read • &lt;/p&gt;&lt;p dir="ltr"&gt;When working with data a common task is fetching data from some external source on a recurring basis and importing into a database for further analysis or as part of our application. Setting up servers to handle this can be time consuming and error prone. I recently came across a workflow using &lt;a rel="noopener noreferrer" href="https://github.com/features/actions" dir="ltr"&gt;GitHub Actions&lt;/a&gt; and &lt;a rel="noopener noreferrer" href="https://dev.neo4j.com/neo4j-aura" dir="ltr"&gt;Neo4j Aura&lt;/a&gt; that makes this a breeze and with the free tiers of both GitHub Actions and Neo4j Aura is free to set up and run forever - great for side projects!&lt;/p&gt;&lt;p dir="ltr"&gt;In this post we'll take a look at setting up this workflow to scrape data from the &lt;a rel="noopener noreferrer" href="https://lobste.rs/" dir="ltr"&gt;Lobsters&lt;/a&gt; news aggregator and import into a &lt;a rel="noopener noreferrer" href="https://dev.neo4j.com/aura-landing" dir="ltr"&gt;Neo4j Aura Free&lt;/a&gt; instance using GitHub Actions. We built this on the &lt;a rel="noopener noreferrer" href="https://twitch.tv/neo4j" dir="ltr"&gt;Neo4j livestream&lt;/a&gt; so check out the recording if you prefer video:&lt;/p&gt;&lt;div&gt;A Look At The Data - Lobsters&lt;/div&gt;&lt;p dir="ltr"&gt;&lt;a rel="noopener noreferrer" href="https://lobste.rs/" dir="ltr"&gt;Lobsters&lt;/a&gt; is a social news aggregator. Users post links to articles and the community votes and comments on them in a discussion thread. An algorithm determines the ranking of the submissions, with the most recent and noteworthy articles floating to the front page. To be able to submit and comment users must be invited by an existing user and this user-invite graph is publicly available, helping to keep discussions civil and avoid fraudulent upvoting to game submission rankings.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;1902&amp;quot; height=&amp;quot;1904&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="421"&gt;&lt;p dir="ltr"&gt;I've been thinking about social networks recently and want to build an application to help explore relevant news articles using graph visualization so building something using data from Lobsters seems like a great fit. We want to import data about users and article submissions into Neo4j as the basis of our application, but how to get started? Fortunately, Lobsters makes two JSON endpoints available to fetch data about the &lt;a rel="noopener noreferrer" href="https://lobste.rs/newest.json" dir="ltr"&gt;newest&lt;/a&gt; and the &lt;a rel="noopener noreferrer" href="https://lobste.rs/hottest.json" dir="ltr"&gt;"hottest"&lt;/a&gt; submissions. Each has a similar format and looks like this.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;1628&amp;quot; height=&amp;quot;1782&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="461"&gt;&lt;p&gt;Now that we know what our JSON data looks like we can think about how to start importing this data into Neo4j Aura as a graph.&lt;/p&gt;&lt;div&gt;Neo4j Aura&lt;/div&gt;&lt;p dir="ltr"&gt;&lt;a rel="noopener noreferrer" href="https://dev.neo4j.com/neo4j-aura" dir="ltr"&gt;Neo4j Aura&lt;/a&gt; is a managed cloud service from Neo4j allowing us to run Neo4j clusters in the cloud with a few clicks and handles things like backups, upgrades, and administration so we don't have to worry about it. Best of all for our purposes, Neo4j Aura has a free tier that will allow us to build this project without even putting in a credit card.&lt;/p&gt;&lt;p dir="ltr"&gt;Let's &lt;a rel="noopener noreferrer" href="https://dev.neo4j.com/aura" dir="ltr"&gt;sign-in to Neo4j Aura&lt;/a&gt; and create an Aura Free instance:&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;2282&amp;quot; height=&amp;quot;1924&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="355"&gt;&lt;p&gt;We'll immediately be given a generated password that we'll need to save to access our Neo4j Aura instance. We can change this later.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;1332&amp;quot; height=&amp;quot;1114&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="352"&gt;&lt;p&gt;Next, our Aura instance will take a few moments to be provisioned.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;2318&amp;quot; height=&amp;quot;478&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="87"&gt;&lt;p&gt;Once our Neo4j Aura instance is ready we'll see the connection string in the dashboard. Let's open up Neo4j Browser to start working with our data.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;2286&amp;quot; height=&amp;quot;418&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="77"&gt;&lt;p dir="ltr"&gt;Since we're working with JSON data we can make use of the &lt;a rel="noopener noreferrer" href="https://neo4j.com/labs/apoc/4.1/import/load-json/" dir="ltr"&gt;&lt;code dir="ltr"&gt;apoc.load.json&lt;/code&gt;&lt;/a&gt; procedure from the &lt;a rel="noopener noreferrer" href="https://neo4j.com/labs/apoc/" dir="ltr"&gt;APOC standard library&lt;/a&gt; to import a JSON file using Cypher. First, let's just pull this file in to make sure we can parse it. This Cypher statement will parse the newest Lobsters submissions and return an array of objects that we can work with in Cypher:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;CALL&lt;/span&gt; apoc&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;load&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;json&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"https://lobste.rs/newest.json"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;YIELD&lt;/span&gt; value
 &lt;span dir="ltr"&gt;RETURN&lt;/span&gt; value
 &lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;If we run this in Neo4j Browser we'll see the parsed array of objects returned. We haven't actually created any data in the database yet - we're just parsing the JSON file and returning the results.&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;2178&amp;quot; height=&amp;quot;1144&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="221"&gt;&lt;p&gt;We'll use Cypher to define the graph structure we want to create from this data, but we first need to think a bit about how we want to model this data as a graph. I think of graph modeling as a multi-step process, at the highest level the steps are:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Identify the entities in our data - these become nodes.&lt;/LI&gt;&lt;LI&gt;Identify how these entities are connected - these connections become relationships.&lt;/LI&gt;&lt;LI&gt;Identify the pieces of data that describe the entities or connections - these become properties.&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;&lt;a rel="noopener noreferrer" href="https://arrows.app/" dir="ltr"&gt;Arrows.app&lt;/a&gt; is a great tool for drawing and storing these graph models. Here's what our graph model for the Lobsters data looks like in Arrows:&lt;/p&gt;&lt;img alt="" src="data:image/svg+xml;charset=utf-8,&lt;svg width=&amp;quot;1858&amp;quot; height=&amp;quot;1354&amp;quot; xmlns=&amp;quot;http://www.w3.org/2000/svg&amp;quot; version=&amp;quot;1.1&amp;quot;/&gt;" width="421" height="307"&gt;&lt;p dir="ltr"&gt;Now we can write the Cypher to import our data according to this model. We'll use &lt;code dir="ltr"&gt;apoc.load.json&lt;/code&gt; to parse the JSON file, then use &lt;code dir="ltr"&gt;UNWIND&lt;/code&gt; to iterate over this array of objects. We'll then use the &lt;code dir="ltr"&gt;MERGE&lt;/code&gt; Cypher clause to add users, articles, and tags to the database. The &lt;code dir="ltr"&gt;MERGE&lt;/code&gt; statement allows us to avoid creating duplicates in the graph - with &lt;code dir="ltr"&gt;MERGE&lt;/code&gt; only patterns that don't already exist in the graph are created.&lt;/p&gt;&lt;p&gt;This makes our import statement idempotent - we can run it over and over again on the same data and we won't make any changes to the database unless the data changes.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;CALL&lt;/span&gt; apoc&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;load&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;json&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"https://lobste.rs/newest.json"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;YIELD&lt;/span&gt; value
 &lt;span dir="ltr"&gt;UNWIND&lt;/span&gt; value &lt;span dir="ltr"&gt;AS&lt;/span&gt; article
@@ -90,7 +90,169 @@
             UNWIND article.tags AS tag
             MERGE (t:Tag {name: tag})
             MERGE (a)-[:HAS_TAG]-&amp;gt;(t)&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Once we commit the change our Action will run - loading the latest Lobsters article data into our Neo4j Aura instance. This Action will run each hour updating our database with the latest Lobsters data.&lt;/p&gt;&lt;div&gt;What's Next?&lt;/div&gt;&lt;p dir="ltr"&gt;We've now set up a serverless data scraping workflow to fetch all new articles submitted to Lobsters and import into Neo4j Aura using GitHub Actions. Next, we'll take a look at data visualization options and we begin to explore this dataset and build a web application to help us find relevant information. If you'd like to follow along we'll be coding this on the Neo4j Livestream on &lt;a rel="noopener noreferrer" href="https://twitch.tv/neo4j" dir="ltr"&gt;Twitch&lt;/a&gt; and &lt;a rel="noopener noreferrer" href="https://www.youtube.com/neo4j" dir="ltr"&gt;YouTube&lt;/a&gt;. You can also &lt;a rel="noopener noreferrer" href="https://lyonwj.com/newsletter" dir="ltr"&gt;subscribe to my newsletter&lt;/a&gt; to be notified as new posts are up. Happy graphing!&lt;/p&gt;</description><pubDate>Wed, 21 Jul 2021 11:33:54 -0500</pubDate></item><item><title>My Fanless OpenBSD Desktop</title><link>https://lobste.rs/s/dtkal8</link><description>&lt;div dir="ltr"&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Once we commit the change our Action will run - loading the latest Lobsters article data into our Neo4j Aura instance. This Action will run each hour updating our database with the latest Lobsters data.&lt;/p&gt;&lt;div&gt;What's Next?&lt;/div&gt;&lt;p dir="ltr"&gt;We've now set up a serverless data scraping workflow to fetch all new articles submitted to Lobsters and import into Neo4j Aura using GitHub Actions. Next, we'll take a look at data visualization options and we begin to explore this dataset and build a web application to help us find relevant information. If you'd like to follow along we'll be coding this on the Neo4j Livestream on &lt;a rel="noopener noreferrer" href="https://twitch.tv/neo4j" dir="ltr"&gt;Twitch&lt;/a&gt; and &lt;a rel="noopener noreferrer" href="https://www.youtube.com/neo4j" dir="ltr"&gt;YouTube&lt;/a&gt;. You can also &lt;a rel="noopener noreferrer" href="https://lyonwj.com/newsletter" dir="ltr"&gt;subscribe to my newsletter&lt;/a&gt; to be notified as new posts are up. Happy graphing!&lt;/p&gt;</description><pubDate>Wed, 21 Jul 2021 11:33:54 -0500</pubDate></item><item><title>A monorepo misconception - atomic cross-project commits</title><link>https://lobste.rs/s/h1yvlm</link><description>&lt;div dir="ltr"&gt;Posted on 2021-07-21 in &lt;a href="https://www.snellman.net/blog/list/general/" dir="ltr"&gt;General&lt;/a&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;
+
+In articles and discussions about &lt;a href="https://en.wikipedia.org/wiki/Monorepo" dir="ltr"&gt;monorepos&lt;/a&gt;, there's
+one frequently alleged key benefit: atomic commits across the whole
+tree let you make changes to both a library's implementation and the
+clients in a single commit. Many authors even go as far to claim that
+this is the only benefit of monorepos.
+
+&lt;/p&gt;&lt;p&gt;
+I like monorepos, but that particular claim makes no sense! It's not
+how you'd actually make backwards incompatible changes, such as
+interface refactorings, in a large monorepo. Instead the process would
+be highly incremental, and more like the following:
+
+&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Push one commit to change the library, such that it supports both
+the old and new behavior with different interfaces.
+&lt;/LI&gt;&lt;LI&gt;Once you're sure the commit from stage 1 won't be reverted, push N
+commits to switch each of the N clients to use the new interface.
+&lt;/LI&gt;&lt;LI&gt;Once you're sure the commits from stage 2 won't be reverted, push
+one commit to remove the old implementation and interface from the
+library.
+&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;
+There's a bunch of reasons why this is a nicer sequencing than a
+single atomic commit, but they're mostly variations on the theme:
+mitigating risks. If something breaks, you want as few things as
+possible to break at once, and for the rollback to a known-good state
+to be simple. Here's how the risks are mitigated at the various
+stages in the process:
+
+&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;There is nothing risky at all about the first commit. It is just
+adding new code that's not yet used by anyone.
+
+&lt;/LI&gt;&lt;LI&gt;The commits for changing the clients can be done gradually,
+starting with the ones that the library owners are themselves working
+on, the projects that are most likely to detect bugs, or the clients
+that are most forgiving to errors. Depending on the risk profile of
+the change, you might even use these commits as a form of staged
+rollout, where you'll wait to see if the previous clients report any
+problems in production before sending the next batch of commits
+for code review.
+
+&lt;/LI&gt;&lt;LI&gt;The final commit to remove the old implementation can only break a
+minimal number of clients: the ones that just started using the library
+between the removal commit being reviewed and pushed, and did so
+using the old interface. The ideal environment would have tooling in
+place to prevent that kind of backslipping from happening in the first
+place (e.g. lint warnings on new uses of deprecated interfaces).
+&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;
+If anything goes wrong in stage 2, it's trivial to revert a commit
+that's only touching a couple of files. By contrast, reverting a
+commit that's spanning hundreds of projects would be quite painful,
+especially if the repo has any kind of per-directory ACLs (which I
+think is mandatory for a big monorepo). It gets worse if the breakage
+isn't detected immediately, since the more code that the single
+change is affecting, the less likely it's that the reversion applies
+cleanly.
+
+&lt;/p&gt;&lt;p&gt;
+If anything goes wrong in stage 3, it would also have gone wrong when
+using atomic commits. But with atomic commits the breakage in stage 3
+is far more likely, since the new users will naturally use the old
+interface (the new one doesn't exist yet in their view of the world),
+and since the window between start of code review and committing will
+be wider. And again, the rollback will be far easier with the commit
+that's only touching the library and not the clients.
+
+&lt;/p&gt;&lt;p&gt;
+There's some additional reasons for why the huge commit will be
+annoying. For example getting a clean presubmit CI run will become
+progressively harder the more projects a single commits is changing.
+
+&lt;/p&gt;&lt;p&gt;
+Sure, the atomic commit will save a little bit of work in not needing
+to have the implementation support both interfaces at once. But that
+tiny saving is just not a worthwhile tradeoff when compared to how
+much work wrangling the huge commit would be.
+
+&lt;/p&gt;&lt;p&gt;
+It's particularly easy to see that the "atomic changes across the
+whole repo"story is rubbish when you move away from
+libraries, and also consider code that has any kind of more
+complicated deployment lifecycle, for example the interactions between
+services and client binaries that communicate over an RPC
+interface. Obviously you can't do an atomic change in that case,
+since you need to continue supporting the old server implementation
+until all client binaries have been upgraded (and are rollback-safe).
+The same goes for changes to database schemas, command line
+tools, synchronized client-side Javascript + backend changes, etc.
+
+&lt;/p&gt;&lt;p&gt;
+I think it's true that monorepos make refactoring easier. So that's
+not the problem. It's also true that they have atomic commits across
+projects. But the two facts have nothing to do with each other. The reasons
+monorepos make refactoring simpler all boil down to everyone in the
+organization having a shared view of what the current state is:
+
+&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;A monorepo will, in practice, mean trunk-based
+development. You'll know that everybody really is on HEAD rather than
+actually doing their development on some year-old branch.
+&lt;/LI&gt;&lt;LI&gt;And conversely, you'll know that every user of the library is
+using your library from HEAD rather than pinning it to some year-old
+version.
+&lt;/LI&gt;&lt;LI&gt;It's trivial to find all the current callers, so that you know
+which clients need to be updated. (Once you've solved the highly
+non-trivial problem of having any kind of monorepo tooling at scale,
+of course.)
+&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
+In theory you could do the exact same thing with
+multirepos assuming sufficient tool support, discipline about code
+organization, enforced trunk-based development in all repositories,
+a master list of all repositories in the org, and defaulting to all
+repositories being readable by every engineer with no hidden silos.
+That's all &lt;i dir="ltr"&gt;technically&lt;/i&gt; doable, but I suspect not culturally
+compatible with using multirepos in the first place.
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+Where does this misconception come from? It's certainly present in the
+&lt;a href="https://research.google/pubs/pub45424/" dir="ltr"&gt;Google monorepo paper&lt;/a&gt;,
+which somewhat contradicts itself on this. On one hand,
+they describe exactly this form of atomic refactoring as a benefit of
+monorepos:
+
+&lt;/p&gt;&lt;BLOCKQUOTE&gt;
+The ability to make atomic changes is also a very powerful
+feature of the monolithic model. A developer can make a major change
+touching hundreds or thousands of files across the repository in a
+single consistent operation. For instance, a developer can rename a
+class or function in a single commit and yet not break any builds or
+tests.
+&lt;/BLOCKQUOTE&gt;&lt;p&gt;
+But when it comes to the actual refactoring workflow is, the
+process that's described is quite different:
+
+&lt;/p&gt;&lt;BLOCKQUOTE&gt;
+A team of Google developers will occasionally undertake a set of
+wide-reaching code-cleanup changes to further maintain the health of
+the codebase. The developers who perform these changes commonly
+separate them into two phases. With this approach, a large
+backward-compatible change is made first. Once it is complete, a
+second smaller change can be made to remove the original pattern that
+is no longer referenced.
+&lt;/BLOCKQUOTE&gt;&lt;p&gt;
+I suspect what happened here was that the atomic commits were identified
+as a benefit in the abstract, with refactoring being used as an
+illustration of a use case. This was then quite understandably read
+as a practical example of how you'd work with a monorepo.
+
+&lt;/p&gt;&lt;p&gt;
+There might be a few cases where atomic commits across the whole
+repository are the right solution, but it has to be exceedingly
+rare. The example of renaming a function with thousands of callers,
+for example, is probably better handled by just temporarily aliasing
+the function, or by temporarily defining the new function in terms of
+the old. (But this does suggest that languages, both programming languages and
+IDLs, should make aliasing and indirection easy for as many constructs
+as possible).
+
+&lt;/p&gt;&lt;p&gt;
+Are there organizations with a large monorepo where atomic
+cross-project commits are routinely used to change both the
+implementation and the clients?
+
+&lt;/p&gt;&lt;p dir="ltr"&gt;If you liked this and want to be notified of new posts, &lt;a href="https://twitter.com/intent/follow?screen_name=juhosnellman" dir="ltr"&gt;follow me on Twitter&lt;/a&gt;&lt;/p&gt;</description><pubDate>Wed, 21 Jul 2021 07:57:28 -0500</pubDate></item><item><title>My Fanless OpenBSD Desktop</title><link>https://lobste.rs/s/dtkal8</link><description>&lt;div dir="ltr"&gt;
 			posted on jul 19th, 2021
 			with tags
 				&lt;a href="https://jcs.org/tagged/hardware" dir="ltr"&gt;hardware&lt;/a&gt;
@@ -346,169 +508,7 @@ Through a &lt;code dir="ltr"&gt;make -j8 build&lt;/code&gt; of the system, the t
 72 °C.&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;$ sysctl hw.sensors.ksmn0
 hw.sensors.ksmn0.temp0=54.25 degC
 &lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Other than the quirks with my monitor, OpenBSD works well on this motherboard
-and CPU.&lt;/p&gt;</description><pubDate>Tue, 20 Jul 2021 13:54:07 -0500</pubDate></item><item><title>A monorepo misconception - atomic cross-project commits</title><link>https://lobste.rs/s/h1yvlm</link><description>&lt;div dir="ltr"&gt;Posted on 2021-07-21 in &lt;a href="https://www.snellman.net/blog/list/general/" dir="ltr"&gt;General&lt;/a&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;
-
-In articles and discussions about &lt;a href="https://en.wikipedia.org/wiki/Monorepo" dir="ltr"&gt;monorepos&lt;/a&gt;, there's
-one frequently alleged key benefit: atomic commits across the whole
-tree let you make changes to both a library's implementation and the
-clients in a single commit. Many authors even go as far to claim that
-this is the only benefit of monorepos.
-
-&lt;/p&gt;&lt;p&gt;
-I like monorepos, but that particular claim makes no sense! It's not
-how you'd actually make backwards incompatible changes, such as
-interface refactorings, in a large monorepo. Instead the process would
-be highly incremental, and more like the following:
-
-&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Push one commit to change the library, such that it supports both
-the old and new behavior with different interfaces.
-&lt;/LI&gt;&lt;LI&gt;Once you're sure the commit from stage 1 won't be reverted, push N
-commits to switch each of the N clients to use the new interface.
-&lt;/LI&gt;&lt;LI&gt;Once you're sure the commits from stage 2 won't be reverted, push
-one commit to remove the old implementation and interface from the
-library.
-&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;
-There's a bunch of reasons why this is a nicer sequencing than a
-single atomic commit, but they're mostly variations on the theme:
-mitigating risks. If something breaks, you want as few things as
-possible to break at once, and for the rollback to a known-good state
-to be simple. Here's how the risks are mitigated at the various
-stages in the process:
-
-&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;There is nothing risky at all about the first commit. It is just
-adding new code that's not yet used by anyone.
-
-&lt;/LI&gt;&lt;LI&gt;The commits for changing the clients can be done gradually,
-starting with the ones that the library owners are themselves working
-on, the projects that are most likely to detect bugs, or the clients
-that are most forgiving to errors. Depending on the risk profile of
-the change, you might even use these commits as a form of staged
-rollout, where you'll wait to see if the previous clients report any
-problems in production before sending the next batch of commits
-for code review.
-
-&lt;/LI&gt;&lt;LI&gt;The final commit to remove the old implementation can only break a
-minimal number of clients: the ones that just started using the library
-between the removal commit being reviewed and pushed, and did so
-using the old interface. The ideal environment would have tooling in
-place to prevent that kind of backslipping from happening in the first
-place (e.g. lint warnings on new uses of deprecated interfaces).
-&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;
-If anything goes wrong in stage 2, it's trivial to revert a commit
-that's only touching a couple of files. By contrast, reverting a
-commit that's spanning hundreds of projects would be quite painful,
-especially if the repo has any kind of per-directory ACLs (which I
-think is mandatory for a big monorepo). It gets worse if the breakage
-isn't detected immediately, since the more code that the single
-change is affecting, the less likely it's that the reversion applies
-cleanly.
-
-&lt;/p&gt;&lt;p&gt;
-If anything goes wrong in stage 3, it would also have gone wrong when
-using atomic commits. But with atomic commits the breakage in stage 3
-is far more likely, since the new users will naturally use the old
-interface (the new one doesn't exist yet in their view of the world),
-and since the window between start of code review and committing will
-be wider. And again, the rollback will be far easier with the commit
-that's only touching the library and not the clients.
-
-&lt;/p&gt;&lt;p&gt;
-There's some additional reasons for why the huge commit will be
-annoying. For example getting a clean presubmit CI run will become
-progressively harder the more projects a single commits is changing.
-
-&lt;/p&gt;&lt;p&gt;
-Sure, the atomic commit will save a little bit of work in not needing
-to have the implementation support both interfaces at once. But that
-tiny saving is just not a worthwhile tradeoff when compared to how
-much work wrangling the huge commit would be.
-
-&lt;/p&gt;&lt;p&gt;
-It's particularly easy to see that the "atomic changes across the
-whole repo"story is rubbish when you move away from
-libraries, and also consider code that has any kind of more
-complicated deployment lifecycle, for example the interactions between
-services and client binaries that communicate over an RPC
-interface. Obviously you can't do an atomic change in that case,
-since you need to continue supporting the old server implementation
-until all client binaries have been upgraded (and are rollback-safe).
-The same goes for changes to database schemas, command line
-tools, synchronized client-side Javascript + backend changes, etc.
-
-&lt;/p&gt;&lt;p&gt;
-I think it's true that monorepos make refactoring easier. So that's
-not the problem. It's also true that they have atomic commits across
-projects. But the two facts have nothing to do with each other. The reasons
-monorepos make refactoring simpler all boil down to everyone in the
-organization having a shared view of what the current state is:
-
-&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;A monorepo will, in practice, mean trunk-based
-development. You'll know that everybody really is on HEAD rather than
-actually doing their development on some year-old branch.
-&lt;/LI&gt;&lt;LI&gt;And conversely, you'll know that every user of the library is
-using your library from HEAD rather than pinning it to some year-old
-version.
-&lt;/LI&gt;&lt;LI&gt;It's trivial to find all the current callers, so that you know
-which clients need to be updated. (Once you've solved the highly
-non-trivial problem of having any kind of monorepo tooling at scale,
-of course.)
-&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
-In theory you could do the exact same thing with
-multirepos assuming sufficient tool support, discipline about code
-organization, enforced trunk-based development in all repositories,
-a master list of all repositories in the org, and defaulting to all
-repositories being readable by every engineer with no hidden silos.
-That's all &lt;i dir="ltr"&gt;technically&lt;/i&gt; doable, but I suspect not culturally
-compatible with using multirepos in the first place.
-
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-Where does this misconception come from? It's certainly present in the
-&lt;a href="https://research.google/pubs/pub45424/" dir="ltr"&gt;Google monorepo paper&lt;/a&gt;,
-which somewhat contradicts itself on this. On one hand,
-they describe exactly this form of atomic refactoring as a benefit of
-monorepos:
-
-&lt;/p&gt;&lt;BLOCKQUOTE&gt;
-The ability to make atomic changes is also a very powerful
-feature of the monolithic model. A developer can make a major change
-touching hundreds or thousands of files across the repository in a
-single consistent operation. For instance, a developer can rename a
-class or function in a single commit and yet not break any builds or
-tests.
-&lt;/BLOCKQUOTE&gt;&lt;p&gt;
-But when it comes to the actual refactoring workflow is, the
-process that's described is quite different:
-
-&lt;/p&gt;&lt;BLOCKQUOTE&gt;
-A team of Google developers will occasionally undertake a set of
-wide-reaching code-cleanup changes to further maintain the health of
-the codebase. The developers who perform these changes commonly
-separate them into two phases. With this approach, a large
-backward-compatible change is made first. Once it is complete, a
-second smaller change can be made to remove the original pattern that
-is no longer referenced.
-&lt;/BLOCKQUOTE&gt;&lt;p&gt;
-I suspect what happened here was that the atomic commits were identified
-as a benefit in the abstract, with refactoring being used as an
-illustration of a use case. This was then quite understandably read
-as a practical example of how you'd work with a monorepo.
-
-&lt;/p&gt;&lt;p&gt;
-There might be a few cases where atomic commits across the whole
-repository are the right solution, but it has to be exceedingly
-rare. The example of renaming a function with thousands of callers,
-for example, is probably better handled by just temporarily aliasing
-the function, or by temporarily defining the new function in terms of
-the old. (But this does suggest that languages, both programming languages and
-IDLs, should make aliasing and indirection easy for as many constructs
-as possible).
-
-&lt;/p&gt;&lt;p&gt;
-Are there organizations with a large monorepo where atomic
-cross-project commits are routinely used to change both the
-implementation and the clients?
-
-&lt;/p&gt;&lt;p dir="ltr"&gt;If you liked this and want to be notified of new posts, &lt;a href="https://twitter.com/intent/follow?screen_name=juhosnellman" dir="ltr"&gt;follow me on Twitter&lt;/a&gt;&lt;/p&gt;</description><pubDate>Wed, 21 Jul 2021 07:57:28 -0500</pubDate></item><item><title>namedtuple in a post-dataclasses world</title><link>https://lobste.rs/s/ewkbgn</link><description>&lt;p&gt;&lt;small dir="ltr"&gt;
+and CPU.&lt;/p&gt;</description><pubDate>Tue, 20 Jul 2021 13:54:07 -0500</pubDate></item><item><title>namedtuple in a post-dataclasses world</title><link>https://lobste.rs/s/ewkbgn</link><description>&lt;p&gt;&lt;small dir="ltr"&gt;
 &lt;span dir="ltr"&gt;2021-07-21&lt;/span&gt;
 
 
@@ -710,7 +710,7 @@ for an example of why you might want immutable instances. &lt;a href="https://de
 
         Want to know when new articles come out?
 
-    &lt;/div&gt;&lt;p&gt;Drop your email in the box below and I'll send new stuff straight to your inbox!&lt;/p&gt;</description><pubDate>Wed, 21 Jul 2021 10:28:41 -0500</pubDate></item><item><title>I ****ing hate Science</title><link>https://lobste.rs/s/v4unx3</link><description>&lt;div data-v-aa894f0e=""&gt;&lt;strong data-v-aa894f0e=""&gt;Why Buttondown?&lt;/strong&gt;&lt;/div&gt;</description><pubDate>Tue, 20 Jul 2021 11:17:05 -0500</pubDate></item><item><title>NVMM lands in DragonFlyBSD</title><link>https://lobste.rs/s/k5yqlm</link><description>&lt;h1&gt;NVMM lands in DragonFly&lt;/h1&gt;&lt;p dir="ltr"&gt;Aaron LI’s &lt;a href="https://lists.dragonflybsd.org/pipermail/commits/2021-July/820410.html" dir="ltr"&gt;added&lt;/a&gt; &lt;a href="https://lists.dragonflybsd.org/pipermail/commits/2021-July/820411.html" dir="ltr"&gt;NVMM&lt;/a&gt;, hardware acceleration for &lt;a href="https://lists.dragonflybsd.org/pipermail/commits/2021-July/820412.html" dir="ltr"&gt;virtual machines&lt;/a&gt;, to DragonFly.&lt;/p&gt;&lt;p dir="ltr"&gt;The version of qemu in dports is not set up to support this, yet.&amp;nbsp; Until then, you can &lt;a href="https://leaf.dragonflybsd.org/~aly/nvmm/qemu-6.0.0_1.txz" dir="ltr"&gt;download a prebuilt version&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Since NVMM originated on NetBSD, the &lt;a href="https://netbsd.org/docs/guide/en/chap-virt.html" dir="ltr"&gt;NetBSD documentation page for it&lt;/a&gt; describes how to use it quite well.&amp;nbsp; There’s a &lt;a href="https://man.dragonflybsd.org/?command=nvmm&amp;amp;section=ANY" dir="ltr"&gt;man page in DragonFly&lt;/a&gt; for it too, of course.&amp;nbsp; There’s even &lt;a href="https://lists.dragonflybsd.org/pipermail/commits/2021-July/820471.html" dir="ltr"&gt;basic&lt;/a&gt; &lt;a href="https://lists.dragonflybsd.org/pipermail/commits/2021-July/820475.html" dir="ltr"&gt;machines&lt;/a&gt; to try.&lt;/p&gt;</description><pubDate>Wed, 21 Jul 2021 11:22:04 -0500</pubDate></item><item><title>A story about an Apple and two fetches</title><link>https://lobste.rs/s/agkrfc</link><description>&lt;p&gt;&lt;em&gt;Mistreatment by Apple Security is unfortunately something you’re likely to come across on a regular basis. Usually this concerns people that conduct free work for Apple in their spare time by auditing their assets. Despite Apple’s website claiming the opposite, you’ll frequently find things like quiet patching, no credit, no bounties, and an appalling lack of communication.&lt;/em&gt;&lt;/p&gt;&lt;p&gt;&lt;em&gt;This is unwise on Apple’s part because it frustrates people who find these bugs and disincentivizes them from sharing them with Apple. Remember, every bug that gets reported to them (instead of being sold to some shady outfit) and that gets fixed subsequently is one that can not be exploited in the future to make your device less safe. The very least they can do to honour the work of independent researchers is to communicate clearly and give them credit where appropriate.&lt;/em&gt;&lt;/p&gt;&lt;p&gt;Last year on June 30th 2020, I discovered a vulnerability in Apple’s kernel (darwin-xnu), which I promptly reported. On July 2, 2020, I received notification that my report had been examined and that they were looking into the issue. A few days later, I asked if I could be kept informed of any updates, and they indicated there were none at the time. I never heard from them again after that.&lt;/p&gt;&lt;p&gt;A few weeks ago on 24 June 2021, I found out that this vulnerability had been fixed for a while, unfortunately I have not received any updates or credits. On the basis of this, I sent an e-mail, to which I have not gotten a response to date.&lt;/p&gt;&lt;p dir="ltr"&gt;When I discovered that the vulnerability had been resolved due to a new revision of the source code of darwin-xnu being posted on github, my report flashed through my mind, and I went to see if it had been fixed. I discovered using git blame that this vulnerability was already resolved 8 months ago (on January 11, 2021)! (&lt;a href="https://github.com/apple/darwin-xnu/blame/2ff845c2e033bd0ff64b5b6aa6063a1f8f65aa32/bsd/nfs/nfs_vfsops.c#L2099" dir="ltr"&gt;Git blame&lt;/a&gt;)&lt;/p&gt;&lt;p dir="ltr"&gt;So, let’s have a look at this issue! The &lt;code dir="ltr"&gt;mount()&lt;/code&gt; syscall for “nfs” filesystems had a double fetch vulnerability.&lt;/p&gt;&lt;p dir="ltr"&gt;In theory, a Double Fetch is a conditional competitive vulnerability. It is a battle for data access between kernel mode and user mode. Virtual memory locations are typically partitioned between kernel space and user space in modern operating systems such as Linux and BSD derivatives. More information regarding double fetch vulnerabilities can be found in my post  &lt;a href="https://pwning.systems/posts/an-introduction-to-kernel-exploitation-part1/" dir="ltr"&gt;“An introduction to Kernel Exploitation Part 1”&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;The first fetch occurs in &lt;a href="https://github.com/apple/darwin-xnu/blob/a449c6a3b8014d9406c2ddbdc81795da24aa7443/bsd/nfs/nfs_vfsops.c#L1902" dir="ltr"&gt;“this”&lt;/a&gt; instance. In this case, the External Data Representation (XDR) variables are parsed in NFS. You’re probably thinking right now What exactly is XDR? Externel Data Representation (&lt;a href="https://datatracker.ietf.org/doc/html/rfc1832" dir="ltr"&gt;XDR&lt;/a&gt;) is a data format description language that can only be used to describe data. It isn’t a programming language at all. This language allows you to describe complex data formats in a clear and succinct manner. The XDR programming language is similar to the C programming language. NFS and other protocols employ XDR to describe the format of their data.&lt;/p&gt;&lt;p dir="ltr"&gt;So, in essence, they are copying the length of all XDR variables from userland, then doing a size check on the &lt;code dir="ltr"&gt;argslength&lt;/code&gt; variable that was just copied from userland:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="C" dir="ltr"&gt;argslength &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;ntohl&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;argslength&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;/div&gt;&lt;p&gt;Drop your email in the box below and I'll send new stuff straight to your inbox!&lt;/p&gt;</description><pubDate>Wed, 21 Jul 2021 10:28:41 -0500</pubDate></item><item><title>Can a package manager solve the AGPL "remote network interaction" problem?</title><link>https://lobste.rs/s/s6arro</link><description>&lt;p dir="ltr"&gt;Says &lt;a href="https://www.gnu.org/licenses/agpl-3.0.en.html" rel="nofollow noreferrer" dir="ltr"&gt;AGPLv3&lt;/a&gt;:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;Notwithstanding any other provision of this License, if you modify the Program, your modified version must prominently offer all users interacting with it remotely through a computer network (if your version supports such interaction) an opportunity to receive the Corresponding Source of your version by providing access to the Corresponding Source from a network server at no charge, through some standard or customary means of facilitating copying of software.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;This requirement is known as the "remote network interaction" requirement, after the title of the section where it occurs. In AGPL discussion, there is a corresponding "remote network interaction" design problem, based on three fragments:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;"all users interacting with it remotely through a computer network": Because users are usually represented by &lt;a href="https://en.wikipedia.org/wiki/User_agent" rel="nofollow noreferrer" dir="ltr"&gt;user agents&lt;/a&gt;, this means that even automatic requests need to be satisfied&lt;/LI&gt;&lt;LI&gt;"(if your version supports such interaction)": This paragraph only is engaged if the software is designed to take advantage of the AGPL's anti-&lt;a href="https://en.wikipedia.org/wiki/Software_as_a_service" rel="nofollow noreferrer" dir="ltr"&gt;SaaS&lt;/a&gt; features&lt;/LI&gt;&lt;LI&gt;"some standard or customary means of facilitating copying of software": Most vendors don't have such customs&lt;/LI&gt;&lt;/OL&gt;&lt;p&gt;In many fora, this "remote network interaction" requirement is discussed as an obstacle to practical enforcement of the AGPL. The reasoning is simple: Software isn't designed with the AGPL in mind, and thus is not able to fully utilize its protections. As a thought experiment, however, let's imagine some software which intends to fulfill the requirement:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;The Program shall be a package manager which transmits packages and source code via peer-to-peer connections&lt;/LI&gt;&lt;LI&gt;All interoperable versions of the package manager, including modified versions, communicate with a single common protocol which features &lt;a href="https://en.wikipedia.org/wiki/Digital_signature" rel="nofollow noreferrer" dir="ltr"&gt;signature-based&lt;/a&gt; authentication&lt;/LI&gt;&lt;LI&gt;Specifically, when two peers communicate, they request zero or more signed bundles of data from each other&lt;/LI&gt;&lt;LI&gt;There is a unique way to request that a peer deliver a signed bundle for its own source code, the Corresponding Source, using its own key&lt;/LI&gt;&lt;LI&gt;A peer publishes a package by explicitly licensing and signing a bundle and then &lt;a href="https://en.wikipedia.org/wiki/Out-of-band_agreement" rel="nofollow noreferrer" dir="ltr"&gt;agreeing out-of-band&lt;/a&gt; to have other peers request the freshly-signed bundle&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Now, suppose that the Program is licensed under AGPLv3 and that its subroutine for signing bundles requires them to be licensed under AGPLv3 as well. Then we have placed any user into the following position: If they modify the Program, their modified version must reply to requests for the Corresponding Source of their version by transmitting a self-signed bundle with the Corresponding Source. In terms of enforcement, &lt;strong dir="ltr"&gt;have we enforced the AGPLv3 in a manner which solves the "remote network interaction" problem?&lt;/strong&gt;&lt;/p&gt;&lt;p&gt;One reasonable complication is that this all should probably be not "AGPLv3" but "AGPLv3 or later".&lt;/p&gt;&lt;p dir="ltr"&gt;An objection which is reasonable but not quite right is to point out that users cannot be forced to use AGPLv3 merely in order to participate in the ecosystem. To be pedantic, users can be required to use AGPLv3 in order to publish packages, but not merely to author packages; further, this can be an extremely one-sided arrangement, as in the automatic licensing clauses in terms of service offered by &lt;a href="https://tosdr.org/en/service/274" rel="nofollow noreferrer" dir="ltr"&gt;YouTube&lt;/a&gt; or &lt;a href="https://tosdr.org/en/service/297" rel="nofollow noreferrer" dir="ltr"&gt;GitHub&lt;/a&gt;.&lt;/p&gt;</description><pubDate>Wed, 21 Jul 2021 21:37:53 -0500</pubDate></item><item><title>I ****ing hate Science</title><link>https://lobste.rs/s/v4unx3</link><description>&lt;div data-v-aa894f0e=""&gt;&lt;strong data-v-aa894f0e=""&gt;Why Buttondown?&lt;/strong&gt;&lt;/div&gt;</description><pubDate>Tue, 20 Jul 2021 11:17:05 -0500</pubDate></item><item><title>NVMM lands in DragonFlyBSD</title><link>https://lobste.rs/s/k5yqlm</link><description>&lt;h1&gt;NVMM lands in DragonFly&lt;/h1&gt;&lt;p dir="ltr"&gt;Aaron LI’s &lt;a href="https://lists.dragonflybsd.org/pipermail/commits/2021-July/820410.html" dir="ltr"&gt;added&lt;/a&gt; &lt;a href="https://lists.dragonflybsd.org/pipermail/commits/2021-July/820411.html" dir="ltr"&gt;NVMM&lt;/a&gt;, hardware acceleration for &lt;a href="https://lists.dragonflybsd.org/pipermail/commits/2021-July/820412.html" dir="ltr"&gt;virtual machines&lt;/a&gt;, to DragonFly.&lt;/p&gt;&lt;p dir="ltr"&gt;The version of qemu in dports is not set up to support this, yet.&amp;nbsp; Until then, you can &lt;a href="https://leaf.dragonflybsd.org/~aly/nvmm/qemu-6.0.0_1.txz" dir="ltr"&gt;download a prebuilt version&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Since NVMM originated on NetBSD, the &lt;a href="https://netbsd.org/docs/guide/en/chap-virt.html" dir="ltr"&gt;NetBSD documentation page for it&lt;/a&gt; describes how to use it quite well.&amp;nbsp; There’s a &lt;a href="https://man.dragonflybsd.org/?command=nvmm&amp;amp;section=ANY" dir="ltr"&gt;man page in DragonFly&lt;/a&gt; for it too, of course.&amp;nbsp; There’s even &lt;a href="https://lists.dragonflybsd.org/pipermail/commits/2021-July/820471.html" dir="ltr"&gt;basic&lt;/a&gt; &lt;a href="https://lists.dragonflybsd.org/pipermail/commits/2021-July/820475.html" dir="ltr"&gt;machines&lt;/a&gt; to try.&lt;/p&gt;</description><pubDate>Wed, 21 Jul 2021 11:22:04 -0500</pubDate></item><item><title>A story about an Apple and two fetches</title><link>https://lobste.rs/s/agkrfc</link><description>&lt;p&gt;&lt;em&gt;Mistreatment by Apple Security is unfortunately something you’re likely to come across on a regular basis. Usually this concerns people that conduct free work for Apple in their spare time by auditing their assets. Despite Apple’s website claiming the opposite, you’ll frequently find things like quiet patching, no credit, no bounties, and an appalling lack of communication.&lt;/em&gt;&lt;/p&gt;&lt;p&gt;&lt;em&gt;This is unwise on Apple’s part because it frustrates people who find these bugs and disincentivizes them from sharing them with Apple. Remember, every bug that gets reported to them (instead of being sold to some shady outfit) and that gets fixed subsequently is one that can not be exploited in the future to make your device less safe. The very least they can do to honour the work of independent researchers is to communicate clearly and give them credit where appropriate.&lt;/em&gt;&lt;/p&gt;&lt;p&gt;Last year on June 30th 2020, I discovered a vulnerability in Apple’s kernel (darwin-xnu), which I promptly reported. On July 2, 2020, I received notification that my report had been examined and that they were looking into the issue. A few days later, I asked if I could be kept informed of any updates, and they indicated there were none at the time. I never heard from them again after that.&lt;/p&gt;&lt;p&gt;A few weeks ago on 24 June 2021, I found out that this vulnerability had been fixed for a while, unfortunately I have not received any updates or credits. On the basis of this, I sent an e-mail, to which I have not gotten a response to date.&lt;/p&gt;&lt;p dir="ltr"&gt;When I discovered that the vulnerability had been resolved due to a new revision of the source code of darwin-xnu being posted on github, my report flashed through my mind, and I went to see if it had been fixed. I discovered using git blame that this vulnerability was already resolved 8 months ago (on January 11, 2021)! (&lt;a href="https://github.com/apple/darwin-xnu/blame/2ff845c2e033bd0ff64b5b6aa6063a1f8f65aa32/bsd/nfs/nfs_vfsops.c#L2099" dir="ltr"&gt;Git blame&lt;/a&gt;)&lt;/p&gt;&lt;p dir="ltr"&gt;So, let’s have a look at this issue! The &lt;code dir="ltr"&gt;mount()&lt;/code&gt; syscall for “nfs” filesystems had a double fetch vulnerability.&lt;/p&gt;&lt;p dir="ltr"&gt;In theory, a Double Fetch is a conditional competitive vulnerability. It is a battle for data access between kernel mode and user mode. Virtual memory locations are typically partitioned between kernel space and user space in modern operating systems such as Linux and BSD derivatives. More information regarding double fetch vulnerabilities can be found in my post  &lt;a href="https://pwning.systems/posts/an-introduction-to-kernel-exploitation-part1/" dir="ltr"&gt;“An introduction to Kernel Exploitation Part 1”&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;The first fetch occurs in &lt;a href="https://github.com/apple/darwin-xnu/blob/a449c6a3b8014d9406c2ddbdc81795da24aa7443/bsd/nfs/nfs_vfsops.c#L1902" dir="ltr"&gt;“this”&lt;/a&gt; instance. In this case, the External Data Representation (XDR) variables are parsed in NFS. You’re probably thinking right now What exactly is XDR? Externel Data Representation (&lt;a href="https://datatracker.ietf.org/doc/html/rfc1832" dir="ltr"&gt;XDR&lt;/a&gt;) is a data format description language that can only be used to describe data. It isn’t a programming language at all. This language allows you to describe complex data formats in a clear and succinct manner. The XDR programming language is similar to the C programming language. NFS and other protocols employ XDR to describe the format of their data.&lt;/p&gt;&lt;p dir="ltr"&gt;So, in essence, they are copying the length of all XDR variables from userland, then doing a size check on the &lt;code dir="ltr"&gt;argslength&lt;/code&gt; variable that was just copied from userland:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="C" dir="ltr"&gt;argslength &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;ntohl&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;argslength&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
 &lt;span dir="ltr"&gt;/* put a reasonable limit on the size of the XDR args */&lt;/span&gt;
 &lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;argslength &lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;16&lt;/span&gt;&lt;span dir="ltr"&gt;*&lt;/span&gt;&lt;span dir="ltr"&gt;1024&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
 	error &lt;span dir="ltr"&gt;=&lt;/span&gt; E2BIG&lt;span dir="ltr"&gt;;&lt;/span&gt;
@@ -2849,7 +2849,609 @@ Now you have all your messy changes and merges applied as a single clean commit 
 
 This technique can also be used in case you get a conflict when using the regular rebase workflow.
 
-&lt;/p&gt;</description><pubDate>Wed, 21 Jul 2021 18:17:16 -0500</pubDate></item><item><title>DuckDuckGo email protection</title><link>https://lobste.rs/s/0mh7ah</link><description>&lt;section dir="ltr"&gt;
+&lt;/p&gt;</description><pubDate>Wed, 21 Jul 2021 18:17:16 -0500</pubDate></item><item><title>Reversing for dummies - x86 assembly and C code</title><link>https://lobste.rs/s/jzgmdk</link><description>&lt;h3&gt;Context&lt;/h3&gt;&lt;p&gt;
+            Before I got into reverse engineering, executables always seemed
+            like black magic to me. I always wondered how stuff worked under the
+            hood, and how binary code is represented inside .exe files, and how
+            hard it is to modify this ‘compiled code’ without access to the
+            original source code.
+          &lt;/p&gt;&lt;p&gt;
+            But one of the main intimidating hurdles always seemed to be the
+            assembly language, it’s the thing that scares most people away from
+            trying to learn about this field.
+          &lt;/p&gt;&lt;p&gt;
+            That’s the main reason why I thought of writing this
+            straight-to-the-point article that only contains the essential stuff
+            that you encounter the most when reversing, albeit missing crucial
+            details for the sake of brevity, and assumes the reader has a reflex
+            of finding answers online, looking up definitions, and more
+            importantly, coming up with examples/ideas/projects to practice on.
+          &lt;/p&gt;&lt;p&gt;
+            The goal is to hopefully guide an aspiring reverse engineer and
+            arouse motivation towards learning more about this seemingly elusive
+            passion.
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            &lt;strong dir="ltr"&gt;&lt;em dir="ltr"&gt;Note&lt;/em&gt;&lt;/strong&gt;: This article assumes the reader has elementary knowledge
+            regarding the
+            &lt;a href="https://en.wikipedia.org/wiki/Hexadecimal" rel="noopener noreferrer" dir="ltr"&gt;hexadecimal numeral system&lt;/a&gt;, as well as the
+            &lt;a href="https://en.wikipedia.org/wiki/C_(programming_language)" rel="noopener noreferrer" dir="ltr"&gt;C programming language&lt;/a&gt;, and is based on a 32-bit Windows executable case study - results
+            might differ across different OSes/architectures.
+          &lt;/p&gt;&lt;h3&gt;Introduction&lt;/h3&gt;&lt;h4&gt;Compilation&lt;/h4&gt;&lt;p dir="ltr"&gt;
+            After writing code using a
+            &lt;a href="https://en.wikipedia.org/wiki/Compiled_language" rel="noopener noreferrer" dir="ltr"&gt;compiled language&lt;/a&gt;, a compilation takes place &lt;del dir="ltr"&gt;(duh)&lt;/del&gt;, in order to generate
+            the output binary file (an example of such is an .exe file).
+          &lt;/p&gt;&lt;img src="https://i.0x41.cf/b/compilation-c-to-exe-file.png" width="310" height="128"&gt;&lt;p dir="ltr"&gt;
+            Compilers are sophisticated programs which do this task. They make
+            sure the syntax of your &lt;del dir="ltr"&gt;ugly&lt;/del&gt; code is correct, before
+            compiling and optimizing the resulting machine code by minimizing
+            its size and improving its performance, whenever applicable.
+          &lt;/p&gt;&lt;h4&gt;Binary code&lt;/h4&gt;&lt;p&gt;
+            As we were saying, the resulting output file contains binary code,
+            which can only be ‘understood’ by a CPU, it’s essentially a
+            succession of varying-length instructions to be executed in order -
+            here’s what some of them look like:
+          &lt;/p&gt;&lt;table dir="ltr"&gt;
+            &lt;thead dir="ltr"&gt;
+              &lt;tr dir="ltr"&gt;
+                &lt;th dir="ltr"&gt;CPU-readable instruction data (in hex)&lt;/th&gt;
+                &lt;th dir="ltr"&gt;Human-readable interpretation&lt;/th&gt;
+              &lt;/tr&gt;
+            &lt;/thead&gt;
+            &lt;tbody dir="ltr"&gt;
+              &lt;tr dir="ltr"&gt;
+                &lt;td dir="ltr"&gt;55&lt;/td&gt;
+                &lt;td dir="ltr"&gt;push ebp&lt;/td&gt;
+              &lt;/tr&gt;
+              &lt;tr dir="ltr"&gt;
+                &lt;td dir="ltr"&gt;8B EC&lt;/td&gt;
+                &lt;td dir="ltr"&gt;mov ebp, esp&lt;/td&gt;
+              &lt;/tr&gt;
+              &lt;tr dir="ltr"&gt;
+                &lt;td dir="ltr"&gt;83 EC 08&lt;/td&gt;
+                &lt;td dir="ltr"&gt;sub esp, 8&lt;/td&gt;
+              &lt;/tr&gt;
+              &lt;tr dir="ltr"&gt;
+                &lt;td dir="ltr"&gt;33 C5&lt;/td&gt;
+                &lt;td dir="ltr"&gt;xor eax, ebp&lt;/td&gt;
+              &lt;/tr&gt;
+              &lt;tr dir="ltr"&gt;
+                &lt;td dir="ltr"&gt;83 7D 0C 01&lt;/td&gt;
+                &lt;td dir="ltr"&gt;cmp dword ptr [ebp+0Ch], 1&lt;/td&gt;
+              &lt;/tr&gt;
+            &lt;/tbody&gt;
+          &lt;/table&gt;&lt;p&gt;
+            These instructions are predominantly arithmetical, and they
+            manipulate CPU registers/flags as well as volatile memory, as
+            they’re executed.
+          &lt;/p&gt;&lt;h4&gt;CPU registers&lt;/h4&gt;&lt;p dir="ltr"&gt;
+            &lt;a href="https://en.wikipedia.org/wiki/Processor_register" rel="noopener noreferrer" dir="ltr"&gt;A CPU register&lt;/a&gt;
+            is almost like a temporary integer variable - there’s a small fixed
+            number of them, and they exist because they’re quick to access,
+            unlike memory-based variables, and they help the CPU keep track of
+            its data (results, operands, counts, etc.) during execution.
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            It’s important to note the presence of a special register called the
+            &lt;a href="https://en.wikipedia.org/wiki/FLAGS_register" rel="noopener noreferrer" dir="ltr"&gt;&lt;code dir="ltr"&gt;FLAGS&lt;/code&gt;
+              register&lt;/a&gt;
+            (&lt;code dir="ltr"&gt;EFLAGS&lt;/code&gt; on
+            32-bit), which houses a bunch of flags (boolean indicators), which
+            hold information about the state of the CPU, which include details
+            about the last arithmetic operation (zero:
+            &lt;code dir="ltr"&gt;ZF&lt;/code&gt;,
+            overflow:
+            &lt;code dir="ltr"&gt;OF&lt;/code&gt;,
+            parity:
+            &lt;code dir="ltr"&gt;PF&lt;/code&gt;, sign:
+            &lt;code dir="ltr"&gt;SF&lt;/code&gt;, etc.).
+          &lt;/p&gt;&lt;img src="https://i.0x41.cf/b/x32dbg-cpu-registers.png" width="127" height="183"&gt;&lt;p align="center" dir="ltr"&gt;
+            &lt;small dir="ltr"&gt;CPU registers visualized while debugging a 32-bit process on
+              x64dbg, a debugging tool.&lt;/small&gt;
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            Some of these registers can also be spotted on the assembly excerpt
+            mentioned &lt;a href="https://0x41.cf/reversing/2021/07/21/reversing-x86-and-c-code-for-beginners.html#binary-code" dir="ltr"&gt;previously&lt;/a&gt;, namely:
+            &lt;code dir="ltr"&gt;EAX&lt;/code&gt;,
+            &lt;code dir="ltr"&gt;ESP&lt;/code&gt; (stack
+            pointer) and
+            &lt;code dir="ltr"&gt;EBP&lt;/code&gt; (base
+            pointer).
+          &lt;/p&gt;&lt;h4&gt;Memory access&lt;/h4&gt;&lt;p dir="ltr"&gt;
+            As the CPU executes stuff, it needs to access and interact with
+            memory, that’s when the role of the &lt;em dir="ltr"&gt;stack&lt;/em&gt; and the
+            &lt;em dir="ltr"&gt;heap&lt;/em&gt; comes.
+          &lt;/p&gt;&lt;p&gt;
+            These are (without getting into too much detail) the 2 main ways of
+            ‘keeping track of variable data’ during the execution of a program:
+          &lt;/p&gt;&lt;h5 dir="ltr"&gt;🥞 &lt;em dir="ltr"&gt;Stack&lt;/em&gt;&lt;/h5&gt;&lt;p dir="ltr"&gt;
+            The simpler and faster of the two - it’s a linear contiguous LIFO
+            (last in = first out) data structure with a push/pop mechanism, it
+            serves to remember function-scoped variables, arguments, and keeps
+            track of calls (ever heard of a
+            &lt;a href="https://en.wikipedia.org/wiki/Stack_trace" rel="noopener noreferrer" dir="ltr"&gt;stack trace&lt;/a&gt;?)
+          &lt;/p&gt;&lt;h5 dir="ltr"&gt;⛰ &lt;em dir="ltr"&gt;Heap&lt;/em&gt;&lt;/h5&gt;&lt;p&gt;
+            The heap, however, is pretty unordered, and is for more complicated
+            data structures, it’s typically used for dynamic allocations, where
+            the size of the buffer isn’t initially known, and/or if it’s too
+            big, and/or needs to be modified later.
+          &lt;/p&gt;&lt;h3&gt;Assembly instructions&lt;/h3&gt;&lt;p&gt;
+            As I’ve mentioned earlier, assembly instructions have a varying
+            ‘byte-size’, and a varying number of arguments.
+          &lt;/p&gt;&lt;p&gt;
+            Arguments can also be either immediate (‘hardcoded’), or they can be
+            registers, depending on the instruction:
+          &lt;/p&gt;&lt;PRE&gt;&lt;code&gt;55         push    ebp     ; size: 1 byte,  argument: register
+6A 01      push    1       ; size: 2 bytes, argument: immediate
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+            Let’s quickly run through a very small set of some of the common
+            ones we’ll get to see - feel free to do your own research for more
+            detail:
+          &lt;/p&gt;&lt;h4&gt;Stack operations&lt;/h4&gt;&lt;UL&gt;&lt;LI&gt;
+              &lt;strong dir="ltr"&gt;push
+                &lt;code dir="ltr"&gt;value&lt;/code&gt;&lt;/strong&gt;
+              &lt;em dir="ltr"&gt;; pushes a value into the stack (decrements
+                &lt;code dir="ltr"&gt;ESP&lt;/code&gt; by
+                4, the size of one stack ‘unit’).&lt;/em&gt;
+            &lt;/LI&gt;&lt;LI&gt;
+              &lt;strong dir="ltr"&gt;pop
+                &lt;code dir="ltr"&gt;register&lt;/code&gt;&lt;/strong&gt;
+              &lt;em dir="ltr"&gt;; pops a value to a register (increments
+                &lt;code dir="ltr"&gt;ESP&lt;/code&gt; by
+                4).&lt;/em&gt;
+            &lt;/LI&gt;&lt;/UL&gt;&lt;h4&gt;Data transfer&lt;/h4&gt;&lt;UL&gt;&lt;LI&gt;
+              &lt;strong dir="ltr"&gt;mov
+                &lt;code dir="ltr"&gt;destination&lt;/code&gt;,
+                &lt;code dir="ltr"&gt;source&lt;/code&gt;&lt;/strong&gt;
+              ; &lt;em dir="ltr"&gt;&lt;del dir="ltr"&gt;moves&lt;/del&gt; copies a value from/to a register.&lt;/em&gt;
+            &lt;/LI&gt;&lt;LI&gt;
+              &lt;strong dir="ltr"&gt;mov
+                &lt;code dir="ltr"&gt;destination&lt;/code&gt;, [&lt;code dir="ltr"&gt;expression&lt;/code&gt;]&lt;/strong&gt;
+              ;
+              &lt;em dir="ltr"&gt;copies a value from a memory address resolved from a ‘register
+                expression’ (single register or arithmetic expression involving
+                one or more registers) into a register.&lt;/em&gt;
+            &lt;/LI&gt;&lt;/UL&gt;&lt;h4&gt;Flow control&lt;/h4&gt;&lt;UL&gt;&lt;LI&gt;
+              &lt;strong dir="ltr"&gt;jmp
+                &lt;code dir="ltr"&gt;destination&lt;/code&gt;&lt;/strong&gt;
+              ;
+              &lt;em dir="ltr"&gt;jumps into a code location (sets
+                &lt;code dir="ltr"&gt;EIP&lt;/code&gt;
+                (instruction pointer)).&lt;/em&gt;
+            &lt;/LI&gt;&lt;LI&gt;
+              &lt;strong dir="ltr"&gt;jz/je
+                &lt;code dir="ltr"&gt;destination&lt;/code&gt;&lt;/strong&gt;
+              ;
+              &lt;em dir="ltr"&gt;jumps into a code location if
+                &lt;code dir="ltr"&gt;ZF&lt;/code&gt;
+                (the zero flag) is set.&lt;/em&gt;
+            &lt;/LI&gt;&lt;LI&gt;
+              &lt;strong dir="ltr"&gt;jnz/jne
+                &lt;code dir="ltr"&gt;destination&lt;/code&gt;&lt;/strong&gt;
+              ;
+              &lt;em dir="ltr"&gt;jumps into a code location if
+                &lt;code dir="ltr"&gt;ZF&lt;/code&gt; is
+                not set.&lt;/em&gt;
+            &lt;/LI&gt;&lt;/UL&gt;&lt;h4&gt;Operations&lt;/h4&gt;&lt;UL&gt;&lt;LI&gt;
+              &lt;strong dir="ltr"&gt;cmp
+                &lt;code dir="ltr"&gt;operand1&lt;/code&gt;,
+                &lt;code dir="ltr"&gt;operand2&lt;/code&gt;&lt;/strong&gt;
+              ;
+              &lt;em dir="ltr"&gt;compares the 2 operands and sets
+                &lt;code dir="ltr"&gt;ZF&lt;/code&gt; if
+                they’re equal.&lt;/em&gt;
+            &lt;/LI&gt;&lt;LI&gt;
+              &lt;strong dir="ltr"&gt;add
+                &lt;code dir="ltr"&gt;operand1&lt;/code&gt;,
+                &lt;code dir="ltr"&gt;operand2&lt;/code&gt;&lt;/strong&gt;
+              ; &lt;em dir="ltr"&gt;operand1 += operand2;&lt;/em&gt;
+            &lt;/LI&gt;&lt;LI&gt;
+              &lt;strong dir="ltr"&gt;sub
+                &lt;code dir="ltr"&gt;operand1&lt;/code&gt;,
+                &lt;code dir="ltr"&gt;operand2&lt;/code&gt;&lt;/strong&gt;
+              ; &lt;em dir="ltr"&gt;operand1 -= operand2;&lt;/em&gt;
+            &lt;/LI&gt;&lt;/UL&gt;&lt;h4&gt;Function transitions&lt;/h4&gt;&lt;UL&gt;&lt;LI&gt;
+              &lt;strong dir="ltr"&gt;call
+                &lt;code dir="ltr"&gt;function&lt;/code&gt;&lt;/strong&gt;
+              ;
+              &lt;em dir="ltr"&gt;calls a function (pushes current
+                &lt;code dir="ltr"&gt;EIP&lt;/code&gt;,
+                then jumps to the function).&lt;/em&gt;
+            &lt;/LI&gt;&lt;LI&gt;
+              &lt;strong dir="ltr"&gt;retn&lt;/strong&gt; ;
+              &lt;em dir="ltr"&gt;returns to caller function (pops back the previous
+                &lt;code dir="ltr"&gt;EIP&lt;/code&gt;).&lt;/em&gt;
+            &lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;
+            &lt;strong dir="ltr"&gt;&lt;em dir="ltr"&gt;Note&lt;/em&gt;&lt;/strong&gt;: You might notice the words ‘equal’ and ‘zero’ being used
+            interchangeably in x86 terminology - that’s because comparison
+            instructions internally perform a subtraction, which means if the 2
+            operands are equal,
+            &lt;code dir="ltr"&gt;ZF&lt;/code&gt; is set.
+          &lt;/p&gt;&lt;h3&gt;Assembly patterns&lt;/h3&gt;&lt;p dir="ltr"&gt;
+            Now that we have a rough idea of the main elements used during the
+            execution of a program, let’s get familiarized with the patterns of
+            instructions that you can encounter reverse engineering your average
+            everyday 32-bit
+            &lt;a href="https://en.wikipedia.org/wiki/Portable_Executable" rel="noopener noreferrer" dir="ltr"&gt;PE&lt;/a&gt;
+            binary.
+          &lt;/p&gt;&lt;h4&gt;Function prologue&lt;/h4&gt;&lt;p dir="ltr"&gt;
+            A
+            &lt;a href="https://en.wikipedia.org/wiki/Function_prologue" rel="noopener noreferrer" dir="ltr"&gt;function prologue&lt;/a&gt;
+            is some initial code embedded in the beginning of most functions, it
+            serves to set up a new stack frame for said function.
+          &lt;/p&gt;&lt;p&gt;It typically looks like this (X being a number):&lt;/p&gt;&lt;PRE&gt;&lt;code&gt;55          push    ebp        ; preserve caller function's base pointer in stack
+8B EC       mov     ebp, esp   ; caller function's stack pointer becomes base pointer (new stack frame)
+83 EC XX    sub     esp, X     ; adjust the stack pointer by X bytes to reserve space for local variables
+&lt;/code&gt;&lt;/PRE&gt;&lt;h4&gt;Function epilogue&lt;/h4&gt;&lt;p dir="ltr"&gt;
+            The
+            &lt;a href="https://en.wikipedia.org/wiki/Function_epilogue" rel="noopener noreferrer" dir="ltr"&gt;epilogue&lt;/a&gt;
+            is simply the opposite of the prologue - it undoes its steps to
+            restore the stack frame of the caller function, before it returns to
+            it:
+          &lt;/p&gt;&lt;PRE&gt;&lt;code&gt;8B E5    mov    esp, ebp    ; restore caller function's stack pointer (current base pointer) 
+5D       pop    ebp         ; restore base pointer from the stack
+C3       retn               ; return to caller function
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+            Now at this point, you might be wondering - how do functions talk to
+            each other? How exactly do you send/access arguments when calling a
+            function, and how do you receive the return value? That’s precisely
+            why we have calling conventions.
+          &lt;/p&gt;&lt;h4&gt;Calling conventions: __cdecl&lt;/h4&gt;&lt;p dir="ltr"&gt;
+            A
+            &lt;a href="https://en.wikipedia.org/wiki/Calling_convention" rel="noopener noreferrer" dir="ltr"&gt;calling convention&lt;/a&gt;
+            is basically a protocol used to communicate with functions, there’s
+            a few variations of them, but they share the same principle.
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            We will be looking at the
+            &lt;a href="https://en.wikipedia.org/wiki/X86_calling_conventions#cdecl" rel="noopener noreferrer" dir="ltr"&gt;__cdecl (C declaration) convention&lt;/a&gt;, which is the standard one when compiling C code.
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            In __cdecl (32-bit), function arguments are passed on the stack
+            (pushed in reverse order), while the return value is returned in the
+            &lt;code dir="ltr"&gt;EAX&lt;/code&gt;
+            register (assuming it’s not a float).
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            This means that a
+            &lt;code dir="ltr"&gt;func(1, 2, 3);&lt;/code&gt;
+            call will generate the following:
+          &lt;/p&gt;&lt;PRE&gt;&lt;code&gt;6A 03             push    3
+6A 02             push    2
+6A 01             push    1
+E8 XX XX XX XX    call    func
+&lt;/code&gt;&lt;/PRE&gt;&lt;h4&gt;Putting everything together&lt;/h4&gt;&lt;p dir="ltr"&gt;
+            Assuming
+            &lt;code dir="ltr"&gt;func()&lt;/code&gt;
+            simply does an addition on the arguments and returns the result, it
+            would probably look like this:
+          &lt;/p&gt;&lt;PRE&gt;&lt;code&gt;int __cdecl func(int, int, int):
+
+           prologue:
+55           push    ebp               ; save base pointer
+8B EC        mov     ebp, esp          ; new stack frame
+
+           body:
+8B 45 08     mov     eax, [ebp+8]      ; load first argument to EAX (return value)
+03 45 0C     add     eax, [ebp+0Ch]    ; add 2nd argument
+03 45 10     add     eax, [ebp+10h]    ; add 3rd argument
+
+           epilogue:
+5D           pop     ebp               ; restore base pointer
+C3           retn                      ; return to caller
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+            Now if you’ve been paying attention and you’re still confused, you
+            might be asking yourself one of these 2 questions:
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            1) Why do we have to adjust
+            &lt;code dir="ltr"&gt;EBP&lt;/code&gt; by 8
+            to get to the first argument?
+          &lt;/p&gt;&lt;UL&gt;&lt;LI&gt;
+              If you
+              &lt;a href="https://0x41.cf/reversing/2021/07/21/reversing-x86-and-c-code-for-beginners.html#assembly-instructions" dir="ltr"&gt;check the definition&lt;/a&gt; of the
+              &lt;code dir="ltr"&gt;call&lt;/code&gt;
+              instruction we mentioned earlier, you’ll realize that, internally,
+              it actually pushes
+              &lt;code dir="ltr"&gt;EIP&lt;/code&gt; to
+              the stack. And if you also check the definition for
+              &lt;code dir="ltr"&gt;push&lt;/code&gt;,
+              you’ll realize that it decrements
+              &lt;code dir="ltr"&gt;ESP&lt;/code&gt;
+              (which is copied to
+              &lt;code dir="ltr"&gt;EBP&lt;/code&gt;
+              after the prologue) by 4 bytes. In addition, the prologue’s first
+              instruction is also a
+              &lt;code dir="ltr"&gt;push&lt;/code&gt;, so
+              we end up with 2 decrements of 4, hence the need to add 8.
+            &lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;
+            2) What happened to the prologue and epilogue, why are they
+            seemingly ‘truncated’?
+          &lt;/p&gt;&lt;UL&gt;&lt;LI&gt;
+              It’s simply because we haven’t had a use for the stack during the
+              execution of our function - if you’ve noticed, we haven’t modified
+              &lt;code dir="ltr"&gt;ESP&lt;/code&gt; at
+              all, which means we also don’t need to restore it.
+            &lt;/LI&gt;&lt;/UL&gt;&lt;h4&gt;If conditions&lt;/h4&gt;&lt;p&gt;
+            To demo the flow control assembly instructions, I’d like to add one
+            more example to show how an if condition was compiled to assembly.
+          &lt;/p&gt;&lt;p&gt;Assume we have the following function:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;void&lt;/span&gt; &lt;span dir="ltr"&gt;print_equal&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;a&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;int&lt;/span&gt; &lt;span dir="ltr"&gt;b&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    &lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;a&lt;/span&gt; &lt;span dir="ltr"&gt;==&lt;/span&gt; &lt;span dir="ltr"&gt;b&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+        &lt;span dir="ltr"&gt;printf&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"equal"&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
+    &lt;span dir="ltr"&gt;}&lt;/span&gt;
+    &lt;span dir="ltr"&gt;else&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+        &lt;span dir="ltr"&gt;printf&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"nah"&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
+    &lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+            After compiling it, here’s the disassembly that I got with the help
+            of
+            &lt;a href="https://hex-rays.com/ida-pro/" rel="noopener noreferrer" dir="ltr"&gt;IDA&lt;/a&gt;:
+          &lt;/p&gt;&lt;PRE&gt;&lt;code&gt;void __cdecl print_equal(int, int):
+
+     10000000   55                push   ebp
+     10000001   8B EC             mov    ebp, esp
+     10000003   8B 45 08          mov    eax, [ebp+8]       ; load 1st argument
+     10000006   3B 45 0C          cmp    eax, [ebp+0Ch]     ; compare it with 2nd
+  ┌┅ 10000009   75 0F             jnz    short loc_1000001A ; jump if not equal
+  ┊  1000000B   68 94 67 00 10    push   offset aEqual  ; "equal"
+  ┊  10000010   E8 DB F8 FF FF    call   _printf
+  ┊  10000015   83 C4 04          add    esp, 4
+┌─┊─ 10000018   EB 0D             jmp    short loc_10000027
+│ ┊
+│ └ loc_1000001A:
+│    1000001A   68 9C 67 00 10    push   offset aNah    ; "nah"
+│    1000001F   E8 CC F8 FF FF    call   _printf
+│    10000024   83 C4 04          add    esp, 4
+│
+└── loc_10000027:
+     10000027   5D                pop    ebp
+     10000028   C3                retn
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+            Give yourself a minute and try to make sense of this disassembly
+            output (for simplicity’s sake, I’ve changed the real addresses and
+            made the function start from
+            &lt;code dir="ltr"&gt;10000000&lt;/code&gt;
+            instead).
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            In case you’re wondering about the
+            &lt;code dir="ltr"&gt;add esp, 4&lt;/code&gt;
+            part, it’s simply there to adjust
+            &lt;code dir="ltr"&gt;ESP&lt;/code&gt; back
+            to its initial value (same effect as a
+            &lt;code dir="ltr"&gt;pop&lt;/code&gt;,
+            except without modifying any register), since we had to
+            &lt;code dir="ltr"&gt;push&lt;/code&gt; the
+            printf string argument.
+          &lt;/p&gt;&lt;h3&gt;Basic data structures&lt;/h3&gt;&lt;p&gt;
+            Now let’s move on and talk about how data is stored (integers and
+            strings especially).
+          &lt;/p&gt;&lt;h4&gt;Endianness&lt;/h4&gt;&lt;p dir="ltr"&gt;
+            &lt;a href="https://en.wikipedia.org/wiki/Endianness" rel="noopener noreferrer" dir="ltr"&gt;Endianness&lt;/a&gt;
+            is the order of the sequence of bytes representing a value in
+            computer memory.
+          &lt;/p&gt;&lt;p&gt;There’s 2 types - big-endian and little-endian:&lt;/p&gt;&lt;img src="https://i.0x41.cf/b/big-endian-dark.svg" alt="" width="194" height="173"&gt;&lt;img src="https://i.0x41.cf/b/little-endian-dark.svg" alt="" width="194" height="173"&gt;&lt;p&gt;
+            For reference, x86 family processors (the ones on pretty much any
+            computer you can find) always use little-endian.
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            To give you a live example of this concept, I’ve compiled a Visual
+            Studio C++ console app, where I declared an
+            &lt;code dir="ltr"&gt;int&lt;/code&gt;
+            variable with the value
+            &lt;code dir="ltr"&gt;1337&lt;/code&gt;
+            assigned to it, then I printed the variable’s address using
+            &lt;code dir="ltr"&gt;printf()&lt;/code&gt;,
+            on the main function.
+          &lt;/p&gt;&lt;p&gt;
+            Then I ran the program attached to the debugger in order to check
+            the printed variable’s address on the memory hex view, and here’s
+            the result I obtained:
+          &lt;/p&gt;&lt;img src="https://i.0x41.cf/b/vs-debug-memory-view.png" alt="" width="426" height="569"&gt;&lt;p dir="ltr"&gt;
+            To elaborate more on this -
+            &lt;code dir="ltr"&gt;int&lt;/code&gt;
+            variables are 4 bytes long (32 bits) (in case you didn’t know), so
+            this means that if the variable starts from the address
+            &lt;code dir="ltr"&gt;D2FCB8&lt;/code&gt; it
+            would end right before
+            &lt;code dir="ltr"&gt;D2FCBC&lt;/code&gt;
+            (+4).
+          &lt;/p&gt;&lt;p&gt;
+            To go from human readable value to memory bytes, follow these steps:
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            decimal:
+            &lt;code dir="ltr"&gt;1337&lt;/code&gt; -&amp;gt;
+            hex:
+            &lt;code dir="ltr"&gt;539&lt;/code&gt; -&amp;gt;
+            bytes:
+            &lt;code dir="ltr"&gt;00 00 05 39&lt;/code&gt;
+            -&amp;gt; little-endian:
+            &lt;code dir="ltr"&gt;39 05 00 00&lt;/code&gt;
+          &lt;/p&gt;&lt;h4&gt;Signed integers&lt;/h4&gt;&lt;p dir="ltr"&gt;
+            This part is interesting yet relatively simple. What you should know
+            here is that integer signing (positive/negative) is typically done
+            on computers with the help of a concept called
+            &lt;a href="https://en.wikipedia.org/wiki/Signed_number_representations#Two's_complement" rel="noopener noreferrer" dir="ltr"&gt;two’s complement&lt;/a&gt;.
+          &lt;/p&gt;&lt;p&gt;
+            The gist of it is that the lowest/first half of an integer is
+            reserved for positive numbers, while the highest/last half is for
+            negative numbers, here’s what this looks like in hex, for a 32-bit
+            signed int (highlighted = hex, in parenthesis = decimal):
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            Positives (1/2):
+            &lt;code dir="ltr"&gt;00000000&lt;/code&gt;
+            (0) -&amp;gt;
+            &lt;code dir="ltr"&gt;7FFFFFFF&lt;/code&gt;
+            (2,147,483,647 or
+            &lt;code dir="ltr"&gt;INT_MAX&lt;/code&gt;)
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            Negatives (2/2):
+            &lt;code dir="ltr"&gt;80000000&lt;/code&gt;
+            (-2,147,483,648 or
+            &lt;code dir="ltr"&gt;INT_MIN&lt;/code&gt;)
+            -&amp;gt;
+            &lt;code dir="ltr"&gt;FFFFFFFF&lt;/code&gt;
+            (-1)
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            If you’ve noticed, we’re always &lt;em dir="ltr"&gt;ascending&lt;/em&gt; in value. Whether
+            we go up in hex or decimal. And that’s the crucial point of this
+            concept - arithmetical operation do not have to do anything special
+            to handle signing, they can simply treat all values as
+            unsigned/positive, and the result would still be interpreted
+            correctly (as long as we don’t go beyond
+            &lt;code dir="ltr"&gt;INT_MAX&lt;/code&gt; or
+            &lt;code dir="ltr"&gt;INT_MIN&lt;/code&gt;),
+            and that’s because integers will also &lt;em dir="ltr"&gt;‘rollover’&lt;/em&gt; on
+            overflow/underflow by design, kinda like an analog odometer.
+          &lt;/p&gt;&lt;img src="https://i.0x41.cf/b/odometer-rollover.jpg" width="250" height="229"&gt;&lt;p dir="ltr"&gt;
+            &lt;strong dir="ltr"&gt;&lt;em dir="ltr"&gt;Protip&lt;/em&gt;&lt;/strong&gt;: The Windows calculator is a very helpful tool - you can set it to
+            programmer mode and set the size to DWORD (4 bytes), then enter
+            negative decimal values and visualize them in hex and binary, and
+            have fun performing operations on them.
+          &lt;/p&gt;&lt;img src="https://i.0x41.cf/b/calcexe-int-signing.png" alt="" width="355" height="534"&gt;&lt;h4&gt;Strings&lt;/h4&gt;&lt;p dir="ltr"&gt;
+            In C, strings are stored as
+            &lt;code dir="ltr"&gt;char&lt;/code&gt;
+            arrays, therefore, there’s nothing special to note here, except for
+            something called null termination.
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            If you ever wondered how
+            &lt;code dir="ltr"&gt;strlen()&lt;/code&gt;
+            is able to know the size of a string, it’s very simple - strings
+            have a character that indicates their end, and that’s the null
+            byte/character -
+            &lt;code dir="ltr"&gt;00&lt;/code&gt; or
+            &lt;code dir="ltr"&gt;'\0'&lt;/code&gt;.
+          &lt;/p&gt;&lt;p&gt;
+            If you declare a string constant in C code, and hover over it in
+            Visual Studio, for instance, it will tell you the size of the
+            generated array, and as you can see, for this reason, it’s one
+            element more than the ‘visible’ string size.
+          &lt;/p&gt;&lt;img src="https://i.0x41.cf/b/vs-null-termination.png" alt="" width="350" height="103"&gt;&lt;p dir="ltr"&gt;
+            &lt;strong dir="ltr"&gt;&lt;em dir="ltr"&gt;Note&lt;/em&gt;&lt;/strong&gt;: The endianness concept is not applicable on arrays, only on
+            single variables. Therefore, the order of characters in memory would
+            be normal here - low to high.
+          &lt;/p&gt;&lt;h3 dir="ltr"&gt;
+            Making sense of
+            &lt;code dir="ltr"&gt;call&lt;/code&gt; and
+            &lt;code dir="ltr"&gt;jmp&lt;/code&gt;
+            instructions
+          &lt;/h3&gt;&lt;p&gt;
+            Now that you know all of this, you’re likely able to start making
+            sense of some machine code, and emulate a CPU with your brain, to
+            some extent, so to speak.
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            Let’s take the
+            &lt;a href="https://0x41.cf/reversing/2021/07/21/reversing-x86-and-c-code-for-beginners.html#if-conditions" dir="ltr"&gt;&lt;code dir="ltr"&gt;print_equal()&lt;/code&gt;
+              example&lt;/a&gt;, but let’s only focus on the
+            &lt;code dir="ltr"&gt;printf()&lt;/code&gt;
+            &lt;code dir="ltr"&gt;call&lt;/code&gt;
+            instructions this time.
+          &lt;/p&gt;&lt;PRE&gt;&lt;code&gt;void print_equal(int, int):
+...
+     10000010   E8 DB F8 FF FF    call   _printf
+...
+     1000001F   E8 CC F8 FF FF    call   _printf
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;
+            You might be wondering to yourself - wait a second, if these are the
+            same instructions, then why are their bytes different?
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            That’s because,
+            &lt;code dir="ltr"&gt;call&lt;/code&gt; (and
+            &lt;code dir="ltr"&gt;jmp&lt;/code&gt;)
+            instructions (usually) take an &lt;em dir="ltr"&gt;offset&lt;/em&gt; (relative address) as
+            an argument, not an absolute address.
+          &lt;/p&gt;&lt;p&gt;
+            An offset is basically the difference between the current location,
+            and the destination, which also means that it can be either negative
+            or positive.
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            As you can see, the
+            &lt;a href="https://en.wikipedia.org/wiki/Opcode" rel="noopener noreferrer" dir="ltr"&gt;opcode&lt;/a&gt;
+            of a
+            &lt;code dir="ltr"&gt;call&lt;/code&gt;
+            instruction that takes a 32-bit offset, is
+            &lt;code dir="ltr"&gt;E8&lt;/code&gt;, and is
+            followed by said offset - which makes the full instruction:
+            &lt;code dir="ltr"&gt;E8 XX XX XX XX&lt;/code&gt;.
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            Pull out your calculator,
+            &lt;del dir="ltr"&gt;why’d you close it so early?!&lt;/del&gt; and calculate the
+            difference between the offset of both instructions (don’t forget the
+            endianness).
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            You’ll notice that (the absolute value of) this difference is the
+            same as the one between the instruction addresses (&lt;code dir="ltr"&gt;1000001F&lt;/code&gt;
+            -
+            &lt;code dir="ltr"&gt;10000010&lt;/code&gt; =
+            &lt;code dir="ltr"&gt;F&lt;/code&gt;):
+          &lt;/p&gt;&lt;img src="https://i.0x41.cf/b/calcexe-call-inst-diff.png" alt="" width="353" height="157"&gt;&lt;p dir="ltr"&gt;
+            Another small detail that we should add, is the fact that the CPU
+            only executes an instruction after fully ‘reading’ it, which means
+            that by the time the CPU starts ‘executing’,
+            &lt;code dir="ltr"&gt;EIP&lt;/code&gt; (the
+            instruction pointer) is already pointing at the
+            &lt;em dir="ltr"&gt;next&lt;/em&gt; instruction to be executed.
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            That’s why these offsets are actually accounting for this behaviour,
+            which means that in order to get the &lt;em dir="ltr"&gt;real&lt;/em&gt; address of the
+            target function, we have to also &lt;em dir="ltr"&gt;add&lt;/em&gt; the size of the
+            &lt;code dir="ltr"&gt;call&lt;/code&gt;
+            instruction: 5.
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            Now let’s apply all these steps in order to resolve
+            &lt;code dir="ltr"&gt;printf()&lt;/code&gt;’s
+            address from the first instruction on the example:
+          &lt;/p&gt;&lt;PRE&gt;&lt;code&gt;10000010   E8 DB F8 FF FF    call   _printf
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+            1) Extract the offset from the instruction:
+            &lt;code dir="ltr"&gt;E8 (DB F8 FF FF)&lt;/code&gt;
+            -&amp;gt;
+            &lt;code dir="ltr"&gt;FFFFF8D8&lt;/code&gt;
+            (-1832)
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            2) Add it to the instruction address:
+            &lt;code dir="ltr"&gt;10000010&lt;/code&gt; +
+            &lt;code dir="ltr"&gt;FFFFF8D8&lt;/code&gt; =
+            &lt;code dir="ltr"&gt;FFFF8E8&lt;/code&gt;
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            3) And finally, add the instruction size:
+            &lt;code dir="ltr"&gt;FFFF8E8&lt;/code&gt; +
+            5 =
+            &lt;code dir="ltr"&gt;FFFF8ED&lt;/code&gt;
+            (&lt;code dir="ltr"&gt;&amp;amp;printf&lt;/code&gt;)
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            The exact same principle applies to the
+            &lt;code dir="ltr"&gt;jmp&lt;/code&gt;
+            instruction:
+          &lt;/p&gt;&lt;PRE&gt;&lt;code&gt;...
+┌─── 10000018   EB 0D             jmp    short loc_10000027
+...
+└── loc_10000027:
+     10000027   5D                pop    ebp
+...
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+            The only difference in this example is that
+            &lt;code dir="ltr"&gt;EB XX&lt;/code&gt; is a
+            short version
+            &lt;code dir="ltr"&gt;jmp&lt;/code&gt;
+            instruction - which means it only takes an 8-bit (1 byte) offset.
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            Therefore:
+            &lt;code dir="ltr"&gt;10000018&lt;/code&gt; +
+            &lt;code dir="ltr"&gt;0D&lt;/code&gt; + 2 =
+            &lt;code dir="ltr"&gt;10000027&lt;/code&gt;
+          &lt;/p&gt;&lt;h3&gt;Conclusion&lt;/h3&gt;&lt;p&gt;
+            That’s it! You should now have enough information (and hopefully,
+            motivation) to start your journey reverse engineering executables.
+          &lt;/p&gt;&lt;p&gt;
+            Start by writing dummy C code, compiling it, and debugging it while
+            single-stepping through the disassembly instructions (Visual Studio
+            allows you to do this, by the way).
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            After that, you can try your luck with closed-source native
+            binaries, by the help of disassemblers such as
+            &lt;a href="https://ghidra-sre.org/" rel="noopener noreferrer" dir="ltr"&gt;Ghidra&lt;/a&gt;
+            and
+            &lt;a href="https://hex-rays.com/ida-free" rel="noopener noreferrer" dir="ltr"&gt;IDA&lt;/a&gt;, and debuggers such as
+            &lt;a href="https://x64dbg.com/" rel="noopener noreferrer" dir="ltr"&gt;x64dbg&lt;/a&gt;.
+          &lt;/p&gt;&lt;p dir="ltr"&gt;
+            &lt;strong dir="ltr"&gt;&lt;em dir="ltr"&gt;Note&lt;/em&gt;&lt;/strong&gt;: If you’ve noticed inaccurate information, or room for improvement
+            regarding this article, and would like to improve it, feel free to
+            &lt;a href="https://github.com/thedroidgeek/0x41.cf/edit/master/_posts/2021-07-21-reversing-x86-and-c-code-for-beginners.md" rel="noopener noreferrer" dir="ltr"&gt;submit a pull request&lt;/a&gt;
+            on GitHub.
+          &lt;/p&gt;&lt;p&gt;Thanks for reading!&lt;/p&gt;</description><pubDate>Wed, 21 Jul 2021 21:30:07 -0500</pubDate></item><item><title>DuckDuckGo email protection</title><link>https://lobste.rs/s/0mh7ah</link><description>&lt;section dir="ltr"&gt;
                         &lt;span dir="ltr"&gt;Filed under &lt;a href="https://spreadprivacy.com/tag/duckduckgo/" dir="ltr"&gt;DuckDuckGo News&lt;/a&gt; on &lt;/span&gt;
                         &lt;time datetime="2021-07-20" dir="ltr"&gt;20 Jul 2021&lt;/time&gt;
                 &lt;/section&gt;&lt;UL&gt;&lt;LI&gt;DuckDuckGo is launching &lt;strong dir="ltr"&gt;Email Protection&lt;/strong&gt; into beta, a new feature in our apps that will protect your email privacy without switching email services. Join the private waitlist!&lt;/LI&gt;&lt;LI&gt;Get a free, &lt;strong dir="ltr"&gt;personal @duck.com email address. &lt;/strong&gt;Emails sent to it will forward to your regular inbox, with creepy &lt;strong dir="ltr"&gt;email trackers removed&lt;/strong&gt;.&lt;/LI&gt;&lt;LI&gt;Generate &lt;strong dir="ltr"&gt;unique private email addresses&lt;/strong&gt; in the DuckDuckGo app and extension so you can’t be tracked by your email address.&lt;/LI&gt;&lt;LI&gt;DuckDuckGo &lt;strong dir="ltr"&gt;never saves your email&lt;/strong&gt;.&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Reading your email should be a private activity. You may be surprised to learn that &lt;a href="https://freedom-to-tinker.com/2017/09/28/i-never-signed-up-for-this-privacy-implications-of-email-tracking/" dir="ltr"&gt;70% of emails contain trackers&lt;/a&gt; that can detect &lt;em dir="ltr"&gt;when&lt;/em&gt; you’ve opened a message, &lt;em dir="ltr"&gt;where&lt;/em&gt; you were when you opened it, and &lt;em dir="ltr"&gt;what&lt;/em&gt; device you were using. If that isn’t creepy enough, this email data can be used to &lt;a href="https://senglehardt.com/papers/pets18_email_tracking.pdf" dir="ltr"&gt;profile you&lt;/a&gt;, including to target you with ads, and influence the content you see online. Ever open an email and see a related ad about it soon thereafter? Yup, blame email trackers. This data about you is also usually sent directly to third parties, most likely without your consent.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://spreadprivacy.com/content/images/2021/06/1-Pixels-v6.gif" alt="" width="1600" height="900"&gt;&lt;figcaption dir="auto"&gt;Companies hide trackers in your emails that can capture personal information.&lt;/figcaption&gt;&lt;/figure&gt;&lt;h2&gt;Introducing Email Protection&lt;/h2&gt;&lt;p&gt;We’re excited to announce the beta release of DuckDuckGo’s Email Protection. Our free email forwarding service removes email trackers and protects the privacy of your personal email address without asking you to change email services or apps. Most existing email privacy solutions come with significant tradeoffs. You either have to switch email services or apps entirely, or degrade your email experience by hiding all images. We believe protecting your personal information from leaking to third parties should be simple and seamless, like the rest of DuckDuckGo’s privacy protection bundle.&lt;/p&gt;&lt;h2&gt;Email privacy, simplified.&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Choose your Duck Email Address (you@duck.com) and start giving it out. &lt;/strong&gt;We remove hidden trackers from incoming emails sent to this address, then forward them to your regular inbox for safer reading. This means if you use an email service like Gmail or Yahoo, it’s no problem! &amp;nbsp;Emails sent to your Personal Duck Address will arrive there as usual so you can read your email like normal, in any app or on the web, worry-free.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://spreadprivacy.com/content/images/2021/06/4---Proof-of-Trackers.v4.gif" alt="" width="1600" height="900"&gt;&lt;figcaption dir="auto"&gt;We forward your emails after removing trackers. Same inbox, more privacy.&lt;/figcaption&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Get automatic Email Protection in the app. &lt;/strong&gt;The DuckDuckGo app and extension provide easy access to your Personal Duck Address when browsing the web and also give you the option to generate new Private Duck Addresses on demand.&lt;/p&gt;&lt;p&gt;On sites you think could spam you or share your email address, a Private Duck Address will protect you. Since it’s common for sites to upload your email address to Google and Facebook for ad targeting, or for your email to be leaked in a data breach, this extra level of identity protection is now unfortunately necessary. You can think of it as similar to not reusing the same password everywhere. We’ve also made Private Duck Addresses easy to deactivate, so there’s no stress if you start receiving too much spam.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://spreadprivacy.com/content/images/2021/06/3---Autofill.v5.gif" alt="" width="1600" height="900"&gt;&lt;figcaption dir="auto"&gt;Use a Private Duck Address when you don't trust a site to keep your information to themselves.&lt;/figcaption&gt;&lt;/figure&gt;&lt;h2&gt;We don't save your emails.&lt;/h2&gt;&lt;p dir="ltr"&gt;We believe the content of your emails is none of our business, so DuckDuckGo will never save your emails for this service. We don't need to! When we receive an email, we immediately remove trackers from it and then forward it to you, never saving it on our systems. We don’t even save the headers (e.g., to/from). Read more in our &lt;a href="https://www.duckduckgo.com/email/privacy-guarantees" dir="ltr"&gt;Privacy Guarantees&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;Join the private beta waitlist.&lt;/h2&gt;&lt;p&gt;We’re releasing our Email Protection feature into beta while we’re ironing out the wrinkles. To get access to the beta, just join the private waitlist! We're letting new people in every day, but the sooner you join, the sooner you'll be protecting your email privacy.&lt;/p&gt;&lt;p&gt;You won’t need to share any personal information to join the waitlist. You’ll secure your place in line with a timestamp that exists solely on your device, and we’ll notify you when we’re ready for you to join. Once you have a Personal Duck Address, you can expect DuckDuckGo to support it long-term so you can confidently share it from day one.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;Download DuckDuckGo for &lt;a href="https://apps.apple.com/us/app/duckduckgo-privacy-browser/id663592361" dir="ltr"&gt;iOS&lt;/a&gt; or &lt;a href="https://play.google.com/store/apps/details?id=com.duckduckgo.mobile.android&amp;amp;hl=en_US&amp;amp;gl=US" dir="ltr"&gt;Android&lt;/a&gt;&lt;/LI&gt;&lt;LI&gt;Open Settings &amp;gt; Beta Features &amp;gt; Email Protection&lt;/LI&gt;&lt;LI&gt;Click “Join the Private Waitlist."&lt;/LI&gt;&lt;/OL&gt;&lt;img src="https://duckduckgo.com/assets/addons/ios-app-store.svg" width="150" height="50"&gt;&lt;img src="https://duckduckgo.com/assets/addons/google-play.svg" width="170" height="50"&gt;&lt;p&gt;Having control over your privacy shouldn't be complicated or require tradeoffs. Our mission is to make it simple and stress free, for email and everything else you do online. It’s privacy, simplified.&lt;/p&gt;&lt;img src="https://spreadprivacy.com/content/images/2021/06/duckduckgo-logo.png" alt="Dax the duck" width="60" height="60"&gt;</description><pubDate>Wed, 21 Jul 2021 21:15:14 -0500</pubDate></item><item><title>Rendering 1M+ Particles</title><link>https://lobste.rs/s/ot3him</link><description>&lt;h2&gt;Using Points and Shaders.&lt;/h2&gt;&lt;picture&gt;&lt;source type="image/webp" sizes="100vw" srcset="https://blog.farazshaikh.com/static/4419491fffd7e5da7602eaae55e8d799/58fbc/rendering-1M-particles.webp 750w, https://blog.farazshaikh.com/static/4419491fffd7e5da7602eaae55e8d799/0e58b/rendering-1M-particles.webp 1080w, https://blog.farazshaikh.com/static/4419491fffd7e5da7602eaae55e8d799/cbca9/rendering-1M-particles.webp 1366w, https://blog.farazshaikh.com/static/4419491fffd7e5da7602eaae55e8d799/f7079/rendering-1M-particles.webp 1920w"&gt;&lt;img alt="image" src="https://blog.farazshaikh.com/static/4419491fffd7e5da7602eaae55e8d799/66787/rendering-1M-particles.jpg" srcset="https://blog.farazshaikh.com/static/4419491fffd7e5da7602eaae55e8d799/f89da/rendering-1M-particles.jpg 750w, https://blog.farazshaikh.com/static/4419491fffd7e5da7602eaae55e8d799/cad9e/rendering-1M-particles.jpg 1080w, https://blog.farazshaikh.com/static/4419491fffd7e5da7602eaae55e8d799/b998a/rendering-1M-particles.jpg 1366w, https://blog.farazshaikh.com/static/4419491fffd7e5da7602eaae55e8d799/66787/rendering-1M-particles.jpg 1920w" width="400" height="262"&gt;&lt;/picture&gt;&lt;p&gt;Particles are one of the most mesmerizing systems across computer graphics. They are simply a group of objects that act together, following the same set of rules but with some amount of randomness. However, they are only impressive when they number in the thousands or hundreds of thousands.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;In this article, we will learn how to render over a million particles in ThreeJS.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;A few months ago I stumbled across this excelent article by &lt;a href="https://velasquezdaniel.com/blog/rendering-100k-spheres-instantianing-and-draw-calls/" dir="ltr"&gt;Daniel Velasquez&lt;/a&gt; in which he uses Instancing and Shaders to render about 100K particles in real-time. Simply put, here is how he does it - He uses Instancing to render a sphere 100K times, then moves the vertices around within the Vertex Shader of the sphere's material.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://blog.farazshaikh.com/c9eb374fbebe39c5bed3669c71bb0fe1/Daniel.webp" alt="100k particles by Daniel Velasquez" width="400" height="242"&gt;&lt;figcaption dir="ltr"&gt;&lt;a href="https://velasquezdaniel.com/blog/rendering-100k-spheres-instantianing-and-draw-calls/" dir="ltr"&gt;100k particles by Daniel Velasquez&lt;/a&gt;&lt;/figcaption&gt;&lt;/figure&gt;&lt;p&gt;This is a great way of doing it, especially if you have some custom geometry that you'd like to use. In fact, this very website uses this technique to render its particles but we can do better.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;h2&gt;The secret? Points&lt;/h2&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;In the time since I read that article, I found out about ThreeJS's &lt;a href="https://threejs.org/docs/index.html?q=points#api/en/objects/Points" dir="ltr"&gt;Points&lt;/a&gt; object and &lt;a href="https://threejs.org/docs/index.html?q=points#api/en/materials/PointsMaterial" dir="ltr"&gt;Points Material&lt;/a&gt;. The Points object lets us render 2D representations of each vertex of its associated geometry.&lt;/p&gt;&lt;p&gt;I thought to myself...&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;"Hey, why not combine this with some Shader magic to make million of particles?"&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;...and here we are! If we make a geometry with 1 million vertices and render it as a &lt;code dir="ltr"&gt;Points&lt;/code&gt; object, we get 1 million particles ready for us to play with, and since we do not calculate lighting or shadows on these points , we save a lot of cycles and the simulation runs in real-time.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;This may be a shortcoming actually. Again if you want lighting and shadows you're going to have to use Daniel's technique.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;This article assumes you've got the basics of ThreeJS down and will move quick. This is not meant to be a "beginners guide".&lt;/p&gt;&lt;h1&gt;Creating the points&lt;/h1&gt;&lt;p dir="ltr"&gt;As mentioned, we need some vertices to generate the points from. Of course, we can generate our own &lt;code dir="ltr"&gt;BufferGeometry&lt;/code&gt; or use an imported model but we can also do this trivially using inbuilt Geometries. I will use the &lt;code dir="ltr"&gt;IcosahedronGeometry&lt;/code&gt; as it has a more uniform distribution of vertices&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;The &lt;code dir="ltr"&gt;SphereGeometry&lt;/code&gt; pinches vertices at its poles.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;// Creating the Icosahedron&lt;/span&gt;
@@ -5045,128 +5647,4 @@ of my questions, &lt;a href="https://github.com/withoutboats" dir="ltr"&gt;witho
 exploration (&lt;a href="https://github.com/ringbahn/ringbahn" dir="ltr"&gt;Ringbahn&lt;/a&gt;) and spending time
 talking through design issues with me, and
 &lt;a href="https://github.com/quininer" dir="ltr"&gt;quininer&lt;/a&gt; for the excellent work on the pure Rust
-io-uring &lt;a href="https://github.com/tokio-rs/io-uring" dir="ltr"&gt;bindings&lt;/a&gt;.&lt;/p&gt;&lt;img src="https://tokio.rs/img/arrow-left.svg" width="22" height="22"&gt;</description><pubDate>Tue, 20 Jul 2021 03:21:27 -0500</pubDate></item><item><title>Interesting Go Memory Issue</title><link>https://lobste.rs/s/yzafqa</link><description>&lt;h1 dir="ltr"&gt;&lt;span dir="ltr"&gt;Interesting Go Memory Issue&lt;/span&gt; &lt;small dir="ltr"&gt;(300 words)&lt;/small&gt;&lt;/h1&gt;&lt;p&gt;So had an interesting experience with Go the other day.&lt;/p&gt;&lt;p&gt;This is part of building a bloom filter index which is going to replace the index in searchcode.com&lt;/p&gt;&lt;p&gt;So I was trying to verify how long a search would take when the index was full. When trying it out on a machine to see what the performance would be I built a version to create some very large slices over 64,000,000 items in length to simulate the expected workload. This should take about 53 GB in memory with all the overhead and such added in.&lt;/p&gt;&lt;p&gt;So in order to test it I used a 128 GB virtual machine on Digital Ocean, freshly spun up with a base Ubuntu 20.10 install. When running my application I managed to get a lot of out of memory errors. This was running just on the fresh install, and should never have gotten to the 128 GB limit.&lt;/p&gt;&lt;p dir="ltr"&gt;I ended up putting in a &lt;code dir="ltr"&gt;runtime.GC&lt;/code&gt; inside the core loop to resolve the issue and was able to finish my tests.&lt;/p&gt;&lt;p dir="ltr"&gt;However I wouldn’t have thought it possible. The application should never have hit that 128 GB threshold. I suspect because the Go GC triggers every time the heap doubles, it runs into OOM (no swap-file setup by default) when it gets to just over 64 GB of heap, and then doubles again without first running GC. Then crashes. Checking the following &lt;a href="https://blog.twitch.tv/en/2019/04/10/go-memory-ballast-how-i-learnt-to-stop-worrying-and-love-the-heap-26c2462549a2/" dir="ltr"&gt;https://blog.twitch.tv/en/2019/04/10/go-memory-ballast-how-i-learnt-to-stop-worrying-and-love-the-heap-26c2462549a2/&lt;/a&gt; suggests that might be it as well, but would love someone else to have a theory of deny/confirm my one.&lt;/p&gt;&lt;p&gt;I suspect given a real workload this will be less of an issue because the creation will be slower than the 2 mins or so due to network and other impacts, but thats a problem for later when I actually fully implement it.&lt;/p&gt;</description><pubDate>Wed, 21 Jul 2021 08:36:57 -0500</pubDate></item><item><title>Beautiful ideas in programming: generators and continuations</title><link>https://lobste.rs/s/hlicqu</link><description>&lt;p dir="ltr"&gt;In this post, I’ll summarize what I’ve learned from an attempt to gain a deeper understanding of two important concepts in programming: Python’s &lt;a href="https://en.wikipedia.org/wiki/Generator_(computer_programming)" dir="ltr"&gt;generators&lt;/a&gt; and Scheme’s &lt;a href="https://en.wikipedia.org/wiki/Continuation" dir="ltr"&gt;continuation&lt;/a&gt;. The aim is not to teach Python or Scheme programming. Rather, what I want to do is to demonstrate that generators are special cases of a much more powerful construct - continuations. Continuations allow programmers to invent new control structures, and it is the foundation upon which iterators, generators, coroutines, and many other useful constructs can be built. I have found it very useful to understand how generators work from the deeper and broader perspective of continuations.&lt;/p&gt;&lt;p&gt;Continuation is well-established in programming language theory (it was introduced in the 70’s), but its use has not become mainstream. However, I suspect that in the age of cloud computing and big data, where lazy evaluation is becoming increasingly important, continuation will become more prominent, like many other concepts in functional programming. I think it’s worthy of your time to reserve a place for this concept in your peripheral vision.&lt;/p&gt;&lt;p dir="ltr"&gt;For those who are not familiar with Scheme: &lt;a href="https://en.wikipedia.org/wiki/Scheme_(programming_language)" dir="ltr"&gt;Scheme&lt;/a&gt; is a relatively modern dialect of one of the oldest programming languages: LISP. Scheme is a minimalist but highly expressive language, which makes it an ideal vehicle for experimenting with advanced concepts in programming. This is why Scheme is often used as a tool for teaching computer science, and as a playground for programming language researchers. Continuation is not unique to Scheme, but Scheme is the first language that treats continuations as first-class entities, thus making them easily manipulatable. It is the most natural venue for exploring continuations.&lt;/p&gt;&lt;h1&gt;Making generators in Python with “yield”&lt;/h1&gt;&lt;p dir="ltr"&gt;In Python, generators are primarily used to make complex loops easier to write and to maintain. That’s why they are special cases of iterators. In a traditional language like c, a &lt;code dir="ltr"&gt;for&lt;/code&gt; loop looks like this:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="c" dir="ltr"&gt;&lt;span dir="ltr"&gt;for&lt;/span&gt;(i&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;; i&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;&lt;span dir="ltr"&gt;10&lt;/span&gt;; i&lt;span dir="ltr"&gt;++&lt;/span&gt;)
-  printf(&lt;span dir="ltr"&gt;"%i "&lt;/span&gt;, i);
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The first line specifies the sequence of numbers to iterate over with. The second line is what we want to do with those numbers. With generators in Python, we can write this type of loops like the example given below. In it, we use the &lt;code dir="ltr"&gt;squared_ints()&lt;/code&gt; generator to produce a sequence of squared integers one by one, and then use the &lt;code dir="ltr"&gt;sum_of_squares()&lt;/code&gt; function to accumulate them until the sum is greater than a bound specified by the programmer:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="python" dir="ltr"&gt;&lt;span dir="ltr"&gt;def&lt;/span&gt; &lt;span dir="ltr"&gt;squared_ints&lt;/span&gt;():
-    &lt;span dir="ltr"&gt;''' Infinite generator
-&lt;/span&gt;&lt;span dir="ltr"&gt;        Return i^2 for i = 1, 2, ...
-&lt;/span&gt;&lt;span dir="ltr"&gt;    '''&lt;/span&gt;
-    i &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;1&lt;/span&gt;
-    &lt;span dir="ltr"&gt;while&lt;/span&gt; True:
-        &lt;span dir="ltr"&gt;yield&lt;/span&gt; i&lt;span dir="ltr"&gt;*&lt;/span&gt;i   &lt;span dir="ltr"&gt;# it is this yield that makes this function a generator&lt;/span&gt;
-        i &lt;span dir="ltr"&gt;+=&lt;/span&gt; &lt;span dir="ltr"&gt;1&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;def&lt;/span&gt; &lt;span dir="ltr"&gt;sum_of_squares&lt;/span&gt;(bound):
-    &lt;span dir="ltr"&gt;''' Return the smallest sum of squared integers greater than the bound
-&lt;/span&gt;&lt;span dir="ltr"&gt;    '''&lt;/span&gt;
-    g &lt;span dir="ltr"&gt;=&lt;/span&gt; squared_ints()
-    s &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;
-    &lt;span dir="ltr"&gt;for&lt;/span&gt; i &lt;span dir="ltr"&gt;in&lt;/span&gt; g:       &lt;span dir="ltr"&gt;# iterate over generator g&lt;/span&gt;
-        s &lt;span dir="ltr"&gt;+=&lt;/span&gt; i        &lt;span dir="ltr"&gt;# accumulate the sum s&lt;/span&gt;
-        &lt;span dir="ltr"&gt;if&lt;/span&gt; s&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;bound:   &lt;span dir="ltr"&gt;# exit the loop if s is larger than n&lt;/span&gt;
-            &lt;span dir="ltr"&gt;return&lt;/span&gt; s
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The definition of &lt;code dir="ltr"&gt;squared-ints()&lt;/code&gt; looks like a regular function, but the presence of the &lt;code dir="ltr"&gt;yield&lt;/code&gt; keyword makes it a function that produces generators [1]. Using the &lt;code dir="ltr"&gt;next()&lt;/code&gt; function on a generator &lt;code dir="ltr"&gt;g&lt;/code&gt;, we can see that the numbers are generated one by one. Generators work nicely with loops in Python. An example can be seen in &lt;code dir="ltr"&gt;sum_of_squares()&lt;/code&gt;, where we iterate over a generator with a &lt;code dir="ltr"&gt;for&lt;/code&gt; loop.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="python" dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;gt;&amp;gt;&amp;gt;&lt;/span&gt; g &lt;span dir="ltr"&gt;=&lt;/span&gt; squared_ints()
-&lt;span dir="ltr"&gt;&amp;gt;&amp;gt;&amp;gt;&lt;/span&gt; g
-&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;generator &lt;span dir="ltr"&gt;object&lt;/span&gt; squared_ints at &lt;span dir="ltr"&gt;0x7fcf48143830&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;
-&lt;span dir="ltr"&gt;&amp;gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;next&lt;/span&gt;(g)
-&lt;span dir="ltr"&gt;1&lt;/span&gt;
-&lt;span dir="ltr"&gt;&amp;gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;next&lt;/span&gt;(g)
-&lt;span dir="ltr"&gt;4&lt;/span&gt;
-&lt;span dir="ltr"&gt;&amp;gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;next&lt;/span&gt;(g)
-&lt;span dir="ltr"&gt;9&lt;/span&gt;
-&lt;span dir="ltr"&gt;&amp;gt;&amp;gt;&amp;gt;&lt;/span&gt; sum_of_squares(&lt;span dir="ltr"&gt;100&lt;/span&gt;)
-&lt;span dir="ltr"&gt;140&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Let’s review what we have accomplished so far. In c-style loops, the generation and the consumption of the sequence are tightly coupled. In the Python code above, however, they are decomposed into two independent entities. Because generators can be build on other generators, a complex generator can also be further decomposed into simpler generators. This makes complex loops more modular and reusable, and therefore easier to write and maintain. Another improvement is that the generator code does not set a limit on the length of the sequence. It is theoretically infinite. The actual length of the sequence generated is determined by the code that consumes the sequence. This means that the generator code can be as general as possible, leaving computational efficiency to the consumer. This “laziness” is highly desirable in situations where generating the next item in the sequence is computationally expensive.&lt;/p&gt;&lt;p dir="ltr"&gt;All of this is made possible by one single keyword &lt;code dir="ltr"&gt;yield&lt;/code&gt;! It’s pretty amazing, isn’t it? What happens is that every time &lt;code dir="ltr"&gt;yield&lt;/code&gt; is called, the state of the function is frozen, and the flow of control is yielded to the caller, along with the generated value [2]. The next time the generator is evoked, the control flow is returned to the frozen state of the generator.&lt;/p&gt;&lt;p dir="ltr"&gt;What a simple and elegant syntax for a complex behavior! It’s like magic. However, there is a part of me (perhaps the theorist in me) that is uncomfortable with magical behaviors in programming languages. How does &lt;code dir="ltr"&gt;yield&lt;/code&gt; create a generator (i.e., an object of the generator class) from a function definition? Why isn’t this magic found in other places in the language? Why can’t you call &lt;code dir="ltr"&gt;yield&lt;/code&gt; outside a function? In addition, generators provide some facilities for making coroutines - a topic in concurrent programming. What does it have anything to do with iteration? Since all these behaviors appears to be induced with &lt;code dir="ltr"&gt;yield&lt;/code&gt; in an &lt;em dir="ltr"&gt;ad hoc&lt;/em&gt; way, I tend to write generators idiomatically, following a memorized recipe without thinking about the heavy machinery behind the curtain. I always have a nagging feeling that there is a bigger picture that I don’t see.&lt;/p&gt;&lt;p dir="ltr"&gt;This was when I realized that I am vaguely familiar with these concepts. When I learned to program in college, I had a copy of &lt;a href="https://www.cs.unm.edu/~williams/cs357/springer-friedman.pdf" dir="ltr"&gt;Scheme and the Art of Programming&lt;/a&gt; by Springer and Friedman. There was a chapter on the mysterious concept of “continuation”, where all of this stuff was discussed. I skipped the entire chapter because I couldn’t understand what continuations were good for. Maybe it’s time to revisit this topic again.&lt;/p&gt;&lt;h1&gt;Python-style generators in Scheme&lt;/h1&gt;&lt;p dir="ltr"&gt;Before we move on to continuations, rest assured that Python-style generators are available in Scheme. They are not part of the language itself, but with the &lt;code dir="ltr"&gt;make-coroutine-generator&lt;/code&gt; function in a quasi-standard library (i.e., &lt;a href="https://srfi.schemers.org/srfi-158/srfi-158.html" dir="ltr"&gt;SRFI-158&lt;/a&gt;), the &lt;code dir="ltr"&gt;squared-ints&lt;/code&gt; generator discussed previously can be written in Scheme as:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="scheme" dir="ltr"&gt;(&lt;span dir="ltr"&gt;define &lt;/span&gt;&lt;span dir="ltr"&gt;squared-ints&lt;/span&gt;          &lt;span dir="ltr"&gt;;;; squared-ints is a function (lambda) that makes a generator&lt;/span&gt;
-  (&lt;span dir="ltr"&gt;lambda &lt;/span&gt;()
-    (&lt;span dir="ltr"&gt;make-coroutine-generator&lt;/span&gt;
-     (&lt;span dir="ltr"&gt;lambda &lt;/span&gt;(&lt;span dir="ltr"&gt;yield&lt;/span&gt;)
-       (&lt;span dir="ltr"&gt;let &lt;/span&gt;&lt;span dir="ltr"&gt;loop&lt;/span&gt; ((&lt;span dir="ltr"&gt;i&lt;/span&gt; &lt;span dir="ltr"&gt;1&lt;/span&gt;))      &lt;span dir="ltr"&gt;;;; define recursive function "loop" which increases i, starting from 1 &lt;/span&gt;
-	     (&lt;span dir="ltr"&gt;yield&lt;/span&gt; (&lt;span dir="ltr"&gt;* &lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt; &lt;span dir="ltr"&gt;i&lt;/span&gt;))
-	     (&lt;span dir="ltr"&gt;loop&lt;/span&gt; (&lt;span dir="ltr"&gt;+ &lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt; &lt;span dir="ltr"&gt;1&lt;/span&gt;)))))))
-
-(&lt;span dir="ltr"&gt;define &lt;/span&gt;&lt;span dir="ltr"&gt;g&lt;/span&gt; (&lt;span dir="ltr"&gt;squared-ints&lt;/span&gt;))     &lt;span dir="ltr"&gt;;;; make a generator, assign it to "g" &lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This doesn’t look as elegant as the Python code, but logic is almost identical [3]. What is different here is that &lt;code dir="ltr"&gt;yield&lt;/code&gt; in Scheme is not a reserved keyword baked into the interpreter. Rather, the mechanism for yielding control is achieved by manipulating “continuations” - a fundamental building block of the language that represents computational steps that are pending execution. In fact, &lt;code dir="ltr"&gt;make-coroutine-generator&lt;/code&gt; is just a regular Scheme function consisting of ~10 lines of code. It can be implemented by any competent Scheme programmer without too much work. How is it possible? The magic is the use of &lt;code dir="ltr"&gt;call/cc&lt;/code&gt; (which stands for “call with current continuation”) in &lt;code dir="ltr"&gt;make-coroutine-generator&lt;/code&gt;. Note that nothing in this code refers to a special class or keyword. &lt;code dir="ltr"&gt;make-coroutine-generator&lt;/code&gt;, &lt;code dir="ltr"&gt;yield&lt;/code&gt;, and &lt;code dir="ltr"&gt;g&lt;/code&gt; are all nothing more than regular functions. This is why we ask for the next value by calling it like a function:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="scheme" dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;g&lt;/span&gt;
-&lt;span dir="ltr"&gt;#&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;procedure&amp;gt;&lt;/span&gt;
-&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; (&lt;span dir="ltr"&gt;g&lt;/span&gt;)
-&lt;span dir="ltr"&gt;1&lt;/span&gt;
-&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; (&lt;span dir="ltr"&gt;g&lt;/span&gt;)
-&lt;span dir="ltr"&gt;4&lt;/span&gt;
-&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; (&lt;span dir="ltr"&gt;g&lt;/span&gt;)
-&lt;span dir="ltr"&gt;9&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The beauty of Scheme generators is that the library does not introduce a new class of entities, so generators can integrate seamlessly with the rest of the language.&lt;/p&gt;&lt;h1&gt;What are continuations?&lt;/h1&gt;&lt;p dir="ltr"&gt;Simply put, a continuation is a series of computational steps that are pending execution. For example, &lt;code dir="ltr"&gt;0 + 1 + 2&lt;/code&gt; is expressed in Scheme as &lt;code dir="ltr"&gt;(+ 2 (+ 1 0))&lt;/code&gt;. From the perspective of &lt;code dir="ltr"&gt;0&lt;/code&gt;, what will happen is that 1 will be added to it, and then 2 will be added to the result. The continuation of &lt;code dir="ltr"&gt;0&lt;/code&gt; in this context is therefore these two additions. The beauty of Scheme is that in this situation, the continuation is a function: &lt;code dir="ltr"&gt;(lambda (x) (+ 2 (+ 1 x)))&lt;/code&gt;. It is equivalent to &lt;code dir="ltr"&gt;lambda x: x + 1 + 2&lt;/code&gt; in Python.&lt;/p&gt;&lt;p dir="ltr"&gt;In Scheme, we can use a function named &lt;code dir="ltr"&gt;call-with-current-continuation&lt;/code&gt; (or &lt;code dir="ltr"&gt;call/cc&lt;/code&gt; for short) to capture the current continuation, and then pass it to a different function, which is sometimes called the &lt;em dir="ltr"&gt;receiver&lt;/em&gt;. Most programming languages don’t have this construct, so it will take a little bit of time to get used to it.&lt;/p&gt;&lt;p&gt;Consider this simple receiver, which simply stores the continuation in a global variable ‘c’.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="scheme" dir="ltr"&gt;(&lt;span dir="ltr"&gt;define &lt;/span&gt;&lt;span dir="ltr"&gt;c&lt;/span&gt; &lt;span dir="ltr"&gt;#f&lt;/span&gt;)                &lt;span dir="ltr"&gt;;;; initially, global variable c stores nothing&lt;/span&gt;
-
-(&lt;span dir="ltr"&gt;define &lt;/span&gt;&lt;span dir="ltr"&gt;store-continuation&lt;/span&gt;   &lt;span dir="ltr"&gt;;;; define a function store-continuation&lt;/span&gt;
-  (&lt;span dir="ltr"&gt;lambda &lt;/span&gt;(&lt;span dir="ltr"&gt;cc&lt;/span&gt;)               &lt;span dir="ltr"&gt;;;; which receives a continuation&lt;/span&gt;
-    (&lt;span dir="ltr"&gt;set! &lt;/span&gt;&lt;span dir="ltr"&gt;c&lt;/span&gt; &lt;span dir="ltr"&gt;cc&lt;/span&gt;)              &lt;span dir="ltr"&gt;;;; store it to the global variable c&lt;/span&gt;
-    &lt;span dir="ltr"&gt;0&lt;/span&gt;))                      &lt;span dir="ltr"&gt;;;; and returns 0&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;We can now use it to capture the continuation of &lt;code dir="ltr"&gt;0&lt;/code&gt; in &lt;code dir="ltr"&gt;(+ 2 (+ 1 0))&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="scheme" dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;c&lt;/span&gt;                 &lt;span dir="ltr"&gt;;; nothing is stored in c&lt;/span&gt;
-&lt;span dir="ltr"&gt;#f&lt;/span&gt; 
-
-&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; (&lt;span dir="ltr"&gt;+ &lt;/span&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;
-   (&lt;span dir="ltr"&gt;+ &lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;
-     (&lt;span dir="ltr"&gt;call/cc &lt;/span&gt;&lt;span dir="ltr"&gt;store-continuation&lt;/span&gt;)))
-&lt;span dir="ltr"&gt;3&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;c&lt;/span&gt;
-&lt;span dir="ltr"&gt;#&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;procedure&lt;/span&gt; (&lt;span dir="ltr"&gt;continuation&lt;/span&gt; &lt;span dir="ltr"&gt;.&lt;/span&gt; &lt;span dir="ltr"&gt;results1887&lt;/span&gt;)&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The returned value of &lt;code dir="ltr"&gt;(+2 (+ 1 (call/cc store-continuation)))&lt;/code&gt; is 3, but that is not important. The important part is that after the &lt;code dir="ltr"&gt;call/cc&lt;/code&gt; call, the &lt;code dir="ltr"&gt;c&lt;/code&gt; variable stores a function, which is the continuation we captured! We can’t see the code, because it is compiled, but we can verify that it is effectively &lt;code dir="ltr"&gt;(lambda (x) (+2 (+ 1 x)))&lt;/code&gt;, because when we call &lt;code dir="ltr"&gt;c&lt;/code&gt; with a number, the returned value is the input plus 3.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="scheme" dir="ltr"&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; (&lt;span dir="ltr"&gt;c&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;)
-&lt;span dir="ltr"&gt;3&lt;/span&gt;
-&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; (&lt;span dir="ltr"&gt;c&lt;/span&gt; &lt;span dir="ltr"&gt;10&lt;/span&gt;)
-&lt;span dir="ltr"&gt;13&lt;/span&gt;
-&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; (&lt;span dir="ltr"&gt;c&lt;/span&gt; &lt;span dir="ltr"&gt;-100&lt;/span&gt;)
-&lt;span dir="ltr"&gt;-97&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;h1&gt;Controlling the flow of execution with continuations&lt;/h1&gt;&lt;p dir="ltr"&gt;Let’s use &lt;code dir="ltr"&gt;call/cc&lt;/code&gt; to do something useful. Let’s use it to implement the logic of the Python function &lt;code dir="ltr"&gt;sum_of_squares()&lt;/code&gt; in Scheme. As before, we iterate over the generator in a loop, accumulate the sum, and stop when the sum is bigger than a certain bound.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="scheme" dir="ltr"&gt;(&lt;span dir="ltr"&gt;define &lt;/span&gt;&lt;span dir="ltr"&gt;sum-of-squares&lt;/span&gt;
-  (&lt;span dir="ltr"&gt;lambda &lt;/span&gt;(&lt;span dir="ltr"&gt;bound&lt;/span&gt;)                        &lt;span dir="ltr"&gt;;; define (sum-of-squares bound)&lt;/span&gt;
-      (&lt;span dir="ltr"&gt;call/cc&lt;/span&gt;
-       (&lt;span dir="ltr"&gt;lambda &lt;/span&gt;(&lt;span dir="ltr"&gt;break&lt;/span&gt;)                   &lt;span dir="ltr"&gt;;; capture the continuation into break&lt;/span&gt;
-	     (&lt;span dir="ltr"&gt;let &lt;/span&gt;((&lt;span dir="ltr"&gt;g&lt;/span&gt; (&lt;span dir="ltr"&gt;squared-ints&lt;/span&gt;)))       &lt;span dir="ltr"&gt;;; make the generator g&lt;/span&gt;
-	       (&lt;span dir="ltr"&gt;let &lt;/span&gt;&lt;span dir="ltr"&gt;loop&lt;/span&gt; ((&lt;span dir="ltr"&gt;s&lt;/span&gt; &lt;span dir="ltr"&gt;0&lt;/span&gt;))             &lt;span dir="ltr"&gt;;; define the recursive function (loop s), where s is the accumulated value&lt;/span&gt;
-	         (&lt;span dir="ltr"&gt;let &lt;/span&gt;((&lt;span dir="ltr"&gt;new-s&lt;/span&gt; (&lt;span dir="ltr"&gt;+ &lt;/span&gt;&lt;span dir="ltr"&gt;s&lt;/span&gt; (&lt;span dir="ltr"&gt;g&lt;/span&gt;))))    &lt;span dir="ltr"&gt;;; compute the new accumulated value&lt;/span&gt;
-	           (&lt;span dir="ltr"&gt;if &lt;/span&gt;(&lt;span dir="ltr"&gt;&amp;gt; &lt;/span&gt;&lt;span dir="ltr"&gt;new-s&lt;/span&gt; &lt;span dir="ltr"&gt;bound&lt;/span&gt;)       &lt;span dir="ltr"&gt;;; if the new accumulated value is larger than bound&lt;/span&gt;
-		           (&lt;span dir="ltr"&gt;break&lt;/span&gt; &lt;span dir="ltr"&gt;new-s&lt;/span&gt;)         &lt;span dir="ltr"&gt;;; exit the loop&lt;/span&gt;
-		           (&lt;span dir="ltr"&gt;loop&lt;/span&gt; &lt;span dir="ltr"&gt;new-s&lt;/span&gt;)))))))))  &lt;span dir="ltr"&gt;;; otherwise, continue the loop with the new accumulated value&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; (&lt;span dir="ltr"&gt;sum-of-squares&lt;/span&gt; &lt;span dir="ltr"&gt;100&lt;/span&gt;)
-&lt;span dir="ltr"&gt;140&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Before the &lt;code dir="ltr"&gt;sum-of-square&lt;/code&gt; function does anything, I use &lt;code dir="ltr"&gt;call/cc&lt;/code&gt; to capture the continuation, and assign it to the variable &lt;code dir="ltr"&gt;break&lt;/code&gt;. Notice that in the syntax of Scheme, this is the last step of the function. Therefore, calling &lt;code dir="ltr"&gt;break&lt;/code&gt; will immediately exist the function with a returned value, no matter where it is called. This doesn’t seem to be too impressive in this simple example, but what is means is that if you have to work with a big and deeply nested data structure (for example, a tree or a graph), you can program with the elegance of recursion, but with the ability to abandon the recursion as soon as some condition is met. This can dramatically reduce unnecessary computation.&lt;/p&gt;&lt;p dir="ltr"&gt;Some people call &lt;code dir="ltr"&gt;call/cc&lt;/code&gt; the &lt;code dir="ltr"&gt;GOTO&lt;/code&gt; statement of functional languages, but a better characterization is that it is a general mechanism for programmers to created new control structures that don’t exist in the core language. With &lt;code dir="ltr"&gt;call/cc&lt;/code&gt;, all forms of control, including exceptions, backtracking, and coroutines can be built. Since no magic is involved, you can create your customized versions of these structures if you don’t like how they behave. Novel control structures that are specific to the problem domain can also be invented. For example, in web programming, continuations have been used to control the logic of server applications (see &lt;a href="https://thelackthereof.org/docs/library/cs/continuations.pdf" dir="ltr"&gt;here&lt;/a&gt;).&lt;/p&gt;&lt;p dir="ltr"&gt;Note that I wrote the program above to mirror the logic of the Python code. There are better ways to achieve the same without recursion or &lt;code dir="ltr"&gt;call/cc&lt;/code&gt;. For example, in the example below, I used the generator library to create a second infinite generator &lt;code dir="ltr"&gt;acc&lt;/code&gt; to accumulate the sum of elements in the &lt;code dir="ltr"&gt;gen&lt;/code&gt; generator, and then use the &lt;code dir="ltr"&gt;generator-find&lt;/code&gt; function to get the first value in &lt;code dir="ltr"&gt;acc&lt;/code&gt; that is larger than &lt;code dir="ltr"&gt;bound&lt;/code&gt;. This is an example of chaining iterators to make more complex iterators.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="scheme" dir="ltr"&gt;(&lt;span dir="ltr"&gt;define &lt;/span&gt;&lt;span dir="ltr"&gt;sum-of-squares&lt;/span&gt;
-	(&lt;span dir="ltr"&gt;lambda &lt;/span&gt;(&lt;span dir="ltr"&gt;bound&lt;/span&gt;)
-		(&lt;span dir="ltr"&gt;let* &lt;/span&gt;((&lt;span dir="ltr"&gt;gen&lt;/span&gt; (&lt;span dir="ltr"&gt;squared-ints&lt;/span&gt;))               &lt;span dir="ltr"&gt;;; create a generator gen&lt;/span&gt;
-		       (&lt;span dir="ltr"&gt;acc&lt;/span&gt; (&lt;span dir="ltr"&gt;make-unfold-generator&lt;/span&gt;        &lt;span dir="ltr"&gt;;; create a second generator acc&lt;/span&gt;
-		            (&lt;span dir="ltr"&gt;lambda &lt;/span&gt;(&lt;span dir="ltr"&gt;s&lt;/span&gt;) &lt;span dir="ltr"&gt;#f&lt;/span&gt;)               &lt;span dir="ltr"&gt;;; no stop condition, make acc an infinite generator&lt;/span&gt;
-		            (&lt;span dir="ltr"&gt;lambda &lt;/span&gt;(&lt;span dir="ltr"&gt;s&lt;/span&gt;) &lt;span dir="ltr"&gt;s&lt;/span&gt;)                
-		            (&lt;span dir="ltr"&gt;lambda &lt;/span&gt;(&lt;span dir="ltr"&gt;s&lt;/span&gt;) (&lt;span dir="ltr"&gt;+ &lt;/span&gt;&lt;span dir="ltr"&gt;s&lt;/span&gt; (&lt;span dir="ltr"&gt;gen&lt;/span&gt;)))      &lt;span dir="ltr"&gt;;; accumulate the next value from gen&lt;/span&gt;
-		            &lt;span dir="ltr"&gt;0&lt;/span&gt;)))                          &lt;span dir="ltr"&gt;;; accumulate from 0&lt;/span&gt;
-					
-      (&lt;span dir="ltr"&gt;generator-find&lt;/span&gt;                             &lt;span dir="ltr"&gt;;; find the first value bigger than bound in the acc generator&lt;/span&gt;
-       (&lt;span dir="ltr"&gt;lambda &lt;/span&gt;(&lt;span dir="ltr"&gt;s&lt;/span&gt;) (&lt;span dir="ltr"&gt;&amp;gt; &lt;/span&gt;&lt;span dir="ltr"&gt;s&lt;/span&gt; &lt;span dir="ltr"&gt;bound&lt;/span&gt;))
-       &lt;span dir="ltr"&gt;acc&lt;/span&gt;))))
-&lt;/code&gt;&lt;/PRE&gt;&lt;h1&gt;Creating generators with call/cc&lt;/h1&gt;&lt;p dir="ltr"&gt;In the previous section, we use &lt;code dir="ltr"&gt;call/cc&lt;/code&gt; to break from a loop that iterates over a generator. Let’s implement the generator itself with &lt;code dir="ltr"&gt;call/cc&lt;/code&gt;. To make it happen, we need a mechanism to yield - to exit a function before it ends normally. We have already seen how it is done. Now, we need a mechanism that resumes the function after it has yielded. It’s not hard to see that we need two continuations.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="scheme" dir="ltr"&gt;(&lt;span dir="ltr"&gt;define &lt;/span&gt;&lt;span dir="ltr"&gt;squared-ints&lt;/span&gt;
-  (&lt;span dir="ltr"&gt;lambda &lt;/span&gt;()
-    (&lt;span dir="ltr"&gt;let* &lt;/span&gt;((&lt;span dir="ltr"&gt;break&lt;/span&gt; &lt;span dir="ltr"&gt;#f&lt;/span&gt;)                  &lt;span dir="ltr"&gt;;;; will store a continuation to break out of the function&lt;/span&gt;
-	       (&lt;span dir="ltr"&gt;resume&lt;/span&gt; &lt;span dir="ltr"&gt;#f&lt;/span&gt;)                 &lt;span dir="ltr"&gt;;;; will store a continuation to resume after yielding&lt;/span&gt;
-	       (&lt;span dir="ltr"&gt;yield&lt;/span&gt;                      &lt;span dir="ltr"&gt;;;; define the function "yield"&lt;/span&gt;
-	         (&lt;span dir="ltr"&gt;lambda &lt;/span&gt;(&lt;span dir="ltr"&gt;value&lt;/span&gt;)
-	          (&lt;span dir="ltr"&gt;call/cc &lt;/span&gt;                &lt;span dir="ltr"&gt;;;;   capture the current continuation&lt;/span&gt;
-	            (&lt;span dir="ltr"&gt;lambda &lt;/span&gt;(&lt;span dir="ltr"&gt;r&lt;/span&gt;)
-		         (&lt;span dir="ltr"&gt;set! &lt;/span&gt;&lt;span dir="ltr"&gt;resume&lt;/span&gt; &lt;span dir="ltr"&gt;r&lt;/span&gt;)       &lt;span dir="ltr"&gt;;;;   store it in "resume"&lt;/span&gt;
-		         (&lt;span dir="ltr"&gt;break&lt;/span&gt; &lt;span dir="ltr"&gt;value&lt;/span&gt;))))))    &lt;span dir="ltr"&gt;;;;   and break out &lt;/span&gt;
-      
-      (&lt;span dir="ltr"&gt;lambda &lt;/span&gt;()                       &lt;span dir="ltr"&gt;;;; will return a function (a closure)&lt;/span&gt;
-	    (&lt;span dir="ltr"&gt;call/cc &lt;/span&gt;                      &lt;span dir="ltr"&gt;;;; capture the current continuation...&lt;/span&gt;
-	      (&lt;span dir="ltr"&gt;lambda &lt;/span&gt;(&lt;span dir="ltr"&gt;cc&lt;/span&gt;)
-	       (&lt;span dir="ltr"&gt;set! &lt;/span&gt;&lt;span dir="ltr"&gt;break&lt;/span&gt; &lt;span dir="ltr"&gt;cc&lt;/span&gt;)             &lt;span dir="ltr"&gt;;;; ...and store it in "break"&lt;/span&gt;
-	       (&lt;span dir="ltr"&gt;if &lt;/span&gt;&lt;span dir="ltr"&gt;resume&lt;/span&gt;                  &lt;span dir="ltr"&gt;;;; if this generator has been called before...&lt;/span&gt;
-	           (&lt;span dir="ltr"&gt;resume&lt;/span&gt; &lt;span dir="ltr"&gt;'&lt;/span&gt;())            &lt;span dir="ltr"&gt;;;; ... resume it&lt;/span&gt;
-	           (&lt;span dir="ltr"&gt;let &lt;/span&gt;&lt;span dir="ltr"&gt;loop&lt;/span&gt; ((&lt;span dir="ltr"&gt;i&lt;/span&gt; &lt;span dir="ltr"&gt;1&lt;/span&gt;))       &lt;span dir="ltr"&gt;;;; otherwise, loop through i=1, 2, 3, 4...&lt;/span&gt;
-		         (&lt;span dir="ltr"&gt;yield&lt;/span&gt; (&lt;span dir="ltr"&gt;* &lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt; &lt;span dir="ltr"&gt;i&lt;/span&gt;))       &lt;span dir="ltr"&gt;;;; yield the square of i&lt;/span&gt;
-		         (&lt;span dir="ltr"&gt;loop&lt;/span&gt; (&lt;span dir="ltr"&gt;+ &lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt; &lt;span dir="ltr"&gt;1&lt;/span&gt;))))))))))
-
-(&lt;span dir="ltr"&gt;define &lt;/span&gt;&lt;span dir="ltr"&gt;g&lt;/span&gt; (&lt;span dir="ltr"&gt;squared-ints&lt;/span&gt;))
-
-&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; (&lt;span dir="ltr"&gt;g&lt;/span&gt;)
-&lt;span dir="ltr"&gt;1&lt;/span&gt;
-&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; (&lt;span dir="ltr"&gt;g&lt;/span&gt;)
-&lt;span dir="ltr"&gt;4&lt;/span&gt;
-&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; (&lt;span dir="ltr"&gt;g&lt;/span&gt;)
-&lt;span dir="ltr"&gt;9&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;I modified this code slightly from Vasilij Schneidermann’s implementation of the SRFI-158 library (see &lt;a href="https://depp.brause.cc/srfi-158/" dir="ltr"&gt;here&lt;/a&gt; for the full source code). It looks a bit intimidating to those who are not expert Scheme programmers, but the logic is very straightforward: for every number &lt;code dir="ltr"&gt;i&lt;/code&gt; in the loop, first store the future of the computation into an internal variable called &lt;code dir="ltr"&gt;resume&lt;/code&gt;, and then call the &lt;code dir="ltr"&gt;break&lt;/code&gt; continuation as we have done before to exist the function. The next time the generator is called, call the &lt;code dir="ltr"&gt;resume&lt;/code&gt; continuation, which will progress to the next number in the loop.&lt;/p&gt;&lt;p dir="ltr"&gt;Note that in the code above, we return a generator as a function with no argument. We can easily add an argument to the function, so that messages can be sent to the generator after the iteration has started. For example, we can modify the code such that &lt;code dir="ltr"&gt;(g 'reset)&lt;/code&gt; will reset the iteration. Since generators are just functions in Scheme, communicating with generators can be done naturally with regular function calls. In Python, you can also send messages to generators, but it requires a special syntax of the &lt;code dir="ltr"&gt;yield&lt;/code&gt; keyword, and the &lt;code dir="ltr"&gt;.send()&lt;/code&gt; method of the generator class. Again, working with generators in Python is idiomatic, with lots of things happening behind the curtain.&lt;/p&gt;&lt;h1&gt;A few words on coroutines&lt;/h1&gt;&lt;p&gt;I had planned to go into details about coroutines, because Python’s tutorials on generators and Scheme’s tutorials on continuations both tend to end with coroutines. How interesting! However, I have decided against the idea because it will derail the discussion into a different territory.&lt;/p&gt;&lt;p dir="ltr"&gt;But very briefly, &lt;code dir="ltr"&gt;yield&lt;/code&gt; in Python is often presented as a simplified method for writing generators, but what it does, suspending the execution of a function with the ability to resume it, is much broader in scope. It enable a routine to do a small amount of work, and then pass the control to another routine, thus allowing them to run concurrently. In terms of data processing, data can be passed around among a network of routines, which is a more general architecture than the generator pipelines discussed in here and elsewhere. In other words, although generators are used for iterations, &lt;code dir="ltr"&gt;yield&lt;/code&gt; doesn’t have to be.&lt;/p&gt;&lt;p&gt;The story is much simpler in Scheme: coroutines and generators are just normal functions that manipulate continuations in different ways.&lt;/p&gt;&lt;h1&gt;Beautiful ideas&lt;/h1&gt;&lt;p&gt;I wrote this post primarily to summarize something new that I have learned. I also did it as an exercise in art appreciation. A lot of people like to talk about why they love a song, a TV show, or a novel. I would like to see more words spent on articulating why an idea is elegant, powerful, or clever.&lt;/p&gt;&lt;p dir="ltr"&gt;Scheme is an unusual language in its minimalism. Its designers want it to be highly expressive (meaning that complex logic can be expressed succinctly), and yet as simple as possible. This can only be achieved by building the language on a small number of powerful ideas. A powerful idea is an idea that is not narrow in scope. It should interact with all aspects of the language. A powerful idea stays true to itself under every context, but when it is used in combination with other powerful ideas, new functionalities emerge. This is where the expressiveness comes from. A poetic way to express this magic (due to &lt;a href="https://en.wikipedia.org/wiki/John_McCarthy_(computer_scientist)" dir="ltr"&gt;John McCarthy&lt;/a&gt;) is that it almost feel like the language was discovered rather than invented. Once you get it, it’s hard to imagine how a language can be designed in any other way, because every component seems to be incomplete without the others.&lt;/p&gt;&lt;p dir="ltr"&gt;I am obviously a fan of this philosophy. However, I am not blind to the fact that powerful ideas are much harder to master. Continuations are hard to understand and hard to write. The fact that I am still thinking about continuations so many years after my college programming class should tell you something about the amount of devotion needed to reach the blissful state of pure lambda enlightenment. This brings me to Python. As I said before, the minimalist in me is bothered by the hidden machinery behind generators. But with the &lt;code dir="ltr"&gt;yeild&lt;/code&gt; keyword in Python, anyone can read a short tutorial, learn the idioms, and start to use generators in 10 minutes. It is perhaps not as powerful an idea as continuations, but it is powerful enough that it blends in nicely with loops, making complex loops dramatically easier to write. It’s a beautiful idea.&lt;/p&gt;&lt;p dir="ltr"&gt;In the end, I feel compelled to circle back to Scheme. What is beautiful about Python’s generators is that with a single keyword &lt;code dir="ltr"&gt;yield&lt;/code&gt;, an entire new form of control becomes available to programmers. You might say the same about Scheme’s continuations and macros. With &lt;code dir="ltr"&gt;call/cc&lt;/code&gt; and &lt;code dir="ltr"&gt;define-macro&lt;/code&gt;, the machinery of the interpreter become accessible to the programmer, thus erasing the boundary between programming and metaprogramming. A lot has been written on this topic so I won’t repeat it here (see &lt;a href="http://www.paulgraham.com/avg.html" dir="ltr"&gt;here&lt;/a&gt;), but parsing (accessible via macros) and execution control (accessible via &lt;code dir="ltr"&gt;call/cc&lt;/code&gt;) are basically what the interpreter does. I am amazed by how minimal the API to the interpreter is. That is beautiful.&lt;/p&gt;&lt;h1&gt;Notes&lt;/h1&gt;&lt;p dir="ltr"&gt;[1] Using &lt;code dir="ltr"&gt;yield&lt;/code&gt; in a function definition is not the only way in which generators can be constructed in Python. Please consult any general tutorial on generators.&lt;/p&gt;&lt;p dir="ltr"&gt;[2] More accurately, &lt;code dir="ltr"&gt;yield&lt;/code&gt; in a function creates a generator, which suspends its execution at the point where &lt;code dir="ltr"&gt;yield&lt;/code&gt; appears in the definition. This characterization is harder to read, so I will write as if &lt;code dir="ltr"&gt;yield&lt;/code&gt; actually does the yielding. The intention of the syntax is to create this illusion.&lt;/p&gt;&lt;p&gt;[3] Note that recursion is Scheme’s preferred way for writing loops. It isn’t necessary for creating generators. Since this is a form of tail recursion, the Scheme interpreter automatically translates the recursion into a loop.&lt;/p&gt;</description><pubDate>Wed, 21 Jul 2021 10:57:55 -0500</pubDate></item></channel></rss>
+io-uring &lt;a href="https://github.com/tokio-rs/io-uring" dir="ltr"&gt;bindings&lt;/a&gt;.&lt;/p&gt;&lt;img src="https://tokio.rs/img/arrow-left.svg" width="22" height="22"&gt;</description><pubDate>Tue, 20 Jul 2021 03:21:27 -0500</pubDate></item></channel></rss>
