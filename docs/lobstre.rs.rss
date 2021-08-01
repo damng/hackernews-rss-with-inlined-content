@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0"><channel><title>lobstre.rs rss with inlined content</title><link>http://n-gate.com</link><description>webshit condom</description><lastBuildDate>Sat, 31 Jul 2021 16:54:15 -0500</lastBuildDate><item><title>5000x faster CRDTs: An Adventure in Optimization</title><link>https://lobste.rs/s/dny0dv</link><description>&lt;p&gt;&lt;span&gt;July 31 2021&lt;/span&gt;&lt;/p&gt;&lt;p&gt;A few years ago I was really bothered by an academic paper.&lt;/p&gt;&lt;p&gt;Some researchers in France put together a comparison showing lots of ways you could implement concurrent editing, using various CRDT and OT algorithms. And they benchmarked all of them. (Wow, yess!) Some algorithms worked reasonably well. But others took upwards of 3 seconds to process simple paste operations from their editing sessions. Yikes!&lt;/p&gt;&lt;p&gt;Which algorithm was that? Well, this is awkward but .. it was mine. I mean, I didn't invent it - but it was the algorithm I was using for ShareJS. The algorithm we used for Google Wave. The algorithm which - hang on - I knew for a fact didn't take 3 seconds to process large paste events. Whats going on here?&lt;/p&gt;&lt;p dir="ltr"&gt;I took a closer look at the paper. In their implementation when a user pasted a big chunk of text (like 1000 characters), instead of creating 1 operation with 1000 characters, their code split the insert into 1000 individual operations. And each of those operations needed to be processed separately. Do'h - of course it'll be slow if you do that! This isn't a problem with the operational transformation algorithm. This is just a problem with &lt;em dir="ltr"&gt;their particular implementation&lt;/em&gt;.&lt;/p&gt;&lt;p&gt;The infuriating part was that several people sent me links to the paper and (pointedly) asked me what I think about it. Written up as a Published Science Paper, these speed comparisons seemed like a Fact About The Universe. And not what they really were - implementation details of some java code, written by a probably overstretched researcher. One of a whole bunch of implementations that they needed to code up.&lt;/p&gt;&lt;p&gt;"Nooo! The peer reviewed science isn't right everybody! Please believe me!". But I didn't have a published paper justifying my claims. I had working code but it felt like none of the smart computer science people cared about that. Who was I? I was nobody.&lt;/p&gt;&lt;p&gt;When we think about CRDTs and other collaborative editing systems we have a language problem. We describe each system as an "algorithm". Jupiter is an Algorithm. RGA is an Algorithm. But really there are two very separate aspects:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;The black-box &lt;em dir="ltr"&gt;behaviour&lt;/em&gt; of concurrent edits. When two clients edit the same region of text at the same time, what happens? Are they merged, and if so in what order? What are the rules?&lt;/LI&gt;&lt;LI&gt;The white-box &lt;em dir="ltr"&gt;implementation&lt;/em&gt; of the system. What programming language are we using? What data structures? How well optimized is the code?&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;If my implementation runs slowly, what does that actually tell us? Maybe it's like tests. A passing test suite &lt;em dir="ltr"&gt;suggests&lt;/em&gt;, but can never &lt;em dir="ltr"&gt;prove&lt;/em&gt; that there are no bugs. Likewise a slow implementation suggests, but can never prove that every implementation of the system will be slow. If you wait long enough, somebody will find more bugs. And, maybe, someone out there can design a faster implementation.&lt;/p&gt;&lt;p&gt;I've translated my old text OT code into C, Javascript, Go, Rust and Swift. Each implementation has the same behaviour, and the same algorithm. But the performance is not even close. In javascript my transform function ran about 100 000 times per second. Not bad! But the same function in C does 20M iterations per second. That's 200x faster. Wow!&lt;/p&gt;&lt;p&gt;Were the academics testing the slow version or the fast version of this code? Maybe, without noticing, they had fast versions of some algorithms and slow versions of others. It's impossible to tell from the paper!&lt;/p&gt;&lt;h2&gt;Making CRDTs fast&lt;/h2&gt;&lt;p dir="ltr"&gt;So as you may know, I've been getting interested in CRDTs lately. I think they're the &lt;a href="https://josephg.com/blog/crdts-are-the-future/" dir="ltr"&gt;future of collaborative editing&lt;/a&gt;. And maybe the future of all software - but I'm not ready to talk about that yet. Most CRDTs you read about in academic papers are crazy slow, and a decade ago I decided to stop reading academic papers and dismissed them. I assumed CRDTs had some inherent problem. A GUID for every character? Nought but madness comes from those strange lands! But - and this is awkward to admit - I think I've been making the same mistake as those researchers. I was reading papers which described the &lt;em dir="ltr"&gt;behaviour&lt;/em&gt; of different systems. And I assumed that meant we knew how the best way to &lt;em dir="ltr"&gt;implement&lt;/em&gt; those systems. And wow, I was super wrong.&lt;/p&gt;&lt;p dir="ltr"&gt;How wrong? Well. Running &lt;a href="https://github.com/automerge/automerge-perf/" dir="ltr"&gt;this editing trace&lt;/a&gt;, &lt;a href="https://github.com/automerge/automerge/" dir="ltr"&gt;Automerge&lt;/a&gt; (a popular CRDT, written by &lt;a href="https://martin.kleppmann.com/" dir="ltr"&gt;a popular researcher&lt;/a&gt;) takes nearly 5 minutes to run. I have a &lt;a href="https://github.com/josephg/diamond-types" dir="ltr"&gt;new implementation&lt;/a&gt; that can process the same editing trace in 56 milliseconds. Thats 0.056 seconds, which is over 5000x faster. It's the largest speed up I've ever gotten from optimization work - and I'm utterly delighted by it.&lt;/p&gt;&lt;p&gt;Lets talk about why automerge is currently slow, and I'll take you through all the steps toward making it super fast.&lt;/p&gt;&lt;p&gt;Wait, no. First we need to start with:&lt;/p&gt;&lt;h3&gt;What is automerge?&lt;/h3&gt;&lt;p dir="ltr"&gt;Automerge is a library to help you do collaborative editing. It's written by Martin Kleppmann, who's a little bit famous from his book and &lt;a href="https://martin.kleppmann.com/2020/07/06/crdt-hard-parts-hydra.html" dir="ltr"&gt;excellent talks&lt;/a&gt;. Automerge is based on an algorithm called RGA, which you can read about in an academic paper if you're into that sort of thing.&lt;/p&gt;&lt;p&gt;Martin explains automerge far better than I will in this talk from 2020:&lt;/p&gt;&lt;p&gt;Automerge (and Yjs and other CRDTs) think of a shared document as a list of characters. Each character in the document gets a unique ID, and whenever you insert into the document, you name what you're inserting after.&lt;/p&gt;&lt;p&gt;Imagine I type "abc" into an empty document. Automerge creates 3 items:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Insert &lt;em dir="ltr"&gt;'a'&lt;/em&gt; id &lt;code dir="ltr"&gt;(seph, 0)&lt;/code&gt; after &lt;code dir="ltr"&gt;ROOT&lt;/code&gt;
+<rss version="2.0"><channel><title>lobstre.rs rss with inlined content</title><link>http://n-gate.com</link><description>webshit condom</description><lastBuildDate>Sat, 31 Jul 2021 20:40:32 -0500</lastBuildDate><item><title>5000x faster CRDTs: An Adventure in Optimization</title><link>https://lobste.rs/s/dny0dv</link><description>&lt;p&gt;&lt;span&gt;July 31 2021&lt;/span&gt;&lt;/p&gt;&lt;p&gt;A few years ago I was really bothered by an academic paper.&lt;/p&gt;&lt;p&gt;Some researchers in France put together a comparison showing lots of ways you could implement concurrent editing, using various CRDT and OT algorithms. And they benchmarked all of them. (Wow, yess!) Some algorithms worked reasonably well. But others took upwards of 3 seconds to process simple paste operations from their editing sessions. Yikes!&lt;/p&gt;&lt;p&gt;Which algorithm was that? Well, this is awkward but .. it was mine. I mean, I didn't invent it - but it was the algorithm I was using for ShareJS. The algorithm we used for Google Wave. The algorithm which - hang on - I knew for a fact didn't take 3 seconds to process large paste events. Whats going on here?&lt;/p&gt;&lt;p dir="ltr"&gt;I took a closer look at the paper. In their implementation when a user pasted a big chunk of text (like 1000 characters), instead of creating 1 operation with 1000 characters, their code split the insert into 1000 individual operations. And each of those operations needed to be processed separately. Do'h - of course it'll be slow if you do that! This isn't a problem with the operational transformation algorithm. This is just a problem with &lt;em dir="ltr"&gt;their particular implementation&lt;/em&gt;.&lt;/p&gt;&lt;p&gt;The infuriating part was that several people sent me links to the paper and (pointedly) asked me what I think about it. Written up as a Published Science Paper, these speed comparisons seemed like a Fact About The Universe. And not what they really were - implementation details of some java code, written by a probably overstretched researcher. One of a whole bunch of implementations that they needed to code up.&lt;/p&gt;&lt;p&gt;"Nooo! The peer reviewed science isn't right everybody! Please believe me!". But I didn't have a published paper justifying my claims. I had working code but it felt like none of the smart computer science people cared about that. Who was I? I was nobody.&lt;/p&gt;&lt;p&gt;When we think about CRDTs and other collaborative editing systems we have a language problem. We describe each system as an "algorithm". Jupiter is an Algorithm. RGA is an Algorithm. But really there are two very separate aspects:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;The black-box &lt;em dir="ltr"&gt;behaviour&lt;/em&gt; of concurrent edits. When two clients edit the same region of text at the same time, what happens? Are they merged, and if so in what order? What are the rules?&lt;/LI&gt;&lt;LI&gt;The white-box &lt;em dir="ltr"&gt;implementation&lt;/em&gt; of the system. What programming language are we using? What data structures? How well optimized is the code?&lt;/LI&gt;&lt;/OL&gt;&lt;p dir="ltr"&gt;If my implementation runs slowly, what does that actually tell us? Maybe it's like tests. A passing test suite &lt;em dir="ltr"&gt;suggests&lt;/em&gt;, but can never &lt;em dir="ltr"&gt;prove&lt;/em&gt; that there are no bugs. Likewise a slow implementation suggests, but can never prove that every implementation of the system will be slow. If you wait long enough, somebody will find more bugs. And, maybe, someone out there can design a faster implementation.&lt;/p&gt;&lt;p&gt;I've translated my old text OT code into C, Javascript, Go, Rust and Swift. Each implementation has the same behaviour, and the same algorithm. But the performance is not even close. In javascript my transform function ran about 100 000 times per second. Not bad! But the same function in C does 20M iterations per second. That's 200x faster. Wow!&lt;/p&gt;&lt;p&gt;Were the academics testing the slow version or the fast version of this code? Maybe, without noticing, they had fast versions of some algorithms and slow versions of others. It's impossible to tell from the paper!&lt;/p&gt;&lt;h2&gt;Making CRDTs fast&lt;/h2&gt;&lt;p dir="ltr"&gt;So as you may know, I've been getting interested in CRDTs lately. I think they're the &lt;a href="https://josephg.com/blog/crdts-are-the-future/" dir="ltr"&gt;future of collaborative editing&lt;/a&gt;. And maybe the future of all software - but I'm not ready to talk about that yet. Most CRDTs you read about in academic papers are crazy slow, and a decade ago I decided to stop reading academic papers and dismissed them. I assumed CRDTs had some inherent problem. A GUID for every character? Nought but madness comes from those strange lands! But - and this is awkward to admit - I think I've been making the same mistake as those researchers. I was reading papers which described the &lt;em dir="ltr"&gt;behaviour&lt;/em&gt; of different systems. And I assumed that meant we knew how the best way to &lt;em dir="ltr"&gt;implement&lt;/em&gt; those systems. And wow, I was super wrong.&lt;/p&gt;&lt;p dir="ltr"&gt;How wrong? Well. Running &lt;a href="https://github.com/automerge/automerge-perf/" dir="ltr"&gt;this editing trace&lt;/a&gt;, &lt;a href="https://github.com/automerge/automerge/" dir="ltr"&gt;Automerge&lt;/a&gt; (a popular CRDT, written by &lt;a href="https://martin.kleppmann.com/" dir="ltr"&gt;a popular researcher&lt;/a&gt;) takes nearly 5 minutes to run. I have a &lt;a href="https://github.com/josephg/diamond-types" dir="ltr"&gt;new implementation&lt;/a&gt; that can process the same editing trace in 56 milliseconds. Thats 0.056 seconds, which is over 5000x faster. It's the largest speed up I've ever gotten from optimization work - and I'm utterly delighted by it.&lt;/p&gt;&lt;p&gt;Lets talk about why automerge is currently slow, and I'll take you through all the steps toward making it super fast.&lt;/p&gt;&lt;p&gt;Wait, no. First we need to start with:&lt;/p&gt;&lt;h3&gt;What is automerge?&lt;/h3&gt;&lt;p dir="ltr"&gt;Automerge is a library to help you do collaborative editing. It's written by Martin Kleppmann, who's a little bit famous from his book and &lt;a href="https://martin.kleppmann.com/2020/07/06/crdt-hard-parts-hydra.html" dir="ltr"&gt;excellent talks&lt;/a&gt;. Automerge is based on an algorithm called RGA, which you can read about in an academic paper if you're into that sort of thing.&lt;/p&gt;&lt;p&gt;Martin explains automerge far better than I will in this talk from 2020:&lt;/p&gt;&lt;p&gt;Automerge (and Yjs and other CRDTs) think of a shared document as a list of characters. Each character in the document gets a unique ID, and whenever you insert into the document, you name what you're inserting after.&lt;/p&gt;&lt;p&gt;Imagine I type "abc" into an empty document. Automerge creates 3 items:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Insert &lt;em dir="ltr"&gt;'a'&lt;/em&gt; id &lt;code dir="ltr"&gt;(seph, 0)&lt;/code&gt; after &lt;code dir="ltr"&gt;ROOT&lt;/code&gt;
 &lt;UL&gt;&lt;LI&gt;Insert &lt;em dir="ltr"&gt;'b'&lt;/em&gt; id &lt;code dir="ltr"&gt;(seph, 1)&lt;/code&gt; after &lt;code dir="ltr"&gt;(seph, 0)&lt;/code&gt;
 &lt;UL&gt;&lt;LI&gt;Insert &lt;em dir="ltr"&gt;'c'&lt;/em&gt; id &lt;code dir="ltr"&gt;(seph, 2)&lt;/code&gt; after &lt;code dir="ltr"&gt;(seph, 1)&lt;/code&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;We can draw this as a tree!&lt;/p&gt;&lt;img src="https://josephg.com/blog/crdts-go-brrr/automerge1.drawio.svg" alt="tree with &amp;quot;abc&amp;quot; inserts" width="191" height="191"&gt;&lt;p dir="ltr"&gt;Lets say Mike inserts an 'X' between &lt;em dir="ltr"&gt;a&lt;/em&gt; and &lt;em dir="ltr"&gt;b&lt;/em&gt;, so we get "aXbc". Then we have:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;Insert &lt;em dir="ltr"&gt;'a'&lt;/em&gt; id &lt;code dir="ltr"&gt;(seph, 0)&lt;/code&gt; after &lt;code dir="ltr"&gt;ROOT&lt;/code&gt;
 &lt;UL&gt;&lt;LI&gt;Insert &lt;em dir="ltr"&gt;'X'&lt;/em&gt; id &lt;code dir="ltr"&gt;(mike, 0)&lt;/code&gt; after &lt;code dir="ltr"&gt;(seph, 0)&lt;/code&gt;&lt;/LI&gt;&lt;LI&gt;Insert &lt;em dir="ltr"&gt;'b'&lt;/em&gt; id &lt;code dir="ltr"&gt;(seph, 1)&lt;/code&gt; after &lt;code dir="ltr"&gt;(seph, 0)&lt;/code&gt;
@@ -398,7 +398,18 @@ environments that differ from Stripe’s internal production environment. If you
 do try things out, feel free to let us know!&lt;/p&gt;&lt;h2&gt;What’s next?&lt;/h2&gt;&lt;p&gt;Over the next six months we’re going to be heads down focusing on making the
 Sorbet Compiler perform even better on real-world code at Stripe. We’re excited
 to share more with you once we’ve made more progress!&lt;/p&gt;&lt;p&gt;To get in touch with us, find us on our Sorbet Slack:&lt;/p&gt;&lt;p dir="ltr"&gt;Thanks!&lt;br dir="ltr"&gt;
-— The Sorbet team&lt;/p&gt;</description><pubDate>Sat, 31 Jul 2021 16:54:15 -0500</pubDate></item><item><title>Hosting SQLite databases on Github Pages</title><link>https://lobste.rs/s/rwqg5d</link><description>&lt;p dir="ltr"&gt;I was writing &lt;a href="https://phiresky.github.io/youtube-sponsorship-stats/?uploader=Adam+Ragusea" attrs="[object Object]" dir="ltr"&gt;a tiny website&lt;/a&gt; to display statistics of how much sponsored content a Youtube creator has over time when I noticed that I often write a small tool as a website that queries some data from a database and then displays it in a graph, a table, or similar. But if you want to use a database, you either need to write a backend (which you then need to host and maintain forever) or download the whole dataset into the browser (which is not so great when the dataset is more than 10MB).&lt;/p&gt;&lt;p&gt;In the past when I’ve used a backend server for these small side projects at some point some external API goes down or a key expires or I forget about the backend and stop paying for whatever VPS it was on. Then when I revisit it years later, I’m annoyed that it’s gone and curse myself for relying on an external service - or on myself caring over a longer period of time.&lt;/p&gt;&lt;p dir="ltr"&gt;Hosting a static website is much easier than a &lt;span dir="ltr"&gt;"real"&lt;/span&gt; server - there’s many free and reliable options (like GitHub, GitLab Pages, Netlify, etc), and it scales to basically infinity without any effort.&lt;/p&gt;&lt;p&gt;So I wrote a tool to be able to use a real SQL database in a statically hosted website!&lt;/p&gt;&lt;p dir="ltr"&gt;Here’s a demo using the &lt;a href="https://github.com/phiresky/world-development-indicators-sqlite/" attrs="[object Object]" dir="ltr"&gt;World Development Indicators dataset&lt;/a&gt; - a dataset with 6 tables and over 8 million rows (670 MiByte total).&lt;/p&gt;&lt;div&gt;Demo&lt;/div&gt;&lt;div&gt;Output JSON&lt;/div&gt;&lt;div role="button"&gt; Rerun&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;running...&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;As you can see, we can query the &lt;code attrs="[object Object]" dir="ltr"&gt;wdi_country&lt;/code&gt; table while fetching only 1kB of data!&lt;/p&gt;&lt;p dir="ltr"&gt;This is a full SQLite query engine. As such, we can use e.g.&amp;nbsp;the &lt;a href="https://www.sqlite.org/json1.html" attrs="[object Object]" dir="ltr"&gt;SQLite JSON functions&lt;/a&gt;:&lt;/p&gt;&lt;div&gt;Demo&lt;/div&gt;&lt;div dir="ltr"&gt;Input SQL&lt;/div&gt;&lt;div role="button"&gt; Edit&lt;/div&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;select&lt;/span&gt;&lt;span dir="ltr"&gt; json_extract&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;arr&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;value&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;'$.foo.bar'&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;as&lt;/span&gt;&lt;span dir="ltr"&gt; bar
+— The Sorbet team&lt;/p&gt;</description><pubDate>Sat, 31 Jul 2021 16:54:15 -0500</pubDate></item><item><title>Hasta la Vista Gmail</title><link>https://lobste.rs/s/ijqmym</link><description>&lt;p dir="ltr"&gt;I’ve been a Gmail user pretty much since day 1, when it was still an invite-only
+service in 2004.&lt;sup role="doc-noteref" dir="ltr"&gt;&lt;a href="https://metaredux.com/posts/2021/07/31/hasta-la-vista-gmail.html#fn:1" rel="footnote" dir="ltr"&gt;1&lt;/a&gt;&lt;/sup&gt; Not anymore. Over the past month I’ve migrated most of my
+email to &lt;a href="https://fastmail.com/" dir="ltr"&gt;Fastmail&lt;/a&gt; and I’m extremely happy with the result.&lt;/p&gt;&lt;p&gt;Why bother? Well, I guess it won’t come to you as a shock that I’ve felt progressively
+more uncomfortable with how Google (and the like) are handling my personal
+data. I’ve also been getting quite frustrated with attempts to make
+email/my inbox “smarter”. I never needed a “priority inbox”, auto-categorization of email, etc.
+Simple is good. Just put the newest emails on the top and I’ll sort it out from there.&lt;/p&gt;&lt;p&gt;On the other hand, Gmail is really hard to replace/compete with:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;It’s free and you get a lot with the free plan (e.g. 15GB of storage).&lt;/LI&gt;&lt;LI&gt;It ties perfectly with Google’s productivity suite (e.g. Google Docs, Google Drive, etc) and I’m a heavy user of it.&lt;/LI&gt;&lt;LI&gt;It’s fast, secure and really sleek. Clearly Google’s vast resources have been put to good use here.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;That’s not easy to give up. I’ve tried a few other e-mail providers over the years, but I never found
+someone compelling enough to make me do a real switch. HEY was pretty close to making the cut, but
+it’s still missing some features that I deem essential (e.g. you can’t have multiple domains attached to your account, there’s no way to
+use HEY without its apps, there’s no calendar). Enter Fastmail.&lt;/p&gt;&lt;p&gt;I’ve never heard of Fastmail, until I started to explore more actively Gmail alternatives in the past 3 months. At first I had
+quickly discarded it, because of its ancient looking UI, but once I got past this superficial stuff I realized it’s a fantastic service:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;It packs all the features I needed (e.g. custom domains, aliases, calendar, IMAP/JMAP)&lt;/LI&gt;&lt;LI&gt;It has great customer support&lt;/LI&gt;&lt;LI&gt;They are working towards improving the global email standards (check out &lt;a href="https://fastmail.blog/open-technologies/jmap-new-email-open-standard/" dir="ltr"&gt;JMAP&lt;/a&gt;)&lt;/LI&gt;&lt;LI&gt;It’s half the price of HEY&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Sure, it doesn’t look fancy, I’ve ran into a couple of bugs, and it doesn’t have the best search in the world, but it gets the job done. I’ve been a happy customer for over a month now and I can heartily recommend it to everyone. Here’s a &lt;a href="https://www.fastmail.com/gmail-alternative/" dir="ltr"&gt;nice comparison between Fastmail and Gmail&lt;/a&gt;, even if it’s bit biased.&lt;/p&gt;&lt;p dir="ltr"&gt;I won’t write here about the actual migration process from Gmail, as there wasn’t much of it. I just forwarded both my Gmail accounts to my new Fastmail account, and I updated
+many services to use the Fastmail addresses directly. My &lt;code dir="ltr"&gt;batsov.com&lt;/code&gt; domain is tied to a legacy free Google Apps plan, that’s also used by other members of my family, so I couldn’t just move the domain to Fastmail, as I would have done normally. Instead I bought the domains &lt;code dir="ltr"&gt;batsov.net&lt;/code&gt; and &lt;code dir="ltr"&gt;batsov.dev&lt;/code&gt; and decided to gradually make them my primary email addresses. You can now also write to at first name at metaredux dot com.&lt;/p&gt;&lt;p&gt;I’ve also opted not to import my Gmail contacts and mails into Fastmail, even though the process is trivial. I rarely need to check something in the archives and I decided to go for a clean start. Jason Fried and HEY thought me about the value of that. By the way, I’m still going to use HEY as well. Even though the service doesn’t quite match my needs, there’s a certain charm to it that I really like. I’ve been using it mostly as a newsletter reader and to write occasional emails to close friends, like in the pen pal era. You should try this! If nothing else - HEY taught me to favour top posting, instead of inline responses. Seems weird at first, but that’s how real mail works. :-)&lt;/p&gt;&lt;p&gt;We now live at a time where more and more people consider email obsolete and rely mostly on chat apps like Slack, FB Messenger, Whatsapp, Telegram, etc. Many applications claim to be the email killer, but due to their walled garden approaches no one really succeeds in this endeavor. For some reason email has this horrible reputation of something that’s always messy and causes a ton of stress, but I think that’s just a side effect of how most people use (abuse?) email. Email can be a lot of fun, and no stress at all. You just have invest a bit of time in organizing and streamlining your inbox. For me the migration to Fastmail was a great opportunity to do this and I’m truly having a lot of fun with email right now. It’d be cool if some of you shoot me an email or two! :)&lt;/p&gt;&lt;p&gt;Anyways, that’s all from me for now. I’ll go back to having more fun with my new inbox. Keep hacking!&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;P.S.&lt;/strong&gt; Here’s a &lt;a href="https://ref.fm/u26676944" dir="ltr"&gt;Fastmail referral link&lt;/a&gt; that will get you a 10% discount for the first year.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Damn, that’s 17 years! Almost half my life (I’m 36 as I write this).&amp;nbsp;&lt;a href="https://metaredux.com/posts/2021/07/31/hasta-la-vista-gmail.html#fnref:1" role="doc-backlink" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Sat, 31 Jul 2021 06:13:06 -0500</pubDate></item><item><title>Hosting SQLite databases on Github Pages</title><link>https://lobste.rs/s/rwqg5d</link><description>&lt;p dir="ltr"&gt;I was writing &lt;a href="https://phiresky.github.io/youtube-sponsorship-stats/?uploader=Adam+Ragusea" attrs="[object Object]" dir="ltr"&gt;a tiny website&lt;/a&gt; to display statistics of how much sponsored content a Youtube creator has over time when I noticed that I often write a small tool as a website that queries some data from a database and then displays it in a graph, a table, or similar. But if you want to use a database, you either need to write a backend (which you then need to host and maintain forever) or download the whole dataset into the browser (which is not so great when the dataset is more than 10MB).&lt;/p&gt;&lt;p&gt;In the past when I’ve used a backend server for these small side projects at some point some external API goes down or a key expires or I forget about the backend and stop paying for whatever VPS it was on. Then when I revisit it years later, I’m annoyed that it’s gone and curse myself for relying on an external service - or on myself caring over a longer period of time.&lt;/p&gt;&lt;p dir="ltr"&gt;Hosting a static website is much easier than a &lt;span dir="ltr"&gt;"real"&lt;/span&gt; server - there’s many free and reliable options (like GitHub, GitLab Pages, Netlify, etc), and it scales to basically infinity without any effort.&lt;/p&gt;&lt;p&gt;So I wrote a tool to be able to use a real SQL database in a statically hosted website!&lt;/p&gt;&lt;p dir="ltr"&gt;Here’s a demo using the &lt;a href="https://github.com/phiresky/world-development-indicators-sqlite/" attrs="[object Object]" dir="ltr"&gt;World Development Indicators dataset&lt;/a&gt; - a dataset with 6 tables and over 8 million rows (670 MiByte total).&lt;/p&gt;&lt;div&gt;Demo&lt;/div&gt;&lt;div&gt;Output JSON&lt;/div&gt;&lt;div role="button"&gt; Rerun&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;running...&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;As you can see, we can query the &lt;code attrs="[object Object]" dir="ltr"&gt;wdi_country&lt;/code&gt; table while fetching only 1kB of data!&lt;/p&gt;&lt;p dir="ltr"&gt;This is a full SQLite query engine. As such, we can use e.g.&amp;nbsp;the &lt;a href="https://www.sqlite.org/json1.html" attrs="[object Object]" dir="ltr"&gt;SQLite JSON functions&lt;/a&gt;:&lt;/p&gt;&lt;div&gt;Demo&lt;/div&gt;&lt;div dir="ltr"&gt;Input SQL&lt;/div&gt;&lt;div role="button"&gt; Edit&lt;/div&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;select&lt;/span&gt;&lt;span dir="ltr"&gt; json_extract&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;arr&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;value&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;'$.foo.bar'&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;as&lt;/span&gt;&lt;span dir="ltr"&gt; bar
 &lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;  &lt;/span&gt;&lt;span dir="ltr"&gt;from&lt;/span&gt;&lt;span dir="ltr"&gt; json_each&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;'[{"foo": {"bar": 123}}, {"foo": {"bar": "baz"}}]'&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;as&lt;/span&gt;&lt;span dir="ltr"&gt; arr&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;div&gt;Output JSON&lt;/div&gt;&lt;div role="button"&gt; Rerun&lt;/div&gt;&lt;PRE&gt;&lt;code&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;running...&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;We can also register JS functions so they can be called from within a query. Here’s an example with a &lt;code attrs="[object Object]" dir="ltr"&gt;getFlag&lt;/code&gt; function that gets the flag emoji for a country:&lt;/p&gt;&lt;div dir="ltr"&gt;JS Demo&lt;/div&gt;&lt;div dir="ltr"&gt;Input JavaScript&lt;/div&gt;&lt;div role="button"&gt; Edit&lt;/div&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;function&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;getFlag&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;country_code&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt; &lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;&lt;span dir="ltr"&gt;
 &lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;  &lt;/span&gt;&lt;span dir="ltr"&gt;// just some unicode magic&lt;/span&gt;&lt;span dir="ltr"&gt;
 &lt;/span&gt;&lt;/span&gt;&lt;span dir="ltr"&gt;&lt;span dir="ltr"&gt;  &lt;/span&gt;&lt;span dir="ltr"&gt;return&lt;/span&gt;&lt;span dir="ltr"&gt; String&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;fromCodePoint&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;...&lt;/span&gt;&lt;span dir="ltr"&gt;Array&lt;/span&gt;&lt;span dir="ltr"&gt;.&lt;/span&gt;&lt;span dir="ltr"&gt;from&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;country_code&lt;/span&gt;&lt;span dir="ltr"&gt;||&lt;/span&gt;&lt;span dir="ltr"&gt;""&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;&lt;span dir="ltr"&gt;
@@ -464,18 +475,7 @@ our approach has applications beyond the domain of collaborative editing.
   Thu, 27 Feb 2020 07:52:43 UTC (87 KB)&lt;br dir="ltr"&gt;
   &lt;strong dir="ltr"&gt;&lt;a href="https://arxiv.org/abs/2002.09511v3" dir="ltr"&gt;[v3]&lt;/a&gt;&lt;/strong&gt;
   Mon, 2 Mar 2020 11:44:07 UTC (88 KB)&lt;br dir="ltr"&gt;&lt;strong dir="ltr"&gt;[v4]&lt;/strong&gt;
-Fri, 24 Apr 2020 06:34:43 UTC (181 KB)&lt;br dir="ltr"&gt;&lt;/div&gt;</description><pubDate>Sat, 31 Jul 2021 14:07:18 -0500</pubDate></item><item><title>Hasta la Vista Gmail</title><link>https://lobste.rs/s/ijqmym</link><description>&lt;p dir="ltr"&gt;I’ve been a Gmail user pretty much since day 1, when it was still an invite-only
-service in 2004.&lt;sup role="doc-noteref" dir="ltr"&gt;&lt;a href="https://metaredux.com/posts/2021/07/31/hasta-la-vista-gmail.html#fn:1" rel="footnote" dir="ltr"&gt;1&lt;/a&gt;&lt;/sup&gt; Not anymore. Over the past month I’ve migrated most of my
-email to &lt;a href="https://fastmail.com/" dir="ltr"&gt;Fastmail&lt;/a&gt; and I’m extremely happy with the result.&lt;/p&gt;&lt;p&gt;Why bother? Well, I guess it won’t come to you as a shock that I’ve felt progressively
-more uncomfortable with how Google (and the like) are handling my personal
-data. I’ve also been getting quite frustrated with attempts to make
-email/my inbox “smarter”. I never needed a “priority inbox”, auto-categorization of email, etc.
-Simple is good. Just put the newest emails on the top and I’ll sort it out from there.&lt;/p&gt;&lt;p&gt;On the other hand, Gmail is really hard to replace/compete with:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;It’s free and you get a lot with the free plan (e.g. 15GB of storage).&lt;/LI&gt;&lt;LI&gt;It ties perfectly with Google’s productivity suite (e.g. Google Docs, Google Drive, etc) and I’m a heavy user of it.&lt;/LI&gt;&lt;LI&gt;It’s fast, secure and really sleek. Clearly Google’s vast resources have been put to good use here.&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;That’s not easy to give up. I’ve tried a few other e-mail providers over the years, but I never found
-someone compelling enough to make me do a real switch. HEY was pretty close to making the cut, but
-it’s still missing some features that I deem essential (e.g. you can’t have multiple domains attached to your account, there’s no way to
-use HEY without its apps, there’s no calendar). Enter Fastmail.&lt;/p&gt;&lt;p&gt;I’ve never heard of Fastmail, until I started to explore more actively Gmail alternatives in the past 3 months. At first I had
-quickly discarded it, because of its ancient looking UI, but once I got past this superficial stuff I realized it’s a fantastic service:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;It packs all the features I needed (e.g. custom domains, aliases, calendar, IMAP/JMAP)&lt;/LI&gt;&lt;LI&gt;It has great customer support&lt;/LI&gt;&lt;LI&gt;They are working towards improving the global email standards (check out &lt;a href="https://fastmail.blog/open-technologies/jmap-new-email-open-standard/" dir="ltr"&gt;JMAP&lt;/a&gt;)&lt;/LI&gt;&lt;LI&gt;It’s half the price of HEY&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;Sure, it doesn’t look fancy, I’ve ran into a couple of bugs, and it doesn’t have the best search in the world, but it gets the job done. I’ve been a happy customer for over a month now and I can heartily recommend it to everyone. Here’s a &lt;a href="https://www.fastmail.com/gmail-alternative/" dir="ltr"&gt;nice comparison between Fastmail and Gmail&lt;/a&gt;, even if it’s bit biased.&lt;/p&gt;&lt;p dir="ltr"&gt;I won’t write here about the actual migration process from Gmail, as there wasn’t much of it. I just forwarded both my Gmail accounts to my new Fastmail account, and I updated
-many services to use the Fastmail addresses directly. My &lt;code dir="ltr"&gt;batsov.com&lt;/code&gt; domain is tied to a legacy free Google Apps plan, that’s also used by other members of my family, so I couldn’t just move the domain to Fastmail, as I would have done normally. Instead I bought the domains &lt;code dir="ltr"&gt;batsov.net&lt;/code&gt; and &lt;code dir="ltr"&gt;batsov.dev&lt;/code&gt; and decided to gradually make them my primary email addresses. You can now also write to at first name at metaredux dot com.&lt;/p&gt;&lt;p&gt;I’ve also opted not to import my Gmail contacts and mails into Fastmail, even though the process is trivial. I rarely need to check something in the archives and I decided to go for a clean start. Jason Fried and HEY thought me about the value of that. By the way, I’m still going to use HEY as well. Even though the service doesn’t quite match my needs, there’s a certain charm to it that I really like. I’ve been using it mostly as a newsletter reader and to write occasional emails to close friends, like in the pen pal era. You should try this! If nothing else - HEY taught me to favour top posting, instead of inline responses. Seems weird at first, but that’s how real mail works. :-)&lt;/p&gt;&lt;p&gt;We now live at a time where more and more people consider email obsolete and rely mostly on chat apps like Slack, FB Messenger, Whatsapp, Telegram, etc. Many applications claim to be the email killer, but due to their walled garden approaches no one really succeeds in this endeavor. For some reason email has this horrible reputation of something that’s always messy and causes a ton of stress, but I think that’s just a side effect of how most people use (abuse?) email. Email can be a lot of fun, and no stress at all. You just have invest a bit of time in organizing and streamlining your inbox. For me the migration to Fastmail was a great opportunity to do this and I’m truly having a lot of fun with email right now. It’d be cool if some of you shoot me an email or two! :)&lt;/p&gt;&lt;p&gt;Anyways, that’s all from me for now. I’ll go back to having more fun with my new inbox. Keep hacking!&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;P.S.&lt;/strong&gt; Here’s a &lt;a href="https://ref.fm/u26676944" dir="ltr"&gt;Fastmail referral link&lt;/a&gt; that will get you a 10% discount for the first year.&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Damn, that’s 17 years! Almost half my life (I’m 36 as I write this).&amp;nbsp;&lt;a href="https://metaredux.com/posts/2021/07/31/hasta-la-vista-gmail.html#fnref:1" role="doc-backlink" dir="ltr"&gt;↩&lt;/a&gt;&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Sat, 31 Jul 2021 06:13:06 -0500</pubDate></item><item><title>Making Client Certificates Available By Default in Firefox 90</title><link>https://lobste.rs/s/efe2vv</link><description>&lt;div dir="ltr"&gt;
+Fri, 24 Apr 2020 06:34:43 UTC (181 KB)&lt;br dir="ltr"&gt;&lt;/div&gt;</description><pubDate>Sat, 31 Jul 2021 14:07:18 -0500</pubDate></item><item><title>Making Client Certificates Available By Default in Firefox 90</title><link>https://lobste.rs/s/efe2vv</link><description>&lt;div dir="ltr"&gt;
                 &lt;address dir="ltr"&gt;
         Dana Keeler      &lt;/address&gt;
             &lt;time datetime="2021-07-28T12:18:37-07:00" dir="ltr"&gt;July 28, 2021&lt;/time&gt;
@@ -561,236 +561,7 @@ action relay_mail relay host smtp+tls://sendgrid@smtp.sendgrid.net:587 auth &lt;
 # pkg_add rsync
 # syspatch
 # reboot
-&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The latency when working on the $42/year VM hosted in New Jersey was noticeably worse than the $60/year VM hosted in Silicon Valley. However, if you are also frugal, I'm sure you'll agree that's a small price to pay to save $18/year.&lt;/p&gt;&lt;p&gt;After checking that the $42/year VM worked, I switched the DNS A record to point to it instead of the $60/year VM. After the DNS A record TTL expired, I checked and made sure there was no received email on the $60/year VM, then I turned off and deleted it.  I still have the $50 in Vultr credit, which will now last me about 14 months instead of 10.  After the free period expires, this will still be more expensive than the $24/year I was paying previously, but it allows me to write a small script to add an email alias, instead of forcing me to login and mess with a web application. Hopefully prices for VMs will continue to fall, though I expect we will soon be at a point where the cost of the IPv4 address is the majority of the cost of a small VM.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p dir="ltr"&gt;I think this bifurcated setup with a cloud VM receiving email and using Sendgrid's free plan for sending email is the cheapest and simplest option that meets my uncommon needs. It is still more expensive than what I was paying Tuffmail ($42/year instead of $24/year), but I suppose I'll manage.  I am not currently doing any spam filtering on received email, which results in more spam getting through.  That doesn't bother me much, since I can almost always tell what is spam before I open it in &lt;code dir="ltr"&gt;mutt&lt;/code&gt;, and I just delete spam before opening it.  On the plus side, I no longer have to be worried about email being sent to me not arriving because it was marked as spam.  Sendgrid is also a larger email provider than Tuffmail, so I'm guessing my email delivery is better, though that doesn't matter much as I don't send much email.&lt;/p&gt;</description><pubDate>Fri, 30 Jul 2021 14:01:26 -0500</pubDate></item><item><title>Strict memcpy() bounds checking for the kernel</title><link>https://lobste.rs/s/ryfyxu</link><description>&lt;h1&gt;Strict memcpy() bounds checking for the kernel&lt;/h1&gt;&lt;h2&gt;[LWN subscriber-only content]&lt;/h2&gt;&lt;BLOCKQUOTE&gt;&lt;h3&gt;Welcome to LWN.net&lt;/h3&gt;&lt;p dir="ltr"&gt;
-The following subscription-only content has been made available to you 
-by an LWN subscriber.  Thousands of subscribers depend on LWN for the 
-best news from the Linux and free software communities.  If you enjoy this 
-article, please consider &lt;a href="https://lwn.net/subscribe/" dir="ltr"&gt;subscribing to LWN&lt;/a&gt;.  Thank you
-for visiting LWN.net!
-&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;div dir="ltr"&gt;
-           By &lt;b dir="ltr"&gt;Jonathan Corbet&lt;/b&gt;&lt;br dir="ltr"&gt;July 30, 2021
-           &lt;/div&gt;&lt;div dir="ltr"&gt;
-The C programming language is famously prone to memory-safety problems
-that lead to buffer overflows and a seemingly endless stream of security
-vulnerabilities.  But, even in&amp;nbsp;C, it is possible to improve the
-situation in many cases.  One of those is the &lt;tt dir="ltr"&gt;memcpy()&lt;/tt&gt; family of
-functions, which are used to efficiently copy or overwrite blocks of
-memory; with a bit of help from the compiler, those functions can be
-prevented from writing past the end of the
-destination object they are passed.  Enforcing that condition in the kernel
-is harder than one might expect, though, as &lt;a href="https://lwn.net/ml/linux-kernel/20210727205855.411487-1-keescook@chromium.org/" dir="ltr"&gt;this
-massive patch set&lt;/a&gt; from Kees Cook shows.
-&lt;/div&gt;&lt;p&gt;
-Buffer overflows never seem to go away, and they are a constant source of 
-bugs and security problems in the 
-kernel.  That said, hardening techniques have become good enough that many
-types of stack-based overflows can be detected and defended against (by
-killing the system if nothing else).  It is hard to overwrite the stack
-without running over boundaries (which may contain a canary value) in ways
-that make the problem evident.  Heap-based data lacks such boundaries,
-though, making overflows in the heap space harder to detect; as a result,
-attackers tend to find such vulnerabilities attractive.
-&lt;/p&gt;&lt;h4&gt;Fortifying the source&lt;/h4&gt;&lt;p dir="ltr"&gt;
-The kernel's &lt;tt dir="ltr"&gt;FORTIFY_SOURCE&lt;/tt&gt; configuration option turns on a range
-of checks for functions that are commonly implicated in memory problems in
-the heap area (and beyond).
-The &lt;tt dir="ltr"&gt;strcpy()&lt;/tt&gt; family of functions, for example, is fairly
-thoroughly checked when this option is turned on.  There are also checks
-for &lt;tt dir="ltr"&gt;memcpy()&lt;/tt&gt; and friends; consider the fortified version of
-&lt;tt dir="ltr"&gt;memset()&lt;/tt&gt; from &lt;a href="https://elixir.bootlin.com/linux/v5.13.5/source/include/linux/fortify-string.h" dir="ltr"&gt;include/linux/fortify-string.h&lt;/a&gt;
-which, in current kernels, looks like this:
-&lt;/p&gt;&lt;PRE&gt;    __FORTIFY_INLINE void *memset(void *p, int c, __kernel_size_t size)
-    {
-	size_t p_size = __builtin_object_size(p, 0);
-
-	if (__builtin_constant_p(size) &amp;amp;&amp;amp; p_size &amp;lt; size)
-	    __write_overflow();
-	if (p_size &amp;lt; size)
-	    fortify_panic(__func__);
-	return __underlying_memset(p, c, size);
-    }
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-
-This version asks the compiler for the size of the destination object
-(&lt;tt dir="ltr"&gt;p&lt;/tt&gt;).  If the passed-in &lt;tt dir="ltr"&gt;size&lt;/tt&gt; is known at compile time (the
-&lt;tt dir="ltr"&gt;__builtin_constant_p()&lt;/tt&gt; test is true), then the test can be made
-right away, causing compilation to fail if an overflow is detected;
-otherwise the second &lt;tt dir="ltr"&gt;if&lt;/tt&gt; test performs the check at run time.  Note
-that the run-time test will 
-be optimized out by the compiler in cases where the size is known to be
-within bounds.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-So it would seem that the kernel already has bounds checking for these
-functions, but there's a catch.  The second argument to
-&lt;tt dir="ltr"&gt;__builtin_object_size()&lt;/tt&gt; describes &lt;i dir="ltr"&gt;which&lt;/i&gt; object is of
-interest.  This comes into play when, for example, the object of interest
-is embedded within a structure.  If that second argument is zero (as in the
-example above), the return size is the number of bytes to the end of the
-containing structure; setting that argument to one, instead, gives only the
-size of the immediate object itself.  See &lt;a href="https://gcc.gnu.org/onlinedocs/gcc/Object-Size-Checking.html" dir="ltr"&gt;the GCC
-documentation&lt;/a&gt; for more information on &lt;tt dir="ltr"&gt;__builtin_object_size()&lt;/tt&gt;.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-The end result is that the version of &lt;tt dir="ltr"&gt;memset()&lt;/tt&gt; shown above will
-catch attempts to write beyond the end of a structure, but will not catch
-overflows that overwrite structure fields after the intended destination.  That
-leaves a lot of interesting fields for an attacker to step on if they can
-find a way to influence the size passed into those functions.  One might
-think that the obvious thing to do is to change the second argument to
-&lt;tt dir="ltr"&gt;__builtin_object_size()&lt;/tt&gt; to one, thus checking against the correct
-size, but this is the kernel and life is not so simple.
-&lt;/p&gt;&lt;p&gt;
-Setting or copying data across multiple structure fields is, as it turns
-out, a fairly common action in the kernel, and those actions would trigger
-more strict tests in the memory functions.  The result of enabling the
-strict tests would be an unbuildable, unusable kernel; that would certainly
-be secure, but users would still be unimpressed.  Users can be a little
-funny that way.
-&lt;/p&gt;&lt;h4&gt;&lt;tt&gt;memset_after()&lt;/tt&gt;&lt;/h4&gt;&lt;p dir="ltr"&gt;
-One common use case for copying across fields is the "write zeroes from here
-to the end of the structure" operation.  Consider, for example, &lt;a href="https://elixir.bootlin.com/linux/v5.13.5/source/drivers/net/wireless/ath/carl9170/tx.c#L280" dir="ltr"&gt;this
-code&lt;/a&gt; in the AR9170 wireless network driver:
-&lt;/p&gt;&lt;PRE&gt;    memset(&amp;amp;txinfo-&amp;gt;status.ack_signal, 0,
-	   sizeof(struct ieee80211_tx_info) -
-	   offsetof(struct ieee80211_tx_info, status.ack_signal));
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-This code shows a case of clearing to the end of the structure; it also
-shows just how awkward such code can be.  That sort of length arithmetic is
-easy to get wrong, and it's subject to disruption if the layout of the
-structure changes for any reason.  Indeed, the line of code &lt;i dir="ltr"&gt;before&lt;/i&gt;
-the above reads:
-&lt;/p&gt;&lt;PRE&gt;    	BUILD_BUG_ON(offsetof(struct ieee80211_tx_info, status.ack_signal) != 20);
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-This test will cause a build failure if the offset of the first field to
-overwrite is not as expected, but will not catch any changes made after
-that field.  Structure members added after &lt;tt dir="ltr"&gt;ack_signal&lt;/tt&gt; will be
-overwritten by this &lt;tt dir="ltr"&gt;memset()&lt;/tt&gt; call — a fact that may not be obvious
-at the time.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-To clarify this sort of code and to avoid false positives from stricter
-checks on &lt;tt dir="ltr"&gt;memset()&lt;/tt&gt;, the patch set &lt;a href="https://lwn.net/ml/linux-kernel/20210727205855.411487-38-keescook@chromium.org/" dir="ltr"&gt;introduces
-a new macro&lt;/a&gt; for this operation:
-&lt;/p&gt;&lt;PRE&gt;    memset_after(object, value, member);
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-It will cause every byte of &lt;tt dir="ltr"&gt;object&lt;/tt&gt; located after &lt;tt dir="ltr"&gt;member&lt;/tt&gt; to
-be set to &lt;tt dir="ltr"&gt;value&lt;/tt&gt;.  This macro can replace the above code with:
-&lt;/p&gt;&lt;PRE&gt;    memset_after(&amp;amp;txinfo-&amp;gt;status, 0, rates);
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-(The &lt;tt dir="ltr"&gt;ack_signal&lt;/tt&gt; field, being the first to be zeroed, is
-immediately after &lt;tt dir="ltr"&gt;rates&lt;/tt&gt; in this structure).  
-Numerous such cases have been fixed in Cook's patch set.
-&lt;/p&gt;&lt;h4&gt;Grouped structure fields&lt;/h4&gt;&lt;p dir="ltr"&gt;
-There is a more complicated case, though, in which a range of fields within
-a structure is overwritten in a single call.  A number of approaches have
-been used within the kernel to try to do such copies safely; one of those
-is the same sort of &lt;tt dir="ltr"&gt;offsetof()&lt;/tt&gt; arithmetic seen in the case above.
-But there are others.  &lt;a href="https://elixir.bootlin.com/linux/v5.13.5/source/include/linux/skbuff.h#L798" dir="ltr"&gt;Deep
-within the &lt;tt dir="ltr"&gt;sk_buff&lt;/tt&gt; structure&lt;/a&gt; used to represent network packets
-is this field:
-&lt;/p&gt;&lt;PRE&gt;    __u32 headers_start[0];
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-&lt;a href="https://elixir.bootlin.com/linux/v5.13.5/source/include/linux/skbuff.h#L918" dir="ltr"&gt;A
-full 120 lines later&lt;/a&gt; is another zero-length array called
-&lt;tt dir="ltr"&gt;headers_end&lt;/tt&gt;.  Those arrays clearly cannot hold any data of
-interest; instead, they are used with the same sort of offset arithmetic to
-copy a whole set of packet headers in a single operation.  Here, too, there
-is &lt;a href="https://elixir.bootlin.com/linux/v5.13.5/source/net/core/skbuff.c#L974" dir="ltr"&gt;a
-set of build-time checks&lt;/a&gt; to ensure that, at least, all of the relevant
-header fields are located between the two markers.
-&lt;/p&gt;&lt;p&gt;
-Some developers simply add up the lengths of the fields to be written and
-use the result as the length for the memory operation.
-Yet another approach is to define a nested structure to hold the set of
-fields to be copied.  This variant is safer, but it complicates the use of
-those fields (which must be accessed by way of the intermediate structure)
-and tends to lead to pollution of the namespace with macros added to
-minimize those complications.
-&lt;/p&gt;&lt;p dir="ltr"&gt;
-In summary, kernel developers have come up
-with a number of ways of handling cross-field memory operations, but none
-of them are particularly satisfying.
-Cook's patch set brings a new solution (co-authored with Keith Packard) in
-the form of &lt;a href="https://lwn.net/ml/linux-kernel/20210727205855.411487-5-keescook@chromium.org/" dir="ltr"&gt;the
-&lt;tt dir="ltr"&gt;struct_group()&lt;/tt&gt; macro&lt;/a&gt;.  Taking the example from that patch,
-consider a structure like this:
-&lt;/p&gt;&lt;PRE&gt;    struct foo {
-	int one;
-	int two;
-	int three;
-	int four;
-    };
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-Imagine further that the developer wants to copy over fields &lt;tt dir="ltr"&gt;two&lt;/tt&gt; and
-&lt;tt dir="ltr"&gt;three&lt;/tt&gt; with a single &lt;tt dir="ltr"&gt;memcpy()&lt;/tt&gt; call.  This could be formalized
-by declaring the structure this way:
-&lt;/p&gt;&lt;PRE&gt;    struct foo {
-	int one;
-	struct_group(thing,
-		     int two,
-		     int three,
-	);
-	int four;
-    };
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-This macro has the effect of creating a nested structure called
-&lt;tt dir="ltr"&gt;thing&lt;/tt&gt;, which can be used with functions like &lt;tt dir="ltr"&gt;memcpy()&lt;/tt&gt;
-with the strict bounds checks enabled.  The individual fields can still be
-referred to as &lt;tt dir="ltr"&gt;two&lt;/tt&gt; and &lt;tt dir="ltr"&gt;three&lt;/tt&gt;, though, without the need to
-name the nested structure, and without any macro ugliness.  This is
-accomplished this way:
-&lt;/p&gt;&lt;PRE&gt;    #define struct_group_attr(NAME, ATTRS, MEMBERS) \
-	union { \
-	    struct { MEMBERS } ATTRS; \
-	    struct { MEMBERS } ATTRS NAME; \
-	}
-
-    #define struct_group(NAME, MEMBERS)	\
-	struct_group_attr(NAME, /* no attrs */, MEMBERS)
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;
-
-This macro defines an intermediate structure to hold the grouped fields —
-twice; one is anonymous while the other has the given &lt;tt dir="ltr"&gt;NAME&lt;/tt&gt;.  The
-duplicated structures are then overlaid on top of each other within an
-anonymous union.  This bit of trickery  makes it possible to use the field
-names directly while also 
-providing the name for the structure as a whole, which can be used with the
-memory functions.
-&lt;/p&gt;&lt;h4&gt;Toward a harder kernel&lt;/h4&gt;&lt;p dir="ltr"&gt;
-Much of the patch set is devoted to defining these groups within structures
-throughout the kernel, then using the groups for memory operations.  With
-that done, it becomes possible to enable the stricter bounds checks for
-those operations — sort of.  The remaining problem is that this kind of
-cross-field operation is actually kind of hard to find in the code; there
-is not a pattern that can be easily grepped for.  Chances are thus good
-that there are other occurrences in the kernel that have not been found
-yet; as Cook &lt;a href="https://lwn.net/ml/linux-kernel/20210727205855.411487-35-keescook@chromium.org/" dir="ltr"&gt;noted&lt;/a&gt;
-halfway through the patch series, there are over 25,000 &lt;tt dir="ltr"&gt;memcpy()&lt;/tt&gt;
-calls in the kernel.  Crashing the system in response to an unfixed (but
-correct)
-cross-field operation would be seen as rude at best, so warnings will have
-to be issued instead for the indefinite future.
-&lt;/p&gt;&lt;p&gt;
-There should come a time, though, when reports of warnings fall off and the
-community will feel confident enough to halt the system when an
-out-of-bounds copy is detected.  The value of doing so could be
-significant.  Quoting the just-linked patch:
-&lt;/p&gt;&lt;BLOCKQUOTE&gt;
-	With this it's also possible to compare the places where the known
-	11 memcpy() flaw overflows happened against the resulting list of
-	potential new bounds checks, as a measure of potential efficacy of
-	the tightened mitigation. Much to my surprise, horror, and delight,
-	all 11 flaws would have been detected by the newly added run-time
-	bounds checks, making this a distinctly clear mitigation
-	improvement.
-&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
-This mitigation seems worth having, but first the patches must find their
-way into the mainline kernel.  Security-related work often has a rough path
-into the kernel, though the situation has gotten better over the years.  In
-this case, at least, one frequent complaint (impact on performance) should
-not be an issue; the cost of an extra length check in the cases where the
-answer isn't known at compile time is tiny.  But the patch set is still
-large and wide-ranging; chances are that there will be some discussions to
-get through before it can be merged.  The completion of that process should
-herald the end of another type of unpleasant security bugs.&lt;br clear="all" dir="ltr"&gt;&lt;/p&gt;</description><pubDate>Sat, 31 Jul 2021 02:36:50 -0500</pubDate></item><item><title>; echo "Shell Injection"</title><link>https://lobste.rs/s/v0zrtr</link><description>&lt;div&gt;Jul 30, 2021&lt;/div&gt;&lt;p dir="ltr"&gt;This is an introductory article about &lt;a href="https://en.wikipedia.org/wiki/Code_injection#Shell_injection" dir="ltr"&gt;shell injection&lt;/a&gt;, a security vulnerability allowing an attacker to execute arbitrary code on the user’s machine.
+&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The latency when working on the $42/year VM hosted in New Jersey was noticeably worse than the $60/year VM hosted in Silicon Valley. However, if you are also frugal, I'm sure you'll agree that's a small price to pay to save $18/year.&lt;/p&gt;&lt;p&gt;After checking that the $42/year VM worked, I switched the DNS A record to point to it instead of the $60/year VM. After the DNS A record TTL expired, I checked and made sure there was no received email on the $60/year VM, then I turned off and deleted it.  I still have the $50 in Vultr credit, which will now last me about 14 months instead of 10.  After the free period expires, this will still be more expensive than the $24/year I was paying previously, but it allows me to write a small script to add an email alias, instead of forcing me to login and mess with a web application. Hopefully prices for VMs will continue to fall, though I expect we will soon be at a point where the cost of the IPv4 address is the majority of the cost of a small VM.&lt;/p&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p dir="ltr"&gt;I think this bifurcated setup with a cloud VM receiving email and using Sendgrid's free plan for sending email is the cheapest and simplest option that meets my uncommon needs. It is still more expensive than what I was paying Tuffmail ($42/year instead of $24/year), but I suppose I'll manage.  I am not currently doing any spam filtering on received email, which results in more spam getting through.  That doesn't bother me much, since I can almost always tell what is spam before I open it in &lt;code dir="ltr"&gt;mutt&lt;/code&gt;, and I just delete spam before opening it.  On the plus side, I no longer have to be worried about email being sent to me not arriving because it was marked as spam.  Sendgrid is also a larger email provider than Tuffmail, so I'm guessing my email delivery is better, though that doesn't matter much as I don't send much email.&lt;/p&gt;</description><pubDate>Fri, 30 Jul 2021 14:01:26 -0500</pubDate></item><item><title>; echo "Shell Injection"</title><link>https://lobste.rs/s/v0zrtr</link><description>&lt;div&gt;Jul 30, 2021&lt;/div&gt;&lt;p dir="ltr"&gt;This is an introductory article about &lt;a href="https://en.wikipedia.org/wiki/Code_injection#Shell_injection" dir="ltr"&gt;shell injection&lt;/a&gt;, a security vulnerability allowing an attacker to execute arbitrary code on the user’s machine.
 This is a well-studied problem, and there are simple and efficient solutions to it.
 It’s relatively easy to design library API in such a way as to shield the application developer from the risk of shell injections.&lt;/p&gt;&lt;p dir="ltr"&gt;There are two reasons why I am writing this post.
 First, this year I’ve pointed out this issue in &lt;a href="https://old.reddit.com/r/rust/comments/ls096k/rust_cmd_lib_v010_to_write_shellscript_like_tasks/goqlv3m/" dir="ltr"&gt;three&lt;/a&gt; &lt;a href="https://lobste.rs/s/9yu5sl/after_discussion_here_i_created_lib_for#c_ckkova" dir="ltr"&gt;different&lt;/a&gt; &lt;a href="https://lobste.rs/s/p1hict/zxpy_tool_for_shell_scripting_python#c_zuaapx" dir="ltr"&gt;libraries&lt;/a&gt;.
@@ -1038,7 +809,285 @@ The wording is perplexing, but seems that it struggles to explain to me that pas
 This is exactly what I want!
 The absence of any kind of a security note on both APIs is concerning, but oh well.&lt;/p&gt;&lt;p&gt;So, I refactored the code to use this second constructor, and, 🥁 🥁 🥁, it still had the exact same behavior!
 Turns out that this API takes an array of arguments, and just concatenates them, unless I explicitly say that each argument needs to be escaped.&lt;/p&gt;&lt;p dir="ltr"&gt;And &lt;em dir="ltr"&gt;this&lt;/em&gt; is what I am complaining about — that the API looks like it is safe for an untrusted user input, while it is not.
-This is misuse resistance resistance.&lt;/p&gt;&lt;p&gt;That’s all, thanks for reading!&lt;/p&gt;</description><pubDate>Fri, 30 Jul 2021 16:28:42 -0500</pubDate></item><item><title>The journey to controlling external monitors on M1 Macs</title><link>https://lobste.rs/s/2zajeu</link><description>&lt;h4&gt;How the transition to Apple Silicon made all monitor-controlling apps useless overnight, and how Lunar got past that&lt;/h4&gt;&lt;p&gt;July 16, 2021&lt;/p&gt;&lt;p dir="ltr"&gt;One lazy evening in November 2020, I watched how Tim Cook announced a &lt;strong dir="ltr"&gt;fanless&lt;/strong&gt; MacBook Air with a CPU faster than the latest 16 inch MacBook, while my work-provided 15 inch 2019 MacBook Pro was slowly frying my lap and annoying my wife with its constant fan noise.&lt;/p&gt;&lt;p&gt;I had to get my hands on that machine. I also had the excuse that users of my app couldn’t control their monitor brightness anymore, so I could justify the expense easily in my head.&lt;/p&gt;&lt;p&gt;So I got it! With long delays and convoluted delivery schemes because living in a country like Romania means incredibly high prices on everything Apple.&lt;/p&gt;&lt;p&gt;This already starts to sound like those happy stories about seeing how awesome M1 is, but it’s far from that.&lt;/p&gt;&lt;p&gt;This is a story about how getting an M1 made me quit my job, bang my head against numerous walls to figure out monitor support for it and turn an open source app into something that I can really live off without needing a “real job”.&lt;/p&gt;&lt;h2&gt;&lt;a href="https://alinpanaitiu.com/blog/journey-to-ddc-on-m1-macs/#adjusting-monitor-brightness-on-intel-macs"&gt;#&lt;/a&gt;&lt;/h2&gt;&lt;h2&gt; Adjusting monitor brightness on Intel Macs&lt;/h2&gt;&lt;p dir="ltr"&gt;I develop an app called &lt;a href="https://lunar.fyi/" dir="ltr"&gt;Lunar&lt;/a&gt; that can adjust the real brightness, contrast and volume of monitors by sending &lt;a href="https://en.wikipedia.org/wiki/Display_Data_Channel" dir="ltr"&gt;DDC&lt;/a&gt; commands through the Mac GPU.&lt;/p&gt;&lt;picture&gt;
+This is misuse resistance resistance.&lt;/p&gt;&lt;p&gt;That’s all, thanks for reading!&lt;/p&gt;</description><pubDate>Fri, 30 Jul 2021 16:28:42 -0500</pubDate></item><item><title>Strict memcpy() bounds checking for the kernel</title><link>https://lobste.rs/s/ryfyxu</link><description>&lt;h1&gt;Strict memcpy() bounds checking for the kernel&lt;/h1&gt;&lt;h2&gt;[LWN subscriber-only content]&lt;/h2&gt;&lt;BLOCKQUOTE&gt;&lt;h3&gt;Welcome to LWN.net&lt;/h3&gt;&lt;p dir="ltr"&gt;
+The following subscription-only content has been made available to you 
+by an LWN subscriber.  Thousands of subscribers depend on LWN for the 
+best news from the Linux and free software communities.  If you enjoy this 
+article, please consider &lt;a href="https://lwn.net/subscribe/" dir="ltr"&gt;subscribing to LWN&lt;/a&gt;.  Thank you
+for visiting LWN.net!
+&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;div dir="ltr"&gt;
+           By &lt;b dir="ltr"&gt;Jonathan Corbet&lt;/b&gt;&lt;br dir="ltr"&gt;July 30, 2021
+           &lt;/div&gt;&lt;div dir="ltr"&gt;
+The C programming language is famously prone to memory-safety problems
+that lead to buffer overflows and a seemingly endless stream of security
+vulnerabilities.  But, even in&amp;nbsp;C, it is possible to improve the
+situation in many cases.  One of those is the &lt;tt dir="ltr"&gt;memcpy()&lt;/tt&gt; family of
+functions, which are used to efficiently copy or overwrite blocks of
+memory; with a bit of help from the compiler, those functions can be
+prevented from writing past the end of the
+destination object they are passed.  Enforcing that condition in the kernel
+is harder than one might expect, though, as &lt;a href="https://lwn.net/ml/linux-kernel/20210727205855.411487-1-keescook@chromium.org/" dir="ltr"&gt;this
+massive patch set&lt;/a&gt; from Kees Cook shows.
+&lt;/div&gt;&lt;p&gt;
+Buffer overflows never seem to go away, and they are a constant source of 
+bugs and security problems in the 
+kernel.  That said, hardening techniques have become good enough that many
+types of stack-based overflows can be detected and defended against (by
+killing the system if nothing else).  It is hard to overwrite the stack
+without running over boundaries (which may contain a canary value) in ways
+that make the problem evident.  Heap-based data lacks such boundaries,
+though, making overflows in the heap space harder to detect; as a result,
+attackers tend to find such vulnerabilities attractive.
+&lt;/p&gt;&lt;h4&gt;Fortifying the source&lt;/h4&gt;&lt;p dir="ltr"&gt;
+The kernel's &lt;tt dir="ltr"&gt;FORTIFY_SOURCE&lt;/tt&gt; configuration option turns on a range
+of checks for functions that are commonly implicated in memory problems in
+the heap area (and beyond).
+The &lt;tt dir="ltr"&gt;strcpy()&lt;/tt&gt; family of functions, for example, is fairly
+thoroughly checked when this option is turned on.  There are also checks
+for &lt;tt dir="ltr"&gt;memcpy()&lt;/tt&gt; and friends; consider the fortified version of
+&lt;tt dir="ltr"&gt;memset()&lt;/tt&gt; from &lt;a href="https://elixir.bootlin.com/linux/v5.13.5/source/include/linux/fortify-string.h" dir="ltr"&gt;include/linux/fortify-string.h&lt;/a&gt;
+which, in current kernels, looks like this:
+&lt;/p&gt;&lt;PRE&gt;    __FORTIFY_INLINE void *memset(void *p, int c, __kernel_size_t size)
+    {
+	size_t p_size = __builtin_object_size(p, 0);
+
+	if (__builtin_constant_p(size) &amp;amp;&amp;amp; p_size &amp;lt; size)
+	    __write_overflow();
+	if (p_size &amp;lt; size)
+	    fortify_panic(__func__);
+	return __underlying_memset(p, c, size);
+    }
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+
+This version asks the compiler for the size of the destination object
+(&lt;tt dir="ltr"&gt;p&lt;/tt&gt;).  If the passed-in &lt;tt dir="ltr"&gt;size&lt;/tt&gt; is known at compile time (the
+&lt;tt dir="ltr"&gt;__builtin_constant_p()&lt;/tt&gt; test is true), then the test can be made
+right away, causing compilation to fail if an overflow is detected;
+otherwise the second &lt;tt dir="ltr"&gt;if&lt;/tt&gt; test performs the check at run time.  Note
+that the run-time test will 
+be optimized out by the compiler in cases where the size is known to be
+within bounds.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+So it would seem that the kernel already has bounds checking for these
+functions, but there's a catch.  The second argument to
+&lt;tt dir="ltr"&gt;__builtin_object_size()&lt;/tt&gt; describes &lt;i dir="ltr"&gt;which&lt;/i&gt; object is of
+interest.  This comes into play when, for example, the object of interest
+is embedded within a structure.  If that second argument is zero (as in the
+example above), the return size is the number of bytes to the end of the
+containing structure; setting that argument to one, instead, gives only the
+size of the immediate object itself.  See &lt;a href="https://gcc.gnu.org/onlinedocs/gcc/Object-Size-Checking.html" dir="ltr"&gt;the GCC
+documentation&lt;/a&gt; for more information on &lt;tt dir="ltr"&gt;__builtin_object_size()&lt;/tt&gt;.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+The end result is that the version of &lt;tt dir="ltr"&gt;memset()&lt;/tt&gt; shown above will
+catch attempts to write beyond the end of a structure, but will not catch
+overflows that overwrite structure fields after the intended destination.  That
+leaves a lot of interesting fields for an attacker to step on if they can
+find a way to influence the size passed into those functions.  One might
+think that the obvious thing to do is to change the second argument to
+&lt;tt dir="ltr"&gt;__builtin_object_size()&lt;/tt&gt; to one, thus checking against the correct
+size, but this is the kernel and life is not so simple.
+&lt;/p&gt;&lt;p&gt;
+Setting or copying data across multiple structure fields is, as it turns
+out, a fairly common action in the kernel, and those actions would trigger
+more strict tests in the memory functions.  The result of enabling the
+strict tests would be an unbuildable, unusable kernel; that would certainly
+be secure, but users would still be unimpressed.  Users can be a little
+funny that way.
+&lt;/p&gt;&lt;h4&gt;&lt;tt&gt;memset_after()&lt;/tt&gt;&lt;/h4&gt;&lt;p dir="ltr"&gt;
+One common use case for copying across fields is the "write zeroes from here
+to the end of the structure" operation.  Consider, for example, &lt;a href="https://elixir.bootlin.com/linux/v5.13.5/source/drivers/net/wireless/ath/carl9170/tx.c#L280" dir="ltr"&gt;this
+code&lt;/a&gt; in the AR9170 wireless network driver:
+&lt;/p&gt;&lt;PRE&gt;    memset(&amp;amp;txinfo-&amp;gt;status.ack_signal, 0,
+	   sizeof(struct ieee80211_tx_info) -
+	   offsetof(struct ieee80211_tx_info, status.ack_signal));
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+This code shows a case of clearing to the end of the structure; it also
+shows just how awkward such code can be.  That sort of length arithmetic is
+easy to get wrong, and it's subject to disruption if the layout of the
+structure changes for any reason.  Indeed, the line of code &lt;i dir="ltr"&gt;before&lt;/i&gt;
+the above reads:
+&lt;/p&gt;&lt;PRE&gt;    	BUILD_BUG_ON(offsetof(struct ieee80211_tx_info, status.ack_signal) != 20);
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+This test will cause a build failure if the offset of the first field to
+overwrite is not as expected, but will not catch any changes made after
+that field.  Structure members added after &lt;tt dir="ltr"&gt;ack_signal&lt;/tt&gt; will be
+overwritten by this &lt;tt dir="ltr"&gt;memset()&lt;/tt&gt; call — a fact that may not be obvious
+at the time.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+To clarify this sort of code and to avoid false positives from stricter
+checks on &lt;tt dir="ltr"&gt;memset()&lt;/tt&gt;, the patch set &lt;a href="https://lwn.net/ml/linux-kernel/20210727205855.411487-38-keescook@chromium.org/" dir="ltr"&gt;introduces
+a new macro&lt;/a&gt; for this operation:
+&lt;/p&gt;&lt;PRE&gt;    memset_after(object, value, member);
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+It will cause every byte of &lt;tt dir="ltr"&gt;object&lt;/tt&gt; located after &lt;tt dir="ltr"&gt;member&lt;/tt&gt; to
+be set to &lt;tt dir="ltr"&gt;value&lt;/tt&gt;.  This macro can replace the above code with:
+&lt;/p&gt;&lt;PRE&gt;    memset_after(&amp;amp;txinfo-&amp;gt;status, 0, rates);
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+(The &lt;tt dir="ltr"&gt;ack_signal&lt;/tt&gt; field, being the first to be zeroed, is
+immediately after &lt;tt dir="ltr"&gt;rates&lt;/tt&gt; in this structure).  
+Numerous such cases have been fixed in Cook's patch set.
+&lt;/p&gt;&lt;h4&gt;Grouped structure fields&lt;/h4&gt;&lt;p dir="ltr"&gt;
+There is a more complicated case, though, in which a range of fields within
+a structure is overwritten in a single call.  A number of approaches have
+been used within the kernel to try to do such copies safely; one of those
+is the same sort of &lt;tt dir="ltr"&gt;offsetof()&lt;/tt&gt; arithmetic seen in the case above.
+But there are others.  &lt;a href="https://elixir.bootlin.com/linux/v5.13.5/source/include/linux/skbuff.h#L798" dir="ltr"&gt;Deep
+within the &lt;tt dir="ltr"&gt;sk_buff&lt;/tt&gt; structure&lt;/a&gt; used to represent network packets
+is this field:
+&lt;/p&gt;&lt;PRE&gt;    __u32 headers_start[0];
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+&lt;a href="https://elixir.bootlin.com/linux/v5.13.5/source/include/linux/skbuff.h#L918" dir="ltr"&gt;A
+full 120 lines later&lt;/a&gt; is another zero-length array called
+&lt;tt dir="ltr"&gt;headers_end&lt;/tt&gt;.  Those arrays clearly cannot hold any data of
+interest; instead, they are used with the same sort of offset arithmetic to
+copy a whole set of packet headers in a single operation.  Here, too, there
+is &lt;a href="https://elixir.bootlin.com/linux/v5.13.5/source/net/core/skbuff.c#L974" dir="ltr"&gt;a
+set of build-time checks&lt;/a&gt; to ensure that, at least, all of the relevant
+header fields are located between the two markers.
+&lt;/p&gt;&lt;p&gt;
+Some developers simply add up the lengths of the fields to be written and
+use the result as the length for the memory operation.
+Yet another approach is to define a nested structure to hold the set of
+fields to be copied.  This variant is safer, but it complicates the use of
+those fields (which must be accessed by way of the intermediate structure)
+and tends to lead to pollution of the namespace with macros added to
+minimize those complications.
+&lt;/p&gt;&lt;p dir="ltr"&gt;
+In summary, kernel developers have come up
+with a number of ways of handling cross-field memory operations, but none
+of them are particularly satisfying.
+Cook's patch set brings a new solution (co-authored with Keith Packard) in
+the form of &lt;a href="https://lwn.net/ml/linux-kernel/20210727205855.411487-5-keescook@chromium.org/" dir="ltr"&gt;the
+&lt;tt dir="ltr"&gt;struct_group()&lt;/tt&gt; macro&lt;/a&gt;.  Taking the example from that patch,
+consider a structure like this:
+&lt;/p&gt;&lt;PRE&gt;    struct foo {
+	int one;
+	int two;
+	int three;
+	int four;
+    };
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+Imagine further that the developer wants to copy over fields &lt;tt dir="ltr"&gt;two&lt;/tt&gt; and
+&lt;tt dir="ltr"&gt;three&lt;/tt&gt; with a single &lt;tt dir="ltr"&gt;memcpy()&lt;/tt&gt; call.  This could be formalized
+by declaring the structure this way:
+&lt;/p&gt;&lt;PRE&gt;    struct foo {
+	int one;
+	struct_group(thing,
+		     int two,
+		     int three,
+	);
+	int four;
+    };
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+This macro has the effect of creating a nested structure called
+&lt;tt dir="ltr"&gt;thing&lt;/tt&gt;, which can be used with functions like &lt;tt dir="ltr"&gt;memcpy()&lt;/tt&gt;
+with the strict bounds checks enabled.  The individual fields can still be
+referred to as &lt;tt dir="ltr"&gt;two&lt;/tt&gt; and &lt;tt dir="ltr"&gt;three&lt;/tt&gt;, though, without the need to
+name the nested structure, and without any macro ugliness.  This is
+accomplished this way:
+&lt;/p&gt;&lt;PRE&gt;    #define struct_group_attr(NAME, ATTRS, MEMBERS) \
+	union { \
+	    struct { MEMBERS } ATTRS; \
+	    struct { MEMBERS } ATTRS NAME; \
+	}
+
+    #define struct_group(NAME, MEMBERS)	\
+	struct_group_attr(NAME, /* no attrs */, MEMBERS)
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;
+
+This macro defines an intermediate structure to hold the grouped fields —
+twice; one is anonymous while the other has the given &lt;tt dir="ltr"&gt;NAME&lt;/tt&gt;.  The
+duplicated structures are then overlaid on top of each other within an
+anonymous union.  This bit of trickery  makes it possible to use the field
+names directly while also 
+providing the name for the structure as a whole, which can be used with the
+memory functions.
+&lt;/p&gt;&lt;h4&gt;Toward a harder kernel&lt;/h4&gt;&lt;p dir="ltr"&gt;
+Much of the patch set is devoted to defining these groups within structures
+throughout the kernel, then using the groups for memory operations.  With
+that done, it becomes possible to enable the stricter bounds checks for
+those operations — sort of.  The remaining problem is that this kind of
+cross-field operation is actually kind of hard to find in the code; there
+is not a pattern that can be easily grepped for.  Chances are thus good
+that there are other occurrences in the kernel that have not been found
+yet; as Cook &lt;a href="https://lwn.net/ml/linux-kernel/20210727205855.411487-35-keescook@chromium.org/" dir="ltr"&gt;noted&lt;/a&gt;
+halfway through the patch series, there are over 25,000 &lt;tt dir="ltr"&gt;memcpy()&lt;/tt&gt;
+calls in the kernel.  Crashing the system in response to an unfixed (but
+correct)
+cross-field operation would be seen as rude at best, so warnings will have
+to be issued instead for the indefinite future.
+&lt;/p&gt;&lt;p&gt;
+There should come a time, though, when reports of warnings fall off and the
+community will feel confident enough to halt the system when an
+out-of-bounds copy is detected.  The value of doing so could be
+significant.  Quoting the just-linked patch:
+&lt;/p&gt;&lt;BLOCKQUOTE&gt;
+	With this it's also possible to compare the places where the known
+	11 memcpy() flaw overflows happened against the resulting list of
+	potential new bounds checks, as a measure of potential efficacy of
+	the tightened mitigation. Much to my surprise, horror, and delight,
+	all 11 flaws would have been detected by the newly added run-time
+	bounds checks, making this a distinctly clear mitigation
+	improvement.
+&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;
+This mitigation seems worth having, but first the patches must find their
+way into the mainline kernel.  Security-related work often has a rough path
+into the kernel, though the situation has gotten better over the years.  In
+this case, at least, one frequent complaint (impact on performance) should
+not be an issue; the cost of an extra length check in the cases where the
+answer isn't known at compile time is tiny.  But the patch set is still
+large and wide-ranging; chances are that there will be some discussions to
+get through before it can be merged.  The completion of that process should
+herald the end of another type of unpleasant security bugs.&lt;br clear="all" dir="ltr"&gt;&lt;/p&gt;</description><pubDate>Sat, 31 Jul 2021 02:36:50 -0500</pubDate></item><item><title>Learning that you can use unions in C for grouping things into namespaces</title><link>https://lobste.rs/s/yyrdjw</link><description>&lt;h2&gt;Learning that you can use unions in C for grouping things into namespaces&lt;/h2&gt;&lt;div&gt;&lt;small&gt;July 31, 2021&lt;/small&gt;&lt;/div&gt;&lt;p dir="ltr"&gt;I've done a reasonable amount of programming in C and so I like to
+think that I know it reasonably well. But still, every so often I
+learn a new C trick and in the process learn that I didn't know C
+quite as well as I thought. Today's trick is using C unions to group
+&lt;code dir="ltr"&gt;struct&lt;/code&gt; fields together, which I learned about through &lt;a href="https://lwn.net/SubscriberLink/864521/d704bdcced0c5c60/" dir="ltr"&gt;this LWN
+article&lt;/a&gt;
+(&lt;a href="https://lobste.rs/s/ryfyxu/strict_memcpy_bounds_checking_for_kernel" dir="ltr"&gt;via&lt;/a&gt;).&lt;/p&gt;&lt;p dir="ltr"&gt;Suppose that you have a &lt;code dir="ltr"&gt;struct&lt;/code&gt; with a bunch of fields, and you
+want to deal with some of them all together at once under a single
+name; perhaps you want to conveniently copy them as a block through
+struct assignment. However, you also want to keep simple field
+access and for people using your &lt;code dir="ltr"&gt;struct&lt;/code&gt; to not have to know that
+these fields in particular are special (among other things, this
+might keep the grouping from leaking into your API). The traditional
+old school C approach to this is a sub-structure with &lt;code dir="ltr"&gt;#define&lt;/code&gt;s on
+top:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;PRE&gt;struct a {
+  int field1;
+  struct sub {
+    int field_2;
+    int field_3;
+  };
+};
+
+#define field2 sub.field_2
+#define field2 sub.field_3
+&lt;/PRE&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;One of the problems with this is the &lt;code dir="ltr"&gt;#define&lt;/code&gt;s, which have very
+much fallen out of favour as a way of renaming fields.&lt;/p&gt;&lt;p dir="ltr"&gt;It turns out that modern C lets you do better than this by abusing
+unions for namespace purposes. What you do is that you embed two
+identical sub-&lt;code dir="ltr"&gt;struct&lt;/code&gt;s inside an anonymous union, with the same
+fields in each, and give one sub-&lt;code dir="ltr"&gt;struct&lt;/code&gt; a name and keep the other
+anonymous. The anonymous sub-struct inside the anonymous union lets
+you access its fields without any additional levels of names. The
+non-anonymous &lt;code dir="ltr"&gt;struct&lt;/code&gt; lets you refer to the whole thing by name.&lt;/p&gt;&lt;p&gt;Like so:&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;PRE&gt;struct a {
+  int field1;
+  union {
+    struct {
+      int field2;
+      int field3;
+    };
+    struct {
+      int field2;
+      int field3;
+    } sub;
+  };
+};
+&lt;/PRE&gt;&lt;/BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;You can access both &lt;code dir="ltr"&gt;a.field2&lt;/code&gt; and &lt;code dir="ltr"&gt;a.sub&lt;/code&gt;, and &lt;code dir="ltr"&gt;a.field2&lt;/code&gt; is the
+same as &lt;code dir="ltr"&gt;a.sub.field2&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Naturally people create &lt;code dir="ltr"&gt;#define&lt;/code&gt; macros to automate creating this
+structure so that all fields stay in sync between the two &lt;code dir="ltr"&gt;struct&lt;/code&gt;s
+inside the union. Otherwise this "clever" setup is rather fragile.&lt;/p&gt;&lt;p&gt;(I think this may be a well known thing in the modern C community,
+but I'm out of touch with modern C for various reasons, especially
+perverse modern C. This is definitely perverse.)&lt;/p&gt;</description><pubDate>Sat, 31 Jul 2021 20:40:32 -0500</pubDate></item><item><title>The journey to controlling external monitors on M1 Macs</title><link>https://lobste.rs/s/2zajeu</link><description>&lt;h4&gt;How the transition to Apple Silicon made all monitor-controlling apps useless overnight, and how Lunar got past that&lt;/h4&gt;&lt;p&gt;July 16, 2021&lt;/p&gt;&lt;p dir="ltr"&gt;One lazy evening in November 2020, I watched how Tim Cook announced a &lt;strong dir="ltr"&gt;fanless&lt;/strong&gt; MacBook Air with a CPU faster than the latest 16 inch MacBook, while my work-provided 15 inch 2019 MacBook Pro was slowly frying my lap and annoying my wife with its constant fan noise.&lt;/p&gt;&lt;p&gt;I had to get my hands on that machine. I also had the excuse that users of my app couldn’t control their monitor brightness anymore, so I could justify the expense easily in my head.&lt;/p&gt;&lt;p&gt;So I got it! With long delays and convoluted delivery schemes because living in a country like Romania means incredibly high prices on everything Apple.&lt;/p&gt;&lt;p&gt;This already starts to sound like those happy stories about seeing how awesome M1 is, but it’s far from that.&lt;/p&gt;&lt;p&gt;This is a story about how getting an M1 made me quit my job, bang my head against numerous walls to figure out monitor support for it and turn an open source app into something that I can really live off without needing a “real job”.&lt;/p&gt;&lt;h2&gt;&lt;a href="https://alinpanaitiu.com/blog/journey-to-ddc-on-m1-macs/#adjusting-monitor-brightness-on-intel-macs"&gt;#&lt;/a&gt;&lt;/h2&gt;&lt;h2&gt; Adjusting monitor brightness on Intel Macs&lt;/h2&gt;&lt;p dir="ltr"&gt;I develop an app called &lt;a href="https://lunar.fyi/" dir="ltr"&gt;Lunar&lt;/a&gt; that can adjust the real brightness, contrast and volume of monitors by sending &lt;a href="https://en.wikipedia.org/wiki/Display_Data_Channel" dir="ltr"&gt;DDC&lt;/a&gt; commands through the Mac GPU.&lt;/p&gt;&lt;picture&gt;
   
     
     
@@ -1635,345 +1684,4 @@ fails to find a nearby step function.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;img alt=
 
 			&lt;p&gt;Is there any hope of some one deriving the Wallace product for pi the way Wallace derived it, not using any mathematics that came after him?  And without skipping any steps?  In simple English.  Please help.    i have never seen such a proof. The derivation Wallace gives in the 17th century is way above my head.&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;img alt="" src="https://1.gravatar.com/avatar/40fcbaae5e8a261b2ab262f1a4dd6871?s=32&amp;amp;d=identicon&amp;amp;r=G" height="32" width="32"&gt;			&lt;cite dir="ltr"&gt;mezzomare&lt;/cite&gt; Says:						&lt;br dir="ltr"&gt;
 
-			&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Sat, 31 Jul 2021 04:41:27 -0500</pubDate></item><item><title>The Hardest Problem in Type Theory [Uniqueness of Identity Proofs]</title><link>https://www.youtube.com/watch?v=m_PecfbEWik</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/mepre5/hardest_problem_type_theory_uniqueness"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Fri, 30 Jul 2021 17:30:16 -0500</pubDate></item><item><title>Awesome Unstable Rust Features</title><link>https://lobste.rs/s/do5ozt</link><description>&lt;h1&gt;Introduction&lt;/h1&gt;&lt;p&gt;This article describes several unstable Rust compiler features.
-It is intended to explain the basics of these features without diving into too much detail.&lt;/p&gt;&lt;h2&gt;What is unstable Rust?&lt;/h2&gt;&lt;p&gt;Rust releases come in three channels; stable, beta and nightly.&lt;/p&gt;&lt;p&gt;Not only does the nightly compiler come out every day, but it also is the only compiler that allows you to unlock unstable Rust features.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;This article discusses unstable compiler features. Unstable library features are another topic for another day.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h2&gt;Why use unstable features&lt;/h2&gt;&lt;p&gt;Unstable Rust can enable you to write API's that you could not express in stable Rust. Unstable features are used within both the compiler and standard library for that very reason.&lt;/p&gt;&lt;p&gt;Using unstable features always comes with some risk.
-They can often behave in unexpected ways, sometimes even breaking Rust's memory safety guarantees and resulting in undefined behaviour.
-Parts of features can be well developed while other parts left undeveloped.&lt;/p&gt;&lt;p dir="ltr"&gt;It is not uncommon for a nightly compiler using unstable features, to hit an "internal compiler error" often called an &lt;a href="https://github.com/rust-lang/rust/labels/I-ICE" dir="ltr"&gt;ICE&lt;/a&gt;.
-This happens when, during compilation, the compiler panics.
-This could be due to data and queries becoming malformed by incomplete features or even just hitting a &lt;code dir="ltr"&gt;todo!&lt;/code&gt; on part of a feature that has not been worked on yet.
-If you run into an ICE it is often helpful to check if the issue is known about and if it is not, to report it to the &lt;a href="https://github.com/rust-lang/rust/issues" dir="ltr"&gt;bug tracker&lt;/a&gt;. &lt;/p&gt;&lt;p&gt;Rust provides no guarantee that it will continue to support its unstable features into the future.
-As Rust developers, we are spoilt with excellent backwards compatibility and stability.
-When unstable features are enabled, all of those guarantees are thrown out.
-What works today may work very differently tomorrow.&lt;/p&gt;&lt;p&gt;I decided to look into unstable features not because I need them to solve a particular problem.
-I sought them out because I thought they were fun.
-Using unstable features for me was an interesting way of getting more involved in the development process of the language itself.&lt;/p&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;A comprehensive list of unstable features can be found in the  &lt;a href="https://github.com/rust-lang/rust/blob/135ccbaca86ed4b9c0efaf0cd31442eae57ffad7/src/librustc_feature/active.rs#L83-L530" dir="ltr"&gt;compilers source code&lt;/a&gt;.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h2&gt;Enabling unstable features&lt;/h2&gt;&lt;p&gt;To start using unstable features the first thing you'll need to do is install a nightly toolchain by running the command:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;&lt;span dir="ltr"&gt;rustup&lt;/span&gt;&lt;span dir="ltr"&gt; toolchain install nightly
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;To use the nightly-toolchain run commands with the &lt;code dir="ltr"&gt;+nightly&lt;/code&gt; modifier. &lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash"&gt;&lt;span&gt;&amp;lt;rust-command&amp;gt; +nightly &amp;lt;args&amp;gt;
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;For example:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;&lt;span dir="ltr"&gt;cargo&lt;/span&gt;&lt;span dir="ltr"&gt; +nightly run
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Alternatively, you can change your default compiler to nightly so that you won't need to use the &lt;code dir="ltr"&gt;+nightly&lt;/code&gt; modifier.
-I've often done this as I haven't found the nightly compiler to be too unstable, even for my projects that also compile fine on stable.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="bash" dir="ltr"&gt;&lt;span dir="ltr"&gt;rustup&lt;/span&gt;&lt;span dir="ltr"&gt; default nightly
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Once you are using the nightly compiler you can just start using unstable features.
-Let's give it a go.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;span dir="ltr"&gt;() {
-    &lt;/span&gt;&lt;span dir="ltr"&gt;let&lt;/span&gt;&lt;span dir="ltr"&gt; my_box = box &lt;/span&gt;&lt;span dir="ltr"&gt;5&lt;/span&gt;&lt;span dir="ltr"&gt;;
-}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Which results in this complier error:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;error[&lt;/span&gt;&lt;span dir="ltr"&gt;E0658&lt;/span&gt;&lt;span dir="ltr"&gt;]: box expression syntax is experimental; you can call `Box::new` instead
- --&amp;gt; src/main.rs:&lt;/span&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;18
-  &lt;/span&gt;&lt;span dir="ltr"&gt;|
-&lt;/span&gt;&lt;span dir="ltr"&gt;2 &lt;/span&gt;&lt;span dir="ltr"&gt;|     &lt;/span&gt;&lt;span dir="ltr"&gt;let&lt;/span&gt;&lt;span dir="ltr"&gt; my_box = box &lt;/span&gt;&lt;span dir="ltr"&gt;5&lt;/span&gt;&lt;span dir="ltr"&gt;;
-  |                  ^^^^^
-  |
-  = note: see issue #&lt;/span&gt;&lt;span dir="ltr"&gt;49733 &lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;https:&lt;/span&gt;&lt;span dir="ltr"&gt;//github.com/rust-lang/rust/issues/49733&amp;gt; for more information
-  &lt;/span&gt;&lt;span dir="ltr"&gt;= help: add `#![&lt;/span&gt;&lt;span dir="ltr"&gt;feature&lt;/span&gt;&lt;span dir="ltr"&gt;(box_syntax)]` to the &lt;/span&gt;&lt;span dir="ltr"&gt;crate&lt;/span&gt;&lt;span dir="ltr"&gt; attributes to enable
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;As is so often the case in Rust the &lt;code dir="ltr"&gt;help&lt;/code&gt; message tells us exactly what we need to do.
-We need to enable the feature using &lt;code dir="ltr"&gt;#![feature(box_syntax)]&lt;/code&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;#![&lt;/span&gt;&lt;span dir="ltr"&gt;feature&lt;/span&gt;&lt;span dir="ltr"&gt;(box_syntax)]
-&lt;/span&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;span dir="ltr"&gt;() {
-    &lt;/span&gt;&lt;span dir="ltr"&gt;let&lt;/span&gt;&lt;span dir="ltr"&gt; my_box = box &lt;/span&gt;&lt;span dir="ltr"&gt;5&lt;/span&gt;&lt;span dir="ltr"&gt;;
-}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;All unstable features will need to be enabled with &lt;code dir="ltr"&gt;#![feature(..)]&lt;/code&gt; before they can be used.
-If you forget, the compiler is often able to point you in the right direction, however, this is not always the case.&lt;/p&gt;&lt;p dir="ltr"&gt;Now let's get started talking about some of the features themselves.
-I've placed the names of the features that you need to enable in &lt;code dir="ltr"&gt;code blocks&lt;/code&gt; in the headings for each feature while omitting them from the code snippets to keep them concise.&lt;/p&gt;&lt;h1&gt;Control flow, patterns and blocks&lt;/h1&gt;&lt;h2&gt;&lt;code&gt;destructuring_assignment&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;It is very common in Rust to destructure a type when binding it to a definition.
-This is most commonly done with a &lt;code dir="ltr"&gt;let&lt;/code&gt; binding.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;// Create two "variables", one for x, one for y 
-&lt;/span&gt;&lt;span dir="ltr"&gt;let&lt;/span&gt;&lt;span dir="ltr"&gt; Point { x, y } = Point::random();
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Traditionally this pattern has only been possible when instantiating a new definition.
-&lt;code dir="ltr"&gt;destructuring_assignment&lt;/code&gt; extends this to work when mutating values.
-In other words, we can use destructuring without using &lt;code dir="ltr"&gt;let&lt;/code&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;let &lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;mut&lt;/span&gt;&lt;span dir="ltr"&gt; x, &lt;/span&gt;&lt;span dir="ltr"&gt;mut&lt;/span&gt;&lt;span dir="ltr"&gt; y) = (&lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;, &lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;);
-
-Point { x, y } = Point::random();
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;h2 dir="ltr"&gt;Early return from any block with &lt;code dir="ltr"&gt;label_break_value&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;One of the less well-known Rust features is the fact that &lt;a href="https://doc.rust-lang.org/edition-guide/rust-2018/control-flow/loops-can-break-with-a-value.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;loop&lt;/code&gt;s can break with a value&lt;/a&gt;.
-Like many of the constructs in Rust loops are not just statements, but &lt;a href="https://doc.rust-lang.org/reference/statements-and-expressions.html" dir="ltr"&gt;expressions&lt;/a&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;// Keep asking the user to input an number until they give us a valid one
-&lt;/span&gt;&lt;span dir="ltr"&gt;let&lt;/span&gt;&lt;span dir="ltr"&gt; number: &lt;/span&gt;&lt;span dir="ltr"&gt;u8 &lt;/span&gt;&lt;span dir="ltr"&gt;= &lt;/span&gt;&lt;span dir="ltr"&gt;loop &lt;/span&gt;&lt;span dir="ltr"&gt;{
-    &lt;/span&gt;&lt;span dir="ltr"&gt;if let &lt;/span&gt;&lt;span dir="ltr"&gt;Ok(n) = &lt;/span&gt;&lt;span dir="ltr"&gt;input&lt;/span&gt;&lt;span dir="ltr"&gt;().&lt;/span&gt;&lt;span dir="ltr"&gt;parse&lt;/span&gt;&lt;span dir="ltr"&gt;() {
-        &lt;/span&gt;&lt;span dir="ltr"&gt;break&lt;/span&gt;&lt;span dir="ltr"&gt; n;
-    } &lt;/span&gt;&lt;span dir="ltr"&gt;else &lt;/span&gt;&lt;span dir="ltr"&gt;{
-        println!("&lt;/span&gt;&lt;span dir="ltr"&gt;Invaid number, Please input a valid number&lt;/span&gt;&lt;span dir="ltr"&gt;");
-    }
-};
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;label_break_value&lt;/code&gt; extends this to work on any labelled block, not just loops.
-This acts as a kind of early &lt;code dir="ltr"&gt;return&lt;/code&gt; that works on any block of code, not just function bodies. &lt;/p&gt;&lt;p&gt;To label a block you use a syntax similar to lifetimes.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;'block: {
-     &lt;/span&gt;&lt;span dir="ltr"&gt;// This block is now labelled "block"
-&lt;/span&gt;&lt;span dir="ltr"&gt;}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;It is already possible to &lt;a href="https://doc.rust-lang.org/rust-by-example/flow_control/loop/nested.html" dir="ltr"&gt;label loops&lt;/a&gt; much in the same way. &lt;/p&gt;&lt;p dir="ltr"&gt;We can put the same label on our &lt;code dir="ltr"&gt;break&lt;/code&gt; to early return from that block.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;let&lt;/span&gt;&lt;span dir="ltr"&gt; number = 'block: {
-    &lt;/span&gt;&lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt; s.&lt;/span&gt;&lt;span dir="ltr"&gt;is_empty&lt;/span&gt;&lt;span dir="ltr"&gt;() {
-	&lt;/span&gt;&lt;span dir="ltr"&gt;break 'block &lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;; &lt;/span&gt;&lt;span dir="ltr"&gt;// Early return from block
-    &lt;/span&gt;&lt;span dir="ltr"&gt;}
-    s.&lt;/span&gt;&lt;span dir="ltr"&gt;parse&lt;/span&gt;&lt;span dir="ltr"&gt;().&lt;/span&gt;&lt;span dir="ltr"&gt;unwrap&lt;/span&gt;&lt;span dir="ltr"&gt;()
-}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;BLOCKQUOTE&gt;&lt;p dir="ltr"&gt;This feature is &lt;a href="http://david.tribble.com/text/goto.html" dir="ltr"&gt;not equivalent to goto&lt;/a&gt;.
-It does not have the same damaging effects as goto as it only goes forward and breaks from a block.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;h2 dir="ltr"&gt;Inlining the power of the &lt;code dir="ltr"&gt;?&lt;/code&gt; operator using &lt;code dir="ltr"&gt;try_blocks&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;The &lt;a href="https://doc.rust-lang.org/edition-guide/rust-2018/error-handling-and-panics/the-question-mark-operator-for-easier-error-handling.html" dir="ltr"&gt;edition guide&lt;/a&gt; uses this example to illustrate how the question mark operator works:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;read_username_from_file&lt;/span&gt;&lt;span dir="ltr"&gt;() -&amp;gt; Result&amp;lt;String, io::Error&amp;gt; {
-    &lt;/span&gt;&lt;span dir="ltr"&gt;let&lt;/span&gt;&lt;span dir="ltr"&gt; f = File::open("&lt;/span&gt;&lt;span dir="ltr"&gt;username.txt&lt;/span&gt;&lt;span dir="ltr"&gt;");
-
-    &lt;/span&gt;&lt;span dir="ltr"&gt;let mut&lt;/span&gt;&lt;span dir="ltr"&gt; f = &lt;/span&gt;&lt;span dir="ltr"&gt;match&lt;/span&gt;&lt;span dir="ltr"&gt; f {
-        Ok(file) =&amp;gt; file,
-        Err(e) =&amp;gt; &lt;/span&gt;&lt;span dir="ltr"&gt;return &lt;/span&gt;&lt;span dir="ltr"&gt;Err(e),
-    };
-
-    &lt;/span&gt;&lt;span dir="ltr"&gt;let mut&lt;/span&gt;&lt;span dir="ltr"&gt; s = String::new();
-
-    &lt;/span&gt;&lt;span dir="ltr"&gt;match&lt;/span&gt;&lt;span dir="ltr"&gt; f.&lt;/span&gt;&lt;span dir="ltr"&gt;read_to_string&lt;/span&gt;&lt;span dir="ltr"&gt;(&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;mut&lt;/span&gt;&lt;span dir="ltr"&gt; s) {
-        Ok(_) =&amp;gt; Ok(s),
-        Err(e) =&amp;gt; Err(e),
-    }
-}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Simplifying using the &lt;code dir="ltr"&gt;?&lt;/code&gt; operator, results in this equivalent code:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;read_username_from_file&lt;/span&gt;&lt;span dir="ltr"&gt;() -&amp;gt; Result&amp;lt;String, io::Error&amp;gt; {
-    &lt;/span&gt;&lt;span dir="ltr"&gt;let mut&lt;/span&gt;&lt;span dir="ltr"&gt; f = File::open("&lt;/span&gt;&lt;span dir="ltr"&gt;username.txt&lt;/span&gt;&lt;span dir="ltr"&gt;")?;
-    &lt;/span&gt;&lt;span dir="ltr"&gt;let mut&lt;/span&gt;&lt;span dir="ltr"&gt; s = String::new();
-
-    f.&lt;/span&gt;&lt;span dir="ltr"&gt;read_to_string&lt;/span&gt;&lt;span dir="ltr"&gt;(&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;mut&lt;/span&gt;&lt;span dir="ltr"&gt; s)?;
-
-    Ok(s)
-}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;?&lt;/code&gt; is used in the context of functions to early return an &lt;code dir="ltr"&gt;Err&lt;/code&gt; if encountered.
-&lt;code dir="ltr"&gt;try_blocks&lt;/code&gt; unlock the same power but for any block of code rather than just functions.
-With &lt;code dir="ltr"&gt;try_blocks&lt;/code&gt; we can inline our &lt;code dir="ltr"&gt;read_usernames_from_file&lt;/code&gt; function.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;try_blocks&lt;/code&gt; relate to &lt;code dir="ltr"&gt;?&lt;/code&gt; in the same way that &lt;code dir="ltr"&gt;label_break_value&lt;/code&gt; relates to &lt;code dir="ltr"&gt;return&lt;/code&gt;.
-The RFC for &lt;code dir="ltr"&gt;try_blocks&lt;/code&gt; mentions &lt;code dir="ltr"&gt;label_break_value&lt;/code&gt; as a potential way of desugaring  &lt;code dir="ltr"&gt;try_blocks&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Let's rewrite our &lt;code dir="ltr"&gt;read_username_from_file&lt;/code&gt; function as a simple &lt;code dir="ltr"&gt;let&lt;/code&gt; binding with a &lt;code dir="ltr"&gt;try&lt;/code&gt; block.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;let&lt;/span&gt;&lt;span dir="ltr"&gt; read_username_from_file: Result&amp;lt;String, io::Error&amp;gt; = try {
-    &lt;/span&gt;&lt;span dir="ltr"&gt;let mut&lt;/span&gt;&lt;span dir="ltr"&gt; f = File::open("&lt;/span&gt;&lt;span dir="ltr"&gt;username.txt&lt;/span&gt;&lt;span dir="ltr"&gt;")?;
-    &lt;/span&gt;&lt;span dir="ltr"&gt;let mut&lt;/span&gt;&lt;span dir="ltr"&gt; s = String::new();
-
-    f.&lt;/span&gt;&lt;span dir="ltr"&gt;read_to_string&lt;/span&gt;&lt;span dir="ltr"&gt;(&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;mut&lt;/span&gt;&lt;span dir="ltr"&gt; s)?;
-
-    Ok(s)
-}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;I love this kind of thing especially for smaller expressions that can be made easier to read when not extracted into functions.&lt;/p&gt;&lt;h2&gt;&lt;code&gt;inline_const&lt;/code&gt;&lt;/h2&gt;&lt;p&gt;Currently, the way to get a value to be evaluated at compile time is by defining a constant.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;const &lt;/span&gt;&lt;span dir="ltr"&gt;PI_APPROX&lt;/span&gt;&lt;span dir="ltr"&gt;: &lt;/span&gt;&lt;span dir="ltr"&gt;f64 &lt;/span&gt;&lt;span dir="ltr"&gt;= &lt;/span&gt;&lt;span dir="ltr"&gt;22.0 &lt;/span&gt;&lt;span dir="ltr"&gt;/ &lt;/span&gt;&lt;span dir="ltr"&gt;7.0&lt;/span&gt;&lt;span dir="ltr"&gt;;
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;span dir="ltr"&gt;() {
-     &lt;/span&gt;&lt;span dir="ltr"&gt;let&lt;/span&gt;&lt;span dir="ltr"&gt; value = &lt;/span&gt;&lt;span dir="ltr"&gt;func&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;PI_APPROX&lt;/span&gt;&lt;span dir="ltr"&gt;);
-}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;With &lt;code dir="ltr"&gt;inline_const&lt;/code&gt; we can do the same as an anonymous expression.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;span dir="ltr"&gt;() {
-     &lt;/span&gt;&lt;span dir="ltr"&gt;let&lt;/span&gt;&lt;span dir="ltr"&gt; value = &lt;/span&gt;&lt;span dir="ltr"&gt;func&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;const &lt;/span&gt;&lt;span dir="ltr"&gt;{ &lt;/span&gt;&lt;span dir="ltr"&gt;22.0 &lt;/span&gt;&lt;span dir="ltr"&gt;/ &lt;/span&gt;&lt;span dir="ltr"&gt;7.0 &lt;/span&gt;&lt;span dir="ltr"&gt;});
-}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;With this simple example, the &lt;code dir="ltr"&gt;const&lt;/code&gt; block is almost certainly not necessary, due to compiler optimisations such as &lt;a href="https://blog.rust-lang.org/inside-rust/2019/12/02/const-prop-on-by-default.html" dir="ltr"&gt;constant propagation&lt;/a&gt;,
-however, with more complex constants, it may be helpful to be explicit with the block.&lt;/p&gt;&lt;p dir="ltr"&gt;This feature also allows for these blocks to be used in pattern position.
-&lt;code dir="ltr"&gt;match x { 1 + 3 =&amp;gt; {} }&lt;/code&gt; results in a syntax error while &lt;code dir="ltr"&gt;match x { const { 1 + 3 } =&amp;gt; {} }&lt;/code&gt;does not.&lt;/p&gt;&lt;h2&gt;&lt;code&gt;if_let_guard&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;Extends the &lt;a href="https://doc.rust-lang.org/beta/rust-by-example/flow_control/match/guard.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;if&lt;/code&gt; guards&lt;/a&gt; that you can use with &lt;code dir="ltr"&gt;match&lt;/code&gt; statements to be able to use &lt;code dir="ltr"&gt;if let&lt;/code&gt;.&lt;/p&gt;&lt;h2&gt;&lt;code&gt;let_chains&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;Currently, &lt;code dir="ltr"&gt;if let&lt;/code&gt; and &lt;code dir="ltr"&gt;while let&lt;/code&gt; expressions can not be chained with &lt;code dir="ltr"&gt;||&lt;/code&gt; or &lt;code dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/code&gt;.
-This feature adds that support.&lt;/p&gt;&lt;h1&gt;Traits&lt;/h1&gt;&lt;h2&gt;&lt;code&gt;associated_type_bounds&lt;/code&gt;&lt;/h2&gt;&lt;p&gt;Let's take this stable Rust function:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;fizzbuzz&lt;/span&gt;&lt;span dir="ltr"&gt;() -&amp;gt; impl Iterator&amp;lt;Item = String&amp;gt; {
-    (&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;..).&lt;/span&gt;&lt;span dir="ltr"&gt;map&lt;/span&gt;&lt;span dir="ltr"&gt;(|&lt;/span&gt;&lt;span dir="ltr"&gt;val&lt;/span&gt;&lt;span dir="ltr"&gt;| &lt;/span&gt;&lt;span dir="ltr"&gt;match &lt;/span&gt;&lt;span dir="ltr"&gt;(val % &lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;, val % &lt;/span&gt;&lt;span dir="ltr"&gt;5&lt;/span&gt;&lt;span dir="ltr"&gt;) {
-        (&lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;, &lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;) =&amp;gt; "&lt;/span&gt;&lt;span dir="ltr"&gt;FizzBuzz&lt;/span&gt;&lt;span dir="ltr"&gt;".&lt;/span&gt;&lt;span dir="ltr"&gt;to_string&lt;/span&gt;&lt;span dir="ltr"&gt;(),
-        (&lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;, _) =&amp;gt; "&lt;/span&gt;&lt;span dir="ltr"&gt;Fizz&lt;/span&gt;&lt;span dir="ltr"&gt;".&lt;/span&gt;&lt;span dir="ltr"&gt;to_string&lt;/span&gt;&lt;span dir="ltr"&gt;(),
-        (_, &lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;) =&amp;gt; "&lt;/span&gt;&lt;span dir="ltr"&gt;Buzz&lt;/span&gt;&lt;span dir="ltr"&gt;".&lt;/span&gt;&lt;span dir="ltr"&gt;to_string&lt;/span&gt;&lt;span dir="ltr"&gt;(),
-        (_, _) =&amp;gt; val.&lt;/span&gt;&lt;span dir="ltr"&gt;to_string&lt;/span&gt;&lt;span dir="ltr"&gt;(),
-    })
-}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;With the &lt;code dir="ltr"&gt;associated_type_bounds&lt;/code&gt; feature we can use an anonymous type in this context:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;fizzbuzz&lt;/span&gt;&lt;span dir="ltr"&gt;() -&amp;gt; impl Iterator&amp;lt;Item: Display&amp;gt; { ... }
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Let's take a look at this horribly repetitive type signature:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;flatten_twice&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;T&amp;gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;iter&lt;/span&gt;&lt;span dir="ltr"&gt;: T) -&amp;gt; Flatten&amp;lt;Flatten&amp;lt;T&amp;gt;&amp;gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;where
-&lt;/span&gt;&lt;span dir="ltr"&gt;    T: Iterator,
-    &amp;lt;T as Iterator&amp;gt;::Item: IntoIterator,
-    &amp;lt;&amp;lt;T as Iterator&amp;gt;::Item as IntoIterator&amp;gt;::Item: IntoIterator,
-{
-    iter.&lt;/span&gt;&lt;span dir="ltr"&gt;flatten&lt;/span&gt;&lt;span dir="ltr"&gt;().&lt;/span&gt;&lt;span dir="ltr"&gt;flatten&lt;/span&gt;&lt;span dir="ltr"&gt;()
-}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;With this feature, we can write it simply as:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;flatten_twice&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;T&amp;gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;iter&lt;/span&gt;&lt;span dir="ltr"&gt;: T) -&amp;gt; Flatten&amp;lt;Flatten&amp;lt;T&amp;gt;&amp;gt;
-&lt;/span&gt;&lt;span dir="ltr"&gt;where
-&lt;/span&gt;&lt;span dir="ltr"&gt;    T: Iterator&amp;lt;Item: IntoIterator&amp;lt;Item: IntoIterator&amp;gt;&amp;gt;,
-{
-    iter.&lt;/span&gt;&lt;span dir="ltr"&gt;flatten&lt;/span&gt;&lt;span dir="ltr"&gt;().&lt;/span&gt;&lt;span dir="ltr"&gt;flatten&lt;/span&gt;&lt;span dir="ltr"&gt;()
-}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Which is far easier for me to reason about.&lt;/p&gt;&lt;h2 dir="ltr"&gt;&lt;code dir="ltr"&gt;default_type_parameter_fallback&lt;/code&gt;, &lt;code dir="ltr"&gt;associated_type_defaults&lt;/code&gt; and &lt;code dir="ltr"&gt;const_generics_defaults&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;These features allow you to specify default values for &lt;a href="https://github.com/rust-lang/rfcs/blob/master/text/0213-defaulted-type-params.md" dir="ltr"&gt;generic types&lt;/a&gt;, &lt;a href="https://github.com/rust-lang/rfcs/blob/master/text/2532-associated-type-defaults.md" dir="ltr"&gt;associated types&lt;/a&gt; and &lt;a href="https://lazy.codes/posts/awesome-unstable-rust-features/#const-generics" dir="ltr"&gt;const variables&lt;/a&gt; respectively in more places.&lt;/p&gt;&lt;p&gt;This allows you as a developer to create nicer APIs.
-If a crate user is not interested in a detail and that item has a default then the detail can be omitted.
-This also makes it easier to extend APIs without making breaking changes for your users.&lt;/p&gt;&lt;h2 dir="ltr"&gt;&lt;code dir="ltr"&gt;negative_impls&lt;/code&gt; and &lt;code dir="ltr"&gt;auto_traits&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;Both of these features are used in the standard library. The traits &lt;a href="https://doc.rust-lang.org/std/marker/trait.Send.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;Send&lt;/code&gt;&lt;/a&gt; and &lt;a href="https://doc.rust-lang.org/std/marker/trait.Sync.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;Sync&lt;/code&gt;&lt;/a&gt; are both examples of auto traits.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;pub unsafe&lt;/span&gt;&lt;span dir="ltr"&gt; auto &lt;/span&gt;&lt;span dir="ltr"&gt;trait &lt;/span&gt;&lt;span dir="ltr"&gt;Send {
-    &lt;/span&gt;&lt;span dir="ltr"&gt;// empty.
-&lt;/span&gt;&lt;span dir="ltr"&gt;}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Note the use of the &lt;code dir="ltr"&gt;auto&lt;/code&gt; keyword.
-This tells the compiler to automatically implement the &lt;code dir="ltr"&gt;Send&lt;/code&gt; trait for any struct/enum/union as long as all the types that make up said type also implement &lt;code dir="ltr"&gt;Send&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Auto traits would not be very useful if simply every type always implemented them.
-That is where &lt;code dir="ltr"&gt;negative_impls&lt;/code&gt; come in.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;negative_impls&lt;/code&gt; allows for a type to opt-out from implementing an auto trait.
-Take for example &lt;code dir="ltr"&gt;UnsafeCell&lt;/code&gt;. It would be very unsafe for an unrestricted &lt;code dir="ltr"&gt;UnsafeCell&lt;/code&gt; to be shared across threads, therefore it would be very unsafe for it to be &lt;code dir="ltr"&gt;Sync&lt;/code&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;impl&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;T: &lt;/span&gt;&lt;span dir="ltr"&gt;?&lt;/span&gt;&lt;span dir="ltr"&gt;Sized&amp;gt; !Sync for UnsafeCell&amp;lt;T&amp;gt; {}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Note the creative use of &lt;code dir="ltr"&gt;!&lt;/code&gt; to express "not &lt;code dir="ltr"&gt;Sync&lt;/code&gt;".&lt;/p&gt;&lt;h2&gt;&lt;code&gt;marker_trait_attr&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;This feature adds the &lt;code dir="ltr"&gt;#[marker]&lt;/code&gt; attribute for traits.&lt;/p&gt;&lt;p&gt;Rust disallows the defining of traits implementations that could overlap.
-This is so that the compiler will always know which implementation to use because there will always be only one.&lt;/p&gt;&lt;p dir="ltr"&gt;Traits marked with &lt;code dir="ltr"&gt;#[marker]&lt;/code&gt; cannot override anything in their implementations.
-That way they are allowed to have overlapping implementations because all implementations will be the same.&lt;/p&gt;&lt;h2 dir="ltr"&gt;&lt;code dir="ltr"&gt;type_alias_impl_trait&lt;/code&gt;, &lt;code dir="ltr"&gt;impl_trait_in_bindings&lt;/code&gt; and &lt;code dir="ltr"&gt;trait_alias&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;impl Trait&lt;/code&gt; tells the compiler to infer a concrete type to replace it with that implements &lt;code dir="ltr"&gt;Trait&lt;/code&gt;.
-Currently, &lt;code dir="ltr"&gt;impl Trait&lt;/code&gt; is only used in the context of function arguments or return types.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;type_alias_impl_trait&lt;/code&gt; and &lt;code dir="ltr"&gt;impl_trait_in_bindings&lt;/code&gt; extend the places &lt;code dir="ltr"&gt;impl trait&lt;/code&gt; can be used to include type aliases and &lt;code dir="ltr"&gt;let&lt;/code&gt; bindings respectively.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;trait_alias&lt;/code&gt; is subtlely different to &lt;code dir="ltr"&gt;type_alias_impl_trait&lt;/code&gt;.
-Everywhere you use a type alias the type must remain constant.
-A single concrete type must be inferred by the compiler that works in all those places.
-Trait aliases are more forgiving as they can be a different type in each place they are used.&lt;/p&gt;&lt;h2 dir="ltr"&gt;&lt;code dir="ltr"&gt;fn_traits&lt;/code&gt; and &lt;code dir="ltr"&gt;unboxed_closures&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;The three traits &lt;code dir="ltr"&gt;Fn&lt;/code&gt;, &lt;code dir="ltr"&gt;FnMut&lt;/code&gt; and &lt;code dir="ltr"&gt;FnOnce&lt;/code&gt; are known as the fn traits.
-They are automatically implemented for any functions or closures that you create and are what provides the ability to pass arguments to them.&lt;/p&gt;&lt;p dir="ltr"&gt;An automatic implementation is currently the only way to implement those traits.
-The &lt;code dir="ltr"&gt;fn_traits&lt;/code&gt; feature allows for custom implementations on any type.
-This is very similar to operator overloading but customising the use of &lt;code dir="ltr"&gt;()&lt;/code&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;#![&lt;/span&gt;&lt;span dir="ltr"&gt;feature&lt;/span&gt;&lt;span dir="ltr"&gt;(unboxed_closures)] &lt;/span&gt;&lt;span dir="ltr"&gt;// required to implement a function with `extern "rust-call"`
-&lt;/span&gt;&lt;span dir="ltr"&gt;#![&lt;/span&gt;&lt;span dir="ltr"&gt;feature&lt;/span&gt;&lt;span dir="ltr"&gt;(fn_traits)]
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;struct &lt;/span&gt;&lt;span dir="ltr"&gt;Multiply;
-
-#[&lt;/span&gt;&lt;span dir="ltr"&gt;allow&lt;/span&gt;&lt;span dir="ltr"&gt;(non_upper_case_globals)]
-&lt;/span&gt;&lt;span dir="ltr"&gt;const&lt;/span&gt;&lt;span dir="ltr"&gt; multiply: Multiply = Multiply;
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;impl &lt;/span&gt;&lt;span dir="ltr"&gt;FnOnce&amp;lt;(&lt;/span&gt;&lt;span dir="ltr"&gt;u32&lt;/span&gt;&lt;span dir="ltr"&gt;, &lt;/span&gt;&lt;span dir="ltr"&gt;u32&lt;/span&gt;&lt;span dir="ltr"&gt;)&amp;gt; &lt;/span&gt;&lt;span dir="ltr"&gt;for &lt;/span&gt;&lt;span dir="ltr"&gt;Multiply {
-    &lt;/span&gt;&lt;span dir="ltr"&gt;type &lt;/span&gt;&lt;span dir="ltr"&gt;Output = &lt;/span&gt;&lt;span dir="ltr"&gt;u32&lt;/span&gt;&lt;span dir="ltr"&gt;;
-    &lt;/span&gt;&lt;span dir="ltr"&gt;extern &lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;rust-call&lt;/span&gt;&lt;span dir="ltr"&gt;" &lt;/span&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;call_once&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;self&lt;/span&gt;&lt;span dir="ltr"&gt;, &lt;/span&gt;&lt;span dir="ltr"&gt;a&lt;/span&gt;&lt;span dir="ltr"&gt;: (&lt;/span&gt;&lt;span dir="ltr"&gt;u32&lt;/span&gt;&lt;span dir="ltr"&gt;, &lt;/span&gt;&lt;span dir="ltr"&gt;u32&lt;/span&gt;&lt;span dir="ltr"&gt;)) -&amp;gt; &lt;/span&gt;&lt;span dir="ltr"&gt;Self::&lt;/span&gt;&lt;span dir="ltr"&gt;Output {
-        a.&lt;/span&gt;&lt;span dir="ltr"&gt;0 &lt;/span&gt;&lt;span dir="ltr"&gt;* a.&lt;/span&gt;&lt;span dir="ltr"&gt;1
-    &lt;/span&gt;&lt;span dir="ltr"&gt;}
-}
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;impl &lt;/span&gt;&lt;span dir="ltr"&gt;FnOnce&amp;lt;(&lt;/span&gt;&lt;span dir="ltr"&gt;u32&lt;/span&gt;&lt;span dir="ltr"&gt;, &lt;/span&gt;&lt;span dir="ltr"&gt;u32&lt;/span&gt;&lt;span dir="ltr"&gt;, &lt;/span&gt;&lt;span dir="ltr"&gt;u32&lt;/span&gt;&lt;span dir="ltr"&gt;)&amp;gt; &lt;/span&gt;&lt;span dir="ltr"&gt;for &lt;/span&gt;&lt;span dir="ltr"&gt;Multiply {
-    &lt;/span&gt;&lt;span dir="ltr"&gt;type &lt;/span&gt;&lt;span dir="ltr"&gt;Output = &lt;/span&gt;&lt;span dir="ltr"&gt;u32&lt;/span&gt;&lt;span dir="ltr"&gt;;
-    &lt;/span&gt;&lt;span dir="ltr"&gt;extern &lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;rust-call&lt;/span&gt;&lt;span dir="ltr"&gt;" &lt;/span&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;call_once&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;self&lt;/span&gt;&lt;span dir="ltr"&gt;, &lt;/span&gt;&lt;span dir="ltr"&gt;a&lt;/span&gt;&lt;span dir="ltr"&gt;: (&lt;/span&gt;&lt;span dir="ltr"&gt;u32&lt;/span&gt;&lt;span dir="ltr"&gt;, &lt;/span&gt;&lt;span dir="ltr"&gt;u32&lt;/span&gt;&lt;span dir="ltr"&gt;, &lt;/span&gt;&lt;span dir="ltr"&gt;u32&lt;/span&gt;&lt;span dir="ltr"&gt;)) -&amp;gt; &lt;/span&gt;&lt;span dir="ltr"&gt;Self::&lt;/span&gt;&lt;span dir="ltr"&gt;Output {
-        a.&lt;/span&gt;&lt;span dir="ltr"&gt;0 &lt;/span&gt;&lt;span dir="ltr"&gt;* a.&lt;/span&gt;&lt;span dir="ltr"&gt;1 &lt;/span&gt;&lt;span dir="ltr"&gt;* a.&lt;/span&gt;&lt;span dir="ltr"&gt;2
-    &lt;/span&gt;&lt;span dir="ltr"&gt;}
-}
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;impl &lt;/span&gt;&lt;span dir="ltr"&gt;FnOnce&amp;lt;(&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;str&lt;/span&gt;&lt;span dir="ltr"&gt;, &lt;/span&gt;&lt;span dir="ltr"&gt;usize&lt;/span&gt;&lt;span dir="ltr"&gt;)&amp;gt; &lt;/span&gt;&lt;span dir="ltr"&gt;for &lt;/span&gt;&lt;span dir="ltr"&gt;Multiply {
-    &lt;/span&gt;&lt;span dir="ltr"&gt;type &lt;/span&gt;&lt;span dir="ltr"&gt;Output = String;
-    &lt;/span&gt;&lt;span dir="ltr"&gt;extern &lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;rust-call&lt;/span&gt;&lt;span dir="ltr"&gt;" &lt;/span&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;call_once&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;self&lt;/span&gt;&lt;span dir="ltr"&gt;, &lt;/span&gt;&lt;span dir="ltr"&gt;a&lt;/span&gt;&lt;span dir="ltr"&gt;: (&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;str&lt;/span&gt;&lt;span dir="ltr"&gt;, &lt;/span&gt;&lt;span dir="ltr"&gt;usize&lt;/span&gt;&lt;span dir="ltr"&gt;)) -&amp;gt; &lt;/span&gt;&lt;span dir="ltr"&gt;Self::&lt;/span&gt;&lt;span dir="ltr"&gt;Output {
-        a.&lt;/span&gt;&lt;span dir="ltr"&gt;0.&lt;/span&gt;&lt;span dir="ltr"&gt;repeat&lt;/span&gt;&lt;span dir="ltr"&gt;(a.&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;)
-    }
-}
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;span dir="ltr"&gt;() {
-    assert_eq!(&lt;/span&gt;&lt;span dir="ltr"&gt;multiply&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;, &lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;), &lt;/span&gt;&lt;span dir="ltr"&gt;6&lt;/span&gt;&lt;span dir="ltr"&gt;);
-    assert_eq!(&lt;/span&gt;&lt;span dir="ltr"&gt;multiply&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;2&lt;/span&gt;&lt;span dir="ltr"&gt;, &lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;, &lt;/span&gt;&lt;span dir="ltr"&gt;4&lt;/span&gt;&lt;span dir="ltr"&gt;), &lt;/span&gt;&lt;span dir="ltr"&gt;24&lt;/span&gt;&lt;span dir="ltr"&gt;);
-    assert_eq!(&lt;/span&gt;&lt;span dir="ltr"&gt;multiply&lt;/span&gt;&lt;span dir="ltr"&gt;("&lt;/span&gt;&lt;span dir="ltr"&gt;hello &lt;/span&gt;&lt;span dir="ltr"&gt;", &lt;/span&gt;&lt;span dir="ltr"&gt;3&lt;/span&gt;&lt;span dir="ltr"&gt;), "&lt;/span&gt;&lt;span dir="ltr"&gt;hello hello hello &lt;/span&gt;&lt;span dir="ltr"&gt;");
-}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Notice that this is being used to create a hacky version of &lt;a href="https://en.wikipedia.org/wiki/Function_overloading" dir="ltr"&gt;function overloading&lt;/a&gt; and &lt;a href="https://en.wikipedia.org/wiki/Variadic_function" dir="ltr"&gt;variadic functions&lt;/a&gt;.&lt;/p&gt;&lt;h1&gt;Sugar&lt;/h1&gt;&lt;h2 dir="ltr"&gt;&lt;code dir="ltr"&gt;box_patterns&lt;/code&gt; and &lt;code dir="ltr"&gt;box_syntax&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;These two features make constructing and destructing &lt;code dir="ltr"&gt;Box&lt;/code&gt;es easier.
-The &lt;code dir="ltr"&gt;box&lt;/code&gt; keyword replaces &lt;code dir="ltr"&gt;Box::new(..)&lt;/code&gt; and allows for the dereferencing &lt;code dir="ltr"&gt;Box&lt;/code&gt;es when pattern matching.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;struct &lt;/span&gt;&lt;span dir="ltr"&gt;TrashStack&amp;lt;T&amp;gt; {
-    &lt;/span&gt;&lt;span dir="ltr"&gt;head&lt;/span&gt;&lt;span dir="ltr"&gt;: T,
-    &lt;/span&gt;&lt;span dir="ltr"&gt;body&lt;/span&gt;&lt;span dir="ltr"&gt;: Option&amp;lt;Box&amp;lt;TrashStack&amp;lt;T&amp;gt;&amp;gt;&amp;gt;,
-}
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;impl&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;T&amp;gt; TrashStack&amp;lt;T&amp;gt; {
-    &lt;/span&gt;&lt;span dir="ltr"&gt;pub fn &lt;/span&gt;&lt;span dir="ltr"&gt;push&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;self&lt;/span&gt;&lt;span dir="ltr"&gt;, &lt;/span&gt;&lt;span dir="ltr"&gt;elem&lt;/span&gt;&lt;span dir="ltr"&gt;: T) -&amp;gt; &lt;/span&gt;&lt;span dir="ltr"&gt;Self &lt;/span&gt;&lt;span dir="ltr"&gt;{
-        &lt;/span&gt;&lt;span dir="ltr"&gt;Self &lt;/span&gt;&lt;span dir="ltr"&gt;{
-            head: elem,
-            body: Some(box &lt;/span&gt;&lt;span dir="ltr"&gt;self&lt;/span&gt;&lt;span dir="ltr"&gt;),
-        }
-    }
-
-    &lt;/span&gt;&lt;span dir="ltr"&gt;pub fn &lt;/span&gt;&lt;span dir="ltr"&gt;peek&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;self&lt;/span&gt;&lt;span dir="ltr"&gt;) -&amp;gt; Option&amp;lt;T&amp;gt; {
-        &lt;/span&gt;&lt;span dir="ltr"&gt;if let&lt;/span&gt;&lt;span dir="ltr"&gt; TrashStack {
-            body: Some(box TrashStack { head, .. }),
-            ..
-        } = &lt;/span&gt;&lt;span dir="ltr"&gt;self
-        &lt;/span&gt;&lt;span dir="ltr"&gt;{
-            Some(head)
-        } &lt;/span&gt;&lt;span dir="ltr"&gt;else &lt;/span&gt;&lt;span dir="ltr"&gt;{
-            None
-        }
-    }
-}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This makes things a little more ergonomic but I don't think there is much chance that this feature will ever be stabilised.
-It seems to have existed forever with no plan for stabilisation but instead a little discussion about removing the feature.
-&lt;code dir="ltr"&gt;box_synatx&lt;/code&gt; is used heavily in the compiler's source and a little in the standard library.&lt;/p&gt;&lt;p dir="ltr"&gt;It is interesting to note that &lt;code dir="ltr"&gt;box&lt;/code&gt; does not desugar to &lt;code dir="ltr"&gt;Box::new&lt;/code&gt; but &lt;code dir="ltr"&gt;Box::new&lt;/code&gt; is implemented in the standard library with &lt;code dir="ltr"&gt;box&lt;/code&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;impl&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;T&amp;gt; Box&amp;lt;T&amp;gt; {
-    ...
-    &lt;/span&gt;&lt;span dir="ltr"&gt;pub fn &lt;/span&gt;&lt;span dir="ltr"&gt;new&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;x&lt;/span&gt;&lt;span dir="ltr"&gt;: T) -&amp;gt; &lt;/span&gt;&lt;span dir="ltr"&gt;Self &lt;/span&gt;&lt;span dir="ltr"&gt;{
-        box x
-    }
-    ...
-}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;&lt;code&gt;async_closure&lt;/code&gt;&lt;/h2&gt;&lt;p&gt;Currently to be async inside of a closure you have to use an async block.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;app.&lt;/span&gt;&lt;span dir="ltr"&gt;at&lt;/span&gt;&lt;span dir="ltr"&gt;("&lt;/span&gt;&lt;span dir="ltr"&gt;/&lt;/span&gt;&lt;span dir="ltr"&gt;").&lt;/span&gt;&lt;span dir="ltr"&gt;get&lt;/span&gt;&lt;span dir="ltr"&gt;(|_| async { Ok("&lt;/span&gt;&lt;span dir="ltr"&gt;Hi&lt;/span&gt;&lt;span dir="ltr"&gt;") });
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;async_closure&lt;/code&gt; allows you to mark the closure itself as async just like you would a async function.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;app.&lt;/span&gt;&lt;span dir="ltr"&gt;at&lt;/span&gt;&lt;span dir="ltr"&gt;("&lt;/span&gt;&lt;span dir="ltr"&gt;/&lt;/span&gt;&lt;span dir="ltr"&gt;").&lt;/span&gt;&lt;span dir="ltr"&gt;get&lt;/span&gt;&lt;span dir="ltr"&gt;(async |_| Ok("&lt;/span&gt;&lt;span dir="ltr"&gt;Hi&lt;/span&gt;&lt;span dir="ltr"&gt;"));
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;h2&gt;&lt;code&gt;in_band_lifetimes&lt;/code&gt;&lt;/h2&gt;&lt;p&gt;To use a lifetime it must be explicitly brought into scope.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;select&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;&lt;span dir="ltr"&gt;'data&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;data&lt;/span&gt;&lt;span dir="ltr"&gt;: &amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;'data&lt;/span&gt;&lt;span dir="ltr"&gt; Data, &lt;/span&gt;&lt;span dir="ltr"&gt;params&lt;/span&gt;&lt;span dir="ltr"&gt;: &amp;amp;Params) -&amp;gt; &amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;'data&lt;/span&gt;&lt;span dir="ltr"&gt; Item;
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;With &lt;code dir="ltr"&gt;in_band_lifetimes&lt;/code&gt; the lifetimes can be used without bringing them into scope first.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;select&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;data&lt;/span&gt;&lt;span dir="ltr"&gt;: &amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;'data&lt;/span&gt;&lt;span dir="ltr"&gt; Data, &lt;/span&gt;&lt;span dir="ltr"&gt;params&lt;/span&gt;&lt;span dir="ltr"&gt;: &amp;amp;Params) -&amp;gt; &amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;'data&lt;/span&gt;&lt;span dir="ltr"&gt; Item;
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Interestingly enough this was &lt;a href="https://github.com/rust-lang/rfcs/pull/2115#issuecomment-323221054" dir="ltr"&gt;how lifetimes used to work&lt;/a&gt; pre &lt;code dir="ltr"&gt;1.0.0&lt;/code&gt;.&lt;/p&gt;&lt;h2&gt;&lt;code&gt;format_args_capture&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;This allows for named arguments to be placed inside of strings inside any macro that depends on &lt;code dir="ltr"&gt;std::format_args!&lt;/code&gt;.
-That includes &lt;code dir="ltr"&gt;print!&lt;/code&gt;, &lt;code dir="ltr"&gt;format!&lt;/code&gt;, &lt;code dir="ltr"&gt;write!&lt;/code&gt; and many more.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;let&lt;/span&gt;&lt;span dir="ltr"&gt; name = "&lt;/span&gt;&lt;span dir="ltr"&gt;Ferris&lt;/span&gt;&lt;span dir="ltr"&gt;";
-&lt;/span&gt;&lt;span dir="ltr"&gt;let&lt;/span&gt;&lt;span dir="ltr"&gt; age = &lt;/span&gt;&lt;span dir="ltr"&gt;11&lt;/span&gt;&lt;span dir="ltr"&gt;;
-println!("&lt;/span&gt;&lt;span dir="ltr"&gt;Hello &lt;/span&gt;&lt;span dir="ltr"&gt;{name}&lt;/span&gt;&lt;span dir="ltr"&gt;, you are &lt;/span&gt;&lt;span dir="ltr"&gt;{age}&lt;/span&gt;&lt;span dir="ltr"&gt; years old&lt;/span&gt;&lt;span dir="ltr"&gt;");
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;It is likely that this will be stabilised with or soon after edition 2021.&lt;/p&gt;&lt;h2&gt;&lt;code&gt;crate_visibility_modifier&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;With this feature you can write &lt;code dir="ltr"&gt;crate struct Foo&lt;/code&gt; rather than &lt;code dir="ltr"&gt;pub(crate) struct Foo&lt;/code&gt; and have it mean exactly the same thing.&lt;/p&gt;&lt;p dir="ltr"&gt;This makes &lt;code dir="ltr"&gt;pub(crate)&lt;/code&gt; easier to write, encouraging the use of crate visibility when full &lt;code dir="ltr"&gt;pub&lt;/code&gt; is not necessary.&lt;/p&gt;&lt;h1&gt;Types&lt;/h1&gt;&lt;h2&gt;&lt;code&gt;type_ascription&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;Take for example the &lt;code dir="ltr"&gt;collect&lt;/code&gt; method on &lt;code dir="ltr"&gt;Iterator&lt;/code&gt;.
-Collect transforms an interator into a collection.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;let&lt;/span&gt;&lt;span dir="ltr"&gt; word = "&lt;/span&gt;&lt;span dir="ltr"&gt;hello&lt;/span&gt;&lt;span dir="ltr"&gt;".&lt;/span&gt;&lt;span dir="ltr"&gt;chars&lt;/span&gt;&lt;span dir="ltr"&gt;().&lt;/span&gt;&lt;span dir="ltr"&gt;collect&lt;/span&gt;&lt;span dir="ltr"&gt;();
-println!("&lt;/span&gt;&lt;span dir="ltr"&gt;{:?}&lt;/span&gt;&lt;span dir="ltr"&gt;", word);
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This does not compile because Rust is unable to infer the type of &lt;code dir="ltr"&gt;word&lt;/code&gt;.
-This can be fixed by replacing the first line with:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;let&lt;/span&gt;&lt;span dir="ltr"&gt; word: Vec&amp;lt;&lt;/span&gt;&lt;span dir="ltr"&gt;char&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt; = "&lt;/span&gt;&lt;span dir="ltr"&gt;hello&lt;/span&gt;&lt;span dir="ltr"&gt;".&lt;/span&gt;&lt;span dir="ltr"&gt;chars&lt;/span&gt;&lt;span dir="ltr"&gt;().&lt;/span&gt;&lt;span dir="ltr"&gt;collect&lt;/span&gt;&lt;span dir="ltr"&gt;();
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;With &lt;code dir="ltr"&gt;type_ascription&lt;/code&gt; the &lt;code dir="ltr"&gt;let&lt;/code&gt; binding is no longer necessary and one can simply:&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;println!("&lt;/span&gt;&lt;span dir="ltr"&gt;{:?}&lt;/span&gt;&lt;span dir="ltr"&gt;", "&lt;/span&gt;&lt;span dir="ltr"&gt;hello&lt;/span&gt;&lt;span dir="ltr"&gt;".&lt;/span&gt;&lt;span dir="ltr"&gt;chars&lt;/span&gt;&lt;span dir="ltr"&gt;().&lt;/span&gt;&lt;span dir="ltr"&gt;collect&lt;/span&gt;&lt;span dir="ltr"&gt;(): Vec&amp;lt;&lt;/span&gt;&lt;span dir="ltr"&gt;char&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;);
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The &lt;code dir="ltr"&gt;: Type&lt;/code&gt; syntax can be used anywhere to hint at the compiler "I want this type at this point".&lt;/p&gt;&lt;h2&gt;&lt;code&gt;never_type&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;It is possible to define &lt;code dir="ltr"&gt;enum&lt;/code&gt;s with zero variants.
-Such an enum exists stable in the standard library.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;pub enum &lt;/span&gt;&lt;span dir="ltr"&gt;Infallible {}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;It is possible to use this type in generics and function signatures but never possible for it to be constructed.
-There are simply no variants to construct.&lt;/p&gt;&lt;p dir="ltr"&gt;The unit type, &lt;code dir="ltr"&gt;()&lt;/code&gt; would be equivalent to an enum with a single variant.
-&lt;code dir="ltr"&gt;never_type&lt;/code&gt; introduces a new type, &lt;code dir="ltr"&gt;!&lt;/code&gt; which is equivalent to our &lt;code dir="ltr"&gt;Infallible&lt;/code&gt; enum with zero variants.&lt;/p&gt;&lt;p dir="ltr"&gt;Because &lt;code dir="ltr"&gt;!&lt;/code&gt; can never be constructed it can be given special powers.
-We don't have to handle the case of &lt;code dir="ltr"&gt;!&lt;/code&gt; because we have proven it will never exist.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;span dir="ltr"&gt;() -&amp;gt; ! {
-    &lt;/span&gt;&lt;span dir="ltr"&gt;loop &lt;/span&gt;&lt;span dir="ltr"&gt;{
-        println!("&lt;/span&gt;&lt;span dir="ltr"&gt;Hello, world!&lt;/span&gt;&lt;span dir="ltr"&gt;");
-    }
-}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Loops without a &lt;code dir="ltr"&gt;break&lt;/code&gt; "return &lt;code dir="ltr"&gt;!&lt;/code&gt;" because they don't ever return.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;!&lt;/code&gt; can be very useful for expressing impossible outcomes in the type system.
-Take for example the &lt;code dir="ltr"&gt;FromStr&lt;/code&gt; implementation on this &lt;code dir="ltr"&gt;UserName&lt;/code&gt; type.
-This implementation is infallible because its implementation can never fail.
-This allows us to set the &lt;code dir="ltr"&gt;Err&lt;/code&gt; variant to type &lt;code dir="ltr"&gt;!&lt;/code&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;struct &lt;/span&gt;&lt;span dir="ltr"&gt;UserName(String);
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;impl &lt;/span&gt;&lt;span dir="ltr"&gt;FromStr &lt;/span&gt;&lt;span dir="ltr"&gt;for &lt;/span&gt;&lt;span dir="ltr"&gt;UserName {
-    &lt;/span&gt;&lt;span dir="ltr"&gt;type &lt;/span&gt;&lt;span dir="ltr"&gt;Err = !;
-    &lt;/span&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;from_str&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;s&lt;/span&gt;&lt;span dir="ltr"&gt;: &amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;str&lt;/span&gt;&lt;span dir="ltr"&gt;) -&amp;gt; Result&amp;lt;&lt;/span&gt;&lt;span dir="ltr"&gt;Self&lt;/span&gt;&lt;span dir="ltr"&gt;, &lt;/span&gt;&lt;span dir="ltr"&gt;Self::&lt;/span&gt;&lt;span dir="ltr"&gt;Err&amp;gt; {
-        Ok(&lt;/span&gt;&lt;span dir="ltr"&gt;Self&lt;/span&gt;&lt;span dir="ltr"&gt;(s.&lt;/span&gt;&lt;span dir="ltr"&gt;to_owned&lt;/span&gt;&lt;span dir="ltr"&gt;()))
-    }
-}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;It is then possible to use an empty &lt;code dir="ltr"&gt;match&lt;/code&gt; on the &lt;code dir="ltr"&gt;Err&lt;/code&gt; variant because &lt;code dir="ltr"&gt;!&lt;/code&gt; has no variants.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;let&lt;/span&gt;&lt;span dir="ltr"&gt; user_name = &lt;/span&gt;&lt;span dir="ltr"&gt;match &lt;/span&gt;&lt;span dir="ltr"&gt;UserName::from_str("&lt;/span&gt;&lt;span dir="ltr"&gt;ethan&lt;/span&gt;&lt;span dir="ltr"&gt;") {
-    Ok(u) =&amp;gt; u,
-    Err(e) =&amp;gt; &lt;/span&gt;&lt;span dir="ltr"&gt;match&lt;/span&gt;&lt;span dir="ltr"&gt; e {},
-};
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;With the feature &lt;code dir="ltr"&gt;exhaustive_patterns&lt;/code&gt; the type system becomes smart enough for us to eliminate the &lt;code dir="ltr"&gt;Err&lt;/code&gt; branch altogether.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;let&lt;/span&gt;&lt;span dir="ltr"&gt; user_name = &lt;/span&gt;&lt;span dir="ltr"&gt;match &lt;/span&gt;&lt;span dir="ltr"&gt;UserName::from_str("&lt;/span&gt;&lt;span dir="ltr"&gt;ethan&lt;/span&gt;&lt;span dir="ltr"&gt;") {
-    Ok(u) =&amp;gt; u,
-};
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;We can combine this with destructuring to remove the &lt;code dir="ltr"&gt;match&lt;/code&gt; leaving a beautiful line of code.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;let &lt;/span&gt;&lt;span dir="ltr"&gt;Ok(user_name) = UserName::from_str("&lt;/span&gt;&lt;span dir="ltr"&gt;ethan&lt;/span&gt;&lt;span dir="ltr"&gt;");
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;h1&gt;Attributes&lt;/h1&gt;&lt;h2&gt;&lt;code&gt;optimize_attribute&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;It is possible to specify how you want your binary to be optimised with &lt;code dir="ltr"&gt;Cargo.toml&lt;/code&gt; &lt;a href="https://doc.rust-lang.org/book/ch14-01-release-profiles.html" dir="ltr"&gt;using &lt;code dir="ltr"&gt;opt-level&lt;/code&gt;&lt;/a&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;The &lt;code dir="ltr"&gt;opt-level&lt;/code&gt; affects the entire crate while the &lt;code dir="ltr"&gt;optimize_attribute&lt;/code&gt; can control optimization for individual items.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;#[&lt;/span&gt;&lt;span dir="ltr"&gt;optimize&lt;/span&gt;&lt;span dir="ltr"&gt;(speed)]
-&lt;/span&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;fast_but_large&lt;/span&gt;&lt;span dir="ltr"&gt;() {
-     ...
-}
-#[&lt;/span&gt;&lt;span dir="ltr"&gt;optimize&lt;/span&gt;&lt;span dir="ltr"&gt;(size)]
-&lt;/span&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;slow_but_small&lt;/span&gt;&lt;span dir="ltr"&gt;() {
-     ...
-}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This would be very useful for fine-tuning applications where the trade off between size and performance is particularly pronounced such as when using &lt;a href="https://webassembly.org/" dir="ltr"&gt;web assembly&lt;/a&gt;.&lt;/p&gt;&lt;h2&gt;&lt;code&gt;stmt_expr_attributes&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;This feature allows you to place attributes almost everywhere not just top-level items. For example with this feature, you are able to place an &lt;a href="https://lazy.codes/posts/awesome-unstable-rust-features/#optimize-attribute" dir="ltr"&gt;optimize attribute&lt;/a&gt; on a closure.&lt;/p&gt;&lt;h2&gt;&lt;code&gt;cfg_version&lt;/code&gt;&lt;/h2&gt;&lt;p&gt;This feature allows for conditional compilation based on compiler version.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;#[&lt;/span&gt;&lt;span dir="ltr"&gt;cfg&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;version&lt;/span&gt;&lt;span dir="ltr"&gt;("&lt;/span&gt;&lt;span dir="ltr"&gt;1.42&lt;/span&gt;&lt;span dir="ltr"&gt;"))] &lt;/span&gt;&lt;span dir="ltr"&gt;// 1.42 and above
-&lt;/span&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;a&lt;/span&gt;&lt;span dir="ltr"&gt;() {
-    &lt;/span&gt;&lt;span dir="ltr"&gt;// ...
-&lt;/span&gt;&lt;span dir="ltr"&gt;}
-
-#[&lt;/span&gt;&lt;span dir="ltr"&gt;cfg&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;not&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;version&lt;/span&gt;&lt;span dir="ltr"&gt;("&lt;/span&gt;&lt;span dir="ltr"&gt;1.42&lt;/span&gt;&lt;span dir="ltr"&gt;")))] &lt;/span&gt;&lt;span dir="ltr"&gt;// 1.41 and below
-&lt;/span&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;a&lt;/span&gt;&lt;span dir="ltr"&gt;() {
-    &lt;/span&gt;&lt;span dir="ltr"&gt;// ...
-&lt;/span&gt;&lt;span dir="ltr"&gt;}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This allows crates to make use of the latest compiler features while still keeping fallback support for old compilers.&lt;/p&gt;&lt;h2&gt;&lt;code&gt;no_core&lt;/code&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;It has been possible to opt-out of using the standard library using &lt;code dir="ltr"&gt;#![no_std]&lt;/code&gt; for a while.
-This is important for applications that don't run in a full environment such as embedded systems.
-Embedded systems often don't have an operating system or even dynamic memory so many of the functions in &lt;code dir="ltr"&gt;std&lt;/code&gt; wouldn't work.&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;#![no_core]&lt;/code&gt; takes it further by opting out of libcore.
-That leaves you with almost nothing, you can't even use libc.
-This makes it very difficult to implement anything useful.&lt;/p&gt;&lt;h1&gt;Other&lt;/h1&gt;&lt;h2&gt;Const Generics&lt;/h2&gt;&lt;p dir="ltr"&gt;I spoke about the future of const_generics &lt;a href="https://lazy.codes/posts/intro-to-const-generics/" dir="ltr"&gt;at my talk for Rust Dublin&lt;/a&gt;.
-Rather than me reiterating what I said there, I encourage you to &lt;a href="https://lazy.codes/posts/intro-to-const-generics/" dir="ltr"&gt;watch that talk&lt;/a&gt;.&lt;/p&gt;&lt;h1&gt;Macros 2.0&lt;/h1&gt;&lt;p dir="ltr"&gt;Rust's declarative macros are very powerful however some of the rules around &lt;code dir="ltr"&gt;macro_rules!&lt;/code&gt; have always confused me.&lt;/p&gt;&lt;p dir="ltr"&gt;For one, &lt;code dir="ltr"&gt;macro_rules!&lt;/code&gt; acts as a simple token transformation.
-It takes a list of tokens and outputs a new list of tokens, nothing smarter than that.
-The publicity rules end up being the rules of where the macro is being called.
-This is obvious because the codes is being simply pasted into that place.&lt;/p&gt;&lt;p dir="ltr"&gt;Macros 2.0 is an rfc describing a replacement to &lt;code dir="ltr"&gt;macro_rules!&lt;/code&gt; with a new construct simply using the keyword &lt;code dir="ltr"&gt;macro&lt;/code&gt;.&lt;/p&gt;&lt;p&gt;One of the main improvements the new syntax introduces is macro hygiene which allows macros to use the publicity rules of where they are written rather than where they are called.&lt;/p&gt;&lt;h2&gt;&lt;code&gt;generators&lt;/code&gt;&lt;/h2&gt;&lt;p&gt;Generators/coroutines provide a special kind of function that can be paused during execution to "yield" intermediate values to the caller.&lt;/p&gt;&lt;p dir="ltr"&gt;Generators can return multiple values using the &lt;code dir="ltr"&gt;yield&lt;/code&gt; keyword, each time pausing the function and returning to the caller.
-A generator can then &lt;code dir="ltr"&gt;return&lt;/code&gt; a single value after which it can no longer be resumed.&lt;/p&gt;&lt;p&gt;About three years ago I attempted to write an algorithm to traverse an infinite matrix along its diagonals.
-I found it very difficult to write that with Rust's iterators and ended up giving up.&lt;/p&gt;&lt;p&gt;Here is an implementation using Rust's generators/coroutines along with a number of other features we've discussed already.&lt;/p&gt;&lt;PRE&gt;&lt;code data-lang="rust" dir="ltr"&gt;&lt;span dir="ltr"&gt;#![&lt;/span&gt;&lt;span dir="ltr"&gt;feature&lt;/span&gt;&lt;span dir="ltr"&gt;(
-    try_blocks,
-    generators,
-    generator_trait,
-    associated_type_bounds,
-    type_ascription
-)]
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;use &lt;/span&gt;&lt;span dir="ltr"&gt;std::{
-    iter,
-    ops::{Generator, GeneratorState},
-    pin::Pin,
-};
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;/// Input
-/// [[1, 2, 3]
-/// ,[4, 5, 6]
-/// ,[7, 8, 9]]
-/// Output
-/// [1, 2, 4, 3, 5, 7]
-&lt;/span&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;diagonalize&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;lt;T&amp;gt;(
-    &lt;/span&gt;&lt;span dir="ltr"&gt;mut &lt;/span&gt;&lt;span dir="ltr"&gt;matrix&lt;/span&gt;&lt;span dir="ltr"&gt;: impl Iterator&amp;lt;Item: Iterator&amp;lt;Item = T&amp;gt;&amp;gt;,
-) -&amp;gt; impl Generator&amp;lt;Yield = T, Return = ()&amp;gt; {
-    &lt;/span&gt;&lt;span dir="ltr"&gt;move &lt;/span&gt;&lt;span dir="ltr"&gt;|| {
-        &lt;/span&gt;&lt;span dir="ltr"&gt;let mut&lt;/span&gt;&lt;span dir="ltr"&gt; rows = Vec::new();
-        (try {
-            rows.&lt;/span&gt;&lt;span dir="ltr"&gt;push&lt;/span&gt;&lt;span dir="ltr"&gt;(matrix.&lt;/span&gt;&lt;span dir="ltr"&gt;next&lt;/span&gt;&lt;span dir="ltr"&gt;()?);
-            &lt;/span&gt;&lt;span dir="ltr"&gt;for&lt;/span&gt;&lt;span dir="ltr"&gt; height in &lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;.. {
-                &lt;/span&gt;&lt;span dir="ltr"&gt;for&lt;/span&gt;&lt;span dir="ltr"&gt; row in &lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;..height {
-                    &lt;/span&gt;&lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt; row &amp;gt;= rows.&lt;/span&gt;&lt;span dir="ltr"&gt;len&lt;/span&gt;&lt;span dir="ltr"&gt;() {
-                        rows.&lt;/span&gt;&lt;span dir="ltr"&gt;push&lt;/span&gt;&lt;span dir="ltr"&gt;(matrix.&lt;/span&gt;&lt;span dir="ltr"&gt;next&lt;/span&gt;&lt;span dir="ltr"&gt;()?);
-                    }
-                    &lt;/span&gt;&lt;span dir="ltr"&gt;yield&lt;/span&gt;&lt;span dir="ltr"&gt; rows[row].&lt;/span&gt;&lt;span dir="ltr"&gt;next&lt;/span&gt;&lt;span dir="ltr"&gt;()?;
-                }
-            }
-        }): Option&amp;lt;()&amp;gt;;
-    }
-}
-
-&lt;/span&gt;&lt;span dir="ltr"&gt;fn &lt;/span&gt;&lt;span dir="ltr"&gt;main&lt;/span&gt;&lt;span dir="ltr"&gt;() {
-    &lt;/span&gt;&lt;span dir="ltr"&gt;let&lt;/span&gt;&lt;span dir="ltr"&gt; matrix = (&lt;/span&gt;&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;span dir="ltr"&gt;..).&lt;/span&gt;&lt;span dir="ltr"&gt;map&lt;/span&gt;&lt;span dir="ltr"&gt;(|&lt;/span&gt;&lt;span dir="ltr"&gt;x&lt;/span&gt;&lt;span dir="ltr"&gt;| iter::once(x).&lt;/span&gt;&lt;span dir="ltr"&gt;cycle&lt;/span&gt;&lt;span dir="ltr"&gt;().&lt;/span&gt;&lt;span dir="ltr"&gt;enumerate&lt;/span&gt;&lt;span dir="ltr"&gt;());
-    &lt;/span&gt;&lt;span dir="ltr"&gt;let mut&lt;/span&gt;&lt;span dir="ltr"&gt; diagonals = &lt;/span&gt;&lt;span dir="ltr"&gt;diagonalize&lt;/span&gt;&lt;span dir="ltr"&gt;(matrix);
-    &lt;/span&gt;&lt;span dir="ltr"&gt;while let &lt;/span&gt;&lt;span dir="ltr"&gt;GeneratorState::Yielded(value) = Pin::new(&amp;amp;&lt;/span&gt;&lt;span dir="ltr"&gt;mut&lt;/span&gt;&lt;span dir="ltr"&gt; diagonals).&lt;/span&gt;&lt;span dir="ltr"&gt;resume&lt;/span&gt;&lt;span dir="ltr"&gt;(()) {
-        dbg!(value);
-    }
-}
-&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;BLOCKQUOTE&gt;&lt;p&gt;It is understandable if you found the above snippet hard to interpret.
-It makes use of a number of features that you may have just been introduced to.&lt;/p&gt;&lt;p&gt;There is a compelling argument against adding too many new features as they can greatly increase the learning curve.&lt;/p&gt;&lt;/BLOCKQUOTE&gt;&lt;p&gt;Generators make it possible to write implementations that are far more difficult or even impossible to write without them.&lt;/p&gt;&lt;p&gt;Generators were added to implement async-await in the standard library.
-It is most likely that the exact semantics will change before any kind of stabilisation but they are very fun to play with.&lt;/p&gt;&lt;h1&gt;Final thoughts&lt;/h1&gt;&lt;p dir="ltr"&gt;I have to apologise for not including three amazing unstable features; &lt;a href="https://github.com/rust-lang/rfcs/blob/master/text/1598-generic_associated_types.md" dir="ltr"&gt;Generic associated types&lt;/a&gt;, &lt;a href="https://rust-lang.github.io/rfcs/2873-inline-asm.html" dir="ltr"&gt;inline asm&lt;/a&gt; and &lt;a href="https://rust-lang.github.io/rfcs/1210-impl-specialization.html" dir="ltr"&gt;specialization&lt;/a&gt;.
-I simply did not feel able to give these features justice in this article but I may try to talk about them in future.&lt;/p&gt;&lt;p dir="ltr"&gt;If you wish to read more about an unstable feature the best place to start is &lt;a href="https://doc.rust-lang.org/beta/unstable-book/the-unstable-book.html" dir="ltr"&gt;the unstable book&lt;/a&gt; where most of them are listed.
-The unstable book then links to a &lt;a href="https://github.com/rust-lang/rust/labels/C-tracking-issue" dir="ltr"&gt;tracking issue&lt;/a&gt; which then often, in turn, links to an &lt;a href="https://rust-lang.github.io/rfcs/" dir="ltr"&gt;RFC&lt;/a&gt;.
-With this combination of sources, you can then build up a picture of the details surrounding a feature.&lt;/p&gt;&lt;p dir="ltr"&gt;Thank you for reading my first blog post 😃.
-The best way to support me is by following my &lt;a href="https://twitter.com/efun_b" dir="ltr"&gt;Twitter&lt;/a&gt;.
-I am also looking for employment opportunities so please get in touch if you would like to talk about that.&lt;/p&gt;</description><pubDate>Fri, 30 Jul 2021 08:24:15 -0500</pubDate></item></channel></rss>
+			&lt;/LI&gt;&lt;/OL&gt;</description><pubDate>Sat, 31 Jul 2021 04:41:27 -0500</pubDate></item><item><title>The Hardest Problem in Type Theory [Uniqueness of Identity Proofs]</title><link>https://www.youtube.com/watch?v=m_PecfbEWik</link><description>&lt;p&gt;&lt;a href="https://lobste.rs/s/mepre5/hardest_problem_type_theory_uniqueness"&gt;Comments&lt;/a&gt;&lt;/p&gt;</description><pubDate>Fri, 30 Jul 2021 17:30:16 -0500</pubDate></item></channel></rss>
