@@ -1550,740 +1550,7 @@ to me and, hopefully, to others who read my posts.&lt;/p&gt;&lt;p&gt;End of rant
             &lt;/p&gt;&lt;p dir="ltr"&gt;
                 It also applies to Managed Domains with static certificate files (
                 see &lt;code dir="ltr"&gt;&lt;a href="https://httpd.apache.org/docs/trunk/mod/mod_md.html#mdcertificatefile" dir="ltr"&gt;MDCertificateFile&lt;/a&gt;&lt;/code&gt;).
-            &lt;/p&gt;</description><pubDate>Sat, 07 Aug 2021 22:44:16 -0500</pubDate></item><item><title>Put This In Your Pipe – Backticks in Julia</title><link>https://lobste.rs/s/ybinhe</link><description>&lt;img src="https://julialang.org/assets/infra/logo.svg" alt="JuliaLang Logo" width="80" height="50"&gt;&lt;h3 dir="ltr"&gt; &lt;span dir="ltr"&gt; 8 April 2013 &lt;/span&gt; |  &lt;span dir="ltr"&gt;&lt;a href="https://karpinski.org/" dir="ltr"&gt;Stefan Karpinski&lt;/a&gt; &lt;/span&gt; &lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Note:&lt;/strong&gt; This post has been updated to work with Julia 1.x (the original version used Julia 0.1 syntax).&lt;/p&gt;&lt;p dir="ltr"&gt;In a &lt;a href="https://julialang.org/blog/2012/03/shelling-out-sucks/" dir="ltr"&gt;previous post&lt;/a&gt;, I talked about why "shelling out" to spawn a pipeline of external programs via an intermediate shell is a common cause of bugs, security holes, unnecessary overhead, and silent failures. But it's so convenient! Why can't running pipelines of external programs be convenient &lt;em dir="ltr"&gt;and&lt;/em&gt; safe? Well, there's no real reason, actually. The shell itself manages to construct and execute pipelines quite well. In principle, there's nothing stopping high-level languages from doing it at least as well as shells do – the common ones just don't by default, instead requiring users to make the extra effort to use external programs safely and correctly. There are two major impediments:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Some moderately tricky low-level UNIX plumbing using the &lt;a href="https://man7.org/linux/man-pages/man2/pipe.2.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;pipe&lt;/code&gt;&lt;/a&gt;, &lt;a href="https://man7.org/linux/man-pages/man2/dup2.2.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;dup2&lt;/code&gt;&lt;/a&gt;, &lt;a href="https://man7.org/linux/man-pages/man2/fork.2.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;fork&lt;/code&gt;&lt;/a&gt;, &lt;a href="https://man7.org/linux/man-pages/man2/close.2.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;close&lt;/code&gt;&lt;/a&gt;, and &lt;a href="https://man7.org/linux/man-pages/man2/execve.2.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;exec&lt;/code&gt;&lt;/a&gt; system calls;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;The UX problem of designing an easy, flexible programming interface for commands and pipelines.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;This post describes the system we designed and implemented for Julia, and how it avoids the major flaws of shelling out in other languages. First, I'll present the Julia version of the previous post's example – counting the number of lines in a given directory containing the string "foo". The fact that Julia provides complete, specific diagnostic error messages when pipelines fail turns out to reveal a surprising and subtle bug, lurking in what appears to be a perfectly innocuous UNIX pipeline. After fixing this bug, we go into details of how Julia's external command execution and pipeline construction system actually works, and why it provides greater flexibility and safety than the traditional approach of using an intermediate shell to do all the heavy lifting.&lt;/p&gt;&lt;h2&gt;&lt;a href="https://julialang.org/blog/2013/04/put-this-in-your-pipe/#simple_pipeline_subtle_bug"&gt;Simple Pipeline, Subtle Bug&lt;/a&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;Here's how you write the example of counting the number of lines in a directory containing the string "foo" in Julia (you can follow along at home if you have Julia installed from source by changing directories into the Julia source directory and doing &lt;code dir="ltr"&gt;cp -a src "source code"; mkdir tmp&lt;/code&gt; and then firing up the Julia repl):&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; dir = &lt;span dir="ltr"&gt;"src"&lt;/span&gt;; &lt;span dir="ltr"&gt;# works in the git repo for Julia&lt;/span&gt;
-
-julia&amp;gt; parse(&lt;span dir="ltr"&gt;Int&lt;/span&gt;, readchomp(pipeline(
-           &lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;$dir&lt;/span&gt; -type f -print0`&lt;/span&gt;,
-           &lt;span dir="ltr"&gt;`xargs -0 grep foo`&lt;/span&gt;,
-           &lt;span dir="ltr"&gt;`wc -l`&lt;/span&gt;,
-       )))
-&lt;span dir="ltr"&gt;5&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This Julia command looks suspiciously similar to the naïve Ruby version we started with in the previous post:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;#{dir}&lt;/span&gt; -type f -print0 | xargs -0 grep foo | wc -l`&lt;/span&gt;.to_i&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;However, it isn't susceptible to the same problems:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; dir = &lt;span dir="ltr"&gt;"source code"&lt;/span&gt;;
-
-julia&amp;gt; parse(&lt;span dir="ltr"&gt;Int&lt;/span&gt;, readchomp(pipeline(
-           &lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;$dir&lt;/span&gt; -type f -print0`&lt;/span&gt;,
-           &lt;span dir="ltr"&gt;`xargs -0 grep foo`&lt;/span&gt;,
-           &lt;span dir="ltr"&gt;`wc -l`&lt;/span&gt;,
-       )))
-&lt;span dir="ltr"&gt;5&lt;/span&gt;
-
-julia&amp;gt; dir = &lt;span dir="ltr"&gt;"nonexistent"&lt;/span&gt;;
-
-julia&amp;gt; parse(&lt;span dir="ltr"&gt;Int&lt;/span&gt;, readchomp(pipeline(
-           &lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;$dir&lt;/span&gt; -type f -print0`&lt;/span&gt;,
-           &lt;span dir="ltr"&gt;`xargs -0 grep foo`&lt;/span&gt;,
-           &lt;span dir="ltr"&gt;`wc -l`&lt;/span&gt;,
-       )))
-find: ‘nonexistent’: No such file or directory
-ERROR: failed processes:
-  Process(&lt;span dir="ltr"&gt;`find nonexistent -type f -print0`&lt;/span&gt;, ProcessExited(&lt;span dir="ltr"&gt;1&lt;/span&gt;)) [&lt;span dir="ltr"&gt;1&lt;/span&gt;]
-  Process(&lt;span dir="ltr"&gt;`xargs -0 grep foo`&lt;/span&gt;, ProcessExited(&lt;span dir="ltr"&gt;123&lt;/span&gt;)) [&lt;span dir="ltr"&gt;123&lt;/span&gt;]
-
-julia&amp;gt; dir = &lt;span dir="ltr"&gt;"foo'; echo MALICIOUS ATTACK; echo '"&lt;/span&gt;;
-
-julia&amp;gt; parse(&lt;span dir="ltr"&gt;Int&lt;/span&gt;, readchomp(pipeline(
-           &lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;$dir&lt;/span&gt; -type f -print0`&lt;/span&gt;,
-           &lt;span dir="ltr"&gt;`xargs -0 grep foo`&lt;/span&gt;,
-           &lt;span dir="ltr"&gt;`wc -l`&lt;/span&gt;,
-       )))
-find: ‘foo'; echo MALICIOUS ATTACK; echo '’: No such file or directory
-ERROR: failed processes:
-  Process(&lt;span dir="ltr"&gt;`find "foo'; echo MALICIOUS ATTACK; echo '" -type f -print0`&lt;/span&gt;, ProcessExited(&lt;span dir="ltr"&gt;1&lt;/span&gt;)) [&lt;span dir="ltr"&gt;1&lt;/span&gt;]
-  Process(&lt;span dir="ltr"&gt;`xargs -0 grep foo`&lt;/span&gt;, ProcessExited(&lt;span dir="ltr"&gt;123&lt;/span&gt;)) [&lt;span dir="ltr"&gt;123&lt;/span&gt;]&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The default, simplest-to-achieve behavior in Julia is:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;not susceptible to any kind of metacharacter breakage,&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;reliably detects all subprocess failures,&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;automatically raises an exception if any subprocess fails,&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;prints error messages including exactly which commands failed.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;In the above examples, we can see that even when &lt;code dir="ltr"&gt;dir&lt;/code&gt; contains spaces or quotes, the expression still behaves exactly as intended –&amp;nbsp;the value of &lt;code dir="ltr"&gt;dir&lt;/code&gt; is interpolated as a single argument to the &lt;code dir="ltr"&gt;find&lt;/code&gt; command. When &lt;code dir="ltr"&gt;dir&lt;/code&gt; is not the name of a directory that exists, &lt;code dir="ltr"&gt;find&lt;/code&gt; fails – as it should – and this failure is detected and automatically converted into an informative exception, including the fully expanded command-lines that failed.&lt;/p&gt;&lt;p dir="ltr"&gt;In the previous post, we observed that using the &lt;code dir="ltr"&gt;pipefail&lt;/code&gt; option for Bash allows detection of pipeline failures, like this one, occurring before the last process in the pipeline. However, it only allows us to detect that at least one thing in the pipeline failed. We still have to guess at what parts of the pipeline actually failed. In the Julia example, on the other hand, there is no guessing required: when a non-existent directory is given, we can see that both &lt;code dir="ltr"&gt;find&lt;/code&gt; and &lt;code dir="ltr"&gt;xargs&lt;/code&gt; fail. While it is unsurprising that &lt;code dir="ltr"&gt;find&lt;/code&gt; fails in this case, it is unexpected that &lt;code dir="ltr"&gt;xargs&lt;/code&gt; also fails. Why &lt;em dir="ltr"&gt;does&lt;/em&gt; &lt;code dir="ltr"&gt;xargs&lt;/code&gt; fail?&lt;/p&gt;&lt;p dir="ltr"&gt;One possibility to check for is that the &lt;code dir="ltr"&gt;xargs&lt;/code&gt; program fails with no input. We can use Julia's &lt;code dir="ltr"&gt;success&lt;/code&gt; predicate to try it out:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; success(pipeline(&lt;span dir="ltr"&gt;`cat /dev/null`&lt;/span&gt;, &lt;span dir="ltr"&gt;`xargs true`&lt;/span&gt;))
-&lt;span dir="ltr"&gt;true&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Ok, so &lt;code dir="ltr"&gt;xargs&lt;/code&gt; seems perfectly happy with no input. Maybe grep doesn't like not getting any input?&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; success(pipeline(&lt;span dir="ltr"&gt;`cat /dev/null`&lt;/span&gt;, &lt;span dir="ltr"&gt;`grep foo`&lt;/span&gt;))
-&lt;span dir="ltr"&gt;false&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Aha! &lt;code dir="ltr"&gt;grep&lt;/code&gt; returns a non-zero status when it doesn't get any input. Good to know. It turns out that &lt;code dir="ltr"&gt;grep&lt;/code&gt; indicates whether it matched anything or not with its return status. Most programs use their return status to indicate success or failure, but some, like &lt;code dir="ltr"&gt;grep&lt;/code&gt;, use it to indicate some other boolean condition –&amp;nbsp;in this case "found something" versus "didn't find anything":&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; success(pipeline(&lt;span dir="ltr"&gt;`echo foo`&lt;/span&gt;, &lt;span dir="ltr"&gt;`grep foo`&lt;/span&gt;))
-&lt;span dir="ltr"&gt;true&lt;/span&gt;
-
-julia&amp;gt; success(pipeline(&lt;span dir="ltr"&gt;`echo bar`&lt;/span&gt;, &lt;span dir="ltr"&gt;`grep foo`&lt;/span&gt;))
-&lt;span dir="ltr"&gt;false&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Now we know why &lt;code dir="ltr"&gt;grep&lt;/code&gt; is "failing" – and &lt;code dir="ltr"&gt;xargs&lt;/code&gt; too, since it returns a non-zero status if the program it runs returns non-zero. This means that our Julia pipeline and the "responsible" Ruby version are both susceptible to bogus failures when we search an existing directory that happens not to contain the string "flippity" anywhere:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; dir = &lt;span dir="ltr"&gt;"src"&lt;/span&gt;;
-
-julia&amp;gt; parse(&lt;span dir="ltr"&gt;Int&lt;/span&gt;, readchomp(pipeline(
-           &lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;$dir&lt;/span&gt; -type f -print0`&lt;/span&gt;,
-           &lt;span dir="ltr"&gt;`xargs -0 grep flippity`&lt;/span&gt;,
-           &lt;span dir="ltr"&gt;`wc -l`&lt;/span&gt;,
-       )))
-ERROR: failed process: Process(&lt;span dir="ltr"&gt;`xargs -0 grep flippity`&lt;/span&gt;, ProcessExited(&lt;span dir="ltr"&gt;123&lt;/span&gt;)) [&lt;span dir="ltr"&gt;123&lt;/span&gt;]&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Since &lt;code dir="ltr"&gt;grep&lt;/code&gt; indicates not finding anything using a non-zero return status, the &lt;code dir="ltr"&gt;readchomp&lt;/code&gt; function concludes that its pipeline failed and raises an error to that effect. In this case, this default behavior is undesirable: we want the expression to just return &lt;code dir="ltr"&gt;0&lt;/code&gt; without raising an error. The simple fix in Julia is this:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; parse(&lt;span dir="ltr"&gt;Int&lt;/span&gt;, readchomp(pipeline(
-           &lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;$dir&lt;/span&gt; -type f -print0`&lt;/span&gt;,
-           ignorestatus(&lt;span dir="ltr"&gt;`xargs -0 grep flippity`&lt;/span&gt;),
-           &lt;span dir="ltr"&gt;`wc -l`&lt;/span&gt;,
-       )))
-&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This works correctly in all cases. Next I'll explain &lt;em dir="ltr"&gt;how&lt;/em&gt; all of this works, but for now it's enough to note that the detailed error message provided when our pipeline failed exposed a rather subtle bug that would eventually cause subtle and hard-to-debug problems when used in production. Without such detailed error reporting, this bug would be pretty difficult to track down.&lt;/p&gt;&lt;h2&gt;&lt;a href="https://julialang.org/blog/2013/04/put-this-in-your-pipe/#do-nothing_backticks"&gt;Do-Nothing Backticks&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Julia borrows the backtick syntax for external commands from Perl and Ruby, both of which in turn got it from the shell. Unlike in these predecessors, however, in Julia backticks don't immediately run commands, nor do they necessarily indicate that you want to capture the output of the command. Instead, backticks just construct an object representing a command:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; &lt;span dir="ltr"&gt;`echo Hello`&lt;/span&gt;
-&lt;span dir="ltr"&gt;`echo Hello`&lt;/span&gt;
-
-julia&amp;gt; typeof(ans)
-&lt;span dir="ltr"&gt;Cmd&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;(In the Julia repl, &lt;code dir="ltr"&gt;ans&lt;/code&gt; is automatically bound to the value of the last evaluated input.) In order to actually run a command, you have to &lt;em dir="ltr"&gt;do&lt;/em&gt; something with a command object. To run a command and capture its output into a string –&amp;nbsp;what other languages do with backticks automatically –&amp;nbsp;you can apply the &lt;code dir="ltr"&gt;read&lt;/code&gt; function with &lt;code dir="ltr"&gt;String&lt;/code&gt; as the second argument indicating that you want a string not a byte array:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; read(&lt;span dir="ltr"&gt;`echo Hello`&lt;/span&gt;, &lt;span dir="ltr"&gt;String&lt;/span&gt;)
-&lt;span dir="ltr"&gt;"Hello\n"&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Since it's very common to want to discard the trailing line break at the end of a command's output, Julia provides the &lt;code dir="ltr"&gt;readchomp(x)&lt;/code&gt; command which is equivalent to writing &lt;code dir="ltr"&gt;chomp(read(x, String))&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; readchomp(&lt;span dir="ltr"&gt;`echo Hello`&lt;/span&gt;)
-&lt;span dir="ltr"&gt;"Hello"&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;To run a command without capturing its output, letting it just print to the same &lt;code dir="ltr"&gt;stdout&lt;/code&gt; stream as the main process –&amp;nbsp;i.e. what the &lt;code dir="ltr"&gt;system&lt;/code&gt; function does when given a command as a string in other languages – use the &lt;code dir="ltr"&gt;run&lt;/code&gt; function:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; run(&lt;span dir="ltr"&gt;`echo Hello`&lt;/span&gt;)
-Hello
-Process(&lt;span dir="ltr"&gt;`echo Hello`&lt;/span&gt;, ProcessExited(&lt;span dir="ltr"&gt;0&lt;/span&gt;))&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The &lt;code dir="ltr"&gt;"Hello"&lt;/code&gt; after the &lt;code dir="ltr"&gt;readchomp&lt;/code&gt; command is a returned value, whereas the &lt;code dir="ltr"&gt;Hello&lt;/code&gt; after the &lt;code dir="ltr"&gt;run&lt;/code&gt; command is printed output. The &lt;code dir="ltr"&gt;Process(`echo Hello`, ProcessExited(0))&lt;/code&gt; is the value returned by &lt;code dir="ltr"&gt;run&lt;/code&gt;. (If your terminal supports color, these are colored differently so that you can easily distinguish them visually.) If something goes wrong, an exception is raised:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; run(&lt;span dir="ltr"&gt;`false`&lt;/span&gt;)
-ERROR: failed process: Process(&lt;span dir="ltr"&gt;`false`&lt;/span&gt;, ProcessExited(&lt;span dir="ltr"&gt;1&lt;/span&gt;)) [&lt;span dir="ltr"&gt;1&lt;/span&gt;]
-
-julia&amp;gt; run(&lt;span dir="ltr"&gt;`notaprogram`&lt;/span&gt;)
-ERROR: IOError: could not spawn &lt;span dir="ltr"&gt;`notaprogram`&lt;/span&gt;: no such file or directory (ENOENT)&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;As with &lt;code dir="ltr"&gt;xargs&lt;/code&gt; and &lt;code dir="ltr"&gt;grep&lt;/code&gt; above, this may not always be desirable. In such cases, you can use &lt;code dir="ltr"&gt;ignorestatus&lt;/code&gt; to indicate that the command returning a non-zero value should not be considered an error:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; run(ignorestatus(&lt;span dir="ltr"&gt;`false`&lt;/span&gt;))
-Process(&lt;span dir="ltr"&gt;`false`&lt;/span&gt;, ProcessExited(&lt;span dir="ltr"&gt;1&lt;/span&gt;))
-
-julia&amp;gt; run(ignorestatus(&lt;span dir="ltr"&gt;`notaprogram`&lt;/span&gt;))
-ERROR: IOError: could not spawn &lt;span dir="ltr"&gt;`notaprogram`&lt;/span&gt;: no such file or directory (ENOENT)&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;In the latter case, an error is still raised in the parent process since the problem is that the executable doesn't even exist, rather than merely that it ran and returned a non-zero status.&lt;/p&gt;&lt;p&gt;Although Julia's backtick syntax intentionally mimics the shell as closely as possible, there is an important distinction: the command string is never passed to a shell to be interpreted and executed; instead it is parsed in Julia code, using the same rules the shell uses to determine what the command and arguments are. Command objects look a bit like strings, but they're actually more like an array of strings, which can be seen if you collect a command:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; cmd = &lt;span dir="ltr"&gt;`perl -e 'print "Hello\n"'`&lt;/span&gt;
-&lt;span dir="ltr"&gt;`perl -e 'print "Hello\n"'`&lt;/span&gt;
-
-julia&amp;gt; collect(cmd)
-&lt;span dir="ltr"&gt;3&lt;/span&gt;-element &lt;span dir="ltr"&gt;Array&lt;/span&gt;{&lt;span dir="ltr"&gt;String&lt;/span&gt;,&lt;span dir="ltr"&gt;1&lt;/span&gt;}:
- &lt;span dir="ltr"&gt;"perl"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"-e"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"print \"Hello\\n\""&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;You can also get the length of a command object and index into it:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; length(cmd)
-&lt;span dir="ltr"&gt;3&lt;/span&gt;
-
-julia&amp;gt; cmd[&lt;span dir="ltr"&gt;3&lt;/span&gt;]
-&lt;span dir="ltr"&gt;"print \"Hello\\n\""&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;So commands are very much just a funny kind of string array. If your terminal supports underlines, the individual words in the command will be underlined, helping you to easily see where the breaks between words are.&lt;/p&gt;&lt;h2&gt;&lt;a href="https://julialang.org/blog/2013/04/put-this-in-your-pipe/#constructing_commands"&gt;Constructing Commands&lt;/a&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;The purpose of the backtick notation in Julia is to provide a familiar, shell-like syntax for making objects representing commands with arguments. To that end, quotes and spaces work just as they do in the shell. The real power of backtick syntax doesn't emerge, however, until we begin constructing commands programmatically. Just as in the shell (and in Julia strings), you can interpolate values into commands using the dollar sign (&lt;code dir="ltr"&gt;$&lt;/code&gt;):&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; dir = &lt;span dir="ltr"&gt;"src"&lt;/span&gt;;
-
-julia&amp;gt; collect(&lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;$dir&lt;/span&gt; -type f`&lt;/span&gt;)
-&lt;span dir="ltr"&gt;4&lt;/span&gt;-element &lt;span dir="ltr"&gt;Array&lt;/span&gt;{&lt;span dir="ltr"&gt;String&lt;/span&gt;,&lt;span dir="ltr"&gt;1&lt;/span&gt;}:
- &lt;span dir="ltr"&gt;"find"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"src"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"-type"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"f"&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Unlike in the shell, however, Julia values interpolated into commands are interpolated as a single verbatim argument –&amp;nbsp;no characters inside the value are interpreted as special after the value has been interpolated:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; dir = &lt;span dir="ltr"&gt;"two words"&lt;/span&gt;;
-
-julia&amp;gt; collect(&lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;$dir&lt;/span&gt; -type f`&lt;/span&gt;)
-&lt;span dir="ltr"&gt;4&lt;/span&gt;-element &lt;span dir="ltr"&gt;Array&lt;/span&gt;{&lt;span dir="ltr"&gt;String&lt;/span&gt;,&lt;span dir="ltr"&gt;1&lt;/span&gt;}:
- &lt;span dir="ltr"&gt;"find"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"two words"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"-type"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"f"&lt;/span&gt;
-
-julia&amp;gt; dir = &lt;span dir="ltr"&gt;"foo'bar"&lt;/span&gt;;
-
-julia&amp;gt; collect(&lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;$dir&lt;/span&gt; -type f`&lt;/span&gt;)
-&lt;span dir="ltr"&gt;4&lt;/span&gt;-element &lt;span dir="ltr"&gt;Array&lt;/span&gt;{&lt;span dir="ltr"&gt;String&lt;/span&gt;,&lt;span dir="ltr"&gt;1&lt;/span&gt;}:
- &lt;span dir="ltr"&gt;"find"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"foo'bar"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"-type"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"f"&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This works no matter what the contents of the interpolated value is, allowing simple interpolation of characters that are quite difficult to pass as parts of command-line arguments even in the shell (for the following examples, &lt;code dir="ltr"&gt;tmp/a.tsv&lt;/code&gt; and &lt;code dir="ltr"&gt;tmp/b.tsv&lt;/code&gt; can be created in the shell with &lt;code dir="ltr"&gt;echo -e "foo\tbar\nbaz\tqux" &amp;gt; tmp/a.tsv; echo -e "foo\t1\nbaz\t2" &amp;gt; tmp/b.tsv&lt;/code&gt;):&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; tab = &lt;span dir="ltr"&gt;"\t"&lt;/span&gt;;
-
-julia&amp;gt; cmd = &lt;span dir="ltr"&gt;`join -t&lt;span dir="ltr"&gt;$tab&lt;/span&gt; tmp/a.tsv tmp/b.tsv`&lt;/span&gt;;
-
-julia&amp;gt; collect(cmd)
-&lt;span dir="ltr"&gt;4&lt;/span&gt;-element &lt;span dir="ltr"&gt;Array&lt;/span&gt;{&lt;span dir="ltr"&gt;String&lt;/span&gt;,&lt;span dir="ltr"&gt;1&lt;/span&gt;}:
- &lt;span dir="ltr"&gt;"join"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"-t\t"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"tmp/a.tsv"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"tmp/b.tsv"&lt;/span&gt;
-
-julia&amp;gt; run(cmd)
-foo     bar     &lt;span dir="ltr"&gt;1&lt;/span&gt;
-baz     qux     &lt;span dir="ltr"&gt;2&lt;/span&gt;
-Process(&lt;span dir="ltr"&gt;`join '-t   ' tmp/a.tsv tmp/b.tsv`&lt;/span&gt;, ProcessExited(&lt;span dir="ltr"&gt;0&lt;/span&gt;))&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Moreover, what comes after the &lt;code dir="ltr"&gt;$&lt;/code&gt; can actually be any valid Julia expression,&amp;nbsp;not just a variable name:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; collect(&lt;span dir="ltr"&gt;`join -t$"\t" tmp/a.tsv tmp/b.tsv`&lt;/span&gt;)
-&lt;span dir="ltr"&gt;4&lt;/span&gt;-element &lt;span dir="ltr"&gt;Array&lt;/span&gt;{&lt;span dir="ltr"&gt;String&lt;/span&gt;,&lt;span dir="ltr"&gt;1&lt;/span&gt;}:
- &lt;span dir="ltr"&gt;"join"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"-t\t"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"tmp/a.tsv"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"tmp/b.tsv"&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;A tab character is somewhat harder to pass in the shell, requiring command interpolation and some tricky quoting:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;bash-3.2$ join -t&lt;span dir="ltr"&gt;"&lt;span dir="ltr"&gt;$(printf '\t')&lt;/span&gt;"&lt;/span&gt; tmp/a.tsv tmp/b.tsv
-foo     bar     1
-baz     qux     2&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;While interpolating values with spaces and other strange characters is great for non-brittle construction of commands, there was a reason why the shell split values on spaces in the first place: to allow interpolation of multiple arguments. Most modern shells have first-class array types, but older shells used space-separation to simulate arrays. Thus, if you interpolate a value like "foo bar" into a command in the shell, it's treated as two separate words by default. In languages with first-class array types, however, there's a much better option: consistently interpolate single values as single arguments and interpolate arrays as multiple values. This is precisely what Julia's backtick interpolation does:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; dirs = [&lt;span dir="ltr"&gt;"foo"&lt;/span&gt;, &lt;span dir="ltr"&gt;"bar"&lt;/span&gt;, &lt;span dir="ltr"&gt;"baz"&lt;/span&gt;];
-
-julia&amp;gt; collect(&lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;$dirs&lt;/span&gt; -type f`&lt;/span&gt;)
-&lt;span dir="ltr"&gt;6&lt;/span&gt;-element &lt;span dir="ltr"&gt;Array&lt;/span&gt;{&lt;span dir="ltr"&gt;String&lt;/span&gt;,&lt;span dir="ltr"&gt;1&lt;/span&gt;}:
- &lt;span dir="ltr"&gt;"find"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"foo"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"bar"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"baz"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"-type"&lt;/span&gt;
- &lt;span dir="ltr"&gt;"f"&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;And of course, no matter how strange the strings contained in an interpolated array are, they become verbatim arguments, without any shell interpretation. Julia's backticks have one more fancy trick up their sleeve. We saw earlier (without really remarking on it) that you could interpolate single values into a larger argument:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; x = &lt;span dir="ltr"&gt;"bar"&lt;/span&gt;;
-
-julia&amp;gt; &lt;span dir="ltr"&gt;`echo foo&lt;span dir="ltr"&gt;$x&lt;/span&gt;`&lt;/span&gt;
-&lt;span dir="ltr"&gt;`echo foobar`&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;What happens if &lt;code dir="ltr"&gt;x&lt;/code&gt; is an array? Only one way to find out:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; x = [&lt;span dir="ltr"&gt;"bar"&lt;/span&gt;, &lt;span dir="ltr"&gt;"baz"&lt;/span&gt;];
-
-julia&amp;gt; &lt;span dir="ltr"&gt;`echo foo&lt;span dir="ltr"&gt;$x&lt;/span&gt;`&lt;/span&gt;
-&lt;span dir="ltr"&gt;`echo foobar foobaz`&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Julia does what the shell would do if you wrote &lt;code dir="ltr"&gt;echo foo{bar,baz}&lt;/code&gt;. This even works correctly for multiple values interpolated into the same shell word:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; dir = &lt;span dir="ltr"&gt;"data"&lt;/span&gt;; names = [&lt;span dir="ltr"&gt;"foo"&lt;/span&gt;,&lt;span dir="ltr"&gt;"bar"&lt;/span&gt;]; exts=[&lt;span dir="ltr"&gt;"csv"&lt;/span&gt;,&lt;span dir="ltr"&gt;"tsv"&lt;/span&gt;];
-
-julia&amp;gt; &lt;span dir="ltr"&gt;`cat &lt;span dir="ltr"&gt;$dir&lt;/span&gt;/&lt;span dir="ltr"&gt;$names&lt;/span&gt;.&lt;span dir="ltr"&gt;$exts&lt;/span&gt;`&lt;/span&gt;
-&lt;span dir="ltr"&gt;`cat data/foo.csv data/foo.tsv data/bar.csv data/bar.tsv`&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This is the same Cartesian product expansion that the shell does if multiple &lt;code dir="ltr"&gt;{...}&lt;/code&gt; expressions are used in the same word.&lt;/p&gt;&lt;h2&gt;&lt;a href="https://julialang.org/blog/2013/04/put-this-in-your-pipe/#further_reading"&gt;Further Reading&lt;/a&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;You can read more in Julia's &lt;a href="https://docs.julialang.org/en/v1/manual/running-external-programs/#" dir="ltr"&gt;online manual&lt;/a&gt;, including how to construct complex pipelines, and how shell-compatible quoting and interpolation rules in Julia's backtick syntax make it both simple and safe to cut-and-paste shell commands into Julia code. The whole system is designed on the principle that the easiest thing to do should also be the right thing. The end result is that starting and interacting with external processes in Julia is both convenient and safe.&lt;/p&gt;</description><pubDate>Sun, 08 Aug 2021 14:58:12 -0500</pubDate></item><item><title>Lisping at JPL (2002)</title><link>https://lobste.rs/s/xzzrct</link><description>&lt;h1&gt;Lisping at JPL&lt;/h1&gt;&lt;div&gt;
-
-&lt;small dir="ltr"&gt;Copyright (c) 2002 by Ron Garret
- (&lt;a href="http://www.flownet.com/ron/eg-rg-faq.html" dir="ltr"&gt;f.k.a. Erann Gat&lt;/a&gt;),
- all rights reserved.&lt;/small&gt;&lt;/div&gt;&lt;p&gt;
-
-This is the story of the rise and fall of Lisp at the Jet Propulsion
-Lab as told from my personal (and highly biased) point of view.  I am
-not writing in my official capacity as an employee of JPL, nor am I in
-any way representing the official position of JPL.  (This will become
-rather obvious shortly.)&lt;/p&gt;&lt;h3&gt;1988-1991 - The Robotics Years&lt;/h3&gt;&lt;div&gt;
-
-I came to JPL in 1988 to work in the Artificial Intelligence group on
-autonomous mobile robots.  Times were different then.  Dollars flowed
-more freely from government coffers.  AI Winter was just beginning, and
-it had not yet arrived at JPL.  (Technology at the Lab tends to run a
-few years behind the state of the art :-) &lt;/div&gt;&lt;p&gt;
-
-JPL at the time was in the early planning stages for a Mars rover
-mission called Mars Rover Sample Return (MRSR).  In those days space
-missions were Big, with a capital B.  The MRSR rover was to weigh nearly
-a ton.  The mission budget was going to be in the billions of dollars
-(which was typical in those days).&lt;/p&gt;&lt;p dir="ltr"&gt;
-
-Against this backdrop I went to work for a fellow named
-&lt;a href="http://www.kipr.org/dpm/" dir="ltr"&gt;David Miller&lt;/a&gt;,
-who also happened to be my thesis advisor.  Dave had the then-radical
-idea of using small rovers to explore planets instead of big ones.  In
-1988 that was a tough sell.  Very few people believed that a small rover
-could do anything useful.  (Many still don't.)&lt;/p&gt;&lt;p dir="ltr"&gt;
-
-Using some creatively acquired R&amp;amp;D funding, Dave hired Colin Angle (then
-a grad student working for Rod Brooks at MIT, now CEO of IS Robotics) as
-a summer student.  Colin built
-&lt;a href="http://www.kipr.org/robots/tooth.html" dir="ltr"&gt;a small robot named Tooth&lt;/a&gt;,
-which stood in very stark contrast to the 2000-pound
-&lt;a href="http://robotics.jpl.nasa.gov/groups/rv/images/robby.gif" dir="ltr"&gt;Robby&lt;/a&gt;,
-which was the testbed for the MRSR mission.&lt;/p&gt;&lt;p&gt;
-
-At the time it was more or less taken for granted that AI work was done
-in Lisp.  C++ barely existed.  Perl was brand new.  Java was years away.
-Spacecraft were mostly programmed in assembler, or, if you were really
-being radical, Ada.&lt;/p&gt;&lt;p&gt;
-
-Robby had two Motorola 68020 processors running vxWorks, each with (if
-memory serves) 8 MB of RAM.  (This was considered a huge amount of RAM
-in those days.  In fact, the Robby work was often criticized for, among
-other things, being too memory-hungry to be of any use.)  Tooth, by
-contrast, had two Motorola 68hc11 8-bit microcontrollers each with 256
-bytes of RAM and 2k bytes of EEPROM.  (In later robots we used 6811's
-with a whopping 32k bytes of RAM.)&lt;/p&gt;&lt;p dir="ltr"&gt;
-
-(As an indication of just how fast and how radically attitudes can
-change, the other day I heard an engineer complain that "you can't
-do &lt;i dir="ltr"&gt;anything&lt;/i&gt; with only 128 megabytes.") &lt;/p&gt;&lt;p dir="ltr"&gt;
-
-Both Robby and Tooth were programmed using Lisp.  On Robby we actually
-ran Lisp on-board.  The Lisp we used was
-&lt;a href="http://www.paulgraham.com/thist.html" dir="ltr"&gt;T 3.1&lt;/a&gt; which was ported
-from a Sun3 to vxWorks with a great deal of help from Jim Firby, who
-came to JPL from Yale.  Jim also wrote a T-in-common-lisp compatibility
-package called Common T.  Using Common T we could do code
-development on a Macintosh (using Macintosh Common Lisp and a Robbie
-simulator, also written by Jim) and then run the resulting code directly
-on Robby with no changes.&lt;/p&gt;&lt;p dir="ltr"&gt;
-
-Tooth's processors didn't have nearly enough RAM to run Lisp directly &lt;a href="https://flownet.com/gat/jpl-lisp.html#notes" dir="ltr"&gt;[1]&lt;/a&gt; so instead we used a custom-designed compiler
-written in Lisp to generate 6811 code.  At first we used Rod Brooks's
-subsumption compiler, but later I decided I didn't like the constraints
-imposed by the subsumption architecture and wrote my own for a language
-called ALFA &lt;a href="https://flownet.com/gat/jpl-lisp.html#notes" dir="ltr"&gt;[2]&lt;/a&gt;.  ALFA was subsequently used to
-program a whole series of rovers, the
-&lt;a href="http://www.kipr.org/robots/rocky.html" dir="ltr"&gt;Rocky series&lt;/a&gt;, which
-eventually led to the
-&lt;a href="http://mars.jpl.nasa.gov/MPF/rover/sojourner.html" dir="ltr"&gt;Sojourner
-rover&lt;/a&gt; on the Mars Pathfinder mission. (Sojourner had an Intel 8085
-processor with 1 MB of bank-switched RAM.  It was programmed in C.  More
-on this decision later.)&lt;/p&gt;&lt;p dir="ltr"&gt;
-
-Tooth, Robby, and the Rocky series were among the most capable robots of
-their day.  Robby was the first robot ever to navigate autonomously in
-an outdoor environment using stereo vision as its only sensor.  (NOTE:
-The stereo vision code was written in C by Larry Matthies.) 
-Tooth was only the second robot to do an indoor object-collection task,
-the other being
-&lt;a href="http://www.ai.mit.edu/people/joanna/herbert.html" dir="ltr"&gt;Herbert&lt;/a&gt;, which
-was developed a year or two earlier in by Jonathan Connell working in
-Rod Brooks's mobot lab at MIT.  (But Tooth was vastly more reliable than
-Herbert.) The Rocky robots were the first ever microrovers to operate
-successfully in rough-terrain environments.  In 1990,
-&lt;a href="http://www.kipr.org/robots/rocky.html#rocky2" dir="ltr"&gt; Rocky III&lt;/a&gt;
-demonstrated a fully autonomous traverse and sample collection mission,
-a capability that has not been reproduced to my knowledge in the twelve
-years since.&lt;/p&gt;&lt;p&gt;
-
-The period between 1988 and 1991 was amazingly productive for autonomous
-mobile robot work at JPL.  It was also, unfortunately, politically
-turbulent.  Dave Miller's group was, alas, not part of the
-organizational structure that had the "official" charter for doing
-robotics research at JPL.  The result was a bloody turf battle, whose
-eventual result was the dissolution of the Robotic Intelligence group,
-and the departure of nearly all of its members (and, probably, the fact that
-Sojourner was programmed in C).&lt;/p&gt;&lt;h3&gt;1992-1993 - Miscellaneous stories&lt;/h3&gt;&lt;div&gt;
-
-In 1993, for my own robotics swan song, I entered the AAAI mobile robot
-contest. My robot (an RWI B12 named Alfred) was entered in two of three
-events (the third required a manipulator, which Alfred lacked) and took
-a first and second place. (Alfred was actually the only robot to finish
-one of the events.)  But the cool part is that all the contest-specific
-code was written in three days.  (I started working on it on the plane
-ride to the conference.)  I attribute this success to a large extent to
-the fact that I was using Lisp while most of the other teams were using
-C.&lt;/div&gt;&lt;p dir="ltr"&gt;
-
-Also in 1993 I used MCL to help generate a code patch for the &lt;a href="http://www.igpp.ucla.edu/galileo/doc/ssr60/mag.htm" dir="ltr"&gt; Gallileo
-magnetometer&lt;/a&gt;.  The magnetometer had an RCA1802 processor, 2k each of
-RAM and ROM, and was programmed in Forth using a development system that
-ran on a long-since-decommissioned Apple II.  The instrument had
-developed a bad memory byte right in the middle of the code.  The code
-needed to be patched to not use this bad byte.  The magnetometer team
-had originally estimated that resurrecting the development environment
-and generating the code patch would take so long that they were not even
-going to attempt it. Using Lisp I wrote from scratch a
-Forth development environment for the instrument (including a simulator
-for the hardware) and used it to generate the patch.  The whole project
-took just under 3 months of part-time work.&lt;/p&gt;&lt;h3&gt;1994-1999 - Remote Agent&lt;/h3&gt;&lt;div&gt;
-
-In 1994 JPL started working on the &lt;a href="http://ic.arc.nasa.gov/projects/remote-agent/" dir="ltr"&gt;Remote Agent&lt;/a&gt;
-(RA), an autonomous spacecraft control system.  RA was written entirely
-in Common Lisp despite unrelenting political pressure to move to C++. 
-At one point an attempt was made to port one part of the system (the
-planner) to C++.  This attempt had to be abandoned after a year.  Based
-on this experience I think it's safe to say that if not for Lisp the
-Remote Agent would have failed.&lt;/div&gt;&lt;p&gt;
-
-We used four different Common Lisps in the course of the Remote Agent
-project: MCL, Allegro, Harlequin, and CLisp.  These ran in various
-combinations on three different operating systems: MacOS, SunOS, and
-vxWorks.  Harlequin was the Lisp that eventually flew on the spacecraft.
-Most of the ground development was done in MCL and Allegro.  (CLisp was
-also ported to vxWorks, and probably would have been the flight Lisp but
-for the fact that it lacked threads.)  We moved code effortlessly back
-and forth among these systems.&lt;/p&gt;&lt;p dir="ltr"&gt;
-
-The Remote Agent software, running on a custom port of Harlequin Common
-Lisp, flew aboard &lt;a href="http://nmp.jpl.nasa.gov/ds1/" dir="ltr"&gt; Deep Space 1&lt;/a&gt;
-(DS1), the first mission of NASA's &lt;a href="http://nmp.jpl.nasa.gov/index_flash.html" dir="ltr"&gt; New Millennium
-program&lt;/a&gt;.  Remote Agent controlled DS1 for two days in May of
-1999.  During that time we were able to debug and fix a race condition
-that had not shown up during ground testing.  (Debugging a program
-running on a $100M piece of hardware that is 100 million miles away is
-an interesting experience.  Having a read-eval-print loop running on the
-spacecraft proved invaluable in finding and fixing the problem.  The &lt;a href="http://ti.arc.nasa.gov/m/pub-archive/176h/0176%20(Havelund).pdf" dir="ltr"&gt;story of the
-Remote Agent bug&lt;/a&gt; is an interesting one in and of itself.)&lt;/p&gt;&lt;p&gt;
-
-The Remote Agent was subsequently named "NASA Software of the Year".&lt;/p&gt;&lt;div&gt;
-
-&lt;font dir="ltr"&gt;&lt;b dir="ltr"&gt;Warning!&lt;/b&gt;&lt;/font&gt; From here on the story takes some rather
-less pleasant turns.  If you are not in the mood for bad news and
-a lot of cynical ranting and raving, stop reading now.  You have been
-warned.&lt;/div&gt;&lt;h3&gt;1999 - MDS&lt;/h3&gt;&lt;div&gt;
-
-Now, you might expect that with a track record like that, with one
-technological success afte another, that NASA would be rushing to
-embrace Lisp.  And you would, of course, be wrong.&lt;/div&gt;&lt;p dir="ltr"&gt;
-
-The New Millennium missions were supposed to be the flagships
-for NASA's new "better, faster, and cheaper" philosophy, which meant
-that we were given a budget that was impossibly small, and a schedule
-that was impossibly tight.  When the inevitable schedule and budget
-overruns began the project needed a scapegoat.  The crucial turning
-point was a major review with about 200 people attending, including many
-of JPL's top managers. At one point the software integration engineer
-was giving his presentation and listing all of the things that were
-going wrong.  Someone (I don't know who) interrupted him and asked if he
-could change only one thing to make things better what would it be.  His
-answer was: get rid of Lisp &lt;a href="https://flownet.com/gat/jpl-lisp.html#notes" dir="ltr"&gt;[3]&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;
-
-That one event was pretty much the end of Lisp at JPL.  The Remote Agent was
-downgraded from the mainline flight software to a flight experiment (now
-renamed RAX).  It still flew, but it only controlled the spacecraft for
-two days.&lt;/p&gt;&lt;p dir="ltr"&gt;
-
-I tried to resurrect Lisp on my next project (the JPL Mission Data System
-or MDS) but the damage was done.  In an attempt to address one of the major
-objections to Lisp, that it was too big, I hired Gary Byers, who wrote the
-compiler for Macintosh Common Lisp (MCL) to port MCL to vxWorks.  (Along
-the way he also produced ports for Linux and Solaris.)  The MCL image was
-only 2 MB (compared to 16 or so for Harlequin), but it turned out not to
-matter.  Lisp was dead, at least at JPL.  After two years Gary realized that
-his work was never going to be used by anyone and he too left JPL.  A few
-months later I followed him and went to work at Google.  (The work Gary
-did on the Linux port eventually found its way into &lt;a href="http://www.clozure.com/openmcl" dir="ltr"&gt;
-OpenMCL&lt;/a&gt; so it was not a total loss for the world.)&lt;/p&gt;&lt;p&gt;
-
-There were at least two other major Lisp developments at JPL: Mark James
-wrote a system called SHARP (Spacecraft Health Automated Reasoning
-Prototype) that diagnosed hardware problems on the Voyager spacecraft,
-and Curt Eggemeyer wrote a planner called Plan-IT that was used for
-ground planning on a number of missions.  There were many others as
-well.  All are long forgotten.&lt;/p&gt;&lt;h3&gt;2000-2001 - Google&lt;/h3&gt;&lt;div&gt;
-
-This section is a little off-topic, since this is supposed to be a
-history of Lisp at JPL, but some aspects of my experience at Google
-might nonetheless be of interest.&lt;/div&gt;&lt;p dir="ltr"&gt;
-
-One of the reasons I stayed at JPL for twelve years was that I was
-appalled at what the software industry had become.  The management
-world has tried to develop software engineering processes that allow
-people to be plugged into them like interchangeable components.  The
-"interface specification" for these "components" usually involves a
-list of tools in which an engineer has received "training."  (I really
-detest the use of the word "training" in relation to professional
-activities.  Training is what you do to dogs.  What you should be doing
-with people is &lt;i dir="ltr"&gt;educating&lt;/i&gt; them, not training them.  There is a big, big
-difference.)&lt;/p&gt;&lt;p&gt;
-
-To my mind, the hallmark of the interchangeable component model of software
-engineers is Java.  Without going into too many details, I'll just say that
-having programmed in Lisp the shortcomings of Java are glaringly obvious,
-and programming in Java means a life of continual and unremitting pain.  So
-I vowed I would never be a Java programmer, which pretty much shut me out
-of 90% of all software engineering jobs in the late 90's.  This was OK
-since I was managing to put together a reasonably successful career as a
-researcher.  But after Remote Agent I found myself more and more frustrated,
-and the opportunity to work at Google just happened to coincide with a
-local frustration maximum.&lt;/p&gt;&lt;p dir="ltr"&gt;
-
-One of the reasons I decided to go work for Google was that they were not
-using Java.  So of course you can guess what my first assignment was: lead
-the inaugural Java development at the company, what eventually became
-&lt;a href="https://adwords.google.com/" dir="ltr"&gt;Google AdWords&lt;/a&gt;.  Thank God I had a
-junior engineer working for me who actually knew something about Java and
-didn't mind it so much.  In the ancient tradition of senior-junior relationships,
-he did all the work, and I took all the credit.  (Well, not quite -- I did
-write the billing system, including a pretty wizzy security system that keeps
-the credit card numbers secure even against dishonest employees.  But Jeremy
-wrote the Lion's share of AdWords version 1.)&lt;/p&gt;&lt;p&gt;
-
-I did try to introduce Lisp to Google.  Having had some experience selling
-Lisp at JPL I got all my ducks in a row, had a cool demo going, showed it
-to all the other members of the ads team, and had them all convinced that
-this was a good idea.  The only thing left was to get approval from the
-VP of engineering.  The conversation went something like this:&lt;/p&gt;&lt;PRE&gt;Me:  I'd like to talk to you about something...
-Him: Let me guess - you want to use Smalltalk.
-Me:  Er, no...
-Him: Lisp?
-Me: Right.
-Him:  No way.
-&lt;/PRE&gt;&lt;div&gt;
-
-And that was the end of Lisp at Google.  In retrospect I am not
-convinced that he made the wrong decision.  The interchangeable
-component model of software engineers seemed to work reasonably well
-there.  It's just not a business model in which I wish to be involved,
-at least not on the component-provider side.  So after a year at
-Google I quit and returned to JPL.&lt;/div&gt;&lt;h3&gt;2001-2004 Your tax dollars at work&lt;/h3&gt;&lt;div&gt;
-
-When I returned to JPL they put me to work on -- (wait for it) --
-search engines!  Apparently they got this idea that because I worked
-at Google for a year that I was now a search engine expert (never
-mind that I didn't actually do any work on the search engine).  Fortunately
-for me, working on search engines at JPL doesn't mean the same thing as working
-on search engines at Google.  When you work on search engines at Google
-it means actually working on a search engine.  When you work on search
-engines at JPL it means &lt;i dir="ltr"&gt;buying&lt;/i&gt; a search engine, about which I
-actually knew quite a bit.  (Call Google, place an order.)  You don't want
-to know how many of your taxpayer dollars went to pay me for helping to
-shepherd purchase orders through the JPL bureaucracy.&lt;/div&gt;&lt;p&gt;
-
-But I digress.&lt;/p&gt;&lt;h3&gt;Commentary&lt;/h3&gt;&lt;div&gt;
-
-The demise of Lisp at JPL is a tragedy.  The language is particularly
-well suited for the kind of software development that is often done
-here: one-of-a-kind, highly dynamic applications that must be developed
-on extremely tight budgets and schedules.  The efficacy of the language
-in that kind of environment is amply documented by a long record of
-unmatched technical achievements.&lt;/div&gt;&lt;p dir="ltr"&gt;
-
-The situation is particularly ironic because the argument that has been
-advanced for discarding Lisp in favor of C++ (and now for Java) is that
-JPL should use "industry best practice."  The problem with this argument
-is twofold: first, we're confusing best practice with &lt;i dir="ltr"&gt;standard&lt;/i&gt;
-practice.  The two are not the same.  And second, we're assuming that
-best (or even standard) practice is an invariant with respect to the
-task, that the best way to write a word processor is also the best way
-to write a spacecacraft control system.  It isn't.&lt;/p&gt;&lt;p dir="ltr"&gt;
-
-It is incredibly frustrating watching all this happen.  My job today
-(I am now working on software verification and validation) is
-to solve problems that can be traced directly back to the use of purely
-imperative langauges with poorly defined semantics like C and C++.  (The
-situation is a little better with Java, but not much.)  But, of course,
-the obvious solution -- to use non-imperative languages with well defined
-semantics like Lisp -- is not an option.  I can't even &lt;i dir="ltr"&gt;say&lt;/i&gt; the
-word Lisp without cementing my reputation as a crazy lunatic who thinks
-Lisp is the Answer to Everything.  So I keep my mouth shut (mostly) and
-watch helplessly as millions of tax dollars get wasted.  (I would pin some
-hope on a wave of grass-roots outrage over this blatant waste of money
-coming to the rescue, but, alas, on the scale of outrageous waste that
-happens routinely in government endeavors this is barely a blip.)&lt;/p&gt;&lt;p&gt;
-
-In the words of Elton John: It's sad.  So sad.  It's a sad, sad
-situation.  My best hope at this point is that the dotcom crash will do
-to Java what AI winter did to Lisp, and we may eventually emerge from
-"dotcom winter" into a saner world.  But I wouldn't bet on it.&lt;/p&gt;&lt;h3&gt;NOTES:&lt;/h3&gt;&lt;a name="notes"&gt;
-
-[1]  It's possible to run Lisp on surprisingly small processors.  My
-first Lisp was P-Lisp, which ran on an Apple II with 48k of RAM.  The
-three-disk towers-of-hanoi problem was about at the limits of its
-capabilities.&lt;/a&gt;&lt;p&gt;
-
-[2] ALFA was an acronym that stood for A Language For Action.  My plan
-was to eventually design a language that would be called BETA, which
-would stand for Better Even Than ALFA.  But I never got around to it.&lt;/p&gt;&lt;p dir="ltr"&gt;
-
-[3] This begs the question of &lt;i dir="ltr"&gt;why&lt;/i&gt; he said this.  The reason he gave
-at the time was that most of his time was being taken up dealing with
-multi-language integration issues.  However, this was belied by the following
-fact: shortly before the review, I met with the integration engineer and
-offered to help him with any Lisp-related issues he was encountering.  He
-replied that there weren't any that I could help with.  So while there
-&lt;i dir="ltr"&gt;were&lt;/i&gt; issues that arose from the fact that Lisp had to interoperate
-with C, I do not believe that a good-faith effort was made to address those
-issues.&lt;/p&gt;&lt;p&gt;
-
-Postscript: Many of the multi-language integration headaches were
-caused by the interprocess communication system that allowed Lisp and
-C to communicate.  The IPC relied on a central server (written in C)
-which crashed regularly.  Getting rid of Lisp did in fact alleviate
-those problems (because the unreliable IPC was no longer necessary).
-It is nonetheless supremely ironic that the demise of Lisp at JPL was
-ultimately due in no small measure to the unreliability of a C
-program.&lt;/p&gt;</description><pubDate>Sun, 08 Aug 2021 21:05:52 -0500</pubDate></item><item><title>OpenBSD on the Framework Laptop</title><link>https://lobste.rs/s/7zpung</link><description>&lt;div dir="ltr"&gt;
-			posted on aug 6th, 2021
-			with tags
-				&lt;a href="https://jcs.org/tagged/hardware" dir="ltr"&gt;hardware&lt;/a&gt;,
-					
-					
-				
-				&lt;a href="https://jcs.org/tagged/laptops" dir="ltr"&gt;laptops&lt;/a&gt;,
-					
-					and
-					
-				
-				&lt;a href="https://jcs.org/tagged/openbsd" dir="ltr"&gt;openbsd&lt;/a&gt;
-		&lt;/div&gt;&lt;p dir="ltr"&gt;&lt;a href="https://frame.work/" dir="ltr"&gt;Framework&lt;/a&gt;
-is a new company offering a laptop that is designed to be repairable and
-upgradeable, both in terms of internal components like the screen and
-motherboard, and in pluggable
-&lt;a href="https://frame.work/blog/storage-expansion-cards" dir="ltr"&gt;expansion cards&lt;/a&gt;.&lt;/p&gt;&lt;img src="https://jcs.org/images/2021-08-06-hero-665x261.jpg" srcset="https://jcs.org/images/2021-08-06-hero-665x261.jpg 1x, https://jcs.org/images/2021-08-06-hero-1330x522@2x.jpg 2x" width="490" height="192" alt="Framework Laptop with expansion cards removed"&gt;&lt;h2&gt;Hardware&lt;/h2&gt;&lt;p dir="ltr"&gt;While many classic ThinkPad owners will probably say “so what?” to a repairable
-and upgradeable laptop, doing so in an ultrabook-style thin and light laptop in
-2021 is fairly novel.
-Each new
-&lt;a href="https://jcs.org/tagged/thinkpad" dir="ltr"&gt;ThinkPad&lt;/a&gt;
-I’ve used lately has become less and less repairable and upgradeable, with RAM
-and WiFi cards now being soldered to the motherboard.&lt;/p&gt;&lt;p dir="ltr"&gt;The Framework Laptop became available for pre-order in May and was offered in
-two configurations of essentially the same device: a
-&lt;a href="https://frame.work/products/laptop" dir="ltr"&gt;pre-built&lt;/a&gt;
-option and a
-&lt;a href="https://frame.work/products/laptop-diy-edition" dir="ltr"&gt;DIY&lt;/a&gt;
-option that can be purchased without RAM, an SSD, a WiFi card, or a Windows
-license.&lt;/p&gt;&lt;p&gt;Both configurations offer the same 13.5” 3:2 aspect ratio screen and various
-Intel CPU options.
-I opted for the Intel i7-1185G7 processor, although in retrospect I’m not really
-sure why.
-I’ve usually chosen an i5 processor for better battery life and lower heat
-output since most of what I do is not CPU-intensive, but perhaps in the rush to
-place a pre-order as soon as I could, I was not considering those issues.&lt;/p&gt;&lt;p&gt;The laptop weighs 2.8 lbs and is 11.6” wide, 9” tall, and 0.6” inches thick.
-It has basically two USB-C ports on each side, although they are recessed about
-1.5” to accommodate the expansion cards which are just various USB-C dongles in
-uniform cases.
-Framework offers USB-C, USB-A, HDMI, and DisplayPort connector cards, along with
-a MicroSD card reader and 250GB and 1TB storage devices.
-Currently all of the cards desired must be purchased with the laptop at the time
-of ordering, and they are not yet available for sale separately.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://jcs.org/images/2021-08-06-box-216x162.jpg" srcset="https://jcs.org/images/2021-08-06-box-216x162.jpg 1x, https://jcs.org/images/2021-08-06-box-432x324@2x.jpg 2x" width="216" height="162"&gt;&lt;/figure&gt;&lt;p&gt;In between the two expansion slots on the left side is an LED for charging
-status and a 3.5mm headphone jack to the right of the slots.
-On the right side of the laptop is another LED for charging, if charging via
-USB-C connection on that side.&lt;/p&gt;&lt;p dir="ltr"&gt;There are two downward-firing speakers and a fan exhaust on the bottom.
-The speakers sound excellent and have a sufficient amount of bass (but not
-overpowering like the new MacBook Air).
-The fan is inaudible at idle, but can get very loud at full speed when doing a
-high amount of CPU and disk activity such as a &lt;code dir="ltr"&gt;git clone&lt;/code&gt;.
-It makes a little click/squeak when turning on, and in some cases can come on
-and turn off every few seconds which makes it kind of annoying in a very quiet
-room.  There is no audible coil whine from any of the components.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://jcs.org/images/2021-08-06-left_side-216x162.jpg" srcset="https://jcs.org/images/2021-08-06-left_side-216x162.jpg 1x, https://jcs.org/images/2021-08-06-left_side-432x324@2x.jpg 2x" width="216" height="162"&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;The keyboard deck has a power button with integrated fingerprint reader in the
-upper-right corner.
-Unfortunately it also contains a white LED ring around it that is very bright
-and does not dim with the keyboard backlight, nor does it turn off when the
-fingerprint reader is disabled in the BIOS.
-Since the button is so close to the screen, it remains in my field of view and
-is very annoying in a dark room.
-Framework have
-&lt;a href="https://community.frame.work/t/power-button-light/4297/2" dir="ltr"&gt;confirmed&lt;/a&gt;
-that the light is controllable via the EC, so this can be something that could
-be disabled or dimmed in a future firmware update.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://jcs.org/images/2021-08-06-backlight-327x245.jpg" srcset="https://jcs.org/images/2021-08-06-backlight-327x245.jpg 1x, https://jcs.org/images/2021-08-06-backlight-654x490@2x.jpg 2x" width="327" height="245"&gt;&lt;/figure&gt;&lt;p&gt;The keyboard has 1.5mm of key travel with a pronounced but quiet tactile.
-It reminds me of the MacBook Pro 2015 keyboard but with slightly more tactile.
-I wish the arrow keys were an inverted T, however.
-The keyboard has 3 levels of backlight (plus off) adjustable with Fn+Space.
-The surface of the keys is somewhat rough and matte.&lt;/p&gt;&lt;p&gt;The 13.5” non-touch screen has a 3:2 aspect ratio and a 2256x1504 resolution,
-which is high enough to use 1.5x scaling.
-It is reportedly a &amp;gt;400 nit screen, and most of the time in my office I’m using
-it at about 30% brightness.&lt;/p&gt;&lt;p&gt;The screen lid is quite bendy, and has a lot of wobble on its hinge although the
-hinge itself doesn’t seem to wobble and is quite tight.
-This means that it doesn’t wobble in response to typing or moving things on my
-desk, which is what I was concerned about, but does wobble excessively when
-making screen angle adjustments.
-The lid can be mostly opened all the way with one hand and will open fully to
-180 degrees.
-Centered on the back of the lid is the Framework logo in black, with “Framework”
-branding written on the front of the hinge in glossy black against the matte
-black plastic making it very discreet in most lighting.&lt;/p&gt;&lt;p dir="ltr"&gt;The screen bezel is sufficiently thin, but still has space for a 1080p webcam
-with a physical cut-off switch (showing a red strip when disabled) next to the
-microphone which also has its own cut-off switch.
-The bezel is held on magnetically to make it easier to
-&lt;a href="https://frame.work/blog/display-and-customizable-bezels" dir="ltr"&gt;upgrade or change&lt;/a&gt;.
-If you’re wondering like I was, the square to the left is an ambient light
-sensor (though it is not exposed as a standard ACPI ALS device) and the one on
-the right is the actual camera.
-There is no Windows Hello IR camera.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://jcs.org/images/2021-08-06-screen-327x245.jpg" srcset="https://jcs.org/images/2021-08-06-screen-327x245.jpg 1x, https://jcs.org/images/2021-08-06-screen-654x490@2x.jpg 2x" width="327" height="245"&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;The Windows Precision Touchpad is made by
-&lt;a href="https://frame.work/blog/framework-laptop-deep-divethe-touchpad-and-fingerprint" dir="ltr"&gt;PixArt&lt;/a&gt;.
-Its surface is not quite as smooth as I would like but is not bad, although the
-click mechanism is somewhat loud and hollow sounding which makes it seem cheap.&lt;/p&gt;&lt;h2&gt;Assembly&lt;/h2&gt;&lt;p dir="ltr"&gt;Since I purchased the DIY version, mine came with the 32GB of Crucial RAM that I
-ordered, along with an Intel AX210 WiFi card (which I swapped out for an
-&lt;a href="https://amzn.to/2X4vRXC" dir="ltr"&gt;AX201&lt;/a&gt;
-due to OpenBSD compatibility) in separate packaging.&lt;/p&gt;&lt;p&gt;The Framework Laptop includes a screwdriver in the box with a removable Torx and
-Phillips bit on one end, and a spudger on the other.
-All of the screws on the laptop, from the captive ones on the bottom that
-release the keyboard deck (rather than the bottom casing coming off as on most
-laptops) to the internal screws on the WiFi card, SSD, and other internal
-components, can be removed with the same Torx bit.&lt;/p&gt;&lt;p dir="ltr"&gt;Installation of the RAM and the
-&lt;a href="https://amzn.to/3Ck2MHX" dir="ltr"&gt;Samsung 980 Pro 1TB NVMe SSD&lt;/a&gt;
-that I already had were very simple.
-Installing the WiFi card took a minute or two due to the custom bracket that is
-supposed to be installed over the antenna connectors, but is oriented
-differently when temporarily installed from the factory.
-All of the component locations on the motherboard have QR codes which direct one
-to URLs on the Framework website for instructions.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://jcs.org/images/2021-08-06-internals-665x300.jpg" srcset="https://jcs.org/images/2021-08-06-internals-665x300.jpg 1x, https://jcs.org/images/2021-08-06-internals-1330x600@2x.jpg 2x" width="455" height="205"&gt;&lt;/figure&gt;&lt;h2&gt;Expansion Cards&lt;/h2&gt;&lt;p&gt;I initially installed USB-C and USB-A expansion cards on the left side, and a
-USB-C and 1TB storage card on the right which will be used for backups.&lt;/p&gt;&lt;p&gt;I like that the expansion cards keep the ports a good distance from each other
-and that there can be USB-C charging ports on either side.
-I’ve often run into problems with the two USB-C ports on my MacBook Air being
-too close to each other and with them both on the left side, I can’t opt to
-charge on the right side if I happen to be sitting with the wall outlet on that
-side of me.&lt;/p&gt;&lt;p dir="ltr"&gt;Framework has an
-&lt;a href="https://frame.work/blog/expansion-card-developer-program--canada-launch" dir="ltr"&gt;Expansion Card Developer Program&lt;/a&gt;
-to support 3rd party expansion cards and they’ve also
-&lt;a href="https://frame.work/blog/expansion-card-developer-program--canada-launch" dir="ltr"&gt;made
-available&lt;/a&gt;
-the schematics and case designs for their existing cards.
-I miss the days of
-&lt;a href="https://amzn.to/3imS9fp" dir="ltr"&gt;funky PCMCIA cards&lt;/a&gt;
-which brought so much expandability to laptops without needing dongles.&lt;/p&gt;&lt;p dir="ltr"&gt;In the future I’d like to make a simple 3D-printed case for the
-&lt;a href="https://jcs.org/2020/11/18/openbsd_btaudio" dir="ltr"&gt;Creative BT-W3&lt;/a&gt;
-Bluetooth adapter and maybe one for the Logitech mouse dongle, allowing them to
-be plugged in without sticking out.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://jcs.org/images/2021-08-06-expansion_cards-216x162.jpg" srcset="https://jcs.org/images/2021-08-06-expansion_cards-216x162.jpg 1x, https://jcs.org/images/2021-08-06-expansion_cards-432x324@2x.jpg 2x" width="216" height="162"&gt;&lt;/figure&gt;&lt;h2&gt;Firmware&lt;/h2&gt;&lt;p dir="ltr"&gt;The Framework Laptop has an InsydeH2O BIOS that is accessible upon pressing
-&lt;code dir="ltr"&gt;F2&lt;/code&gt;.
-Secure Boot must be disabled in the BIOS menu to boot OpenBSD, and CSM/Legacy
-booting is not supported.
-I opted to disable the fingerprint reader and Hyperthreading.&lt;/p&gt;&lt;h2&gt;Battery&lt;/h2&gt;&lt;p&gt;I don’t usually publish battery life estimates for laptops because power usage
-on modern laptops can vary wildly with screen brightness and CPU load, whether
-it’s constantly Turbo boosting, etc.
-The Framework Laptop has a 55 Watt-hour battery and it idles around 9 Watts with
-the screen at 25% brightness and connected to WiFi.&lt;/p&gt;&lt;h2&gt;OpenBSD Support Log&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;2021-08-04:&lt;/strong&gt; Initial boot of OpenBSD-current showed a strange issue once
-&lt;code dir="ltr"&gt;inteldrm&lt;/code&gt; took over from &lt;code dir="ltr"&gt;efifb&lt;/code&gt;.
-The screen would go blank and then the backlight would flicker off and on every
-second or so with the screen still black.
-Recompiling the kernel with &lt;code dir="ltr"&gt;DRMDEBUG&lt;/code&gt; enabled showed that it was having trouble
-training the eDP panel properly, although enabling debugging caused it to print
-messages to the console during the whole process, introducing enough delay that
-it could complete the training properly.
-Eventually I found that by switching between X and the console a few times, the
-screen would train and work properly, but after an &lt;code dir="ltr"&gt;xset dpms force off&lt;/code&gt;, or
-trying to resume from S3, this workaround does not usually work.
-I’m still trying to debug this, but I can’t reproduce it in Linux with the same
-DRM code that we have in OpenBSD (based on Linux 5.10.56).&lt;/p&gt;&lt;p dir="ltr"&gt;I also started having stability issues with the machine randomly powering off
-which was extremely frustrating, but I eventually tracked it down to the
-touchpad as the culprit.
-Since OpenBSD does not yet have a Tiger Lake GPIO interrupt driver, the touchpad
-is working in polling mode (via &lt;code dir="ltr"&gt;ihidev&lt;/code&gt;).
-At some point this goes haywire (minutes to hours) and touching the touchpad
-results in the machine instantly powering off.
-I’m making a guess that the EC is crashing while trying to interface with the
-touchpad.
-By disabling the &lt;code dir="ltr"&gt;dwiic&lt;/code&gt; i&lt;sup dir="ltr"&gt;2&lt;/sup&gt;c driver, the touchpad becomes available
-through the legacy PS/2 interface, allowing it to work through the &lt;code dir="ltr"&gt;pms&lt;/code&gt; mouse
-driver.
-However, after a day of using this legacy configuration, the same power-offs
-would randomly happen when touching the touchpad.
-There is a BIOS option to disable this legacy interface, which I did, and am now
-running without a working touchpad until I can write a GPIO driver.&lt;/p&gt;&lt;p&gt;Aside from the display driver issue, I’ve experienced a few other issues with
-the laptop that seem related to the EC, such as keyboard input in the EFI
-bootloader dropping keys and being very sluggish (this happened only once),
-USB-C ports refusing to accept power for charging until the system is powered
-off and back on again (I’ve had this happen a number of times), and it not
-restarting when instructed to by the kernel/ACPI (a few times).
-I’m sure all of these issues will work themselves out over time through future
-firmware/EC updates.&lt;/p&gt;&lt;h2&gt;Current OpenBSD Support Summary&lt;/h2&gt;&lt;p&gt;Status is relative to OpenBSD-current as of 2021-08-05.&lt;/p&gt;&lt;table dir="ltr"&gt;
-  &lt;thead dir="ltr"&gt;
-    &lt;tr dir="ltr"&gt;
-      &lt;th dir="ltr"&gt;Component&lt;/th&gt;
-      &lt;th dir="ltr"&gt;Works?&lt;/th&gt;
-      &lt;th dir="ltr"&gt;Notes&lt;/th&gt;
-    &lt;/tr&gt;
-  &lt;/thead&gt;
-  &lt;tbody dir="ltr"&gt;
-    &lt;tr dir="ltr"&gt;
-      &lt;td dir="ltr"&gt;Audio&lt;/td&gt;
-      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
-      &lt;td dir="ltr"&gt;Intel audio with Realtek ALC295 codec and supported by &lt;a href="https://man.openbsd.org/azalia.4" dir="ltr"&gt;&lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;azalia&lt;/code&gt;&lt;/a&gt;. Microphone can be disabled by toggling the physical switch on the screen bezel.&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr dir="ltr"&gt;
-      &lt;td dir="ltr"&gt;Battery status&lt;/td&gt;
-      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
-      &lt;td dir="ltr"&gt;55Whr battery, status available through &lt;a href="https://man.openbsd.org/acpibat.4" dir="ltr"&gt;&lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;acpibat&lt;/code&gt;&lt;/a&gt;.&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr dir="ltr"&gt;
-      &lt;td dir="ltr"&gt;Bluetooth&lt;/td&gt;
-      &lt;td dir="ltr"&gt;No&lt;/td&gt;
-      &lt;td dir="ltr"&gt;Usually provided by the wireless card, but OpenBSD does not support Bluetooth.&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr dir="ltr"&gt;
-      &lt;td dir="ltr"&gt;Fingerprint sensor&lt;/td&gt;
-      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
-      &lt;td dir="ltr"&gt;Goodix via USB, &lt;a href="https://community.frame.work/t/fingerprint-scanner-compatibility-with-linux-ubuntu-fedora-etc/1501/18" dir="ltr"&gt;reportedly&lt;/a&gt; supported by libfprint. Can be disabled in the BIOS.&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr dir="ltr"&gt;
-      &lt;td dir="ltr"&gt;Keyboard backlight&lt;/td&gt;
-      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
-      &lt;td dir="ltr"&gt;Supported natively by the EC.  Three levels of adjustment can be toggled with Fn+Space.&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr dir="ltr"&gt;
-      &lt;td dir="ltr"&gt;Hibernation&lt;/td&gt;
-      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
-      &lt;td dir="ltr"&gt;Can be triggered by &lt;a href="https://man.openbsd.org/ZZZ.8" dir="ltr"&gt;&lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;ZZZ&lt;/code&gt;&lt;/a&gt;.&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr dir="ltr"&gt;
-      &lt;td dir="ltr"&gt;Micro-SD card reader&lt;/td&gt;
-      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
-      &lt;td dir="ltr"&gt;The Framework Micro-SD expansion card attaches via USB and works fine.  An inserted card sticks out about 2mm from the edge.&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr dir="ltr"&gt;
-      &lt;td dir="ltr"&gt;SSD&lt;/td&gt;
-      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
-      &lt;td dir="ltr"&gt;M.2 2280 socket; I used a Samsung 980 Pro NVMe drive supported by &lt;a href="https://man.openbsd.org/nvme.4" dir="ltr"&gt;&lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;nvme&lt;/code&gt;&lt;/a&gt;.&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr dir="ltr"&gt;
-      &lt;td dir="ltr"&gt;Suspend / resume&lt;/td&gt;
-      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
-      &lt;td dir="ltr"&gt;Can be triggered by &lt;a href="https://man.openbsd.org/zzz.8" dir="ltr"&gt;&lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;zzz&lt;/code&gt;&lt;/a&gt; or closing the lid.&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr dir="ltr"&gt;
-      &lt;td dir="ltr"&gt;Touchpad&lt;/td&gt;
-      &lt;td dir="ltr"&gt;Mostly&lt;/td&gt;
-      &lt;td dir="ltr"&gt;Pixart I&lt;sup dir="ltr"&gt;2&lt;/sup&gt;C, supported by &lt;a href="https://man.openbsd.org/imt.4" dir="ltr"&gt;&lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;imt&lt;/code&gt;&lt;/a&gt;. A GPIO driver is needed to make it work in interrupt (non-polling) mode.&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr dir="ltr"&gt;
-      &lt;td dir="ltr"&gt;USB&lt;/td&gt;
-      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
-      &lt;td dir="ltr"&gt;The 4 USB-C ports work fine, though I’ve had a few occasions where Power Delivery charging did not work until the laptop was powered off and back on again.&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr dir="ltr"&gt;
-      &lt;td dir="ltr"&gt;Video&lt;/td&gt;
-      &lt;td dir="ltr"&gt;Mostly&lt;/td&gt;
-      &lt;td dir="ltr"&gt;&lt;a href="http://man.openbsd.org/inteldrm.4" dir="ltr"&gt;&lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;inteldrm&lt;/code&gt;&lt;/a&gt; supports accelerated video, DPMS, gamma control, and integrated backlight control, though the integrated eDP panel has issues coming up. HDMI output through the HDMI expansion card did not work nor did it work through other USB-C docks/dongles.&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr dir="ltr"&gt;
-      &lt;td dir="ltr"&gt;Webcam&lt;/td&gt;
-      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
-      &lt;td dir="ltr"&gt;1080p USB camera, supported by the &lt;a href="http://man.openbsd.org/uvideo.4" dir="ltr"&gt;&lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;uvideo&lt;/code&gt;&lt;/a&gt; driver when the &lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;kern.video.record&lt;/code&gt; sysctl is enabled.  Can be disabled in the BIOS or by the switch on the bezel which will detach the USB device.&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr dir="ltr"&gt;
-      &lt;td dir="ltr"&gt;Wireless&lt;/td&gt;
-      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
-      &lt;td dir="ltr"&gt;M.2 socket; I used a Intel AX201 802.11ax wireless card supported by &lt;a href="http://man.openbsd.org/iwx.4" dir="ltr"&gt;&lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;iwx&lt;/code&gt;&lt;/a&gt;. The Intel AX210 card sold by Framework is not yet supported by &lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;iwx&lt;/code&gt;.&lt;/td&gt;
-    &lt;/tr&gt;
-  &lt;/tbody&gt;
-&lt;/table&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p dir="ltr"&gt;Framework has done well with their future-thinking design and prioritizing
-&lt;a href="https://guides.frame.work/" dir="ltr"&gt;repairability&lt;/a&gt;
-and upgradeability.
-Whether the company, replacement parts, and future motherboard/processor
-upgrades will be around in five or ten years to make good on their promises
-remains to be seen, but I feel like we’ll never get there unless consumers
-support the company in the beginning.&lt;/p&gt;&lt;p&gt;My concern before receiving my laptop was that reviewers and consumers would be
-expected to look past a lot of faults just because it was repairable and
-upgradeable, as can been seen with modular phones and other devices.
-However, I feel that the Framework Laptop is a well-executed product that can
-stand on its own right now and any future upgradeability is just icing on the
-cake.&lt;/p&gt;&lt;p&gt;I hope the expansion card idea takes off and 3rd party developers create some
-really interesting things.&lt;/p&gt;</description><pubDate>Sat, 07 Aug 2021 08:53:54 -0500</pubDate></item><item><title>DebConf21 Schedule</title><link>https://lobste.rs/s/qpmf25</link><description>&lt;img alt="DebConf21" src="https://debconf21.debconf.org/static/img/dc21-logo.087afb68c47d.svg" width="101" height="69"&gt;&lt;table cellspacing="1" cellpadding="0" dir="ltr"&gt;
+            &lt;/p&gt;</description><pubDate>Sat, 07 Aug 2021 22:44:16 -0500</pubDate></item><item><title>DebConf21 Schedule</title><link>https://lobste.rs/s/qpmf25</link><description>&lt;img alt="DebConf21" src="https://debconf21.debconf.org/static/img/dc21-logo.087afb68c47d.svg" width="101" height="69"&gt;&lt;table cellspacing="1" cellpadding="0" dir="ltr"&gt;
             
             &lt;tbody dir="ltr"&gt;&lt;tr dir="ltr"&gt;
               &lt;td colspan="4" class="title" dir="ltr"&gt;
@@ -5519,7 +4786,740 @@ really interesting things.&lt;/p&gt;</description><pubDate>Sat, 07 Aug 2021 08:5
           Debian is a registered &lt;a href="https://www.debian.org/trademark" dir="ltr"&gt;trademark&lt;/a&gt; of Software in the Public Interest, Inc.
         &lt;/p&gt;&lt;p dir="ltr"&gt;Past DebConfs:
           &lt;select onchange="if (this.value) window.location.href=this.value" dir="ltr"&gt;
-            &lt;/select&gt;&lt;/p&gt;</description><pubDate>Sun, 08 Aug 2021 17:53:26 -0500</pubDate></item><item><title>License Round Up</title><link>https://lobste.rs/s/s0xch6</link><description>&lt;p dir="ltr"&gt;
+            &lt;/select&gt;&lt;/p&gt;</description><pubDate>Sun, 08 Aug 2021 17:53:26 -0500</pubDate></item><item><title>Put This In Your Pipe – Backticks in Julia</title><link>https://lobste.rs/s/ybinhe</link><description>&lt;img src="https://julialang.org/assets/infra/logo.svg" alt="JuliaLang Logo" width="80" height="50"&gt;&lt;h3 dir="ltr"&gt; &lt;span dir="ltr"&gt; 8 April 2013 &lt;/span&gt; |  &lt;span dir="ltr"&gt;&lt;a href="https://karpinski.org/" dir="ltr"&gt;Stefan Karpinski&lt;/a&gt; &lt;/span&gt; &lt;/h3&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Note:&lt;/strong&gt; This post has been updated to work with Julia 1.x (the original version used Julia 0.1 syntax).&lt;/p&gt;&lt;p dir="ltr"&gt;In a &lt;a href="https://julialang.org/blog/2012/03/shelling-out-sucks/" dir="ltr"&gt;previous post&lt;/a&gt;, I talked about why "shelling out" to spawn a pipeline of external programs via an intermediate shell is a common cause of bugs, security holes, unnecessary overhead, and silent failures. But it's so convenient! Why can't running pipelines of external programs be convenient &lt;em dir="ltr"&gt;and&lt;/em&gt; safe? Well, there's no real reason, actually. The shell itself manages to construct and execute pipelines quite well. In principle, there's nothing stopping high-level languages from doing it at least as well as shells do – the common ones just don't by default, instead requiring users to make the extra effort to use external programs safely and correctly. There are two major impediments:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p dir="ltr"&gt;Some moderately tricky low-level UNIX plumbing using the &lt;a href="https://man7.org/linux/man-pages/man2/pipe.2.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;pipe&lt;/code&gt;&lt;/a&gt;, &lt;a href="https://man7.org/linux/man-pages/man2/dup2.2.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;dup2&lt;/code&gt;&lt;/a&gt;, &lt;a href="https://man7.org/linux/man-pages/man2/fork.2.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;fork&lt;/code&gt;&lt;/a&gt;, &lt;a href="https://man7.org/linux/man-pages/man2/close.2.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;close&lt;/code&gt;&lt;/a&gt;, and &lt;a href="https://man7.org/linux/man-pages/man2/execve.2.html" dir="ltr"&gt;&lt;code dir="ltr"&gt;exec&lt;/code&gt;&lt;/a&gt; system calls;&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;The UX problem of designing an easy, flexible programming interface for commands and pipelines.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p&gt;This post describes the system we designed and implemented for Julia, and how it avoids the major flaws of shelling out in other languages. First, I'll present the Julia version of the previous post's example – counting the number of lines in a given directory containing the string "foo". The fact that Julia provides complete, specific diagnostic error messages when pipelines fail turns out to reveal a surprising and subtle bug, lurking in what appears to be a perfectly innocuous UNIX pipeline. After fixing this bug, we go into details of how Julia's external command execution and pipeline construction system actually works, and why it provides greater flexibility and safety than the traditional approach of using an intermediate shell to do all the heavy lifting.&lt;/p&gt;&lt;h2&gt;&lt;a href="https://julialang.org/blog/2013/04/put-this-in-your-pipe/#simple_pipeline_subtle_bug"&gt;Simple Pipeline, Subtle Bug&lt;/a&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;Here's how you write the example of counting the number of lines in a directory containing the string "foo" in Julia (you can follow along at home if you have Julia installed from source by changing directories into the Julia source directory and doing &lt;code dir="ltr"&gt;cp -a src "source code"; mkdir tmp&lt;/code&gt; and then firing up the Julia repl):&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; dir = &lt;span dir="ltr"&gt;"src"&lt;/span&gt;; &lt;span dir="ltr"&gt;# works in the git repo for Julia&lt;/span&gt;
+
+julia&amp;gt; parse(&lt;span dir="ltr"&gt;Int&lt;/span&gt;, readchomp(pipeline(
+           &lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;$dir&lt;/span&gt; -type f -print0`&lt;/span&gt;,
+           &lt;span dir="ltr"&gt;`xargs -0 grep foo`&lt;/span&gt;,
+           &lt;span dir="ltr"&gt;`wc -l`&lt;/span&gt;,
+       )))
+&lt;span dir="ltr"&gt;5&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;This Julia command looks suspiciously similar to the naïve Ruby version we started with in the previous post:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;#{dir}&lt;/span&gt; -type f -print0 | xargs -0 grep foo | wc -l`&lt;/span&gt;.to_i&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;However, it isn't susceptible to the same problems:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; dir = &lt;span dir="ltr"&gt;"source code"&lt;/span&gt;;
+
+julia&amp;gt; parse(&lt;span dir="ltr"&gt;Int&lt;/span&gt;, readchomp(pipeline(
+           &lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;$dir&lt;/span&gt; -type f -print0`&lt;/span&gt;,
+           &lt;span dir="ltr"&gt;`xargs -0 grep foo`&lt;/span&gt;,
+           &lt;span dir="ltr"&gt;`wc -l`&lt;/span&gt;,
+       )))
+&lt;span dir="ltr"&gt;5&lt;/span&gt;
+
+julia&amp;gt; dir = &lt;span dir="ltr"&gt;"nonexistent"&lt;/span&gt;;
+
+julia&amp;gt; parse(&lt;span dir="ltr"&gt;Int&lt;/span&gt;, readchomp(pipeline(
+           &lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;$dir&lt;/span&gt; -type f -print0`&lt;/span&gt;,
+           &lt;span dir="ltr"&gt;`xargs -0 grep foo`&lt;/span&gt;,
+           &lt;span dir="ltr"&gt;`wc -l`&lt;/span&gt;,
+       )))
+find: ‘nonexistent’: No such file or directory
+ERROR: failed processes:
+  Process(&lt;span dir="ltr"&gt;`find nonexistent -type f -print0`&lt;/span&gt;, ProcessExited(&lt;span dir="ltr"&gt;1&lt;/span&gt;)) [&lt;span dir="ltr"&gt;1&lt;/span&gt;]
+  Process(&lt;span dir="ltr"&gt;`xargs -0 grep foo`&lt;/span&gt;, ProcessExited(&lt;span dir="ltr"&gt;123&lt;/span&gt;)) [&lt;span dir="ltr"&gt;123&lt;/span&gt;]
+
+julia&amp;gt; dir = &lt;span dir="ltr"&gt;"foo'; echo MALICIOUS ATTACK; echo '"&lt;/span&gt;;
+
+julia&amp;gt; parse(&lt;span dir="ltr"&gt;Int&lt;/span&gt;, readchomp(pipeline(
+           &lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;$dir&lt;/span&gt; -type f -print0`&lt;/span&gt;,
+           &lt;span dir="ltr"&gt;`xargs -0 grep foo`&lt;/span&gt;,
+           &lt;span dir="ltr"&gt;`wc -l`&lt;/span&gt;,
+       )))
+find: ‘foo'; echo MALICIOUS ATTACK; echo '’: No such file or directory
+ERROR: failed processes:
+  Process(&lt;span dir="ltr"&gt;`find "foo'; echo MALICIOUS ATTACK; echo '" -type f -print0`&lt;/span&gt;, ProcessExited(&lt;span dir="ltr"&gt;1&lt;/span&gt;)) [&lt;span dir="ltr"&gt;1&lt;/span&gt;]
+  Process(&lt;span dir="ltr"&gt;`xargs -0 grep foo`&lt;/span&gt;, ProcessExited(&lt;span dir="ltr"&gt;123&lt;/span&gt;)) [&lt;span dir="ltr"&gt;123&lt;/span&gt;]&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;The default, simplest-to-achieve behavior in Julia is:&lt;/p&gt;&lt;UL&gt;&lt;LI&gt;&lt;p&gt;not susceptible to any kind of metacharacter breakage,&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;reliably detects all subprocess failures,&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;automatically raises an exception if any subprocess fails,&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;prints error messages including exactly which commands failed.&lt;/p&gt;&lt;/LI&gt;&lt;/UL&gt;&lt;p dir="ltr"&gt;In the above examples, we can see that even when &lt;code dir="ltr"&gt;dir&lt;/code&gt; contains spaces or quotes, the expression still behaves exactly as intended –&amp;nbsp;the value of &lt;code dir="ltr"&gt;dir&lt;/code&gt; is interpolated as a single argument to the &lt;code dir="ltr"&gt;find&lt;/code&gt; command. When &lt;code dir="ltr"&gt;dir&lt;/code&gt; is not the name of a directory that exists, &lt;code dir="ltr"&gt;find&lt;/code&gt; fails – as it should – and this failure is detected and automatically converted into an informative exception, including the fully expanded command-lines that failed.&lt;/p&gt;&lt;p dir="ltr"&gt;In the previous post, we observed that using the &lt;code dir="ltr"&gt;pipefail&lt;/code&gt; option for Bash allows detection of pipeline failures, like this one, occurring before the last process in the pipeline. However, it only allows us to detect that at least one thing in the pipeline failed. We still have to guess at what parts of the pipeline actually failed. In the Julia example, on the other hand, there is no guessing required: when a non-existent directory is given, we can see that both &lt;code dir="ltr"&gt;find&lt;/code&gt; and &lt;code dir="ltr"&gt;xargs&lt;/code&gt; fail. While it is unsurprising that &lt;code dir="ltr"&gt;find&lt;/code&gt; fails in this case, it is unexpected that &lt;code dir="ltr"&gt;xargs&lt;/code&gt; also fails. Why &lt;em dir="ltr"&gt;does&lt;/em&gt; &lt;code dir="ltr"&gt;xargs&lt;/code&gt; fail?&lt;/p&gt;&lt;p dir="ltr"&gt;One possibility to check for is that the &lt;code dir="ltr"&gt;xargs&lt;/code&gt; program fails with no input. We can use Julia's &lt;code dir="ltr"&gt;success&lt;/code&gt; predicate to try it out:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; success(pipeline(&lt;span dir="ltr"&gt;`cat /dev/null`&lt;/span&gt;, &lt;span dir="ltr"&gt;`xargs true`&lt;/span&gt;))
+&lt;span dir="ltr"&gt;true&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Ok, so &lt;code dir="ltr"&gt;xargs&lt;/code&gt; seems perfectly happy with no input. Maybe grep doesn't like not getting any input?&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; success(pipeline(&lt;span dir="ltr"&gt;`cat /dev/null`&lt;/span&gt;, &lt;span dir="ltr"&gt;`grep foo`&lt;/span&gt;))
+&lt;span dir="ltr"&gt;false&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Aha! &lt;code dir="ltr"&gt;grep&lt;/code&gt; returns a non-zero status when it doesn't get any input. Good to know. It turns out that &lt;code dir="ltr"&gt;grep&lt;/code&gt; indicates whether it matched anything or not with its return status. Most programs use their return status to indicate success or failure, but some, like &lt;code dir="ltr"&gt;grep&lt;/code&gt;, use it to indicate some other boolean condition –&amp;nbsp;in this case "found something" versus "didn't find anything":&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; success(pipeline(&lt;span dir="ltr"&gt;`echo foo`&lt;/span&gt;, &lt;span dir="ltr"&gt;`grep foo`&lt;/span&gt;))
+&lt;span dir="ltr"&gt;true&lt;/span&gt;
+
+julia&amp;gt; success(pipeline(&lt;span dir="ltr"&gt;`echo bar`&lt;/span&gt;, &lt;span dir="ltr"&gt;`grep foo`&lt;/span&gt;))
+&lt;span dir="ltr"&gt;false&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Now we know why &lt;code dir="ltr"&gt;grep&lt;/code&gt; is "failing" – and &lt;code dir="ltr"&gt;xargs&lt;/code&gt; too, since it returns a non-zero status if the program it runs returns non-zero. This means that our Julia pipeline and the "responsible" Ruby version are both susceptible to bogus failures when we search an existing directory that happens not to contain the string "flippity" anywhere:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; dir = &lt;span dir="ltr"&gt;"src"&lt;/span&gt;;
+
+julia&amp;gt; parse(&lt;span dir="ltr"&gt;Int&lt;/span&gt;, readchomp(pipeline(
+           &lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;$dir&lt;/span&gt; -type f -print0`&lt;/span&gt;,
+           &lt;span dir="ltr"&gt;`xargs -0 grep flippity`&lt;/span&gt;,
+           &lt;span dir="ltr"&gt;`wc -l`&lt;/span&gt;,
+       )))
+ERROR: failed process: Process(&lt;span dir="ltr"&gt;`xargs -0 grep flippity`&lt;/span&gt;, ProcessExited(&lt;span dir="ltr"&gt;123&lt;/span&gt;)) [&lt;span dir="ltr"&gt;123&lt;/span&gt;]&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Since &lt;code dir="ltr"&gt;grep&lt;/code&gt; indicates not finding anything using a non-zero return status, the &lt;code dir="ltr"&gt;readchomp&lt;/code&gt; function concludes that its pipeline failed and raises an error to that effect. In this case, this default behavior is undesirable: we want the expression to just return &lt;code dir="ltr"&gt;0&lt;/code&gt; without raising an error. The simple fix in Julia is this:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; parse(&lt;span dir="ltr"&gt;Int&lt;/span&gt;, readchomp(pipeline(
+           &lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;$dir&lt;/span&gt; -type f -print0`&lt;/span&gt;,
+           ignorestatus(&lt;span dir="ltr"&gt;`xargs -0 grep flippity`&lt;/span&gt;),
+           &lt;span dir="ltr"&gt;`wc -l`&lt;/span&gt;,
+       )))
+&lt;span dir="ltr"&gt;0&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This works correctly in all cases. Next I'll explain &lt;em dir="ltr"&gt;how&lt;/em&gt; all of this works, but for now it's enough to note that the detailed error message provided when our pipeline failed exposed a rather subtle bug that would eventually cause subtle and hard-to-debug problems when used in production. Without such detailed error reporting, this bug would be pretty difficult to track down.&lt;/p&gt;&lt;h2&gt;&lt;a href="https://julialang.org/blog/2013/04/put-this-in-your-pipe/#do-nothing_backticks"&gt;Do-Nothing Backticks&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Julia borrows the backtick syntax for external commands from Perl and Ruby, both of which in turn got it from the shell. Unlike in these predecessors, however, in Julia backticks don't immediately run commands, nor do they necessarily indicate that you want to capture the output of the command. Instead, backticks just construct an object representing a command:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; &lt;span dir="ltr"&gt;`echo Hello`&lt;/span&gt;
+&lt;span dir="ltr"&gt;`echo Hello`&lt;/span&gt;
+
+julia&amp;gt; typeof(ans)
+&lt;span dir="ltr"&gt;Cmd&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;(In the Julia repl, &lt;code dir="ltr"&gt;ans&lt;/code&gt; is automatically bound to the value of the last evaluated input.) In order to actually run a command, you have to &lt;em dir="ltr"&gt;do&lt;/em&gt; something with a command object. To run a command and capture its output into a string –&amp;nbsp;what other languages do with backticks automatically –&amp;nbsp;you can apply the &lt;code dir="ltr"&gt;read&lt;/code&gt; function with &lt;code dir="ltr"&gt;String&lt;/code&gt; as the second argument indicating that you want a string not a byte array:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; read(&lt;span dir="ltr"&gt;`echo Hello`&lt;/span&gt;, &lt;span dir="ltr"&gt;String&lt;/span&gt;)
+&lt;span dir="ltr"&gt;"Hello\n"&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Since it's very common to want to discard the trailing line break at the end of a command's output, Julia provides the &lt;code dir="ltr"&gt;readchomp(x)&lt;/code&gt; command which is equivalent to writing &lt;code dir="ltr"&gt;chomp(read(x, String))&lt;/code&gt;:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; readchomp(&lt;span dir="ltr"&gt;`echo Hello`&lt;/span&gt;)
+&lt;span dir="ltr"&gt;"Hello"&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;To run a command without capturing its output, letting it just print to the same &lt;code dir="ltr"&gt;stdout&lt;/code&gt; stream as the main process –&amp;nbsp;i.e. what the &lt;code dir="ltr"&gt;system&lt;/code&gt; function does when given a command as a string in other languages – use the &lt;code dir="ltr"&gt;run&lt;/code&gt; function:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; run(&lt;span dir="ltr"&gt;`echo Hello`&lt;/span&gt;)
+Hello
+Process(&lt;span dir="ltr"&gt;`echo Hello`&lt;/span&gt;, ProcessExited(&lt;span dir="ltr"&gt;0&lt;/span&gt;))&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The &lt;code dir="ltr"&gt;"Hello"&lt;/code&gt; after the &lt;code dir="ltr"&gt;readchomp&lt;/code&gt; command is a returned value, whereas the &lt;code dir="ltr"&gt;Hello&lt;/code&gt; after the &lt;code dir="ltr"&gt;run&lt;/code&gt; command is printed output. The &lt;code dir="ltr"&gt;Process(`echo Hello`, ProcessExited(0))&lt;/code&gt; is the value returned by &lt;code dir="ltr"&gt;run&lt;/code&gt;. (If your terminal supports color, these are colored differently so that you can easily distinguish them visually.) If something goes wrong, an exception is raised:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; run(&lt;span dir="ltr"&gt;`false`&lt;/span&gt;)
+ERROR: failed process: Process(&lt;span dir="ltr"&gt;`false`&lt;/span&gt;, ProcessExited(&lt;span dir="ltr"&gt;1&lt;/span&gt;)) [&lt;span dir="ltr"&gt;1&lt;/span&gt;]
+
+julia&amp;gt; run(&lt;span dir="ltr"&gt;`notaprogram`&lt;/span&gt;)
+ERROR: IOError: could not spawn &lt;span dir="ltr"&gt;`notaprogram`&lt;/span&gt;: no such file or directory (ENOENT)&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;As with &lt;code dir="ltr"&gt;xargs&lt;/code&gt; and &lt;code dir="ltr"&gt;grep&lt;/code&gt; above, this may not always be desirable. In such cases, you can use &lt;code dir="ltr"&gt;ignorestatus&lt;/code&gt; to indicate that the command returning a non-zero value should not be considered an error:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; run(ignorestatus(&lt;span dir="ltr"&gt;`false`&lt;/span&gt;))
+Process(&lt;span dir="ltr"&gt;`false`&lt;/span&gt;, ProcessExited(&lt;span dir="ltr"&gt;1&lt;/span&gt;))
+
+julia&amp;gt; run(ignorestatus(&lt;span dir="ltr"&gt;`notaprogram`&lt;/span&gt;))
+ERROR: IOError: could not spawn &lt;span dir="ltr"&gt;`notaprogram`&lt;/span&gt;: no such file or directory (ENOENT)&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;In the latter case, an error is still raised in the parent process since the problem is that the executable doesn't even exist, rather than merely that it ran and returned a non-zero status.&lt;/p&gt;&lt;p&gt;Although Julia's backtick syntax intentionally mimics the shell as closely as possible, there is an important distinction: the command string is never passed to a shell to be interpreted and executed; instead it is parsed in Julia code, using the same rules the shell uses to determine what the command and arguments are. Command objects look a bit like strings, but they're actually more like an array of strings, which can be seen if you collect a command:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; cmd = &lt;span dir="ltr"&gt;`perl -e 'print "Hello\n"'`&lt;/span&gt;
+&lt;span dir="ltr"&gt;`perl -e 'print "Hello\n"'`&lt;/span&gt;
+
+julia&amp;gt; collect(cmd)
+&lt;span dir="ltr"&gt;3&lt;/span&gt;-element &lt;span dir="ltr"&gt;Array&lt;/span&gt;{&lt;span dir="ltr"&gt;String&lt;/span&gt;,&lt;span dir="ltr"&gt;1&lt;/span&gt;}:
+ &lt;span dir="ltr"&gt;"perl"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"-e"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"print \"Hello\\n\""&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;You can also get the length of a command object and index into it:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; length(cmd)
+&lt;span dir="ltr"&gt;3&lt;/span&gt;
+
+julia&amp;gt; cmd[&lt;span dir="ltr"&gt;3&lt;/span&gt;]
+&lt;span dir="ltr"&gt;"print \"Hello\\n\""&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;So commands are very much just a funny kind of string array. If your terminal supports underlines, the individual words in the command will be underlined, helping you to easily see where the breaks between words are.&lt;/p&gt;&lt;h2&gt;&lt;a href="https://julialang.org/blog/2013/04/put-this-in-your-pipe/#constructing_commands"&gt;Constructing Commands&lt;/a&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;The purpose of the backtick notation in Julia is to provide a familiar, shell-like syntax for making objects representing commands with arguments. To that end, quotes and spaces work just as they do in the shell. The real power of backtick syntax doesn't emerge, however, until we begin constructing commands programmatically. Just as in the shell (and in Julia strings), you can interpolate values into commands using the dollar sign (&lt;code dir="ltr"&gt;$&lt;/code&gt;):&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; dir = &lt;span dir="ltr"&gt;"src"&lt;/span&gt;;
+
+julia&amp;gt; collect(&lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;$dir&lt;/span&gt; -type f`&lt;/span&gt;)
+&lt;span dir="ltr"&gt;4&lt;/span&gt;-element &lt;span dir="ltr"&gt;Array&lt;/span&gt;{&lt;span dir="ltr"&gt;String&lt;/span&gt;,&lt;span dir="ltr"&gt;1&lt;/span&gt;}:
+ &lt;span dir="ltr"&gt;"find"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"src"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"-type"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"f"&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;Unlike in the shell, however, Julia values interpolated into commands are interpolated as a single verbatim argument –&amp;nbsp;no characters inside the value are interpreted as special after the value has been interpolated:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; dir = &lt;span dir="ltr"&gt;"two words"&lt;/span&gt;;
+
+julia&amp;gt; collect(&lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;$dir&lt;/span&gt; -type f`&lt;/span&gt;)
+&lt;span dir="ltr"&gt;4&lt;/span&gt;-element &lt;span dir="ltr"&gt;Array&lt;/span&gt;{&lt;span dir="ltr"&gt;String&lt;/span&gt;,&lt;span dir="ltr"&gt;1&lt;/span&gt;}:
+ &lt;span dir="ltr"&gt;"find"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"two words"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"-type"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"f"&lt;/span&gt;
+
+julia&amp;gt; dir = &lt;span dir="ltr"&gt;"foo'bar"&lt;/span&gt;;
+
+julia&amp;gt; collect(&lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;$dir&lt;/span&gt; -type f`&lt;/span&gt;)
+&lt;span dir="ltr"&gt;4&lt;/span&gt;-element &lt;span dir="ltr"&gt;Array&lt;/span&gt;{&lt;span dir="ltr"&gt;String&lt;/span&gt;,&lt;span dir="ltr"&gt;1&lt;/span&gt;}:
+ &lt;span dir="ltr"&gt;"find"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"foo'bar"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"-type"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"f"&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This works no matter what the contents of the interpolated value is, allowing simple interpolation of characters that are quite difficult to pass as parts of command-line arguments even in the shell (for the following examples, &lt;code dir="ltr"&gt;tmp/a.tsv&lt;/code&gt; and &lt;code dir="ltr"&gt;tmp/b.tsv&lt;/code&gt; can be created in the shell with &lt;code dir="ltr"&gt;echo -e "foo\tbar\nbaz\tqux" &amp;gt; tmp/a.tsv; echo -e "foo\t1\nbaz\t2" &amp;gt; tmp/b.tsv&lt;/code&gt;):&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; tab = &lt;span dir="ltr"&gt;"\t"&lt;/span&gt;;
+
+julia&amp;gt; cmd = &lt;span dir="ltr"&gt;`join -t&lt;span dir="ltr"&gt;$tab&lt;/span&gt; tmp/a.tsv tmp/b.tsv`&lt;/span&gt;;
+
+julia&amp;gt; collect(cmd)
+&lt;span dir="ltr"&gt;4&lt;/span&gt;-element &lt;span dir="ltr"&gt;Array&lt;/span&gt;{&lt;span dir="ltr"&gt;String&lt;/span&gt;,&lt;span dir="ltr"&gt;1&lt;/span&gt;}:
+ &lt;span dir="ltr"&gt;"join"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"-t\t"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"tmp/a.tsv"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"tmp/b.tsv"&lt;/span&gt;
+
+julia&amp;gt; run(cmd)
+foo     bar     &lt;span dir="ltr"&gt;1&lt;/span&gt;
+baz     qux     &lt;span dir="ltr"&gt;2&lt;/span&gt;
+Process(&lt;span dir="ltr"&gt;`join '-t   ' tmp/a.tsv tmp/b.tsv`&lt;/span&gt;, ProcessExited(&lt;span dir="ltr"&gt;0&lt;/span&gt;))&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Moreover, what comes after the &lt;code dir="ltr"&gt;$&lt;/code&gt; can actually be any valid Julia expression,&amp;nbsp;not just a variable name:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; collect(&lt;span dir="ltr"&gt;`join -t$"\t" tmp/a.tsv tmp/b.tsv`&lt;/span&gt;)
+&lt;span dir="ltr"&gt;4&lt;/span&gt;-element &lt;span dir="ltr"&gt;Array&lt;/span&gt;{&lt;span dir="ltr"&gt;String&lt;/span&gt;,&lt;span dir="ltr"&gt;1&lt;/span&gt;}:
+ &lt;span dir="ltr"&gt;"join"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"-t\t"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"tmp/a.tsv"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"tmp/b.tsv"&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;A tab character is somewhat harder to pass in the shell, requiring command interpolation and some tricky quoting:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;bash-3.2$ join -t&lt;span dir="ltr"&gt;"&lt;span dir="ltr"&gt;$(printf '\t')&lt;/span&gt;"&lt;/span&gt; tmp/a.tsv tmp/b.tsv
+foo     bar     1
+baz     qux     2&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;While interpolating values with spaces and other strange characters is great for non-brittle construction of commands, there was a reason why the shell split values on spaces in the first place: to allow interpolation of multiple arguments. Most modern shells have first-class array types, but older shells used space-separation to simulate arrays. Thus, if you interpolate a value like "foo bar" into a command in the shell, it's treated as two separate words by default. In languages with first-class array types, however, there's a much better option: consistently interpolate single values as single arguments and interpolate arrays as multiple values. This is precisely what Julia's backtick interpolation does:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; dirs = [&lt;span dir="ltr"&gt;"foo"&lt;/span&gt;, &lt;span dir="ltr"&gt;"bar"&lt;/span&gt;, &lt;span dir="ltr"&gt;"baz"&lt;/span&gt;];
+
+julia&amp;gt; collect(&lt;span dir="ltr"&gt;`find &lt;span dir="ltr"&gt;$dirs&lt;/span&gt; -type f`&lt;/span&gt;)
+&lt;span dir="ltr"&gt;6&lt;/span&gt;-element &lt;span dir="ltr"&gt;Array&lt;/span&gt;{&lt;span dir="ltr"&gt;String&lt;/span&gt;,&lt;span dir="ltr"&gt;1&lt;/span&gt;}:
+ &lt;span dir="ltr"&gt;"find"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"foo"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"bar"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"baz"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"-type"&lt;/span&gt;
+ &lt;span dir="ltr"&gt;"f"&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p&gt;And of course, no matter how strange the strings contained in an interpolated array are, they become verbatim arguments, without any shell interpretation. Julia's backticks have one more fancy trick up their sleeve. We saw earlier (without really remarking on it) that you could interpolate single values into a larger argument:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; x = &lt;span dir="ltr"&gt;"bar"&lt;/span&gt;;
+
+julia&amp;gt; &lt;span dir="ltr"&gt;`echo foo&lt;span dir="ltr"&gt;$x&lt;/span&gt;`&lt;/span&gt;
+&lt;span dir="ltr"&gt;`echo foobar`&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;What happens if &lt;code dir="ltr"&gt;x&lt;/code&gt; is an array? Only one way to find out:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; x = [&lt;span dir="ltr"&gt;"bar"&lt;/span&gt;, &lt;span dir="ltr"&gt;"baz"&lt;/span&gt;];
+
+julia&amp;gt; &lt;span dir="ltr"&gt;`echo foo&lt;span dir="ltr"&gt;$x&lt;/span&gt;`&lt;/span&gt;
+&lt;span dir="ltr"&gt;`echo foobar foobaz`&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Julia does what the shell would do if you wrote &lt;code dir="ltr"&gt;echo foo{bar,baz}&lt;/code&gt;. This even works correctly for multiple values interpolated into the same shell word:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;julia&amp;gt; dir = &lt;span dir="ltr"&gt;"data"&lt;/span&gt;; names = [&lt;span dir="ltr"&gt;"foo"&lt;/span&gt;,&lt;span dir="ltr"&gt;"bar"&lt;/span&gt;]; exts=[&lt;span dir="ltr"&gt;"csv"&lt;/span&gt;,&lt;span dir="ltr"&gt;"tsv"&lt;/span&gt;];
+
+julia&amp;gt; &lt;span dir="ltr"&gt;`cat &lt;span dir="ltr"&gt;$dir&lt;/span&gt;/&lt;span dir="ltr"&gt;$names&lt;/span&gt;.&lt;span dir="ltr"&gt;$exts&lt;/span&gt;`&lt;/span&gt;
+&lt;span dir="ltr"&gt;`cat data/foo.csv data/foo.tsv data/bar.csv data/bar.tsv`&lt;/span&gt;&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;This is the same Cartesian product expansion that the shell does if multiple &lt;code dir="ltr"&gt;{...}&lt;/code&gt; expressions are used in the same word.&lt;/p&gt;&lt;h2&gt;&lt;a href="https://julialang.org/blog/2013/04/put-this-in-your-pipe/#further_reading"&gt;Further Reading&lt;/a&gt;&lt;/h2&gt;&lt;p dir="ltr"&gt;You can read more in Julia's &lt;a href="https://docs.julialang.org/en/v1/manual/running-external-programs/#" dir="ltr"&gt;online manual&lt;/a&gt;, including how to construct complex pipelines, and how shell-compatible quoting and interpolation rules in Julia's backtick syntax make it both simple and safe to cut-and-paste shell commands into Julia code. The whole system is designed on the principle that the easiest thing to do should also be the right thing. The end result is that starting and interacting with external processes in Julia is both convenient and safe.&lt;/p&gt;</description><pubDate>Sun, 08 Aug 2021 14:58:12 -0500</pubDate></item><item><title>Lisping at JPL (2002)</title><link>https://lobste.rs/s/xzzrct</link><description>&lt;h1&gt;Lisping at JPL&lt;/h1&gt;&lt;div&gt;
+
+&lt;small dir="ltr"&gt;Copyright (c) 2002 by Ron Garret
+ (&lt;a href="http://www.flownet.com/ron/eg-rg-faq.html" dir="ltr"&gt;f.k.a. Erann Gat&lt;/a&gt;),
+ all rights reserved.&lt;/small&gt;&lt;/div&gt;&lt;p&gt;
+
+This is the story of the rise and fall of Lisp at the Jet Propulsion
+Lab as told from my personal (and highly biased) point of view.  I am
+not writing in my official capacity as an employee of JPL, nor am I in
+any way representing the official position of JPL.  (This will become
+rather obvious shortly.)&lt;/p&gt;&lt;h3&gt;1988-1991 - The Robotics Years&lt;/h3&gt;&lt;div&gt;
+
+I came to JPL in 1988 to work in the Artificial Intelligence group on
+autonomous mobile robots.  Times were different then.  Dollars flowed
+more freely from government coffers.  AI Winter was just beginning, and
+it had not yet arrived at JPL.  (Technology at the Lab tends to run a
+few years behind the state of the art :-) &lt;/div&gt;&lt;p&gt;
+
+JPL at the time was in the early planning stages for a Mars rover
+mission called Mars Rover Sample Return (MRSR).  In those days space
+missions were Big, with a capital B.  The MRSR rover was to weigh nearly
+a ton.  The mission budget was going to be in the billions of dollars
+(which was typical in those days).&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Against this backdrop I went to work for a fellow named
+&lt;a href="http://www.kipr.org/dpm/" dir="ltr"&gt;David Miller&lt;/a&gt;,
+who also happened to be my thesis advisor.  Dave had the then-radical
+idea of using small rovers to explore planets instead of big ones.  In
+1988 that was a tough sell.  Very few people believed that a small rover
+could do anything useful.  (Many still don't.)&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Using some creatively acquired R&amp;amp;D funding, Dave hired Colin Angle (then
+a grad student working for Rod Brooks at MIT, now CEO of IS Robotics) as
+a summer student.  Colin built
+&lt;a href="http://www.kipr.org/robots/tooth.html" dir="ltr"&gt;a small robot named Tooth&lt;/a&gt;,
+which stood in very stark contrast to the 2000-pound
+&lt;a href="http://robotics.jpl.nasa.gov/groups/rv/images/robby.gif" dir="ltr"&gt;Robby&lt;/a&gt;,
+which was the testbed for the MRSR mission.&lt;/p&gt;&lt;p&gt;
+
+At the time it was more or less taken for granted that AI work was done
+in Lisp.  C++ barely existed.  Perl was brand new.  Java was years away.
+Spacecraft were mostly programmed in assembler, or, if you were really
+being radical, Ada.&lt;/p&gt;&lt;p&gt;
+
+Robby had two Motorola 68020 processors running vxWorks, each with (if
+memory serves) 8 MB of RAM.  (This was considered a huge amount of RAM
+in those days.  In fact, the Robby work was often criticized for, among
+other things, being too memory-hungry to be of any use.)  Tooth, by
+contrast, had two Motorola 68hc11 8-bit microcontrollers each with 256
+bytes of RAM and 2k bytes of EEPROM.  (In later robots we used 6811's
+with a whopping 32k bytes of RAM.)&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+(As an indication of just how fast and how radically attitudes can
+change, the other day I heard an engineer complain that "you can't
+do &lt;i dir="ltr"&gt;anything&lt;/i&gt; with only 128 megabytes.") &lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Both Robby and Tooth were programmed using Lisp.  On Robby we actually
+ran Lisp on-board.  The Lisp we used was
+&lt;a href="http://www.paulgraham.com/thist.html" dir="ltr"&gt;T 3.1&lt;/a&gt; which was ported
+from a Sun3 to vxWorks with a great deal of help from Jim Firby, who
+came to JPL from Yale.  Jim also wrote a T-in-common-lisp compatibility
+package called Common T.  Using Common T we could do code
+development on a Macintosh (using Macintosh Common Lisp and a Robbie
+simulator, also written by Jim) and then run the resulting code directly
+on Robby with no changes.&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Tooth's processors didn't have nearly enough RAM to run Lisp directly &lt;a href="https://flownet.com/gat/jpl-lisp.html#notes" dir="ltr"&gt;[1]&lt;/a&gt; so instead we used a custom-designed compiler
+written in Lisp to generate 6811 code.  At first we used Rod Brooks's
+subsumption compiler, but later I decided I didn't like the constraints
+imposed by the subsumption architecture and wrote my own for a language
+called ALFA &lt;a href="https://flownet.com/gat/jpl-lisp.html#notes" dir="ltr"&gt;[2]&lt;/a&gt;.  ALFA was subsequently used to
+program a whole series of rovers, the
+&lt;a href="http://www.kipr.org/robots/rocky.html" dir="ltr"&gt;Rocky series&lt;/a&gt;, which
+eventually led to the
+&lt;a href="http://mars.jpl.nasa.gov/MPF/rover/sojourner.html" dir="ltr"&gt;Sojourner
+rover&lt;/a&gt; on the Mars Pathfinder mission. (Sojourner had an Intel 8085
+processor with 1 MB of bank-switched RAM.  It was programmed in C.  More
+on this decision later.)&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+Tooth, Robby, and the Rocky series were among the most capable robots of
+their day.  Robby was the first robot ever to navigate autonomously in
+an outdoor environment using stereo vision as its only sensor.  (NOTE:
+The stereo vision code was written in C by Larry Matthies.) 
+Tooth was only the second robot to do an indoor object-collection task,
+the other being
+&lt;a href="http://www.ai.mit.edu/people/joanna/herbert.html" dir="ltr"&gt;Herbert&lt;/a&gt;, which
+was developed a year or two earlier in by Jonathan Connell working in
+Rod Brooks's mobot lab at MIT.  (But Tooth was vastly more reliable than
+Herbert.) The Rocky robots were the first ever microrovers to operate
+successfully in rough-terrain environments.  In 1990,
+&lt;a href="http://www.kipr.org/robots/rocky.html#rocky2" dir="ltr"&gt; Rocky III&lt;/a&gt;
+demonstrated a fully autonomous traverse and sample collection mission,
+a capability that has not been reproduced to my knowledge in the twelve
+years since.&lt;/p&gt;&lt;p&gt;
+
+The period between 1988 and 1991 was amazingly productive for autonomous
+mobile robot work at JPL.  It was also, unfortunately, politically
+turbulent.  Dave Miller's group was, alas, not part of the
+organizational structure that had the "official" charter for doing
+robotics research at JPL.  The result was a bloody turf battle, whose
+eventual result was the dissolution of the Robotic Intelligence group,
+and the departure of nearly all of its members (and, probably, the fact that
+Sojourner was programmed in C).&lt;/p&gt;&lt;h3&gt;1992-1993 - Miscellaneous stories&lt;/h3&gt;&lt;div&gt;
+
+In 1993, for my own robotics swan song, I entered the AAAI mobile robot
+contest. My robot (an RWI B12 named Alfred) was entered in two of three
+events (the third required a manipulator, which Alfred lacked) and took
+a first and second place. (Alfred was actually the only robot to finish
+one of the events.)  But the cool part is that all the contest-specific
+code was written in three days.  (I started working on it on the plane
+ride to the conference.)  I attribute this success to a large extent to
+the fact that I was using Lisp while most of the other teams were using
+C.&lt;/div&gt;&lt;p dir="ltr"&gt;
+
+Also in 1993 I used MCL to help generate a code patch for the &lt;a href="http://www.igpp.ucla.edu/galileo/doc/ssr60/mag.htm" dir="ltr"&gt; Gallileo
+magnetometer&lt;/a&gt;.  The magnetometer had an RCA1802 processor, 2k each of
+RAM and ROM, and was programmed in Forth using a development system that
+ran on a long-since-decommissioned Apple II.  The instrument had
+developed a bad memory byte right in the middle of the code.  The code
+needed to be patched to not use this bad byte.  The magnetometer team
+had originally estimated that resurrecting the development environment
+and generating the code patch would take so long that they were not even
+going to attempt it. Using Lisp I wrote from scratch a
+Forth development environment for the instrument (including a simulator
+for the hardware) and used it to generate the patch.  The whole project
+took just under 3 months of part-time work.&lt;/p&gt;&lt;h3&gt;1994-1999 - Remote Agent&lt;/h3&gt;&lt;div&gt;
+
+In 1994 JPL started working on the &lt;a href="http://ic.arc.nasa.gov/projects/remote-agent/" dir="ltr"&gt;Remote Agent&lt;/a&gt;
+(RA), an autonomous spacecraft control system.  RA was written entirely
+in Common Lisp despite unrelenting political pressure to move to C++. 
+At one point an attempt was made to port one part of the system (the
+planner) to C++.  This attempt had to be abandoned after a year.  Based
+on this experience I think it's safe to say that if not for Lisp the
+Remote Agent would have failed.&lt;/div&gt;&lt;p&gt;
+
+We used four different Common Lisps in the course of the Remote Agent
+project: MCL, Allegro, Harlequin, and CLisp.  These ran in various
+combinations on three different operating systems: MacOS, SunOS, and
+vxWorks.  Harlequin was the Lisp that eventually flew on the spacecraft.
+Most of the ground development was done in MCL and Allegro.  (CLisp was
+also ported to vxWorks, and probably would have been the flight Lisp but
+for the fact that it lacked threads.)  We moved code effortlessly back
+and forth among these systems.&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+The Remote Agent software, running on a custom port of Harlequin Common
+Lisp, flew aboard &lt;a href="http://nmp.jpl.nasa.gov/ds1/" dir="ltr"&gt; Deep Space 1&lt;/a&gt;
+(DS1), the first mission of NASA's &lt;a href="http://nmp.jpl.nasa.gov/index_flash.html" dir="ltr"&gt; New Millennium
+program&lt;/a&gt;.  Remote Agent controlled DS1 for two days in May of
+1999.  During that time we were able to debug and fix a race condition
+that had not shown up during ground testing.  (Debugging a program
+running on a $100M piece of hardware that is 100 million miles away is
+an interesting experience.  Having a read-eval-print loop running on the
+spacecraft proved invaluable in finding and fixing the problem.  The &lt;a href="http://ti.arc.nasa.gov/m/pub-archive/176h/0176%20(Havelund).pdf" dir="ltr"&gt;story of the
+Remote Agent bug&lt;/a&gt; is an interesting one in and of itself.)&lt;/p&gt;&lt;p&gt;
+
+The Remote Agent was subsequently named "NASA Software of the Year".&lt;/p&gt;&lt;div&gt;
+
+&lt;font dir="ltr"&gt;&lt;b dir="ltr"&gt;Warning!&lt;/b&gt;&lt;/font&gt; From here on the story takes some rather
+less pleasant turns.  If you are not in the mood for bad news and
+a lot of cynical ranting and raving, stop reading now.  You have been
+warned.&lt;/div&gt;&lt;h3&gt;1999 - MDS&lt;/h3&gt;&lt;div&gt;
+
+Now, you might expect that with a track record like that, with one
+technological success afte another, that NASA would be rushing to
+embrace Lisp.  And you would, of course, be wrong.&lt;/div&gt;&lt;p dir="ltr"&gt;
+
+The New Millennium missions were supposed to be the flagships
+for NASA's new "better, faster, and cheaper" philosophy, which meant
+that we were given a budget that was impossibly small, and a schedule
+that was impossibly tight.  When the inevitable schedule and budget
+overruns began the project needed a scapegoat.  The crucial turning
+point was a major review with about 200 people attending, including many
+of JPL's top managers. At one point the software integration engineer
+was giving his presentation and listing all of the things that were
+going wrong.  Someone (I don't know who) interrupted him and asked if he
+could change only one thing to make things better what would it be.  His
+answer was: get rid of Lisp &lt;a href="https://flownet.com/gat/jpl-lisp.html#notes" dir="ltr"&gt;[3]&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;
+
+That one event was pretty much the end of Lisp at JPL.  The Remote Agent was
+downgraded from the mainline flight software to a flight experiment (now
+renamed RAX).  It still flew, but it only controlled the spacecraft for
+two days.&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+I tried to resurrect Lisp on my next project (the JPL Mission Data System
+or MDS) but the damage was done.  In an attempt to address one of the major
+objections to Lisp, that it was too big, I hired Gary Byers, who wrote the
+compiler for Macintosh Common Lisp (MCL) to port MCL to vxWorks.  (Along
+the way he also produced ports for Linux and Solaris.)  The MCL image was
+only 2 MB (compared to 16 or so for Harlequin), but it turned out not to
+matter.  Lisp was dead, at least at JPL.  After two years Gary realized that
+his work was never going to be used by anyone and he too left JPL.  A few
+months later I followed him and went to work at Google.  (The work Gary
+did on the Linux port eventually found its way into &lt;a href="http://www.clozure.com/openmcl" dir="ltr"&gt;
+OpenMCL&lt;/a&gt; so it was not a total loss for the world.)&lt;/p&gt;&lt;p&gt;
+
+There were at least two other major Lisp developments at JPL: Mark James
+wrote a system called SHARP (Spacecraft Health Automated Reasoning
+Prototype) that diagnosed hardware problems on the Voyager spacecraft,
+and Curt Eggemeyer wrote a planner called Plan-IT that was used for
+ground planning on a number of missions.  There were many others as
+well.  All are long forgotten.&lt;/p&gt;&lt;h3&gt;2000-2001 - Google&lt;/h3&gt;&lt;div&gt;
+
+This section is a little off-topic, since this is supposed to be a
+history of Lisp at JPL, but some aspects of my experience at Google
+might nonetheless be of interest.&lt;/div&gt;&lt;p dir="ltr"&gt;
+
+One of the reasons I stayed at JPL for twelve years was that I was
+appalled at what the software industry had become.  The management
+world has tried to develop software engineering processes that allow
+people to be plugged into them like interchangeable components.  The
+"interface specification" for these "components" usually involves a
+list of tools in which an engineer has received "training."  (I really
+detest the use of the word "training" in relation to professional
+activities.  Training is what you do to dogs.  What you should be doing
+with people is &lt;i dir="ltr"&gt;educating&lt;/i&gt; them, not training them.  There is a big, big
+difference.)&lt;/p&gt;&lt;p&gt;
+
+To my mind, the hallmark of the interchangeable component model of software
+engineers is Java.  Without going into too many details, I'll just say that
+having programmed in Lisp the shortcomings of Java are glaringly obvious,
+and programming in Java means a life of continual and unremitting pain.  So
+I vowed I would never be a Java programmer, which pretty much shut me out
+of 90% of all software engineering jobs in the late 90's.  This was OK
+since I was managing to put together a reasonably successful career as a
+researcher.  But after Remote Agent I found myself more and more frustrated,
+and the opportunity to work at Google just happened to coincide with a
+local frustration maximum.&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+One of the reasons I decided to go work for Google was that they were not
+using Java.  So of course you can guess what my first assignment was: lead
+the inaugural Java development at the company, what eventually became
+&lt;a href="https://adwords.google.com/" dir="ltr"&gt;Google AdWords&lt;/a&gt;.  Thank God I had a
+junior engineer working for me who actually knew something about Java and
+didn't mind it so much.  In the ancient tradition of senior-junior relationships,
+he did all the work, and I took all the credit.  (Well, not quite -- I did
+write the billing system, including a pretty wizzy security system that keeps
+the credit card numbers secure even against dishonest employees.  But Jeremy
+wrote the Lion's share of AdWords version 1.)&lt;/p&gt;&lt;p&gt;
+
+I did try to introduce Lisp to Google.  Having had some experience selling
+Lisp at JPL I got all my ducks in a row, had a cool demo going, showed it
+to all the other members of the ads team, and had them all convinced that
+this was a good idea.  The only thing left was to get approval from the
+VP of engineering.  The conversation went something like this:&lt;/p&gt;&lt;PRE&gt;Me:  I'd like to talk to you about something...
+Him: Let me guess - you want to use Smalltalk.
+Me:  Er, no...
+Him: Lisp?
+Me: Right.
+Him:  No way.
+&lt;/PRE&gt;&lt;div&gt;
+
+And that was the end of Lisp at Google.  In retrospect I am not
+convinced that he made the wrong decision.  The interchangeable
+component model of software engineers seemed to work reasonably well
+there.  It's just not a business model in which I wish to be involved,
+at least not on the component-provider side.  So after a year at
+Google I quit and returned to JPL.&lt;/div&gt;&lt;h3&gt;2001-2004 Your tax dollars at work&lt;/h3&gt;&lt;div&gt;
+
+When I returned to JPL they put me to work on -- (wait for it) --
+search engines!  Apparently they got this idea that because I worked
+at Google for a year that I was now a search engine expert (never
+mind that I didn't actually do any work on the search engine).  Fortunately
+for me, working on search engines at JPL doesn't mean the same thing as working
+on search engines at Google.  When you work on search engines at Google
+it means actually working on a search engine.  When you work on search
+engines at JPL it means &lt;i dir="ltr"&gt;buying&lt;/i&gt; a search engine, about which I
+actually knew quite a bit.  (Call Google, place an order.)  You don't want
+to know how many of your taxpayer dollars went to pay me for helping to
+shepherd purchase orders through the JPL bureaucracy.&lt;/div&gt;&lt;p&gt;
+
+But I digress.&lt;/p&gt;&lt;h3&gt;Commentary&lt;/h3&gt;&lt;div&gt;
+
+The demise of Lisp at JPL is a tragedy.  The language is particularly
+well suited for the kind of software development that is often done
+here: one-of-a-kind, highly dynamic applications that must be developed
+on extremely tight budgets and schedules.  The efficacy of the language
+in that kind of environment is amply documented by a long record of
+unmatched technical achievements.&lt;/div&gt;&lt;p dir="ltr"&gt;
+
+The situation is particularly ironic because the argument that has been
+advanced for discarding Lisp in favor of C++ (and now for Java) is that
+JPL should use "industry best practice."  The problem with this argument
+is twofold: first, we're confusing best practice with &lt;i dir="ltr"&gt;standard&lt;/i&gt;
+practice.  The two are not the same.  And second, we're assuming that
+best (or even standard) practice is an invariant with respect to the
+task, that the best way to write a word processor is also the best way
+to write a spacecacraft control system.  It isn't.&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+It is incredibly frustrating watching all this happen.  My job today
+(I am now working on software verification and validation) is
+to solve problems that can be traced directly back to the use of purely
+imperative langauges with poorly defined semantics like C and C++.  (The
+situation is a little better with Java, but not much.)  But, of course,
+the obvious solution -- to use non-imperative languages with well defined
+semantics like Lisp -- is not an option.  I can't even &lt;i dir="ltr"&gt;say&lt;/i&gt; the
+word Lisp without cementing my reputation as a crazy lunatic who thinks
+Lisp is the Answer to Everything.  So I keep my mouth shut (mostly) and
+watch helplessly as millions of tax dollars get wasted.  (I would pin some
+hope on a wave of grass-roots outrage over this blatant waste of money
+coming to the rescue, but, alas, on the scale of outrageous waste that
+happens routinely in government endeavors this is barely a blip.)&lt;/p&gt;&lt;p&gt;
+
+In the words of Elton John: It's sad.  So sad.  It's a sad, sad
+situation.  My best hope at this point is that the dotcom crash will do
+to Java what AI winter did to Lisp, and we may eventually emerge from
+"dotcom winter" into a saner world.  But I wouldn't bet on it.&lt;/p&gt;&lt;h3&gt;NOTES:&lt;/h3&gt;&lt;a name="notes"&gt;
+
+[1]  It's possible to run Lisp on surprisingly small processors.  My
+first Lisp was P-Lisp, which ran on an Apple II with 48k of RAM.  The
+three-disk towers-of-hanoi problem was about at the limits of its
+capabilities.&lt;/a&gt;&lt;p&gt;
+
+[2] ALFA was an acronym that stood for A Language For Action.  My plan
+was to eventually design a language that would be called BETA, which
+would stand for Better Even Than ALFA.  But I never got around to it.&lt;/p&gt;&lt;p dir="ltr"&gt;
+
+[3] This begs the question of &lt;i dir="ltr"&gt;why&lt;/i&gt; he said this.  The reason he gave
+at the time was that most of his time was being taken up dealing with
+multi-language integration issues.  However, this was belied by the following
+fact: shortly before the review, I met with the integration engineer and
+offered to help him with any Lisp-related issues he was encountering.  He
+replied that there weren't any that I could help with.  So while there
+&lt;i dir="ltr"&gt;were&lt;/i&gt; issues that arose from the fact that Lisp had to interoperate
+with C, I do not believe that a good-faith effort was made to address those
+issues.&lt;/p&gt;&lt;p&gt;
+
+Postscript: Many of the multi-language integration headaches were
+caused by the interprocess communication system that allowed Lisp and
+C to communicate.  The IPC relied on a central server (written in C)
+which crashed regularly.  Getting rid of Lisp did in fact alleviate
+those problems (because the unreliable IPC was no longer necessary).
+It is nonetheless supremely ironic that the demise of Lisp at JPL was
+ultimately due in no small measure to the unreliability of a C
+program.&lt;/p&gt;</description><pubDate>Sun, 08 Aug 2021 21:05:52 -0500</pubDate></item><item><title>OpenBSD on the Framework Laptop</title><link>https://lobste.rs/s/7zpung</link><description>&lt;div dir="ltr"&gt;
+			posted on aug 6th, 2021
+			with tags
+				&lt;a href="https://jcs.org/tagged/hardware" dir="ltr"&gt;hardware&lt;/a&gt;,
+					
+					
+				
+				&lt;a href="https://jcs.org/tagged/laptops" dir="ltr"&gt;laptops&lt;/a&gt;,
+					
+					and
+					
+				
+				&lt;a href="https://jcs.org/tagged/openbsd" dir="ltr"&gt;openbsd&lt;/a&gt;
+		&lt;/div&gt;&lt;p dir="ltr"&gt;&lt;a href="https://frame.work/" dir="ltr"&gt;Framework&lt;/a&gt;
+is a new company offering a laptop that is designed to be repairable and
+upgradeable, both in terms of internal components like the screen and
+motherboard, and in pluggable
+&lt;a href="https://frame.work/blog/storage-expansion-cards" dir="ltr"&gt;expansion cards&lt;/a&gt;.&lt;/p&gt;&lt;img src="https://jcs.org/images/2021-08-06-hero-665x261.jpg" srcset="https://jcs.org/images/2021-08-06-hero-665x261.jpg 1x, https://jcs.org/images/2021-08-06-hero-1330x522@2x.jpg 2x" width="490" height="192" alt="Framework Laptop with expansion cards removed"&gt;&lt;h2&gt;Hardware&lt;/h2&gt;&lt;p dir="ltr"&gt;While many classic ThinkPad owners will probably say “so what?” to a repairable
+and upgradeable laptop, doing so in an ultrabook-style thin and light laptop in
+2021 is fairly novel.
+Each new
+&lt;a href="https://jcs.org/tagged/thinkpad" dir="ltr"&gt;ThinkPad&lt;/a&gt;
+I’ve used lately has become less and less repairable and upgradeable, with RAM
+and WiFi cards now being soldered to the motherboard.&lt;/p&gt;&lt;p dir="ltr"&gt;The Framework Laptop became available for pre-order in May and was offered in
+two configurations of essentially the same device: a
+&lt;a href="https://frame.work/products/laptop" dir="ltr"&gt;pre-built&lt;/a&gt;
+option and a
+&lt;a href="https://frame.work/products/laptop-diy-edition" dir="ltr"&gt;DIY&lt;/a&gt;
+option that can be purchased without RAM, an SSD, a WiFi card, or a Windows
+license.&lt;/p&gt;&lt;p&gt;Both configurations offer the same 13.5” 3:2 aspect ratio screen and various
+Intel CPU options.
+I opted for the Intel i7-1185G7 processor, although in retrospect I’m not really
+sure why.
+I’ve usually chosen an i5 processor for better battery life and lower heat
+output since most of what I do is not CPU-intensive, but perhaps in the rush to
+place a pre-order as soon as I could, I was not considering those issues.&lt;/p&gt;&lt;p&gt;The laptop weighs 2.8 lbs and is 11.6” wide, 9” tall, and 0.6” inches thick.
+It has basically two USB-C ports on each side, although they are recessed about
+1.5” to accommodate the expansion cards which are just various USB-C dongles in
+uniform cases.
+Framework offers USB-C, USB-A, HDMI, and DisplayPort connector cards, along with
+a MicroSD card reader and 250GB and 1TB storage devices.
+Currently all of the cards desired must be purchased with the laptop at the time
+of ordering, and they are not yet available for sale separately.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://jcs.org/images/2021-08-06-box-216x162.jpg" srcset="https://jcs.org/images/2021-08-06-box-216x162.jpg 1x, https://jcs.org/images/2021-08-06-box-432x324@2x.jpg 2x" width="216" height="162"&gt;&lt;/figure&gt;&lt;p&gt;In between the two expansion slots on the left side is an LED for charging
+status and a 3.5mm headphone jack to the right of the slots.
+On the right side of the laptop is another LED for charging, if charging via
+USB-C connection on that side.&lt;/p&gt;&lt;p dir="ltr"&gt;There are two downward-firing speakers and a fan exhaust on the bottom.
+The speakers sound excellent and have a sufficient amount of bass (but not
+overpowering like the new MacBook Air).
+The fan is inaudible at idle, but can get very loud at full speed when doing a
+high amount of CPU and disk activity such as a &lt;code dir="ltr"&gt;git clone&lt;/code&gt;.
+It makes a little click/squeak when turning on, and in some cases can come on
+and turn off every few seconds which makes it kind of annoying in a very quiet
+room.  There is no audible coil whine from any of the components.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://jcs.org/images/2021-08-06-left_side-216x162.jpg" srcset="https://jcs.org/images/2021-08-06-left_side-216x162.jpg 1x, https://jcs.org/images/2021-08-06-left_side-432x324@2x.jpg 2x" width="216" height="162"&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;The keyboard deck has a power button with integrated fingerprint reader in the
+upper-right corner.
+Unfortunately it also contains a white LED ring around it that is very bright
+and does not dim with the keyboard backlight, nor does it turn off when the
+fingerprint reader is disabled in the BIOS.
+Since the button is so close to the screen, it remains in my field of view and
+is very annoying in a dark room.
+Framework have
+&lt;a href="https://community.frame.work/t/power-button-light/4297/2" dir="ltr"&gt;confirmed&lt;/a&gt;
+that the light is controllable via the EC, so this can be something that could
+be disabled or dimmed in a future firmware update.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://jcs.org/images/2021-08-06-backlight-327x245.jpg" srcset="https://jcs.org/images/2021-08-06-backlight-327x245.jpg 1x, https://jcs.org/images/2021-08-06-backlight-654x490@2x.jpg 2x" width="327" height="245"&gt;&lt;/figure&gt;&lt;p&gt;The keyboard has 1.5mm of key travel with a pronounced but quiet tactile.
+It reminds me of the MacBook Pro 2015 keyboard but with slightly more tactile.
+I wish the arrow keys were an inverted T, however.
+The keyboard has 3 levels of backlight (plus off) adjustable with Fn+Space.
+The surface of the keys is somewhat rough and matte.&lt;/p&gt;&lt;p&gt;The 13.5” non-touch screen has a 3:2 aspect ratio and a 2256x1504 resolution,
+which is high enough to use 1.5x scaling.
+It is reportedly a &amp;gt;400 nit screen, and most of the time in my office I’m using
+it at about 30% brightness.&lt;/p&gt;&lt;p&gt;The screen lid is quite bendy, and has a lot of wobble on its hinge although the
+hinge itself doesn’t seem to wobble and is quite tight.
+This means that it doesn’t wobble in response to typing or moving things on my
+desk, which is what I was concerned about, but does wobble excessively when
+making screen angle adjustments.
+The lid can be mostly opened all the way with one hand and will open fully to
+180 degrees.
+Centered on the back of the lid is the Framework logo in black, with “Framework”
+branding written on the front of the hinge in glossy black against the matte
+black plastic making it very discreet in most lighting.&lt;/p&gt;&lt;p dir="ltr"&gt;The screen bezel is sufficiently thin, but still has space for a 1080p webcam
+with a physical cut-off switch (showing a red strip when disabled) next to the
+microphone which also has its own cut-off switch.
+The bezel is held on magnetically to make it easier to
+&lt;a href="https://frame.work/blog/display-and-customizable-bezels" dir="ltr"&gt;upgrade or change&lt;/a&gt;.
+If you’re wondering like I was, the square to the left is an ambient light
+sensor (though it is not exposed as a standard ACPI ALS device) and the one on
+the right is the actual camera.
+There is no Windows Hello IR camera.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://jcs.org/images/2021-08-06-screen-327x245.jpg" srcset="https://jcs.org/images/2021-08-06-screen-327x245.jpg 1x, https://jcs.org/images/2021-08-06-screen-654x490@2x.jpg 2x" width="327" height="245"&gt;&lt;/figure&gt;&lt;p dir="ltr"&gt;The Windows Precision Touchpad is made by
+&lt;a href="https://frame.work/blog/framework-laptop-deep-divethe-touchpad-and-fingerprint" dir="ltr"&gt;PixArt&lt;/a&gt;.
+Its surface is not quite as smooth as I would like but is not bad, although the
+click mechanism is somewhat loud and hollow sounding which makes it seem cheap.&lt;/p&gt;&lt;h2&gt;Assembly&lt;/h2&gt;&lt;p dir="ltr"&gt;Since I purchased the DIY version, mine came with the 32GB of Crucial RAM that I
+ordered, along with an Intel AX210 WiFi card (which I swapped out for an
+&lt;a href="https://amzn.to/2X4vRXC" dir="ltr"&gt;AX201&lt;/a&gt;
+due to OpenBSD compatibility) in separate packaging.&lt;/p&gt;&lt;p&gt;The Framework Laptop includes a screwdriver in the box with a removable Torx and
+Phillips bit on one end, and a spudger on the other.
+All of the screws on the laptop, from the captive ones on the bottom that
+release the keyboard deck (rather than the bottom casing coming off as on most
+laptops) to the internal screws on the WiFi card, SSD, and other internal
+components, can be removed with the same Torx bit.&lt;/p&gt;&lt;p dir="ltr"&gt;Installation of the RAM and the
+&lt;a href="https://amzn.to/3Ck2MHX" dir="ltr"&gt;Samsung 980 Pro 1TB NVMe SSD&lt;/a&gt;
+that I already had were very simple.
+Installing the WiFi card took a minute or two due to the custom bracket that is
+supposed to be installed over the antenna connectors, but is oriented
+differently when temporarily installed from the factory.
+All of the component locations on the motherboard have QR codes which direct one
+to URLs on the Framework website for instructions.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://jcs.org/images/2021-08-06-internals-665x300.jpg" srcset="https://jcs.org/images/2021-08-06-internals-665x300.jpg 1x, https://jcs.org/images/2021-08-06-internals-1330x600@2x.jpg 2x" width="455" height="205"&gt;&lt;/figure&gt;&lt;h2&gt;Expansion Cards&lt;/h2&gt;&lt;p&gt;I initially installed USB-C and USB-A expansion cards on the left side, and a
+USB-C and 1TB storage card on the right which will be used for backups.&lt;/p&gt;&lt;p&gt;I like that the expansion cards keep the ports a good distance from each other
+and that there can be USB-C charging ports on either side.
+I’ve often run into problems with the two USB-C ports on my MacBook Air being
+too close to each other and with them both on the left side, I can’t opt to
+charge on the right side if I happen to be sitting with the wall outlet on that
+side of me.&lt;/p&gt;&lt;p dir="ltr"&gt;Framework has an
+&lt;a href="https://frame.work/blog/expansion-card-developer-program--canada-launch" dir="ltr"&gt;Expansion Card Developer Program&lt;/a&gt;
+to support 3rd party expansion cards and they’ve also
+&lt;a href="https://frame.work/blog/expansion-card-developer-program--canada-launch" dir="ltr"&gt;made
+available&lt;/a&gt;
+the schematics and case designs for their existing cards.
+I miss the days of
+&lt;a href="https://amzn.to/3imS9fp" dir="ltr"&gt;funky PCMCIA cards&lt;/a&gt;
+which brought so much expandability to laptops without needing dongles.&lt;/p&gt;&lt;p dir="ltr"&gt;In the future I’d like to make a simple 3D-printed case for the
+&lt;a href="https://jcs.org/2020/11/18/openbsd_btaudio" dir="ltr"&gt;Creative BT-W3&lt;/a&gt;
+Bluetooth adapter and maybe one for the Logitech mouse dongle, allowing them to
+be plugged in without sticking out.&lt;/p&gt;&lt;figure&gt;&lt;img src="https://jcs.org/images/2021-08-06-expansion_cards-216x162.jpg" srcset="https://jcs.org/images/2021-08-06-expansion_cards-216x162.jpg 1x, https://jcs.org/images/2021-08-06-expansion_cards-432x324@2x.jpg 2x" width="216" height="162"&gt;&lt;/figure&gt;&lt;h2&gt;Firmware&lt;/h2&gt;&lt;p dir="ltr"&gt;The Framework Laptop has an InsydeH2O BIOS that is accessible upon pressing
+&lt;code dir="ltr"&gt;F2&lt;/code&gt;.
+Secure Boot must be disabled in the BIOS menu to boot OpenBSD, and CSM/Legacy
+booting is not supported.
+I opted to disable the fingerprint reader and Hyperthreading.&lt;/p&gt;&lt;h2&gt;Battery&lt;/h2&gt;&lt;p&gt;I don’t usually publish battery life estimates for laptops because power usage
+on modern laptops can vary wildly with screen brightness and CPU load, whether
+it’s constantly Turbo boosting, etc.
+The Framework Laptop has a 55 Watt-hour battery and it idles around 9 Watts with
+the screen at 25% brightness and connected to WiFi.&lt;/p&gt;&lt;h2&gt;OpenBSD Support Log&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;2021-08-04:&lt;/strong&gt; Initial boot of OpenBSD-current showed a strange issue once
+&lt;code dir="ltr"&gt;inteldrm&lt;/code&gt; took over from &lt;code dir="ltr"&gt;efifb&lt;/code&gt;.
+The screen would go blank and then the backlight would flicker off and on every
+second or so with the screen still black.
+Recompiling the kernel with &lt;code dir="ltr"&gt;DRMDEBUG&lt;/code&gt; enabled showed that it was having trouble
+training the eDP panel properly, although enabling debugging caused it to print
+messages to the console during the whole process, introducing enough delay that
+it could complete the training properly.
+Eventually I found that by switching between X and the console a few times, the
+screen would train and work properly, but after an &lt;code dir="ltr"&gt;xset dpms force off&lt;/code&gt;, or
+trying to resume from S3, this workaround does not usually work.
+I’m still trying to debug this, but I can’t reproduce it in Linux with the same
+DRM code that we have in OpenBSD (based on Linux 5.10.56).&lt;/p&gt;&lt;p dir="ltr"&gt;I also started having stability issues with the machine randomly powering off
+which was extremely frustrating, but I eventually tracked it down to the
+touchpad as the culprit.
+Since OpenBSD does not yet have a Tiger Lake GPIO interrupt driver, the touchpad
+is working in polling mode (via &lt;code dir="ltr"&gt;ihidev&lt;/code&gt;).
+At some point this goes haywire (minutes to hours) and touching the touchpad
+results in the machine instantly powering off.
+I’m making a guess that the EC is crashing while trying to interface with the
+touchpad.
+By disabling the &lt;code dir="ltr"&gt;dwiic&lt;/code&gt; i&lt;sup dir="ltr"&gt;2&lt;/sup&gt;c driver, the touchpad becomes available
+through the legacy PS/2 interface, allowing it to work through the &lt;code dir="ltr"&gt;pms&lt;/code&gt; mouse
+driver.
+However, after a day of using this legacy configuration, the same power-offs
+would randomly happen when touching the touchpad.
+There is a BIOS option to disable this legacy interface, which I did, and am now
+running without a working touchpad until I can write a GPIO driver.&lt;/p&gt;&lt;p&gt;Aside from the display driver issue, I’ve experienced a few other issues with
+the laptop that seem related to the EC, such as keyboard input in the EFI
+bootloader dropping keys and being very sluggish (this happened only once),
+USB-C ports refusing to accept power for charging until the system is powered
+off and back on again (I’ve had this happen a number of times), and it not
+restarting when instructed to by the kernel/ACPI (a few times).
+I’m sure all of these issues will work themselves out over time through future
+firmware/EC updates.&lt;/p&gt;&lt;h2&gt;Current OpenBSD Support Summary&lt;/h2&gt;&lt;p&gt;Status is relative to OpenBSD-current as of 2021-08-05.&lt;/p&gt;&lt;table dir="ltr"&gt;
+  &lt;thead dir="ltr"&gt;
+    &lt;tr dir="ltr"&gt;
+      &lt;th dir="ltr"&gt;Component&lt;/th&gt;
+      &lt;th dir="ltr"&gt;Works?&lt;/th&gt;
+      &lt;th dir="ltr"&gt;Notes&lt;/th&gt;
+    &lt;/tr&gt;
+  &lt;/thead&gt;
+  &lt;tbody dir="ltr"&gt;
+    &lt;tr dir="ltr"&gt;
+      &lt;td dir="ltr"&gt;Audio&lt;/td&gt;
+      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
+      &lt;td dir="ltr"&gt;Intel audio with Realtek ALC295 codec and supported by &lt;a href="https://man.openbsd.org/azalia.4" dir="ltr"&gt;&lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;azalia&lt;/code&gt;&lt;/a&gt;. Microphone can be disabled by toggling the physical switch on the screen bezel.&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr dir="ltr"&gt;
+      &lt;td dir="ltr"&gt;Battery status&lt;/td&gt;
+      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
+      &lt;td dir="ltr"&gt;55Whr battery, status available through &lt;a href="https://man.openbsd.org/acpibat.4" dir="ltr"&gt;&lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;acpibat&lt;/code&gt;&lt;/a&gt;.&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr dir="ltr"&gt;
+      &lt;td dir="ltr"&gt;Bluetooth&lt;/td&gt;
+      &lt;td dir="ltr"&gt;No&lt;/td&gt;
+      &lt;td dir="ltr"&gt;Usually provided by the wireless card, but OpenBSD does not support Bluetooth.&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr dir="ltr"&gt;
+      &lt;td dir="ltr"&gt;Fingerprint sensor&lt;/td&gt;
+      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
+      &lt;td dir="ltr"&gt;Goodix via USB, &lt;a href="https://community.frame.work/t/fingerprint-scanner-compatibility-with-linux-ubuntu-fedora-etc/1501/18" dir="ltr"&gt;reportedly&lt;/a&gt; supported by libfprint. Can be disabled in the BIOS.&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr dir="ltr"&gt;
+      &lt;td dir="ltr"&gt;Keyboard backlight&lt;/td&gt;
+      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
+      &lt;td dir="ltr"&gt;Supported natively by the EC.  Three levels of adjustment can be toggled with Fn+Space.&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr dir="ltr"&gt;
+      &lt;td dir="ltr"&gt;Hibernation&lt;/td&gt;
+      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
+      &lt;td dir="ltr"&gt;Can be triggered by &lt;a href="https://man.openbsd.org/ZZZ.8" dir="ltr"&gt;&lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;ZZZ&lt;/code&gt;&lt;/a&gt;.&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr dir="ltr"&gt;
+      &lt;td dir="ltr"&gt;Micro-SD card reader&lt;/td&gt;
+      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
+      &lt;td dir="ltr"&gt;The Framework Micro-SD expansion card attaches via USB and works fine.  An inserted card sticks out about 2mm from the edge.&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr dir="ltr"&gt;
+      &lt;td dir="ltr"&gt;SSD&lt;/td&gt;
+      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
+      &lt;td dir="ltr"&gt;M.2 2280 socket; I used a Samsung 980 Pro NVMe drive supported by &lt;a href="https://man.openbsd.org/nvme.4" dir="ltr"&gt;&lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;nvme&lt;/code&gt;&lt;/a&gt;.&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr dir="ltr"&gt;
+      &lt;td dir="ltr"&gt;Suspend / resume&lt;/td&gt;
+      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
+      &lt;td dir="ltr"&gt;Can be triggered by &lt;a href="https://man.openbsd.org/zzz.8" dir="ltr"&gt;&lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;zzz&lt;/code&gt;&lt;/a&gt; or closing the lid.&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr dir="ltr"&gt;
+      &lt;td dir="ltr"&gt;Touchpad&lt;/td&gt;
+      &lt;td dir="ltr"&gt;Mostly&lt;/td&gt;
+      &lt;td dir="ltr"&gt;Pixart I&lt;sup dir="ltr"&gt;2&lt;/sup&gt;C, supported by &lt;a href="https://man.openbsd.org/imt.4" dir="ltr"&gt;&lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;imt&lt;/code&gt;&lt;/a&gt;. A GPIO driver is needed to make it work in interrupt (non-polling) mode.&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr dir="ltr"&gt;
+      &lt;td dir="ltr"&gt;USB&lt;/td&gt;
+      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
+      &lt;td dir="ltr"&gt;The 4 USB-C ports work fine, though I’ve had a few occasions where Power Delivery charging did not work until the laptop was powered off and back on again.&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr dir="ltr"&gt;
+      &lt;td dir="ltr"&gt;Video&lt;/td&gt;
+      &lt;td dir="ltr"&gt;Mostly&lt;/td&gt;
+      &lt;td dir="ltr"&gt;&lt;a href="http://man.openbsd.org/inteldrm.4" dir="ltr"&gt;&lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;inteldrm&lt;/code&gt;&lt;/a&gt; supports accelerated video, DPMS, gamma control, and integrated backlight control, though the integrated eDP panel has issues coming up. HDMI output through the HDMI expansion card did not work nor did it work through other USB-C docks/dongles.&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr dir="ltr"&gt;
+      &lt;td dir="ltr"&gt;Webcam&lt;/td&gt;
+      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
+      &lt;td dir="ltr"&gt;1080p USB camera, supported by the &lt;a href="http://man.openbsd.org/uvideo.4" dir="ltr"&gt;&lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;uvideo&lt;/code&gt;&lt;/a&gt; driver when the &lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;kern.video.record&lt;/code&gt; sysctl is enabled.  Can be disabled in the BIOS or by the switch on the bezel which will detach the USB device.&lt;/td&gt;
+    &lt;/tr&gt;
+    &lt;tr dir="ltr"&gt;
+      &lt;td dir="ltr"&gt;Wireless&lt;/td&gt;
+      &lt;td dir="ltr"&gt;Yes&lt;/td&gt;
+      &lt;td dir="ltr"&gt;M.2 socket; I used a Intel AX201 802.11ax wireless card supported by &lt;a href="http://man.openbsd.org/iwx.4" dir="ltr"&gt;&lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;iwx&lt;/code&gt;&lt;/a&gt;. The Intel AX210 card sold by Framework is not yet supported by &lt;code class="language-plaintext highlighter-rouge" dir="ltr"&gt;iwx&lt;/code&gt;.&lt;/td&gt;
+    &lt;/tr&gt;
+  &lt;/tbody&gt;
+&lt;/table&gt;&lt;h2&gt;Conclusion&lt;/h2&gt;&lt;p dir="ltr"&gt;Framework has done well with their future-thinking design and prioritizing
+&lt;a href="https://guides.frame.work/" dir="ltr"&gt;repairability&lt;/a&gt;
+and upgradeability.
+Whether the company, replacement parts, and future motherboard/processor
+upgrades will be around in five or ten years to make good on their promises
+remains to be seen, but I feel like we’ll never get there unless consumers
+support the company in the beginning.&lt;/p&gt;&lt;p&gt;My concern before receiving my laptop was that reviewers and consumers would be
+expected to look past a lot of faults just because it was repairable and
+upgradeable, as can been seen with modular phones and other devices.
+However, I feel that the Framework Laptop is a well-executed product that can
+stand on its own right now and any future upgradeability is just icing on the
+cake.&lt;/p&gt;&lt;p&gt;I hope the expansion card idea takes off and 3rd party developers create some
+really interesting things.&lt;/p&gt;</description><pubDate>Sat, 07 Aug 2021 08:53:54 -0500</pubDate></item><item><title>License Round Up</title><link>https://lobste.rs/s/s0xch6</link><description>&lt;p dir="ltr"&gt;
       &lt;span dir="ltr"&gt;June&lt;/span&gt;
       &lt;span dir="ltr"&gt;21&lt;/span&gt;,
       &lt;span dir="ltr"&gt;2021&lt;/span&gt;
