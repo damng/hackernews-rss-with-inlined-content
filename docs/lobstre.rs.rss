@@ -2456,203 +2456,7 @@ mv $REPO_NAME/.github .
     print(text.toLocaleUpperCase('tr-TR'));
     print('-------------');
 }&lt;/PRE&gt;&lt;p dir="ltr"&gt;I can now run this any time with &lt;code dir="ltr"&gt;jsc Turkish.js&lt;/code&gt;. And you also get to see how having JavaScript in a command line can be handy. Enjoy!&lt;/p&gt;&lt;div dir="ltr"&gt;
-		Written on August 25th, 2021  for &lt;a href="https://furbo.org/category/development/" rel="category tag" dir="ltr"&gt;Development&lt;/a&gt; 			&lt;/div&gt;</description><pubDate>Sat, 28 Aug 2021 00:06:36 -0500</pubDate></item><item><title>Cracking simple LCG PRNG</title><link>https://lobste.rs/s/rtvw8v</link><description>&lt;div&gt;Loading [MathJax]/jax/output/HTML-CSS/fonts/TeX/fontdata.js&lt;/div&gt;&lt;h2&gt;2-Mar-2017: Cracking simple LCG PRNG&lt;/h2&gt;&lt;p&gt;An LCG (Linear congruential generator) is a simplest PRNG (Pseudorandom number generator) and can be cracked easily.&lt;/p&gt;&lt;p dir="ltr"&gt;Here is a clone of a very popular "color lines" game (&lt;a href="https://archive.org/download/BallTriX_1020" dir="ltr"&gt;https://archive.org/download/BallTriX_1020&lt;/a&gt;).&lt;/p&gt;&lt;p&gt;In its internals we can find that it uses standard MSVC rand() function, like that:&lt;/p&gt;&lt;PRE&gt;uint32_t MSVC_rand()
-{
-        g_seed = 214013 * g_seed + 2531011;
-	return (g_seed &amp;amp; 0x7FFF0000) &amp;gt;&amp;gt; 16;
-};
-&lt;/PRE&gt;&lt;p&gt;The game places 3 balls at each step.
-Each ball has the following characteristics: row, column and color.
-It's easy to see in debugger, that rand() function is called 3 times for each step.
-Row and column are computed like that:&lt;/p&gt;&lt;PRE&gt;	rand() % 10
-&lt;/PRE&gt;&lt;p&gt;... while color:&lt;/p&gt;&lt;PRE&gt;	rand() % 5
-&lt;/PRE&gt;&lt;p&gt;At each step, rand() is called twice to get row and column, and then 3rd time to get color.&lt;/p&gt;&lt;p&gt;PRNG facility is initialized like that: srand(time(NULL)).&lt;/p&gt;&lt;p&gt;Let's see, if we can find a way to predict next balls' placement.&lt;/p&gt;&lt;p&gt;For this task, we are going to recover PRNG state.
-And I've found that 6 steps are enough to recover it.
-This problem can be solved using SMT-solver, but this is overkill; state is 32-bit variable, so it can be found
-using simple brute-force.&lt;/p&gt;&lt;p&gt;First, we run it, and in debugger, we can see that 6 triplets is generated using rand():&lt;/p&gt;&lt;img src="https://yurichev.com/blog/LCG/1.png" width="518" height="417"&gt;&lt;p&gt;3 balls are placed and the game is also prepared other 3 balls.
-Now we see that at this step, the game is already know where the next 3 balls will be placed.&lt;/p&gt;&lt;p&gt;Now I'm moving topmost ball one step aside:&lt;/p&gt;&lt;img src="https://yurichev.com/blog/LCG/2.png" width="517" height="415"&gt;&lt;p&gt;Now we got 6 pair of coordinates, and we can brute-force PRNG state. I didn't map colors to its numbers, so we ignore them completely.&lt;/p&gt;&lt;PRE&gt;#include &amp;lt;stdio.h&amp;gt;
-#include &amp;lt;stdlib.h&amp;gt;
-#include &amp;lt;stdint.h&amp;gt;
-
-#define GROUP1_TRIPLET1_COL 2
-#define GROUP1_TRIPLET1_ROW 0
-
-#define GROUP1_TRIPLET2_COL 6
-#define GROUP1_TRIPLET2_ROW 3
-
-#define GROUP1_TRIPLET3_COL 8
-#define GROUP1_TRIPLET3_ROW 5
-
-#define GROUP2_TRIPLET1_COL 9
-#define GROUP2_TRIPLET1_ROW 1
-
-#define GROUP2_TRIPLET2_COL 7
-#define GROUP2_TRIPLET2_ROW 6
-
-#define GROUP2_TRIPLET3_COL 7
-#define GROUP2_TRIPLET3_ROW 4
-
-uint32_t g_seed;
-
-uint32_t MSVC_rand()
-{
-	g_seed = 214013 * g_seed + 2531011;
-	return (g_seed &amp;amp; 0x7FFF0000) &amp;gt;&amp;gt; 16;
-};
-
-void chk_seed(uint32_t seed)
-{
-	int col[6];
-	int row[6];
-	int color[6];
-
-	g_seed=seed;
-
-	// generate 6 triplets:
-	for (int i=0; i&amp;lt;6; i++)
-	{
-		col[i]=MSVC_rand() % 10;
-		row[i]=MSVC_rand() % 10;
-		color[i]=MSVC_rand() % 5;
-	};
-
-	int group1=0, group2=0;
-
-	// we know coordinates, but we don't know order in which they appeared
-	// so we suppose that each triple could be generated at any point...
-	for (int i=0; i&amp;lt;3; i++)
-	{
-		if (col[i]==GROUP1_TRIPLET1_COL &amp;amp;&amp;amp; row[i]==GROUP1_TRIPLET1_ROW)
-			group1|=1;
-		if (col[i]==GROUP1_TRIPLET2_COL &amp;amp;&amp;amp; row[i]==GROUP1_TRIPLET2_ROW)
-			group1|=2;
-		if (col[i]==GROUP1_TRIPLET3_COL &amp;amp;&amp;amp; row[i]==GROUP1_TRIPLET3_ROW)
-			group1|=4;
-
-		if (col[3+i]==GROUP2_TRIPLET1_COL &amp;amp;&amp;amp; row[3+i]==GROUP2_TRIPLET1_ROW)
-			group2|=1;
-		if (col[3+i]==GROUP2_TRIPLET2_COL &amp;amp;&amp;amp; row[3+i]==GROUP2_TRIPLET2_ROW)
-			group2|=2;
-		if (col[3+i]==GROUP2_TRIPLET3_COL &amp;amp;&amp;amp; row[3+i]==GROUP2_TRIPLET3_ROW)
-			group2|=4;
-	};
-
-	if (group1==7 &amp;amp;&amp;amp; group2==7)
-	{
-		printf ("seed 0x%x is OK\n", seed);
-		printf ("next points are probably these:\n");
-		for (int group=0; group&amp;lt;4; group++)
-		{
-			int new_col[3];
-			int new_row[3];
-			int new_color[3];
-			for (int i=0; i&amp;lt;3; i++)
-			{
-				new_col[i]=MSVC_rand() % 10;
-				new_row[i]=MSVC_rand() % 10;
-				new_color[i]=MSVC_rand() % 5;
-
-				printf ("col=%d row=%d color=%d\n", new_col[i], new_row[i], new_color[i]);
-			};
-
-			for (int r=0; r&amp;lt;10; r++)
-			{
-				for (int c=0; c&amp;lt;10; c++)
-				{
-					int put_it=0;
-
-					for (int i=0; i&amp;lt;3; i++)
-						if (new_col[i]==c &amp;amp;&amp;amp; new_row[i]==r)
-							put_it=1;
-
-					printf (put_it ? "*" : ".");
-				};
-				printf ("\n");
-			};
-
-			printf ("\n");
-		};
-	};
-};
-
-int main()
-{
-	// MSB of state isn't used at all, so we don't touch it
-	for (uint32_t seed=0; seed&amp;lt;0x80000000; seed++)
-		chk_seed(seed);
-};
-
-&lt;/PRE&gt;&lt;p&gt;It took ~80 seconds on my somewhat outdated Xeon E3-1220.
-This is enough to get one single candidate:&lt;/p&gt;&lt;PRE&gt;seed 0x5b5341db is OK
-next points are probably these:
-col=3 row=3 color=0
-col=6 row=2 color=2
-col=8 row=9 color=4
-..........
-..........
-......*...
-...*......
-..........
-..........
-..........
-..........
-..........
-........*.
-
-col=4 row=7 color=4
-col=1 row=0 color=4
-col=0 row=3 color=0
-.*........
-..........
-..........
-*.........
-..........
-..........
-..........
-....*.....
-..........
-..........
-
-col=2 row=9 color=3
-col=3 row=9 color=0
-col=7 row=0 color=2
-.......*..
-..........
-..........
-..........
-..........
-..........
-..........
-..........
-..........
-..**......
-
-col=2 row=3 color=4
-col=2 row=5 color=1
-col=9 row=6 color=4
-..........
-..........
-..........
-..*.......
-..........
-..*.......
-.........*
-..........
-..........
-..........
-
-
-&lt;/PRE&gt;&lt;p&gt;Is it correct?
-Let's move topmost ball again couple of times:&lt;/p&gt;&lt;img src="https://yurichev.com/blog/LCG/3.png" width="517" height="416"&gt;&lt;img src="https://yurichev.com/blog/LCG/4.png" width="517" height="417"&gt;&lt;p&gt;It seems so.&lt;/p&gt;&lt;p&gt;This is the way we can predict all further balls placements without touching debugger.&lt;/p&gt;&lt;h3&gt;Further work&lt;/h3&gt;&lt;p&gt;Since PRNG is initialized using current UNIX time, this can narrow brute-force process, if the current time (or day)
-is known.&lt;/p&gt;&lt;h3&gt;Exercise&lt;/h3&gt;&lt;p&gt;What happens if the ball is to be placed to the occupied cell?
-Will rand() be called again?&lt;/p&gt;&lt;h3&gt;Conclusion&lt;/h3&gt;&lt;p&gt;LCG shouldn't be used at all, maybe except of embedded environments where code size is critical.
-Mersenne twister is much better, it has bigger internal state.&lt;/p&gt;&lt;p&gt;Even more, you can use block cipher as PRNG, or your favorite hash function: just hash your initial seed at the first step,
-then hash results of hashing in infinite loop, this can produce enough entropy to have the same features as PRNG,
-but it will not be crackable as easily as LCG.&lt;/p&gt;&lt;p dir="ltr"&gt;More ideas and insights: &lt;a href="https://tools.ietf.org/html/rfc4086" dir="ltr"&gt;RFC4086&lt;/a&gt;: "Randomness Requirements for Security".&lt;/p&gt;&lt;p dir="ltr"&gt;
-The first part of
-&lt;a href="https://www.goodreads.com/book/show/18159.The_Art_of_Intrusion" dir="ltr"&gt;"The Art of Intrusion: The Real Stories Behind the Exploits of Hackers, Intruders and Deceivers" book by Kevin Mitnick&lt;/a&gt;
-has a story about cracking a slot machine in casino that relied on a simple 32-bit LCG.
-&lt;/p&gt;</description><pubDate>Sat, 28 Aug 2021 21:28:08 -0500</pubDate></item><item><title>RBAC like it was meant to be</title><link>https://lobste.rs/s/i2ngzq</link><description>&lt;img src="https://tailscale.com/images/authors/apenwarr.jpg" alt="Photo of Avery Pennarun" width="28" height="28"&gt;&lt;p&gt;Most of us have heard of role-based access control (RBAC) and its
+		Written on August 25th, 2021  for &lt;a href="https://furbo.org/category/development/" rel="category tag" dir="ltr"&gt;Development&lt;/a&gt; 			&lt;/div&gt;</description><pubDate>Sat, 28 Aug 2021 00:06:36 -0500</pubDate></item><item><title>RBAC like it was meant to be</title><link>https://lobste.rs/s/i2ngzq</link><description>&lt;img src="https://tailscale.com/images/authors/apenwarr.jpg" alt="Photo of Avery Pennarun" width="28" height="28"&gt;&lt;p&gt;Most of us have heard of role-based access control (RBAC) and its
 slightly updated successor, attribute-based access control (ABAC). But
 we don’t always appreciate all the great ideas they contain.&lt;/p&gt;&lt;p dir="ltr"&gt;The most common “RBAC” systems today have been stripped down in ways
 that make them considerably weaker than the original concept. By going
@@ -2901,7 +2705,203 @@ apply the same way as they do in a filesystem.&lt;/p&gt;&lt;p&gt;The result is a
 deceptively clean design in which a device or container owner can
 apply a tag; the security team can decide who owns which tags and
 which permissions that tag grants to which roles; and the identity/HR
-team can decide which users are in which roles.&lt;/p&gt;</description><pubDate>Sat, 28 Aug 2021 03:42:59 -0500</pubDate></item><item><title>10 ways GNU Guile is 10x better</title><link>https://lobste.rs/s/siibpv</link><description>&lt;p&gt;#4 will shock you! :-)&lt;/p&gt;&lt;p dir="ltr"&gt;
+team can decide which users are in which roles.&lt;/p&gt;</description><pubDate>Sat, 28 Aug 2021 03:42:59 -0500</pubDate></item><item><title>Cracking simple LCG PRNG</title><link>https://lobste.rs/s/rtvw8v</link><description>&lt;div&gt;Loading [MathJax]/jax/output/HTML-CSS/fonts/TeX/fontdata.js&lt;/div&gt;&lt;h2&gt;2-Mar-2017: Cracking simple LCG PRNG&lt;/h2&gt;&lt;p&gt;An LCG (Linear congruential generator) is a simplest PRNG (Pseudorandom number generator) and can be cracked easily.&lt;/p&gt;&lt;p dir="ltr"&gt;Here is a clone of a very popular "color lines" game (&lt;a href="https://archive.org/download/BallTriX_1020" dir="ltr"&gt;https://archive.org/download/BallTriX_1020&lt;/a&gt;).&lt;/p&gt;&lt;p&gt;In its internals we can find that it uses standard MSVC rand() function, like that:&lt;/p&gt;&lt;PRE&gt;uint32_t MSVC_rand()
+{
+        g_seed = 214013 * g_seed + 2531011;
+	return (g_seed &amp;amp; 0x7FFF0000) &amp;gt;&amp;gt; 16;
+};
+&lt;/PRE&gt;&lt;p&gt;The game places 3 balls at each step.
+Each ball has the following characteristics: row, column and color.
+It's easy to see in debugger, that rand() function is called 3 times for each step.
+Row and column are computed like that:&lt;/p&gt;&lt;PRE&gt;	rand() % 10
+&lt;/PRE&gt;&lt;p&gt;... while color:&lt;/p&gt;&lt;PRE&gt;	rand() % 5
+&lt;/PRE&gt;&lt;p&gt;At each step, rand() is called twice to get row and column, and then 3rd time to get color.&lt;/p&gt;&lt;p&gt;PRNG facility is initialized like that: srand(time(NULL)).&lt;/p&gt;&lt;p&gt;Let's see, if we can find a way to predict next balls' placement.&lt;/p&gt;&lt;p&gt;For this task, we are going to recover PRNG state.
+And I've found that 6 steps are enough to recover it.
+This problem can be solved using SMT-solver, but this is overkill; state is 32-bit variable, so it can be found
+using simple brute-force.&lt;/p&gt;&lt;p&gt;First, we run it, and in debugger, we can see that 6 triplets is generated using rand():&lt;/p&gt;&lt;img src="https://yurichev.com/blog/LCG/1.png" width="518" height="417"&gt;&lt;p&gt;3 balls are placed and the game is also prepared other 3 balls.
+Now we see that at this step, the game is already know where the next 3 balls will be placed.&lt;/p&gt;&lt;p&gt;Now I'm moving topmost ball one step aside:&lt;/p&gt;&lt;img src="https://yurichev.com/blog/LCG/2.png" width="517" height="415"&gt;&lt;p&gt;Now we got 6 pair of coordinates, and we can brute-force PRNG state. I didn't map colors to its numbers, so we ignore them completely.&lt;/p&gt;&lt;PRE&gt;#include &amp;lt;stdio.h&amp;gt;
+#include &amp;lt;stdlib.h&amp;gt;
+#include &amp;lt;stdint.h&amp;gt;
+
+#define GROUP1_TRIPLET1_COL 2
+#define GROUP1_TRIPLET1_ROW 0
+
+#define GROUP1_TRIPLET2_COL 6
+#define GROUP1_TRIPLET2_ROW 3
+
+#define GROUP1_TRIPLET3_COL 8
+#define GROUP1_TRIPLET3_ROW 5
+
+#define GROUP2_TRIPLET1_COL 9
+#define GROUP2_TRIPLET1_ROW 1
+
+#define GROUP2_TRIPLET2_COL 7
+#define GROUP2_TRIPLET2_ROW 6
+
+#define GROUP2_TRIPLET3_COL 7
+#define GROUP2_TRIPLET3_ROW 4
+
+uint32_t g_seed;
+
+uint32_t MSVC_rand()
+{
+	g_seed = 214013 * g_seed + 2531011;
+	return (g_seed &amp;amp; 0x7FFF0000) &amp;gt;&amp;gt; 16;
+};
+
+void chk_seed(uint32_t seed)
+{
+	int col[6];
+	int row[6];
+	int color[6];
+
+	g_seed=seed;
+
+	// generate 6 triplets:
+	for (int i=0; i&amp;lt;6; i++)
+	{
+		col[i]=MSVC_rand() % 10;
+		row[i]=MSVC_rand() % 10;
+		color[i]=MSVC_rand() % 5;
+	};
+
+	int group1=0, group2=0;
+
+	// we know coordinates, but we don't know order in which they appeared
+	// so we suppose that each triple could be generated at any point...
+	for (int i=0; i&amp;lt;3; i++)
+	{
+		if (col[i]==GROUP1_TRIPLET1_COL &amp;amp;&amp;amp; row[i]==GROUP1_TRIPLET1_ROW)
+			group1|=1;
+		if (col[i]==GROUP1_TRIPLET2_COL &amp;amp;&amp;amp; row[i]==GROUP1_TRIPLET2_ROW)
+			group1|=2;
+		if (col[i]==GROUP1_TRIPLET3_COL &amp;amp;&amp;amp; row[i]==GROUP1_TRIPLET3_ROW)
+			group1|=4;
+
+		if (col[3+i]==GROUP2_TRIPLET1_COL &amp;amp;&amp;amp; row[3+i]==GROUP2_TRIPLET1_ROW)
+			group2|=1;
+		if (col[3+i]==GROUP2_TRIPLET2_COL &amp;amp;&amp;amp; row[3+i]==GROUP2_TRIPLET2_ROW)
+			group2|=2;
+		if (col[3+i]==GROUP2_TRIPLET3_COL &amp;amp;&amp;amp; row[3+i]==GROUP2_TRIPLET3_ROW)
+			group2|=4;
+	};
+
+	if (group1==7 &amp;amp;&amp;amp; group2==7)
+	{
+		printf ("seed 0x%x is OK\n", seed);
+		printf ("next points are probably these:\n");
+		for (int group=0; group&amp;lt;4; group++)
+		{
+			int new_col[3];
+			int new_row[3];
+			int new_color[3];
+			for (int i=0; i&amp;lt;3; i++)
+			{
+				new_col[i]=MSVC_rand() % 10;
+				new_row[i]=MSVC_rand() % 10;
+				new_color[i]=MSVC_rand() % 5;
+
+				printf ("col=%d row=%d color=%d\n", new_col[i], new_row[i], new_color[i]);
+			};
+
+			for (int r=0; r&amp;lt;10; r++)
+			{
+				for (int c=0; c&amp;lt;10; c++)
+				{
+					int put_it=0;
+
+					for (int i=0; i&amp;lt;3; i++)
+						if (new_col[i]==c &amp;amp;&amp;amp; new_row[i]==r)
+							put_it=1;
+
+					printf (put_it ? "*" : ".");
+				};
+				printf ("\n");
+			};
+
+			printf ("\n");
+		};
+	};
+};
+
+int main()
+{
+	// MSB of state isn't used at all, so we don't touch it
+	for (uint32_t seed=0; seed&amp;lt;0x80000000; seed++)
+		chk_seed(seed);
+};
+
+&lt;/PRE&gt;&lt;p&gt;It took ~80 seconds on my somewhat outdated Xeon E3-1220.
+This is enough to get one single candidate:&lt;/p&gt;&lt;PRE&gt;seed 0x5b5341db is OK
+next points are probably these:
+col=3 row=3 color=0
+col=6 row=2 color=2
+col=8 row=9 color=4
+..........
+..........
+......*...
+...*......
+..........
+..........
+..........
+..........
+..........
+........*.
+
+col=4 row=7 color=4
+col=1 row=0 color=4
+col=0 row=3 color=0
+.*........
+..........
+..........
+*.........
+..........
+..........
+..........
+....*.....
+..........
+..........
+
+col=2 row=9 color=3
+col=3 row=9 color=0
+col=7 row=0 color=2
+.......*..
+..........
+..........
+..........
+..........
+..........
+..........
+..........
+..........
+..**......
+
+col=2 row=3 color=4
+col=2 row=5 color=1
+col=9 row=6 color=4
+..........
+..........
+..........
+..*.......
+..........
+..*.......
+.........*
+..........
+..........
+..........
+
+
+&lt;/PRE&gt;&lt;p&gt;Is it correct?
+Let's move topmost ball again couple of times:&lt;/p&gt;&lt;img src="https://yurichev.com/blog/LCG/3.png" width="517" height="416"&gt;&lt;img src="https://yurichev.com/blog/LCG/4.png" width="517" height="417"&gt;&lt;p&gt;It seems so.&lt;/p&gt;&lt;p&gt;This is the way we can predict all further balls placements without touching debugger.&lt;/p&gt;&lt;h3&gt;Further work&lt;/h3&gt;&lt;p&gt;Since PRNG is initialized using current UNIX time, this can narrow brute-force process, if the current time (or day)
+is known.&lt;/p&gt;&lt;h3&gt;Exercise&lt;/h3&gt;&lt;p&gt;What happens if the ball is to be placed to the occupied cell?
+Will rand() be called again?&lt;/p&gt;&lt;h3&gt;Conclusion&lt;/h3&gt;&lt;p&gt;LCG shouldn't be used at all, maybe except of embedded environments where code size is critical.
+Mersenne twister is much better, it has bigger internal state.&lt;/p&gt;&lt;p&gt;Even more, you can use block cipher as PRNG, or your favorite hash function: just hash your initial seed at the first step,
+then hash results of hashing in infinite loop, this can produce enough entropy to have the same features as PRNG,
+but it will not be crackable as easily as LCG.&lt;/p&gt;&lt;p dir="ltr"&gt;More ideas and insights: &lt;a href="https://tools.ietf.org/html/rfc4086" dir="ltr"&gt;RFC4086&lt;/a&gt;: "Randomness Requirements for Security".&lt;/p&gt;&lt;p dir="ltr"&gt;
+The first part of
+&lt;a href="https://www.goodreads.com/book/show/18159.The_Art_of_Intrusion" dir="ltr"&gt;"The Art of Intrusion: The Real Stories Behind the Exploits of Hackers, Intruders and Deceivers" book by Kevin Mitnick&lt;/a&gt;
+has a story about cracking a slot machine in casino that relied on a simple 32-bit LCG.
+&lt;/p&gt;</description><pubDate>Sat, 28 Aug 2021 21:28:08 -0500</pubDate></item><item><title>10 ways GNU Guile is 10x better</title><link>https://lobste.rs/s/siibpv</link><description>&lt;p&gt;#4 will shock you! :-)&lt;/p&gt;&lt;p dir="ltr"&gt;
 In &lt;a href="https://www.youtube.com/watch?v=kylqq8pEgRs&amp;amp;list=PL85XCvVPmGQhDOUIZBe6u388GydeACbTt&amp;amp;index=8" dir="ltr"&gt;Rust at Facebook by Fitzhardinge of the Mercurial team&lt;/a&gt;, Jeremy says
 that a new language must be 10x better at &lt;b dir="ltr"&gt;something&lt;/b&gt; than one of the
 (other) incumbent languages.
