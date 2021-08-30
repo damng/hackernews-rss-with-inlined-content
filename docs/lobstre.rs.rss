@@ -2299,468 +2299,7 @@ islclose:
 	leave
 	ret
 /* end function islclose */
-&lt;/PRE&gt;&lt;p dir="ltr"&gt;Perhaps it would have been nice to recognize that &lt;code dir="ltr"&gt;incl %eax&lt;/code&gt; and &lt;code dir="ltr"&gt;decl %eax&lt;/code&gt; could be used in these contexts, but as mentioned before it's not such a huge deal. Other than that, this all looks good.&lt;/p&gt;&lt;h4&gt;Using QBE as a front end target for a self-hosting compiler&lt;/h4&gt;&lt;p&gt;I think even with the minor tweaks I'd like to see with QBE, it has a lot going for it that makes it an ideal option for a back end for our self-hosting PL/0 compiler. We can refine our back end progressively: we can start with a C back end to get things going and prove the self-hosting nature of the compiler, then add a QBE back end to learn about how to convert high-level languages into assembly and assembly-like languages, and finally we can add a direct to assembly back end to learn about challenges such as register allocation (which QBE solves for us).&lt;/p&gt;&lt;p&gt;QBE is small enough that we can place an entire copy of the source code in our repository. It is written in C so we know we can build it. And it outputs either amd64 or aarch64 assembly, so it will just work for most of us most of the time. There's a lot more that QBE is capable of that we didn't encounter, but what I've seen is enough for me to think that it has good potential for us.&lt;/p&gt;&lt;p&gt;It gets the nod of approval for me to use. We'll be seeing QBE again.&lt;/p&gt;&lt;img alt="Top" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAA4AAAAICAYAAADJEc7MAAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH4wkWDyUKJxzXegAAAB1pVFh0Q29tbWVudAAAAAAAQ3JlYXRlZCB3aXRoIEdJTVBkLmUHAAAAUklEQVQY02Ocd/j/fwY0kGjDwMhACPz//5/h////DPMO//8PYxODWXAZOP8Iw39k22F8uBg2G7Gx0cWYGMgEWJ2aaMPAiO5UDOcTGxjogUe2UwHwdJDZUucW5QAAAABJRU5ErkJggg==" width="14" height="8"&gt;&lt;img alt="RSS" src="https://briancallahan.net/blog/media/pic_rss.gif" width="36" height="14"&gt;&lt;p&gt;OpenBSD httpd&lt;/p&gt;</description><pubDate>Sun, 29 Aug 2021 00:54:18 -0500</pubDate></item><item><title>Running Awk in parallel to process 256M records</title><link>https://lobste.rs/s/vxbaoj</link><description>&lt;h3&gt;TL;DR&lt;/h3&gt;&lt;p&gt;Awk crunches massive data; a High Performance Computing (HPC) script calls
-hundreds of Awk concurrently. Fast and scalable in-memory solution on a fat
-machine.&lt;/p&gt;&lt;h1&gt;Introduction&lt;/h1&gt;&lt;p dir="ltr"&gt;Presenting the solution I worked on in 2018, to a &lt;a href="https://smc-datachallenge.ornl.gov/challenges-2018/" dir="ltr"&gt;Data
-Challenge&lt;/a&gt; organized at
-work. I solve the Scientific Publications Mining challenge (no.4) that consists
-of 5 problems. I use classic Unix tools with a modern scalable HPC scripting
-tool to work out the solutions. The project is hosted on
-&lt;a href="https://github.com/ketancmaheshwari/SMC18" dir="ltr"&gt;github&lt;/a&gt;. About 12 teams entered the
-contest.&lt;/p&gt;&lt;h1&gt;Tools&lt;/h1&gt;&lt;h2&gt;Software&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Awk&lt;/strong&gt; (gawk v4.0.2) is dominantly used for the bulk of core processing.&lt;/p&gt;&lt;p dir="ltr"&gt;Argonne National Laboratory developed HPC scripting tool called
-&lt;a href="http://swift-lang.org/Swift-T" dir="ltr"&gt;Swift&lt;/a&gt; (&lt;strong dir="ltr"&gt;NOT&lt;/strong&gt; the Apple Swift) is used to run
-the Awk programs concurrently over the dataset to radically improve
-performance. Swift uses MPI based communication to parallelize and synchronize
-independent tasks.&lt;/p&gt;&lt;p dir="ltr"&gt;Other Unix tools such as &lt;em dir="ltr"&gt;sort&lt;/em&gt;, &lt;em dir="ltr"&gt;grep&lt;/em&gt;, &lt;em dir="ltr"&gt;tr&lt;/em&gt;, &lt;em dir="ltr"&gt;sed&lt;/em&gt; and &lt;em dir="ltr"&gt;bash&lt;/em&gt; are used as
-well. Additionally, &lt;em dir="ltr"&gt;jq&lt;/em&gt;, &lt;em dir="ltr"&gt;D3&lt;/em&gt;, &lt;em dir="ltr"&gt;dot/graphviz&lt;/em&gt;, and &lt;em dir="ltr"&gt;ffmpeg&lt;/em&gt; are used.&lt;/p&gt;&lt;h2&gt;Hardware&lt;/h2&gt;&lt;p dir="ltr"&gt;Fortunately, I had access to a large-memory (24 T) SGI system with 512-core
-Intel Xeon (2.5GHz) CPUs. All the IO is memory (&lt;em dir="ltr"&gt;/dev/shm&lt;/em&gt;) bound ie. the data
-is read from and written to &lt;em dir="ltr"&gt;/dev/shm&lt;/em&gt;.&lt;/p&gt;&lt;h3&gt;Rationale&lt;/h3&gt;&lt;p&gt;Awk is lightweight, concise, expressive, and fast – especially for text processing
-applications. Some people find Awk programs terse and hard to read. I have
-taken care to make the code readable. I wanted to see how far can I go with Awk
-(and boy did I go far!). Alternative tools such as modern Python libraries
-sometimes have scaling limitations, portability concerns. Some are still
-evolving. Swift is used simply because I was familiar with it and confident
-that it will scale well in this case.&lt;/p&gt;&lt;h1&gt;Data&lt;/h1&gt;&lt;p dir="ltr"&gt;The original &lt;a href="https://www.openacademic.ai/oag" dir="ltr"&gt;data&lt;/a&gt; was in two sets (&lt;em dir="ltr"&gt;aminer&lt;/em&gt;
-and &lt;em dir="ltr"&gt;mag&lt;/em&gt;) of 322 &lt;code dir="ltr"&gt;json&lt;/code&gt; files – each containing a million records. A file
-with a list of common records appearing in both sets was available. An Awk script
-(&lt;code dir="ltr"&gt;src/filterdup.awk&lt;/code&gt;) is used to exclude these duplicate records from the aminer
-dataset. As a result, it came out about &lt;strong dir="ltr"&gt;256 million&lt;/strong&gt; (256,382,605 to be
-exact) unique records to be processed. The total data size is 329GB. Some
-fields in the data are &lt;em dir="ltr"&gt;null&lt;/em&gt;. Those records are avoided where relevant.
-Additionally, records related to non-English publications were avoided as
-needed. A
-&lt;a href="https://raw.githubusercontent.com/ketancmaheshwari/SMC18/master/data/aminer_papers_sample.allcols.excl.txt" dir="ltr"&gt;snapshot&lt;/a&gt;
-of tabular data is available. String &lt;code dir="ltr"&gt;qwqw&lt;/code&gt; is chosen as a column separator to
-distinguish it from text already found in data. All other 3 or less character
-combinations already existed in data prohibiting them to be used as separators.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/usr/bin/env awk -f&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;# $1 magid&lt;/span&gt;
-&lt;span dir="ltr"&gt;# $2 aminerid&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;# Filter duplicate papers and remove them&lt;/span&gt;
-&lt;span dir="ltr"&gt;# from aminer database based on the linking relationship &lt;/span&gt;
-
-BEGIN &lt;span dir="ltr"&gt;{&lt;/span&gt;FS &lt;span dir="ltr"&gt;=&lt;/span&gt; OFS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"qwqw"&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-NR &lt;span dir="ltr"&gt;==&lt;/span&gt; FNR &lt;span dir="ltr"&gt;{&lt;/span&gt;a[&lt;span dir="ltr"&gt;$2&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;$1&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;!(&lt;/span&gt;&lt;span dir="ltr"&gt;$1&lt;/span&gt; &lt;span dir="ltr"&gt;in &lt;/span&gt;a&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; FILENAME ~ /aminer/ &lt;span dir="ltr"&gt;{&lt;/span&gt; print &lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;NR == FNR&lt;/code&gt; is a cool Awk idiom that ensures the condition is true only for the first file. This is because for each file that is processed the FNR (File Record Number) gets reset but the NR does not. This means the condition &lt;code dir="ltr"&gt;NR == FNR&lt;/code&gt; yields true only for the first file.&lt;/p&gt;&lt;p&gt;In addition to the publications data, I use the following:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p&gt;A list of large cities (population 100K+) and their lat-long coordinates (3,517).&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;A list of countries (190).&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;A list of world universities and research institutes (8,984).&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;A list of stop-words to avoid in some of the results (161 words).&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;h1&gt;Solutions&lt;/h1&gt;&lt;h2&gt;Pre- and post-processing&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;jq&lt;/code&gt; is used to transform the json data to tabular format
-(&lt;code dir="ltr"&gt;src/json2tabular.sh&lt;/code&gt;). The converted tabular files have 19 original columns
-(&lt;strong dir="ltr"&gt;id&lt;/strong&gt;, &lt;strong dir="ltr"&gt;title&lt;/strong&gt;, &lt;strong dir="ltr"&gt;authors&lt;/strong&gt;, &lt;strong dir="ltr"&gt;year&lt;/strong&gt;, &lt;strong dir="ltr"&gt;citations&lt;/strong&gt;,  etc) and one
-additional column called &lt;strong dir="ltr"&gt;num_authors&lt;/strong&gt; showing the number of authors for a
-given publication record. The authors column has a semi-colon separator for
-multiple authors. Further curation of tabular data is done by removing
-extraneous space, square brackets, escape characters and quotes using &lt;code dir="ltr"&gt;sed&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Some of the results obtained were postprocessed for visulization using the &lt;code dir="ltr"&gt;D3&lt;/code&gt;
-graphics framework. &lt;code dir="ltr"&gt;ffmpeg&lt;/code&gt; is used to stitch images of trending terms to
-create an animation. &lt;code dir="ltr"&gt;dot/graphviz&lt;/code&gt; is used to build the massive citation
-network graph of the best paper.&lt;/p&gt;&lt;h2&gt;Scaling up&lt;/h2&gt;&lt;p&gt;Each solution has Awk code run concurrently over the 322 data files on 322 CPU
-cores using Swift. This resulted in radical speedup at scale. None of the
-solution has taken more than an hour of runtime–most took less than a minute.&lt;/p&gt;&lt;h3&gt;Problem 1&lt;/h3&gt;&lt;p&gt;&lt;em&gt;Identify the individual or group of individuals who appear to be the expert in a particular field or sub-field.&lt;/em&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;This is solved in two ways. First approach identifies all the entries with
-citations higher than 500 for a given search topic
-(&lt;code dir="ltr"&gt;results/meditation_highly_cited.txt&lt;/code&gt;).&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/usr/bin/env awk -f&lt;/span&gt;
-
-BEGIN &lt;span dir="ltr"&gt;{&lt;/span&gt;
-
-    &lt;span dir="ltr"&gt;# Field Separator&lt;/span&gt;
-    FS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"qwqw"&lt;/span&gt;
-    &lt;span dir="ltr"&gt;# Output field separator&lt;/span&gt;
-    OFS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;\t&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;
-    IGNORECASE &lt;span dir="ltr"&gt;=&lt;/span&gt; 1
-
-    &lt;span dir="ltr"&gt;# Field names for readability&lt;/span&gt;
-    &lt;span dir="ltr"&gt;id&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;1&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;title&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;2&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;num_authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;3&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doi&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;4&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;fos_isbn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;5&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doctype_issn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;6&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;lang&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;7&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;8&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;issue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;9&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;url&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;10&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;volume&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;11&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;page_start&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;12&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;page_end&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;13&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;year&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;14&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;venue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;15&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;publisher_pdf&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;16&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;references&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;17&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;keywords&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;18&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;abstract&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;19&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;20&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$0&lt;/span&gt;~topic &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$num_authors&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; 0 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;500&lt;span dir="ltr"&gt;){&lt;/span&gt;
-    print &lt;span dir="ltr"&gt;$n_citation&lt;/span&gt;, &lt;span dir="ltr"&gt;$title&lt;/span&gt;, &lt;span dir="ltr"&gt;$authors&lt;/span&gt;, &lt;span dir="ltr"&gt;$year&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;# How to run:&lt;/span&gt;
-&lt;span dir="ltr"&gt;# awk -v topic=meditation -f src/prob1_p1.awk data/mag_papers_sample.allcols.txt&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The second approach finds the names of authors whose names are repeating for
-queried topic with at least a certain number of citations in each entry. This
-gives a reasonable idea of who are the expert figures in a given research area.
-One such result in &lt;code dir="ltr"&gt;results/cancer_research_topauths.txt&lt;/code&gt; shows authors in
-cancer research with more than one publication with at least 1,000 citations.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/usr/bin/env awk -f&lt;/span&gt;
-
-BEGIN &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    &lt;span dir="ltr"&gt;# Field separator&lt;/span&gt;
-    FS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"qwqw"&lt;/span&gt;
-    OFS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;\t&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;
-    IGNORECASE &lt;span dir="ltr"&gt;=&lt;/span&gt; 1
-
-    &lt;span dir="ltr"&gt;# Field names&lt;/span&gt;
-    &lt;span dir="ltr"&gt;id&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;1&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;title&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;2&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;num_authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;3&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doi&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;4&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;fos_isbn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;5&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doctype_issn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;6&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;lang&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;7&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;8&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;issue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;9&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;url&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;10&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;volume&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;11&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;page_start&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;12&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;page_end&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;13&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;year&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;14&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;venue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;15&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;publisher_pdf&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;16&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;references&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;17&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;keywords&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;18&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;abstract&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;19&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;20&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$0&lt;/span&gt;~topic &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$num_authors&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;0 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;1000&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-   
-   &lt;span dir="ltr"&gt;# find the authors whose names are repeating for a particular topic.&lt;/span&gt;
-   &lt;span dir="ltr"&gt;# Those authors will be considered experts. &lt;/span&gt;
-   
-   gsub&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;\"&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;,&lt;span dir="ltr"&gt;""&lt;/span&gt;,&lt;span dir="ltr"&gt;$authors&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-   &lt;span dir="ltr"&gt;split&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$authors&lt;/span&gt;, a, &lt;span dir="ltr"&gt;";"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-   
-   &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;i &lt;span dir="ltr"&gt;in &lt;/span&gt;a&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-       &lt;span dir="ltr"&gt;split&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;a[i], b, &lt;span dir="ltr"&gt;","&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-       &lt;span dir="ltr"&gt;# auths array will have keys as auth names and the &lt;/span&gt;
-       &lt;span dir="ltr"&gt;# element value increases if the key repeats&lt;/span&gt;
-       &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;b[1]!~/null/&lt;span dir="ltr"&gt;)&lt;/span&gt; auths[b[1]]++ 
-   &lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-END &lt;span dir="ltr"&gt;{&lt;/span&gt; &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;k &lt;span dir="ltr"&gt;in &lt;/span&gt;auths&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;auths[k]&amp;gt;1&lt;span dir="ltr"&gt;)&lt;/span&gt; print auths[k], k &lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;#How to run:&lt;/span&gt;
-&lt;span dir="ltr"&gt;# awk -v topic=cancer -f src/prob1_p2.awk data/mag_papers_sample.allcols.txt&lt;/span&gt;
-&lt;span dir="ltr"&gt;# sort the results&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The HPC implementation of this solution finishes in &lt;strong dir="ltr"&gt;25 seconds&lt;/strong&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Alongside is the citation &lt;strong dir="ltr"&gt;network graph&lt;/strong&gt; of the most cited paper in this
-&lt;a href="https://raw.githubusercontent.com/ketancmaheshwari/SMC18/15b0519d789b0e4b86f66b6bb6199fe24c1a4730/results/best_papers.svg" dir="ltr"&gt;diagram&lt;/a&gt;
-(too big to fit here). The result of a query for all-time list of most cited
-papers with a threshold of 20,000 is in &lt;code dir="ltr"&gt;results/top_papers.txt&lt;/code&gt;.&lt;/p&gt;&lt;h3&gt;Problem 2&lt;/h3&gt;&lt;p&gt;&lt;em&gt;Identify topics that have been researched across all publications.&lt;/em&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;This is solved by identifying most frequently appearing words in the
-collection. Title, abstract and keywords are parsed and top 1,000 frequently
-occurring words across the whole collection is found. Several common words (aka
-&lt;em dir="ltr"&gt;stop-words&lt;/em&gt;) are filtered from the results. At over 23 million, the word
-“patients” occurs the most frequently. The full list of top 1,000 words is
-found in &lt;code dir="ltr"&gt;/results/top_1K_words_kw_abs_title.txt&lt;/code&gt;. The target collection of
-publications may be narrowed down to criteria such as years range.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/usr/bin/env awk -f&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;# Problem  Statement&lt;/span&gt;
-&lt;span dir="ltr"&gt;#    Identify topics that have been researched across all publications.  &lt;/span&gt;
-
-&lt;span dir="ltr"&gt;# Solution:&lt;/span&gt;
-&lt;span dir="ltr"&gt;# step1. Filter the input to English language records &lt;/span&gt;
-&lt;span dir="ltr"&gt;# step2. Eliminate unnecessary content such as punctuation,&lt;/span&gt;
-&lt;span dir="ltr"&gt;#        non-printable chars and small words such as &lt;/span&gt;
-&lt;span dir="ltr"&gt;#        1 letter and 2 letter words&lt;/span&gt;
-&lt;span dir="ltr"&gt;# step3. Extract words used in keywords, title and abstract&lt;/span&gt;
-&lt;span dir="ltr"&gt;# step4. Find most frequently used words &lt;/span&gt;
-
-BEGIN &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    FS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"qwqw"&lt;/span&gt;
-    IGNORECASE &lt;span dir="ltr"&gt;=&lt;/span&gt; 1
-  
-    &lt;span dir="ltr"&gt;# Field names&lt;/span&gt;
-    &lt;span dir="ltr"&gt;id&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;1&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;title&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;2&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;num_authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;3&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doi&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;4&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;fos_isbn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;5&lt;span dir="ltr"&gt;;&lt;/span&gt; 
-    &lt;span dir="ltr"&gt;doctype_issn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;6&lt;span dir="ltr"&gt;;&lt;/span&gt;&lt;span dir="ltr"&gt;lang&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;7&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;8&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;issue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;9&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;url&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;10&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;volume&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;11&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;page_start&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;12&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;page_end&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;13&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;year&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;14&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;venue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;15&lt;span dir="ltr"&gt;;&lt;/span&gt; 
-    &lt;span dir="ltr"&gt;publisher_pdf&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;16&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;references&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;17&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;keywords&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;18&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;abstract&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;19&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;20&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;#collect stop words&lt;/span&gt;
-NR &lt;span dir="ltr"&gt;==&lt;/span&gt; FNR &lt;span dir="ltr"&gt;{&lt;/span&gt;x[&lt;span dir="ltr"&gt;$1&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;next&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;$lang&lt;/span&gt;~/en/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$keywords&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/ &lt;span dir="ltr"&gt;||&lt;/span&gt; &lt;span dir="ltr"&gt;$title&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/ &lt;span dir="ltr"&gt;||&lt;/span&gt; &lt;span dir="ltr"&gt;$abstract&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    &lt;span dir="ltr"&gt;# treat titles&lt;/span&gt;
-    &lt;span dir="ltr"&gt;$title&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; tolower&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$title&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-    &lt;span dir="ltr"&gt;split&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$title&lt;/span&gt;, a, &lt;span dir="ltr"&gt;" "&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-    &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;i &lt;span dir="ltr"&gt;in &lt;/span&gt;a&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;length&lt;span dir="ltr"&gt;(&lt;/span&gt;a[i]&lt;span dir="ltr"&gt;)&amp;gt;&lt;/span&gt;2 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; match&lt;span dir="ltr"&gt;(&lt;/span&gt;a[i],/[a-z]/&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; a[i] &lt;span dir="ltr"&gt;in &lt;/span&gt;x &lt;span dir="ltr"&gt;==&lt;/span&gt; 0&lt;span dir="ltr"&gt;)&lt;/span&gt; kw[a[i]]++
-
-    &lt;span dir="ltr"&gt;# treat keywords&lt;/span&gt;
-    &lt;span dir="ltr"&gt;$keywords&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; tolower&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$keywords&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-    &lt;span dir="ltr"&gt;split&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$keywords&lt;/span&gt;, b, &lt;span dir="ltr"&gt;","&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-    &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;i &lt;span dir="ltr"&gt;in &lt;/span&gt;b&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;length&lt;span dir="ltr"&gt;(&lt;/span&gt;b[i]&lt;span dir="ltr"&gt;)&amp;gt;&lt;/span&gt;2 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; match&lt;span dir="ltr"&gt;(&lt;/span&gt;b[i],/[a-z]/&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; b[i] &lt;span dir="ltr"&gt;in &lt;/span&gt;x &lt;span dir="ltr"&gt;==&lt;/span&gt; 0&lt;span dir="ltr"&gt;)&lt;/span&gt; kw[b[i]]++
-
-     &lt;span dir="ltr"&gt;# treat abstracts (Computationally expensive, results are in:&lt;/span&gt;
-     &lt;span dir="ltr"&gt;# top_1000_words_from_kw_abstract_title_by_freq.txt)&lt;/span&gt;
-     &lt;span dir="ltr"&gt;$abstract&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; tolower&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$abstract&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-     gsub&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;\"&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;,&lt;span dir="ltr"&gt;""&lt;/span&gt;,&lt;span dir="ltr"&gt;$abstract&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-     gsub&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;","&lt;/span&gt;,&lt;span dir="ltr"&gt;""&lt;/span&gt;,&lt;span dir="ltr"&gt;$abstract&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-     &lt;span dir="ltr"&gt;split&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$abstract&lt;/span&gt;, c, &lt;span dir="ltr"&gt;" "&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-     &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;i &lt;span dir="ltr"&gt;in &lt;/span&gt;c&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;length&lt;span dir="ltr"&gt;(&lt;/span&gt;c[i]&lt;span dir="ltr"&gt;)&amp;gt;&lt;/span&gt;2 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; match&lt;span dir="ltr"&gt;(&lt;/span&gt;c[i],/[a-z]/&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; c[i] &lt;span dir="ltr"&gt;in &lt;/span&gt;x &lt;span dir="ltr"&gt;==&lt;/span&gt; 0&lt;span dir="ltr"&gt;)&lt;/span&gt; kw[c[i]]++
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-END &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    &lt;span dir="ltr"&gt;for&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;k &lt;span dir="ltr"&gt;in &lt;/span&gt;kw&lt;span dir="ltr"&gt;){&lt;/span&gt;
-        &lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;kw[k]&amp;gt;1000&lt;span dir="ltr"&gt;)&lt;/span&gt; print kw[k], k
-    &lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;# HOW TO RUN: LC_ALL=C awk -f prob2.awk stop_words.txt \&lt;/span&gt;
-              ../aminer_papers_allcols_excl/aminer_papers_&lt;span dir="ltr"&gt;*&lt;/span&gt;.allcols.excl.txt &lt;span dir="ltr"&gt;\&lt;/span&gt;
-              ../mag_papers_allcols/mag_papers_&lt;span dir="ltr"&gt;*&lt;/span&gt;.allcols.txt &lt;span dir="ltr"&gt;\&lt;/span&gt;
-              | &lt;span dir="ltr"&gt;sort&lt;/span&gt; &lt;span dir="ltr"&gt;-nr&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; freq.txt
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The HPC implementation (Swift code shown below) finishes in &lt;strong dir="ltr"&gt;9 minutes&lt;/strong&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;files&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;unix&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;/* app defines what we want to run, the input parameters,
-   where the stdout should go, etc.
-*/&lt;/span&gt;
-&lt;span dir="ltr"&gt;app&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;out&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;myawk&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;awkprog&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;stop_words&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;infile&lt;/span&gt;&lt;span dir="ltr"&gt;){&lt;/span&gt;
-  &lt;span dir="ltr"&gt;"/usr/bin/awk"&lt;/span&gt; &lt;span dir="ltr"&gt;"-f"&lt;/span&gt; &lt;span dir="ltr"&gt;awkprog&lt;/span&gt; &lt;span dir="ltr"&gt;stop_words&lt;/span&gt; &lt;span dir="ltr"&gt;infile&lt;/span&gt; &lt;span dir="ltr"&gt;@&lt;/span&gt;&lt;span dir="ltr"&gt;stdout&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;out&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;/* populate the input data */&lt;/span&gt;
-&lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;aminer&lt;/span&gt;&lt;span dir="ltr"&gt;[]&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;glob&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"/dev/shm/aminer_mag_papers/*.txt"&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;/* output for each call will be collected here */&lt;/span&gt;
-&lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;outfiles&lt;/span&gt;&lt;span dir="ltr"&gt;[];&lt;/span&gt; 
-
-&lt;span dir="ltr"&gt;foreach&lt;/span&gt; &lt;span dir="ltr"&gt;v&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;i&lt;/span&gt; &lt;span dir="ltr"&gt;in&lt;/span&gt; &lt;span dir="ltr"&gt;aminer&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-  &lt;span dir="ltr"&gt;outfiles&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;myawk&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;input&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"/home/km0/SMC18/src/prob2.awk"&lt;/span&gt;&lt;span dir="ltr"&gt;),&lt;/span&gt;
-                &lt;span dir="ltr"&gt;input&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"/home/km0/SMC18/data/stop_words.txt"&lt;/span&gt;&lt;span dir="ltr"&gt;),&lt;/span&gt; 
-                &lt;span dir="ltr"&gt;v&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;/* Combine all output in one file */&lt;/span&gt;
-&lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;joined&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;&lt;span dir="ltr"&gt;"joined.txt"&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;cat&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;outfiles&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;/*
- After running this swift app:
- awk '{a[$2]+=$1} END {for (k in a) print a[k],k}' joined.txt | sort -nr &amp;gt; freq.txt
-*/&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Problem 3&lt;/h3&gt;&lt;p&gt;&lt;em&gt;Visualize the geographic distribution of the topics in the publications.&lt;/em&gt;&lt;/p&gt;&lt;p&gt;This is solved by identifying the author affiliations for the records that has
-the search topic in them. The affiliation is searched against three
-databases–cities, universities and countries to find out the geographic
-locations for that research. The results are aggregated to present a list of
-centers for which a given keyword appears most frequently. For cities, the
-results are plotted on world map. One such result is shown below for the topic
-of research on “birds”.&lt;/p&gt;&lt;img src="https://raw.githubusercontent.com/ketancmaheshwari/SMC18/master/results/bird_research_cities.png" alt="bird research" title="Bird Research Around the World!" width="453" height="236"&gt;&lt;p dir="ltr"&gt;The &lt;code dir="ltr"&gt;results/&lt;/code&gt; directory contains other similar results such as epilepsy,
-opioid, meditation research by universities and by countries. The HPC
-implementation finishes in &lt;strong dir="ltr"&gt;25 seconds&lt;/strong&gt;. The Awk code is shown below.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/usr/bin/env awk -f&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;# problem statement&lt;/span&gt;
-&lt;span dir="ltr"&gt;#    visualize the geographic distribution of the topics in the publications.&lt;/span&gt;
-
-BEGIN &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    &lt;span dir="ltr"&gt;# Field separator&lt;/span&gt;
-    FS &lt;span dir="ltr"&gt;=&lt;/span&gt; OFS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"qwqw"&lt;/span&gt;
-    IGNORECASE &lt;span dir="ltr"&gt;=&lt;/span&gt; 1
-
-    &lt;span dir="ltr"&gt;# Field names&lt;/span&gt;
-    &lt;span dir="ltr"&gt;id&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;1&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;title&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;2&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;num_authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;3&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doi&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;4&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;fos_isbn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;5&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doctype_issn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;6&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;lang&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;7&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;8&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;issue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;9&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;url&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;10&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;volume&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;11&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;page_start&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;12&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;page_end&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;13&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;year&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;14&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;venue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;15&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;publisher_pdf&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;16&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;references&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;17&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;keywords&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;18&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;abstract&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;19&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;20&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;#collect the countries/cities/univs data&lt;/span&gt;
-NR &lt;span dir="ltr"&gt;==&lt;/span&gt; FNR &lt;span dir="ltr"&gt;{&lt;/span&gt;a[&lt;span dir="ltr"&gt;$1&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;next&lt;span dir="ltr"&gt;}&lt;/span&gt; 
-
-&lt;span dir="ltr"&gt;#treat records with authors whose affiliation is available&lt;/span&gt;
-&lt;span dir="ltr"&gt;$0&lt;/span&gt;~topic &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$num_authors&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$authors&lt;/span&gt;~/&lt;span dir="ltr"&gt;\,&lt;/span&gt;/ &lt;span dir="ltr"&gt;{&lt;/span&gt; 
-    &lt;span dir="ltr"&gt;# extract words from author affiliation and compare with the countries.&lt;/span&gt;
-    &lt;span dir="ltr"&gt;# If a match is found increment that array entry.&lt;/span&gt;
-    w &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;split&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$authors&lt;/span&gt;, b, &lt;span dir="ltr"&gt;","&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-    &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;0&lt;span dir="ltr"&gt;;&lt;/span&gt;i&amp;lt;w&lt;span dir="ltr"&gt;;&lt;/span&gt;i++&lt;span dir="ltr"&gt;){&lt;/span&gt;
-        gsub&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;";"&lt;/span&gt;,&lt;span dir="ltr"&gt;" "&lt;/span&gt;,b[i]&lt;span dir="ltr"&gt;)&lt;/span&gt; 
-        &lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;b[i] &lt;span dir="ltr"&gt;in &lt;/span&gt;a&lt;span dir="ltr"&gt;)&lt;/span&gt; a[b[i]]++
-    &lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-END &lt;span dir="ltr"&gt;{&lt;/span&gt;
-  &lt;span dir="ltr"&gt;for&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;k &lt;span dir="ltr"&gt;in &lt;/span&gt;a&lt;span dir="ltr"&gt;){&lt;/span&gt; 
-     &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;a[k]&lt;span dir="ltr"&gt;)&lt;/span&gt; print a[k], k
-  &lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;# HOW TO RUN:&lt;/span&gt;
-&lt;span dir="ltr"&gt;# awk -v topic=birds -f prob3.awk cities.txt \&lt;/span&gt;
-        ../mag_papers_allcols/mag_papers_&lt;span dir="ltr"&gt;*&lt;/span&gt;.allcols.txt &lt;span dir="ltr"&gt;\&lt;/span&gt;
-        ../aminer_papers_allcols_excl/aminer_papers_&lt;span dir="ltr"&gt;*&lt;/span&gt;.allcols.excl.txt
-&lt;span dir="ltr"&gt;# awk -v topic=birds -f prob3.awk countries.txt ...&lt;/span&gt;
-&lt;span dir="ltr"&gt;# awk -v topic=birds -f prob3.awk universities.txt ... &lt;/span&gt;
-
-&lt;span dir="ltr"&gt;# Run the following pipeline on the results:&lt;/span&gt;
-&lt;span dir="ltr"&gt;# sort -nr -k 1 citywise_papers.txt &amp;gt; tmp &amp;amp;&amp;amp; mv tmp citywise_papers.txt &lt;/span&gt;
-&lt;span dir="ltr"&gt;# OR&lt;/span&gt;
-&lt;span dir="ltr"&gt;# After running the swift app:&lt;/span&gt;
-&lt;span dir="ltr"&gt;# awk -F: '{a[$2]+=$1} END {for (k in a) print a[k],k}' joined_cities.txt \&lt;/span&gt;
-         | &lt;span dir="ltr"&gt;sort&lt;/span&gt; &lt;span dir="ltr"&gt;-nr&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; tmp &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;mv &lt;/span&gt;tmp joined_cities.txt
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Problem 4&lt;/h3&gt;&lt;p&gt;&lt;em&gt;Identify how topics have shifted over time.&lt;/em&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;This problem may be solved in three distinct ways. The first approach processes
-the database to find out year-wise occurrence of any given two topics
-&lt;em dir="ltr"&gt;together&lt;/em&gt;. It generates a list of years and the number of times &lt;em dir="ltr"&gt;both&lt;/em&gt; topics
-has occurred in a single publication in that year. For example, the plot shown
-below shows how the terms “obesity” and “sugar” have trended together in
-publications over the years.&lt;/p&gt;&lt;img src="https://raw.githubusercontent.com/ketancmaheshwari/SMC18/master/results/obesity_sugar.png" alt="obesity sugar" title="papers in which obesity and sugar appears together" width="389" height="773"&gt;&lt;p&gt;Awk code shown below.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/usr/bin/env awk -f&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;# Problem Statement&lt;/span&gt;
-&lt;span dir="ltr"&gt;# Identify how topics have shifted over time.&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;# Solution 1 below will search for any two topics&lt;/span&gt;
-&lt;span dir="ltr"&gt;# mentioned and show the number of occurrence of both the topics year-wise&lt;/span&gt;
-BEGIN &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    &lt;span dir="ltr"&gt;# Field Separator&lt;/span&gt;
-    FS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"qwqw"&lt;/span&gt;
-    IGNORECASE &lt;span dir="ltr"&gt;=&lt;/span&gt; 1
-    &lt;span dir="ltr"&gt;# Field names&lt;/span&gt;
-    &lt;span dir="ltr"&gt;id&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;1&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;title&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;2&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;num_authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;3&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doi&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;4&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;fos_isbn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;5&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doctype_issn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;6&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;lang&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;7&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;8&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;issue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;9&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;url&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;10&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;volume&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;11&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;page_start&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;12&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;page_end&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;13&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;year&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;14&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;venue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;15&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;publisher_pdf&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;16&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;references&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;17&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;keywords&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;18&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;abstract&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;19&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;20&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;$lang&lt;/span&gt;~/en/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$year&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$0&lt;/span&gt;~topic1 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$0&lt;/span&gt;~topic2 &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    a[&lt;span dir="ltr"&gt;$year&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;++
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-END &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    n &lt;span dir="ltr"&gt;=&lt;/span&gt; asorti&lt;span dir="ltr"&gt;(&lt;/span&gt;a,b&lt;span dir="ltr"&gt;)&lt;/span&gt;
-    &lt;span dir="ltr"&gt;printf&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"Trend for topics: %s, %s&lt;/span&gt;&lt;span dir="ltr"&gt;\n&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;, topic1, topic2&lt;span dir="ltr"&gt;)&lt;/span&gt;
-    &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;1&lt;span dir="ltr"&gt;;&lt;/span&gt;i&amp;lt;&lt;span dir="ltr"&gt;=&lt;/span&gt;n&lt;span dir="ltr"&gt;;&lt;/span&gt;i++&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;printf&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"%d :- %d&lt;/span&gt;&lt;span dir="ltr"&gt;\n&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;, b[i], a[b[i]]&lt;span dir="ltr"&gt;)&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;# Run as follows:&lt;/span&gt;
-&lt;span dir="ltr"&gt;# awk -v topic1=obesity -v topic2=sugar -f code/prob4.awk aminer_mag_papers/*.txt&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The second approach finds the papers that has highest impact in each year and
-extracts the keywords in those papers. The impact is computed by the paper that
-is cited the most in that year. The result for this task are in
-&lt;code dir="ltr"&gt;results/yearwise_trending_keywords.txt&lt;/code&gt; in the form of year, keywords,
-citations triplet.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/usr/bin/env awk -f&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;# Problem Statement&lt;/span&gt;
-&lt;span dir="ltr"&gt;#    Identify how topics have shifted over time.&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;# Solution 2 is to find the highest cited paper&lt;/span&gt;
-&lt;span dir="ltr"&gt;# year-wise and figure out the topics it was based on&lt;/span&gt;
-BEGIN &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    FS &lt;span dir="ltr"&gt;=&lt;/span&gt; OFS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"qwqw"&lt;/span&gt;
-    IGNORECASE &lt;span dir="ltr"&gt;=&lt;/span&gt; 1
-
-    &lt;span dir="ltr"&gt;# Field names&lt;/span&gt;
-    &lt;span dir="ltr"&gt;id&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;1&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;title&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;2&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;num_authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;3&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doi&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;4&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;fos_isbn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;5&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doctype_issn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;6&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;lang&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;7&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;8&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;issue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;9&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;url&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;10&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;volume&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;11&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;page_start&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;12&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;page_end&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;13&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;year&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;14&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;venue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;15&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;publisher_pdf&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;16&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;references&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;17&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;keywords&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;18&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;abstract&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;19&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;20&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;$lang&lt;/span&gt;~/en/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$year&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$year&lt;/span&gt;&amp;lt;2020 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$keywords&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/ 
-&lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;max[&lt;span dir="ltr"&gt;$year&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    max[&lt;span dir="ltr"&gt;$year&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;$n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt; a[&lt;span dir="ltr"&gt;$year&lt;/span&gt;&lt;span dir="ltr"&gt;]=&lt;/span&gt;&lt;span dir="ltr"&gt;$keywords&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-END &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    n &lt;span dir="ltr"&gt;=&lt;/span&gt; asorti&lt;span dir="ltr"&gt;(&lt;/span&gt;a,b&lt;span dir="ltr"&gt;)&lt;/span&gt;
-    &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;1&lt;span dir="ltr"&gt;;&lt;/span&gt;i&amp;lt;&lt;span dir="ltr"&gt;=&lt;/span&gt;n&lt;span dir="ltr"&gt;;&lt;/span&gt;i++&lt;span dir="ltr"&gt;)&lt;/span&gt; print b[i], a[b[i]], max[b[i]]
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;# Run via Swift in parallel. If serial, run like so:&lt;/span&gt;
-&lt;span dir="ltr"&gt;# awk -f code/prob4_p2.awk aminer_mag_papers/*.txt &amp;gt; yearwise_trending_keywords.txt&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The third approach finds the top 10 most frequently occurring terms each year
-to find how the topics get in and out of trend over the years. An mkv animation
-video showing a bubble plot of words trending between the year 1800 and 2017 is
-&lt;a href="https://github.com/ketancmaheshwari/SMC18/blob/master/results/freqwordsoveryears.mkv?raw=true" dir="ltr"&gt;here&lt;/a&gt;.
-A file list of all the words is found in &lt;code dir="ltr"&gt;results/trending_words_by_year&lt;/code&gt;. A
-snapshot trending words bubble in 2002 is shown below:&lt;/p&gt;&lt;img src="https://raw.githubusercontent.com/ketancmaheshwari/SMC18/master/results/trending_words_by_year/2002.png" alt="trending bubble 2020" title="top 10 research words in 2002" width="453" height="460"&gt;&lt;p&gt;The Awk code that generates the raw data for above picture is shown below:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/usr/bin/env awk -f&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;# find the top 10 trending topics year-wise and see how they appear/disappear in the trend&lt;/span&gt;
-&lt;span dir="ltr"&gt;# We achieve this by writing keywords, titles and abstract to files named after &lt;/span&gt;
-&lt;span dir="ltr"&gt;# the year they appeared and do postprocessing on those files&lt;/span&gt;
-
-BEGIN &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    FS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"qwqw"&lt;/span&gt;
-    IGNORECASE &lt;span dir="ltr"&gt;=&lt;/span&gt; 1
-
-    &lt;span dir="ltr"&gt;# Field names&lt;/span&gt;
-    &lt;span dir="ltr"&gt;id&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;1&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;title&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;2&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;num_authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;3&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doi&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;4&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;fos_isbn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;5&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doctype_issn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;6&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;lang&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;7&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;8&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;issue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;9&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;url&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;10&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;volume&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;11&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;page_start&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;12&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;page_end&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;13&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;year&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;14&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;venue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;15&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;publisher_pdf&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;16&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;references&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;17&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;keywords&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;18&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;abstract&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;19&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;20&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;#collect stop words&lt;/span&gt;
-NR &lt;span dir="ltr"&gt;==&lt;/span&gt; FNR &lt;span dir="ltr"&gt;{&lt;/span&gt;x[&lt;span dir="ltr"&gt;$1&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;next&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;$lang&lt;/span&gt;~/en/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;0 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$year&lt;/span&gt;&lt;span dir="ltr"&gt;==&lt;/span&gt;yr &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$keywords&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/&lt;span dir="ltr"&gt;{&lt;/span&gt;
-    &lt;span dir="ltr"&gt;# write title, keywords and abstract to a file &lt;/span&gt;
-    &lt;span dir="ltr"&gt;#      titled by the year in which they appear&lt;/span&gt;
-    
-    &lt;span dir="ltr"&gt;# treat title&lt;/span&gt;
-    &lt;span dir="ltr"&gt;$title&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; tolower&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$title&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-    &lt;span dir="ltr"&gt;split&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$title&lt;/span&gt;, a, &lt;span dir="ltr"&gt;" "&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-    &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;i &lt;span dir="ltr"&gt;in &lt;/span&gt;a&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;length&lt;span dir="ltr"&gt;(&lt;/span&gt;a[i]&lt;span dir="ltr"&gt;)&amp;gt;&lt;/span&gt;2 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; match&lt;span dir="ltr"&gt;(&lt;/span&gt;a[i],/[a-z]/&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; a[i] &lt;span dir="ltr"&gt;in &lt;/span&gt;x &lt;span dir="ltr"&gt;==&lt;/span&gt; 0&lt;span dir="ltr"&gt;)&lt;/span&gt; print a[i]
-
-    &lt;span dir="ltr"&gt;# treat keywords&lt;/span&gt;
-    &lt;span dir="ltr"&gt;$keywords&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; tolower&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$keywords&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-    gsub&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;\"&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;,&lt;span dir="ltr"&gt;""&lt;/span&gt;,&lt;span dir="ltr"&gt;$keywords&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-    &lt;span dir="ltr"&gt;split&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$keywords&lt;/span&gt;, b, &lt;span dir="ltr"&gt;","&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-    &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;i &lt;span dir="ltr"&gt;in &lt;/span&gt;b&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;length&lt;span dir="ltr"&gt;(&lt;/span&gt;b[i]&lt;span dir="ltr"&gt;)&amp;gt;&lt;/span&gt;2 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; match&lt;span dir="ltr"&gt;(&lt;/span&gt;b[i],/[a-z]/&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; b[i] &lt;span dir="ltr"&gt;in &lt;/span&gt;x &lt;span dir="ltr"&gt;==&lt;/span&gt; 0&lt;span dir="ltr"&gt;)&lt;/span&gt; print b[i]
-
-     &lt;span dir="ltr"&gt;# treat abstract&lt;/span&gt;
-     &lt;span dir="ltr"&gt;$abstract&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; tolower&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$abstract&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-     gsub&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;\"&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;,&lt;span dir="ltr"&gt;""&lt;/span&gt;,&lt;span dir="ltr"&gt;$abstract&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-     gsub&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;","&lt;/span&gt;,&lt;span dir="ltr"&gt;" "&lt;/span&gt;,&lt;span dir="ltr"&gt;$abstract&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-     &lt;span dir="ltr"&gt;split&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$abstract&lt;/span&gt;, c, &lt;span dir="ltr"&gt;" "&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
-     &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;i &lt;span dir="ltr"&gt;in &lt;/span&gt;c&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;length&lt;span dir="ltr"&gt;(&lt;/span&gt;c[i]&lt;span dir="ltr"&gt;)&amp;gt;&lt;/span&gt;2 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; match&lt;span dir="ltr"&gt;(&lt;/span&gt;c[i],/[a-z]/&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; c[i] &lt;span dir="ltr"&gt;in &lt;/span&gt;x &lt;span dir="ltr"&gt;==&lt;/span&gt; 0&lt;span dir="ltr"&gt;)&lt;/span&gt; print c[i]
-
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;#Do the following for postprocessing:&lt;/span&gt;
-&lt;span dir="ltr"&gt;#for i in 18?? 19?? 20??&lt;/span&gt;
-&lt;span dir="ltr"&gt;# do (grep -o -E '\w+' $i | tr [A-Z] [a-z] \&lt;/span&gt;
-&lt;span dir="ltr"&gt;#     | sed -e 's/null//g' -e 's/^.$//g' -e 's/^..$//g' -e 's/^[0-9]*$//g' \&lt;/span&gt;
-&lt;span dir="ltr"&gt;#     | awk NF | fgrep -v -w -f stop_words.txt \&lt;/span&gt;
-&lt;span dir="ltr"&gt;#     | sort | uniq -c | sort -nr \&lt;/span&gt;
-&lt;span dir="ltr"&gt;#     | head -10 &amp;gt; trending/trending.$i.txt) &amp;amp; done&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Parallelizing the third approach was challenging as it involved a two-level
-nested foreach loop. The outer loop iterates over the years and the inner loop
-iterates over the input files. The HPC implementation finishes in &lt;strong dir="ltr"&gt;48
-minutes&lt;/strong&gt;. Swift code for this shown below.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;files&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;io&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;unix&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;string&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;app&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;out&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;myawk&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;awkprog&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;infile&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;stopwords&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;string&lt;/span&gt; &lt;span dir="ltr"&gt;yr&lt;/span&gt;&lt;span dir="ltr"&gt;){&lt;/span&gt;
-  &lt;span dir="ltr"&gt;"/usr/bin/awk"&lt;/span&gt; &lt;span dir="ltr"&gt;"-v"&lt;/span&gt; &lt;span dir="ltr"&gt;yr&lt;/span&gt; &lt;span dir="ltr"&gt;"-f"&lt;/span&gt; &lt;span dir="ltr"&gt;awkprog&lt;/span&gt; &lt;span dir="ltr"&gt;stopwords&lt;/span&gt; &lt;span dir="ltr"&gt;infile&lt;/span&gt; &lt;span dir="ltr"&gt;@&lt;/span&gt;&lt;span dir="ltr"&gt;stdout&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;out&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;aminer&lt;/span&gt;&lt;span dir="ltr"&gt;[]&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;glob&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"/dev/shm/aminer_mag_papers/*.txt"&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;foreach&lt;/span&gt; &lt;span dir="ltr"&gt;y&lt;/span&gt; &lt;span dir="ltr"&gt;in&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;1800&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;2017&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;]{&lt;/span&gt;
-  &lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;yearfiles&lt;/span&gt;&lt;span dir="ltr"&gt;[];&lt;/span&gt;
-  &lt;span dir="ltr"&gt;foreach&lt;/span&gt; &lt;span dir="ltr"&gt;v&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;i&lt;/span&gt; &lt;span dir="ltr"&gt;in&lt;/span&gt; &lt;span dir="ltr"&gt;aminer&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;
-    &lt;span dir="ltr"&gt;yearfiles&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;myawk&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;input&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"/home/km0/SMC18/src/prob4_p3.awk"&lt;/span&gt;&lt;span dir="ltr"&gt;),&lt;/span&gt;  
-                         &lt;span dir="ltr"&gt;v&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
-                         &lt;span dir="ltr"&gt;input&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"/home/km0/SMC18/data/stop_words.txt"&lt;/span&gt;&lt;span dir="ltr"&gt;),&lt;/span&gt; 
-                         &lt;span dir="ltr"&gt;sprintf&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"yr=%s"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;toString&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;y&lt;/span&gt;&lt;span dir="ltr"&gt;)));&lt;/span&gt;
-  &lt;span dir="ltr"&gt;}&lt;/span&gt;
-  &lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;joined&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;&lt;span dir="ltr"&gt;sprintf&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"year%s.txt"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;toString&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;y&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;cat&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;yearfiles&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Problem 5&lt;/h3&gt;&lt;p&gt;&lt;em&gt;Given a research proposal, determine whether the proposed work has been accomplished previously.&lt;/em&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;This has a simple solution: Find the keywords on a new proposal.  If those
-keywords appear in an existing publication record, it is a suspect. A broad
-list of suspects may be found with logical &lt;strong dir="ltr"&gt;OR&lt;/strong&gt; between keywords which could
-be narrowed down with logical &lt;strong dir="ltr"&gt;AND&lt;/strong&gt;. The keywords may be arbitrarily combined
-in ORs and ANDs. The results file &lt;code dir="ltr"&gt;/results/suspects.txt&lt;/code&gt; shows over 1,400
-suspects for an &lt;strong dir="ltr"&gt;AND&lt;/strong&gt; combination of keywords: &lt;em dir="ltr"&gt;battery&lt;/em&gt;, &lt;em dir="ltr"&gt;electronics&lt;/em&gt;,
-&lt;em dir="ltr"&gt;lithium&lt;/em&gt;, and &lt;em dir="ltr"&gt;energy&lt;/em&gt; from English language papers. The HPC implementation
-finishes in &lt;strong dir="ltr"&gt;26 seconds&lt;/strong&gt;. Awk code below.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/usr/bin/env awk -f&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;# Problem Statement&lt;/span&gt;
-&lt;span dir="ltr"&gt;#    Given a research proposal, determine whether the proposed work has been&lt;/span&gt;
-&lt;span dir="ltr"&gt;#    accomplished previously.&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;# Solution: Find the keywords in the new proposal. &lt;/span&gt;
-&lt;span dir="ltr"&gt;# If those keywords appear in an existing publication record, it is a suspect.&lt;/span&gt;
-
-BEGIN &lt;span dir="ltr"&gt;{&lt;/span&gt;
-    FS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"qwqw"&lt;/span&gt;
-    IGNORECASE &lt;span dir="ltr"&gt;=&lt;/span&gt; 1 
-
-    &lt;span dir="ltr"&gt;# Field names&lt;/span&gt;
-    &lt;span dir="ltr"&gt;id&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;1&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;title&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;2&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;num_authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;3&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doi&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;4&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;fos_isbn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;5&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doctype_issn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;6&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;lang&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;7&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;8&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;issue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;9&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;url&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;10&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;volume&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;11&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;page_start&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;12&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;page_end&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;13&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;year&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;14&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;venue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;15&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;publisher_pdf&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;16&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;references&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;17&lt;span dir="ltr"&gt;;&lt;/span&gt;
-    &lt;span dir="ltr"&gt;keywords&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;18&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;abstract&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;19&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;20&lt;span dir="ltr"&gt;;&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-
-&lt;span dir="ltr"&gt;# topic1 .. topic4 are provided at command line&lt;/span&gt;
-&lt;span dir="ltr"&gt;$0&lt;/span&gt;~topic1 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$0&lt;/span&gt;~topic2 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$0&lt;/span&gt;~topic3 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$0&lt;/span&gt;~topic4 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$lang&lt;/span&gt;~/en/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$authors&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/&lt;span dir="ltr"&gt;{&lt;/span&gt;
-    print &lt;span dir="ltr"&gt;$id&lt;/span&gt;, &lt;span dir="ltr"&gt;$title&lt;/span&gt;, &lt;span dir="ltr"&gt;$authors&lt;/span&gt;, &lt;span dir="ltr"&gt;$year&lt;/span&gt;
-&lt;span dir="ltr"&gt;}&lt;/span&gt;
-&lt;/code&gt;&lt;/PRE&gt;&lt;h1&gt;Conclusion&lt;/h1&gt;&lt;p dir="ltr"&gt;I show how the classic Unix tools may be leveraged to solve modern problems
-and that millions of records may be processed in under a minute at scale.
-About the data itself, it seems the biosciences research dominates
-the publications followed by perhaps physics. I am sure more sophisticated
-tools could be used to get refined results and gain better insights – this is
-my take. I &lt;a href="https://twitter.com/SciDatathon/status/1120335746358026240" dir="ltr"&gt;won&lt;/a&gt;
-the data challenge. Awk is awesome!&lt;/p&gt;</description><pubDate>Sun, 29 Aug 2021 06:43:32 -0500</pubDate></item><item><title>Followup Measuring BGP Stacks Performance</title><link>https://lobste.rs/s/iafayu</link><description>&lt;h4&gt;Systematic performance measurement of Open Source BGP Stacks, adding RustyBGP and OpenBGPD&lt;/h4&gt;&lt;div&gt;
+&lt;/PRE&gt;&lt;p dir="ltr"&gt;Perhaps it would have been nice to recognize that &lt;code dir="ltr"&gt;incl %eax&lt;/code&gt; and &lt;code dir="ltr"&gt;decl %eax&lt;/code&gt; could be used in these contexts, but as mentioned before it's not such a huge deal. Other than that, this all looks good.&lt;/p&gt;&lt;h4&gt;Using QBE as a front end target for a self-hosting compiler&lt;/h4&gt;&lt;p&gt;I think even with the minor tweaks I'd like to see with QBE, it has a lot going for it that makes it an ideal option for a back end for our self-hosting PL/0 compiler. We can refine our back end progressively: we can start with a C back end to get things going and prove the self-hosting nature of the compiler, then add a QBE back end to learn about how to convert high-level languages into assembly and assembly-like languages, and finally we can add a direct to assembly back end to learn about challenges such as register allocation (which QBE solves for us).&lt;/p&gt;&lt;p&gt;QBE is small enough that we can place an entire copy of the source code in our repository. It is written in C so we know we can build it. And it outputs either amd64 or aarch64 assembly, so it will just work for most of us most of the time. There's a lot more that QBE is capable of that we didn't encounter, but what I've seen is enough for me to think that it has good potential for us.&lt;/p&gt;&lt;p&gt;It gets the nod of approval for me to use. We'll be seeing QBE again.&lt;/p&gt;&lt;img alt="Top" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAA4AAAAICAYAAADJEc7MAAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH4wkWDyUKJxzXegAAAB1pVFh0Q29tbWVudAAAAAAAQ3JlYXRlZCB3aXRoIEdJTVBkLmUHAAAAUklEQVQY02Ocd/j/fwY0kGjDwMhACPz//5/h////DPMO//8PYxODWXAZOP8Iw39k22F8uBg2G7Gx0cWYGMgEWJ2aaMPAiO5UDOcTGxjogUe2UwHwdJDZUucW5QAAAABJRU5ErkJggg==" width="14" height="8"&gt;&lt;img alt="RSS" src="https://briancallahan.net/blog/media/pic_rss.gif" width="36" height="14"&gt;&lt;p&gt;OpenBSD httpd&lt;/p&gt;</description><pubDate>Sun, 29 Aug 2021 00:54:18 -0500</pubDate></item><item><title>Followup Measuring BGP Stacks Performance</title><link>https://lobste.rs/s/iafayu</link><description>&lt;h4&gt;Systematic performance measurement of Open Source BGP Stacks, adding RustyBGP and OpenBGPD&lt;/h4&gt;&lt;div&gt;
 		Published on Aug 9, 2021 by Justin Pietsch
 	&lt;/div&gt;&lt;p dir="ltr"&gt;After I published &lt;a href="https://elegantnetwork.github.io/posts/comparing-open-source-bgp-stacks/" dir="ltr"&gt;the post on measuring open source BGP stacks&lt;/a&gt;, I was embarrassed after I realized how haphazard the testing was. I was not very systematic about the way I tried different test parameters. So I hacked on &lt;a href="https://github.com/jopietsch/bgperf" dir="ltr"&gt;bgperf&lt;/a&gt;, added some more reporting and created a new batch feature that iterates through parameters systematically, and automatically graphs the results. By request, I added &lt;a href="https://github.com/osrg/RustyBGP" dir="ltr"&gt;RustyBGP&lt;/a&gt; and &lt;a href="http://www.openbgpd.org/" dir="ltr"&gt;OpenBGPD&lt;/a&gt;. I’ve only added rudimentary support for these just to get started testing the number of prefixes and neighbors. RustyBGP isn’t yet a fully formed BGP stack; I don’t think it has much support for any kind of policy yet.&lt;/p&gt;&lt;p&gt;In these tests I stopped testing GoBGP, even though bgperf still supports it. As you can see from the previous post, it uses a lot more resources and is much slower. It makes the graphs much harder to interpret. I also only test the single table version of bird, because it’s the easier config and it’s faster.&lt;/p&gt;&lt;p&gt;Last time for FRR I (accidentally) used a dev version which took an excess amount of time establishing neighbors when there were &amp;gt; 30 neighbors. This time I’m using FRRouting 7.5.1 from dockerhub container and FRRouting 8.0 that bgperf compiled from github, neither of which have problems with neighbor times. I’m not going to show neighbor results here because for the most part they are uninteresting.&lt;/p&gt;&lt;p&gt;There are all kinds of different uses for BGP stacks. I try to cover a set of interesting scenarios to demonstrate how these perform.&lt;/p&gt;&lt;p&gt;The goal in all of this is to add some quantitative power to any decision making about different BGP stacks. It’s not the only aspect to consider, often it’s the least important.&lt;/p&gt;&lt;h1&gt;Results&lt;/h1&gt;&lt;p&gt;The first set of results we’ll look at are from my AMD 3950 32 core machine with 64 GB RAM.&lt;/p&gt;&lt;h2&gt;10K prefixes&lt;/h2&gt;&lt;p&gt;We’ll start with 10K prefixes. It iterates through 10, 30, 50, and then 100 neighbors. It looks like 100 neighbors with each 10K prefixes is pretty taxing on many of these stacks.&lt;/p&gt;&lt;p&gt;Route reception is the time from the first route received until all routes are received.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/AMD-3950/bgperf_10K_route_reception.png" alt="route reception time" width="455" height="341"&gt;&lt;p&gt;The first thing that jumps out is how much slower OpenBGPD is especially at 100, and even 50, neighbors. While harder to see, BIRD and RustyBGP at 100 neighbors are considerably slower than the two FRRoutings, 18s compared to 9-10s.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/AMD-3950/bgperf_10K_max_cpu.png" alt="max cpu" width="455" height="341"&gt;&lt;p&gt;RustyBGP uses a lot more  CPU resources, even though it isn’t any faster than FRR or BIRD.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/AMD-3950/bgperf_10K_max_mem.png" alt="max mem" width="455" height="341"&gt;&lt;p&gt;OpenBGPD uses a tremendous amount of memory, especially at 100 neighbors. I’m not sure what’s going on here, but that looks troubling to me.&lt;/p&gt;&lt;h2&gt;Many (many) neighbors, 10 prefixes&lt;/h2&gt;&lt;p&gt;This iterates through neighbors from 250 to 1750. More than that runs out of memory on my 64 GB machine (because of all the ExaBGP). It uses a very minimal amount of prefixes just to see if we can understand anything regarding max prefixes.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/AMD-3950/bgperf_many_neighbors_10p_route_reception.png" alt="route reception time" width="455" height="341"&gt;&lt;p&gt;The time to receive prefixes, all 10 per neighbor, doesn’t matter in this test.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/AMD-3950/bgperf_many_neighbors_10p_max_cpu.png" alt="max cpu" width="455" height="341"&gt;&lt;p&gt;Interestingly, RustyBGP uses the smallest amount of CPU and OpenBGPD uses the most, by a lot. FRRouting 8 uses more  CPU at 1750 neighbors than 7.5.1. I don’t know that is important since it’s still not very much&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/AMD-3950/bgperf_many_neighbors_10p_max_mem.png" alt="max mem" width="455" height="341"&gt;&lt;p&gt;OpenBGPD uses a lot more memory, several orders of magnitude more.&lt;/p&gt;&lt;p&gt;Because it’s so hard to see everything but OpenBGPD, going to remove it so we can look at the others.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/AMD-3950/bgperf_many_neighbors_10p_max_mem-no-openbgpd.png" alt="max mem" width="455" height="341"&gt;&lt;p&gt;FRRouting 8 uses a lot more memory than FRRouting 7.5.1 or BIRD. Don’t know if this matters because it’s only 10 prefixes, but it’s interesting. There looks like some kind of per neighbor memory tax in FRRouting 8. It is too much? I don’t know. Is it impactful as there are more routes? Let’s see.&lt;/p&gt;&lt;h2&gt;Many neighbors, 100 prefixes&lt;/h2&gt;&lt;p&gt;This only goes from 250 to 750 neighbors with 100 prefixes. More than that runs out of memory on my 64 GB machine (because of all the ExaBGP processes.)&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/AMD-3950/bgperf_many_neighbors_100p_route_reception.png" alt="route reception time" width="455" height="341"&gt;&lt;p&gt;Again, route reception is trivial. Maybe it matters that OpenBGPD at 750 neighbors is 4 seconds, but not sure.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/AMD-3950/bgperf_many_neighbors_100p_max_cpu.png" alt="max cpu" width="455" height="341"&gt;&lt;p&gt;Similar to the 10 prefix tests, OpenBGPD uses many more CPU resources than the others.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/AMD-3950/bgperf_many_neighbors_100p_max_mem.png" alt="max mem" width="455" height="341"&gt;&lt;p&gt;Similar to the 10 prefix tests, OpenBGPD uses many more memory resources than the others. What’s troubling is that at 10 prefixes and 750 neighbors it’s about 1GB but at 100 prefixes, 750 neighbors it’s 6GB.&lt;/p&gt;&lt;p&gt;Let’s again remove OpenBGPD so we can understand the others better.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/AMD-3950/bgperf_many_neighbors_100p-no-openbgpd_max_mem.png" alt="max mem" width="455" height="341"&gt;&lt;p&gt;FRRouting 8 is still a lot higher than the others, but it grows to about 0.58 GB from 0.52 at 750 neighbors. That again leads credence to a per neighbor memory tax, but doesn’t seem to be in the way as more prefixes are added.&lt;/p&gt;&lt;h2&gt;Prefix iterations&lt;/h2&gt;&lt;p&gt;This set of tests iterates from 50 to 250 neighbors and 10 prefixes to 1000.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/AMD-3950/bgperf_prefix_growth_route_reception.png" alt="route reception time" width="455" height="341"&gt;&lt;p&gt;Route Reception is trivial, except OpenBGPD at 250 neighbors, 1000 prefixes. It plain freaks out.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/AMD-3950/bgperf_prefix_growth_max_cpu.png" alt="max cpu" width="455" height="341"&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/AMD-3950/bgperf_prefix_growth_max_mem.png" alt="max mem" width="455" height="341"&gt;&lt;p&gt;Zoom in without OpenBGPD again.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/AMD-3950/bgperf_prefix_growth-no-openbgp_max_mem.png" alt="max mem" width="455" height="341"&gt;&lt;p&gt;Not sure how to interpret this exactly. It looks like additional routes don’t really matter for memory until 1000 ish. FRRouting 8 still uses more memory but looks like a fixed amount perf neighbor not a percentage, so probably not so concerning. RustyBGP is the lowest memory user still.&lt;/p&gt;&lt;h2&gt;1M routes.&lt;/h2&gt;&lt;p&gt;Since the internet is getting close to 1M routes, how do these stacks do with 1M routes and multiple neighbors?&lt;/p&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;CAVEAT&lt;/strong&gt; As I’ve been thinking about this test I’ve realized it’s not doing a good job of representing actually connecting to internet routes. It’s 1M /32s that are all unique, so in the end, if you have 5 neighbors, you have 5 million routes. It’s what I can do for now, I’ll continue to work on improving this test.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/AMD-3950/bgperf_1M_route_reception.png" alt="route reception time" width="455" height="341"&gt;&lt;p&gt;This is the first time that RustyBGP is considerably slower than all the others.&lt;/p&gt;&lt;p&gt;FRR 8 is somewhat slower than 7.5.1 or BIRD. OpenBGPD looks good here.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/AMD-3950/bgperf_1M_max_cpu.png" alt="max cpu" width="455" height="341"&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/AMD-3950/bgperf_1M_max_mem.png" alt="max mem" width="455" height="341"&gt;&lt;p&gt;BIRD uses 1/3 the memory of FRRouting. RustyBGP also uses significantly less memory than FRRouting, but it’s slower too.  OpenBGPD uses the most memory, as usual.&lt;/p&gt;&lt;h1&gt;Results from EC2 m5&lt;/h1&gt;&lt;p&gt;I wanted to see what would happen with more resources, specifically twice as much RAM. However, the AMD device is a consumer device with less cores but each higher speed. That might matter to some of these tests because of the single core processes.&lt;/p&gt;&lt;p&gt;I ran the same test suites with some little changes. I won’t go through all the graphs, because there are pretty similiar results. But where there is something interesting I’ll mention that.&lt;/p&gt;&lt;h2&gt;10K prefixes&lt;/h2&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/ec2-m5.12xlarge/bgperf_10K_route_reception.png" alt="route reception time" width="455" height="341"&gt;&lt;p&gt;Route Reception has a greater difference between both FRRs and BIRD/RustyBGP. Maybe it’s that 3950 is a consumer device with higher speed cores?&lt;/p&gt;&lt;h2&gt;Many (many) neighbors, 10 prefixes&lt;/h2&gt;&lt;p&gt;I didn’t find any interesting differences here.&lt;/p&gt;&lt;h2&gt;Many neighbors, 100 prefixes&lt;/h2&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/ec2-m5.12xlarge/bgperf_many_neighbors_100p_route_reception.png" alt="route reception time" width="455" height="341"&gt;&lt;p&gt;OpenBGPD at 750 neighbors is a lot greater route reception time than on the AMD.&lt;/p&gt;&lt;h2&gt;Prefix iterations&lt;/h2&gt;&lt;p&gt;Because of more memory, I tested to 500 neighbors.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/ec2-m5.12xlarge/bgperf_prefix_growth_route_reception.png" alt="route reception time" width="455" height="341"&gt;&lt;p&gt;OpenBGPD is an order of magnitude worse at 500 neighbors, 1000 prefixes, then at 250.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/ec2-m5.12xlarge/bgperf_prefix_growth_max_cpu.png" alt="max cpu" width="455" height="341"&gt;&lt;p&gt;We see Rusytbgp jump up in CPU usage at 500 neighbors. On the AMD is never got past 100%.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/ec2-m5.12xlarge/bgperf_prefix_growth_max_mem.png" alt="max mem" width="455" height="341"&gt;&lt;p&gt;OpenBGPD is using over 30GB of RAM and is slow at 500 neighbors.&lt;/p&gt;&lt;h2&gt;1M routes.&lt;/h2&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/ec2-m5.12xlarge/bgperf_1M_max_cpu.png" alt="max cpu" width="455" height="341"&gt;&lt;p&gt;RustyBGP uses twice as much CPU as the AMD, but is still slower than all the others.&lt;/p&gt;&lt;h1&gt;Results from EC2 t3&lt;/h1&gt;&lt;p&gt;I wanted to try out what would happen on a machine with more limited resources. As with the above, these are the same suite of tests, with some little limitations because of less memory. The biggest issue is that because the target stack and the tester, and the monitor, are all on the same hardware they fight for resources, especially in the many neighbors test. I’m still trying to understand the impact of bgperf on the results.&lt;/p&gt;&lt;h2&gt;10K prefixes&lt;/h2&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/ec2-t3.2xlarge/bgperf_10K_max_cpu.png" alt="max cpu" width="455" height="341"&gt;&lt;p&gt;It’s interesting that RustyBGP uses less CPU, because there is less, but it’s not much slower than on the other machines. What is it doing with those other CPU resources when it has them?&lt;/p&gt;&lt;h2&gt;Many (many) neighbors, 10 prefixes&lt;/h2&gt;&lt;p&gt;Can only test many less parameters because of memory.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/ec2-t3.2xlarge/bgperf_many_neighbors_10p_max_cpu.png" alt="max cpu" width="455" height="341"&gt;&lt;p&gt;While not really different, it is interesting to zoom in on just 250 and 500 neighbors.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/ec2-t3.2xlarge/bgperf_many_neighbors_10p_max_mem.png" alt="max mem" width="455" height="341"&gt;&lt;p&gt;Again, not much different, but zooming in shows the difference in memory between FRRouing 8/OpenBGPD vs the others.&lt;/p&gt;&lt;h2&gt;Many neighbors, 100 prefixes&lt;/h2&gt;&lt;p&gt;Nothing interestingly different here.&lt;/p&gt;&lt;h2&gt;Prefix iterations&lt;/h2&gt;&lt;p&gt;Nothing interestingly different here.&lt;/p&gt;&lt;h2&gt;1M routes.&lt;/h2&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/ec2-t3.2xlarge/bgperf_1M_route_reception.png" alt="route reception time" width="455" height="341"&gt;&lt;p&gt;While the others are about the same, RustyBGP doubles it’s time here.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/ec2-t3.2xlarge/bgperf_1M_max_cpu.png" alt="max cpu" width="455" height="341"&gt;&lt;p&gt;Just a lot less CPU resources for RustyBGP to use.&lt;/p&gt;&lt;h1&gt;More extreme tests&lt;/h1&gt;&lt;p&gt;After doing those suite of tests across all three different hardware, I realized that in some cases it’s still telling us more about how much resources the test suite uses than the limits of these stacks. These no longer test OpenBGPD (or GoBGP) because it is so much less performant than the other stacks. I can’t use my own AMD machine because these tests run out of memory, so this is all EC2 hardware.&lt;/p&gt;&lt;h2&gt;10 Prefixes, Many Many Neighbors&lt;/h2&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/ec2-stress/bgperf_many_many_neighbors_10p_route_reception.png" alt="route reception time" width="455" height="341"&gt;&lt;p&gt;Ooop, right away, something interesting. above 3000 neighbors BIRD gets sad/mad.  We seem to have found a boundary in BIRD where it gets much worse&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/ec2-stress/bgperf_many_many_neighbors_10p_max_cpu.png" alt="max cpu" width="455" height="341"&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/ec2-stress/bgperf_many_many_neighbors_10p_max_mem.png" alt="max mem" width="455" height="341"&gt;&lt;h2&gt;100 Prefixes, Many Neighbors&lt;/h2&gt;&lt;p&gt;In the above tests, there was a test for 100 Prefixes up to 750 neighbors. Let’s go bigger and see what we see.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/ec2-stress/bgperf_many_neighbors_100p_route_reception.png" alt="route reception time" width="455" height="341"&gt;&lt;p&gt;Above 1000 neighbors BIRD gets sad/mad. In the above tests we did over 1000 neighbors with BIRD, but with only 10 prefixes.&lt;/p&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/ec2-stress/bgperf_many_neighbors_100p_max_cpu.png" alt="max cpu" width="455" height="341"&gt;&lt;img src="https://elegantnetwork.github.io/assets/images/2021-08-followup-bgp-stacks/ec2-stress/bgperf_many_neighbors_100p_max_mem.png" alt="max mem" width="455" height="341"&gt;&lt;table class="js-csv-data csv-data js-file-line-container" dir="ltr"&gt;
       &lt;thead dir="ltr"&gt;
@@ -3342,7 +2881,468 @@ the data challenge. Awk is awesome!&lt;/p&gt;</description><pubDate>Sun, 29 Aug 
               &lt;td dir="ltr"&gt;373.71GB&lt;/td&gt;
           &lt;/tr&gt;
       &lt;/tbody&gt;
-    &lt;/table&gt;&lt;h1&gt;Observations&lt;/h1&gt;&lt;p&gt;These tests use quite a bit of hardware in CPU and memory. Most of those resources are going into ExaBGP sending the prefixes rather than in the targets. In some ways this is a test of the test system. I’m still figuring out how to best test the targets without the test system getting in the way.&lt;/p&gt;&lt;h2&gt;RustyBGP&lt;/h2&gt;&lt;p&gt;I’ve seen twitter claims that RustyBGP is significantly faster that FRRouting, but I can’t reproduce that here. I’m sure I’m missing something. RustyBGP is still missing a lot of necessary BGP daemon features, I’m just not testing them.&lt;/p&gt;&lt;h2&gt;BIRD&lt;/h2&gt;&lt;p&gt;BIRD with more than 1000 neighbors and more than just a handful of prefixes becomes problematic. And with 1000 prefixes, By 500 neighbors it’s performing badly again. I don’t know what it is exactly that is the bottleneck here.&lt;/p&gt;&lt;h1&gt;Conclusion&lt;/h1&gt;&lt;p&gt;OpenBGP struggles in places that the other stacks do not, but it’s still faster than GoBGP. For anybody running OpenBGP, are there scenarios that make it more useful than the other stacks? All other things being equal, if performance or memory use matters, it looks like OpenBGP is the loser here.&lt;/p&gt;&lt;p&gt;Not sure the winner, maybe FRRouting 7.5.1? Is that enough to not use FRRouting 8? I doubt it, but I’m not testing functionality, just straight up speed on these simple tests. There are some cases in which RustyBGP is faster or uses less memory.&lt;/p&gt;&lt;p&gt;I’m not really going to declare a winner.&lt;/p&gt;&lt;p dir="ltr"&gt;Try out &lt;a href="https://github.com/jopietsch/bgperf" dir="ltr"&gt;bgperf&lt;/a&gt; yourself.&lt;/p&gt;&lt;h2&gt;Questions&lt;/h2&gt;&lt;p&gt;There are probably patterns in here that I missed. What analysis did I miss looking through this data?&lt;/p&gt;&lt;p&gt;Are the scenarios that I’m using to test useful? Are there different combinations of prefixes and neighbors that I should be testing?&lt;/p&gt;&lt;p&gt;Does anybody else have either BGP testing tools that they can share, or other results that they can share?&lt;/p&gt;&lt;h2&gt;followup / todo&lt;/h2&gt;&lt;p&gt;Still more to do to be more representative of real loads and not so artificial.&lt;/p&gt;</description><pubDate>Sun, 29 Aug 2021 07:57:48 -0500</pubDate></item><item><title>Why I will stay Janet</title><link>https://lobste.rs/s/falxep</link><description>&lt;p dir="ltr"&gt;This post is the last part of my Óde to Janet programming
+    &lt;/table&gt;&lt;h1&gt;Observations&lt;/h1&gt;&lt;p&gt;These tests use quite a bit of hardware in CPU and memory. Most of those resources are going into ExaBGP sending the prefixes rather than in the targets. In some ways this is a test of the test system. I’m still figuring out how to best test the targets without the test system getting in the way.&lt;/p&gt;&lt;h2&gt;RustyBGP&lt;/h2&gt;&lt;p&gt;I’ve seen twitter claims that RustyBGP is significantly faster that FRRouting, but I can’t reproduce that here. I’m sure I’m missing something. RustyBGP is still missing a lot of necessary BGP daemon features, I’m just not testing them.&lt;/p&gt;&lt;h2&gt;BIRD&lt;/h2&gt;&lt;p&gt;BIRD with more than 1000 neighbors and more than just a handful of prefixes becomes problematic. And with 1000 prefixes, By 500 neighbors it’s performing badly again. I don’t know what it is exactly that is the bottleneck here.&lt;/p&gt;&lt;h1&gt;Conclusion&lt;/h1&gt;&lt;p&gt;OpenBGP struggles in places that the other stacks do not, but it’s still faster than GoBGP. For anybody running OpenBGP, are there scenarios that make it more useful than the other stacks? All other things being equal, if performance or memory use matters, it looks like OpenBGP is the loser here.&lt;/p&gt;&lt;p&gt;Not sure the winner, maybe FRRouting 7.5.1? Is that enough to not use FRRouting 8? I doubt it, but I’m not testing functionality, just straight up speed on these simple tests. There are some cases in which RustyBGP is faster or uses less memory.&lt;/p&gt;&lt;p&gt;I’m not really going to declare a winner.&lt;/p&gt;&lt;p dir="ltr"&gt;Try out &lt;a href="https://github.com/jopietsch/bgperf" dir="ltr"&gt;bgperf&lt;/a&gt; yourself.&lt;/p&gt;&lt;h2&gt;Questions&lt;/h2&gt;&lt;p&gt;There are probably patterns in here that I missed. What analysis did I miss looking through this data?&lt;/p&gt;&lt;p&gt;Are the scenarios that I’m using to test useful? Are there different combinations of prefixes and neighbors that I should be testing?&lt;/p&gt;&lt;p&gt;Does anybody else have either BGP testing tools that they can share, or other results that they can share?&lt;/p&gt;&lt;h2&gt;followup / todo&lt;/h2&gt;&lt;p&gt;Still more to do to be more representative of real loads and not so artificial.&lt;/p&gt;</description><pubDate>Sun, 29 Aug 2021 07:57:48 -0500</pubDate></item><item><title>Running Awk in parallel to process 256M records</title><link>https://lobste.rs/s/vxbaoj</link><description>&lt;h3&gt;TL;DR&lt;/h3&gt;&lt;p&gt;Awk crunches massive data; a High Performance Computing (HPC) script calls
+hundreds of Awk concurrently. Fast and scalable in-memory solution on a fat
+machine.&lt;/p&gt;&lt;h1&gt;Introduction&lt;/h1&gt;&lt;p dir="ltr"&gt;Presenting the solution I worked on in 2018, to a &lt;a href="https://smc-datachallenge.ornl.gov/challenges-2018/" dir="ltr"&gt;Data
+Challenge&lt;/a&gt; organized at
+work. I solve the Scientific Publications Mining challenge (no.4) that consists
+of 5 problems. I use classic Unix tools with a modern scalable HPC scripting
+tool to work out the solutions. The project is hosted on
+&lt;a href="https://github.com/ketancmaheshwari/SMC18" dir="ltr"&gt;github&lt;/a&gt;. About 12 teams entered the
+contest.&lt;/p&gt;&lt;h1&gt;Tools&lt;/h1&gt;&lt;h2&gt;Software&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;strong dir="ltr"&gt;Awk&lt;/strong&gt; (gawk v4.0.2) is dominantly used for the bulk of core processing.&lt;/p&gt;&lt;p dir="ltr"&gt;Argonne National Laboratory developed HPC scripting tool called
+&lt;a href="http://swift-lang.org/Swift-T" dir="ltr"&gt;Swift&lt;/a&gt; (&lt;strong dir="ltr"&gt;NOT&lt;/strong&gt; the Apple Swift) is used to run
+the Awk programs concurrently over the dataset to radically improve
+performance. Swift uses MPI based communication to parallelize and synchronize
+independent tasks.&lt;/p&gt;&lt;p dir="ltr"&gt;Other Unix tools such as &lt;em dir="ltr"&gt;sort&lt;/em&gt;, &lt;em dir="ltr"&gt;grep&lt;/em&gt;, &lt;em dir="ltr"&gt;tr&lt;/em&gt;, &lt;em dir="ltr"&gt;sed&lt;/em&gt; and &lt;em dir="ltr"&gt;bash&lt;/em&gt; are used as
+well. Additionally, &lt;em dir="ltr"&gt;jq&lt;/em&gt;, &lt;em dir="ltr"&gt;D3&lt;/em&gt;, &lt;em dir="ltr"&gt;dot/graphviz&lt;/em&gt;, and &lt;em dir="ltr"&gt;ffmpeg&lt;/em&gt; are used.&lt;/p&gt;&lt;h2&gt;Hardware&lt;/h2&gt;&lt;p dir="ltr"&gt;Fortunately, I had access to a large-memory (24 T) SGI system with 512-core
+Intel Xeon (2.5GHz) CPUs. All the IO is memory (&lt;em dir="ltr"&gt;/dev/shm&lt;/em&gt;) bound ie. the data
+is read from and written to &lt;em dir="ltr"&gt;/dev/shm&lt;/em&gt;.&lt;/p&gt;&lt;h3&gt;Rationale&lt;/h3&gt;&lt;p&gt;Awk is lightweight, concise, expressive, and fast – especially for text processing
+applications. Some people find Awk programs terse and hard to read. I have
+taken care to make the code readable. I wanted to see how far can I go with Awk
+(and boy did I go far!). Alternative tools such as modern Python libraries
+sometimes have scaling limitations, portability concerns. Some are still
+evolving. Swift is used simply because I was familiar with it and confident
+that it will scale well in this case.&lt;/p&gt;&lt;h1&gt;Data&lt;/h1&gt;&lt;p dir="ltr"&gt;The original &lt;a href="https://www.openacademic.ai/oag" dir="ltr"&gt;data&lt;/a&gt; was in two sets (&lt;em dir="ltr"&gt;aminer&lt;/em&gt;
+and &lt;em dir="ltr"&gt;mag&lt;/em&gt;) of 322 &lt;code dir="ltr"&gt;json&lt;/code&gt; files – each containing a million records. A file
+with a list of common records appearing in both sets was available. An Awk script
+(&lt;code dir="ltr"&gt;src/filterdup.awk&lt;/code&gt;) is used to exclude these duplicate records from the aminer
+dataset. As a result, it came out about &lt;strong dir="ltr"&gt;256 million&lt;/strong&gt; (256,382,605 to be
+exact) unique records to be processed. The total data size is 329GB. Some
+fields in the data are &lt;em dir="ltr"&gt;null&lt;/em&gt;. Those records are avoided where relevant.
+Additionally, records related to non-English publications were avoided as
+needed. A
+&lt;a href="https://raw.githubusercontent.com/ketancmaheshwari/SMC18/master/data/aminer_papers_sample.allcols.excl.txt" dir="ltr"&gt;snapshot&lt;/a&gt;
+of tabular data is available. String &lt;code dir="ltr"&gt;qwqw&lt;/code&gt; is chosen as a column separator to
+distinguish it from text already found in data. All other 3 or less character
+combinations already existed in data prohibiting them to be used as separators.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/usr/bin/env awk -f&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;# $1 magid&lt;/span&gt;
+&lt;span dir="ltr"&gt;# $2 aminerid&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;# Filter duplicate papers and remove them&lt;/span&gt;
+&lt;span dir="ltr"&gt;# from aminer database based on the linking relationship &lt;/span&gt;
+
+BEGIN &lt;span dir="ltr"&gt;{&lt;/span&gt;FS &lt;span dir="ltr"&gt;=&lt;/span&gt; OFS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"qwqw"&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+NR &lt;span dir="ltr"&gt;==&lt;/span&gt; FNR &lt;span dir="ltr"&gt;{&lt;/span&gt;a[&lt;span dir="ltr"&gt;$2&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;$1&lt;/span&gt;&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;!(&lt;/span&gt;&lt;span dir="ltr"&gt;$1&lt;/span&gt; &lt;span dir="ltr"&gt;in &lt;/span&gt;a&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; FILENAME ~ /aminer/ &lt;span dir="ltr"&gt;{&lt;/span&gt; print &lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;NR == FNR&lt;/code&gt; is a cool Awk idiom that ensures the condition is true only for the first file. This is because for each file that is processed the FNR (File Record Number) gets reset but the NR does not. This means the condition &lt;code dir="ltr"&gt;NR == FNR&lt;/code&gt; yields true only for the first file.&lt;/p&gt;&lt;p&gt;In addition to the publications data, I use the following:&lt;/p&gt;&lt;OL&gt;&lt;LI&gt;&lt;p&gt;A list of large cities (population 100K+) and their lat-long coordinates (3,517).&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;A list of countries (190).&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;A list of world universities and research institutes (8,984).&lt;/p&gt;&lt;/LI&gt;&lt;LI&gt;&lt;p&gt;A list of stop-words to avoid in some of the results (161 words).&lt;/p&gt;&lt;/LI&gt;&lt;/OL&gt;&lt;h1&gt;Solutions&lt;/h1&gt;&lt;h2&gt;Pre- and post-processing&lt;/h2&gt;&lt;p dir="ltr"&gt;&lt;code dir="ltr"&gt;jq&lt;/code&gt; is used to transform the json data to tabular format
+(&lt;code dir="ltr"&gt;src/json2tabular.sh&lt;/code&gt;). The converted tabular files have 19 original columns
+(&lt;strong dir="ltr"&gt;id&lt;/strong&gt;, &lt;strong dir="ltr"&gt;title&lt;/strong&gt;, &lt;strong dir="ltr"&gt;authors&lt;/strong&gt;, &lt;strong dir="ltr"&gt;year&lt;/strong&gt;, &lt;strong dir="ltr"&gt;citations&lt;/strong&gt;,  etc) and one
+additional column called &lt;strong dir="ltr"&gt;num_authors&lt;/strong&gt; showing the number of authors for a
+given publication record. The authors column has a semi-colon separator for
+multiple authors. Further curation of tabular data is done by removing
+extraneous space, square brackets, escape characters and quotes using &lt;code dir="ltr"&gt;sed&lt;/code&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Some of the results obtained were postprocessed for visulization using the &lt;code dir="ltr"&gt;D3&lt;/code&gt;
+graphics framework. &lt;code dir="ltr"&gt;ffmpeg&lt;/code&gt; is used to stitch images of trending terms to
+create an animation. &lt;code dir="ltr"&gt;dot/graphviz&lt;/code&gt; is used to build the massive citation
+network graph of the best paper.&lt;/p&gt;&lt;h2&gt;Scaling up&lt;/h2&gt;&lt;p&gt;Each solution has Awk code run concurrently over the 322 data files on 322 CPU
+cores using Swift. This resulted in radical speedup at scale. None of the
+solution has taken more than an hour of runtime–most took less than a minute.&lt;/p&gt;&lt;h3&gt;Problem 1&lt;/h3&gt;&lt;p&gt;&lt;em&gt;Identify the individual or group of individuals who appear to be the expert in a particular field or sub-field.&lt;/em&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;This is solved in two ways. First approach identifies all the entries with
+citations higher than 500 for a given search topic
+(&lt;code dir="ltr"&gt;results/meditation_highly_cited.txt&lt;/code&gt;).&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/usr/bin/env awk -f&lt;/span&gt;
+
+BEGIN &lt;span dir="ltr"&gt;{&lt;/span&gt;
+
+    &lt;span dir="ltr"&gt;# Field Separator&lt;/span&gt;
+    FS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"qwqw"&lt;/span&gt;
+    &lt;span dir="ltr"&gt;# Output field separator&lt;/span&gt;
+    OFS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;\t&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;
+    IGNORECASE &lt;span dir="ltr"&gt;=&lt;/span&gt; 1
+
+    &lt;span dir="ltr"&gt;# Field names for readability&lt;/span&gt;
+    &lt;span dir="ltr"&gt;id&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;1&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;title&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;2&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;num_authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;3&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doi&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;4&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;fos_isbn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;5&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doctype_issn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;6&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;lang&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;7&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;8&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;issue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;9&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;url&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;10&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;volume&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;11&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;page_start&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;12&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;page_end&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;13&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;year&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;14&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;venue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;15&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;publisher_pdf&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;16&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;references&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;17&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;keywords&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;18&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;abstract&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;19&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;20&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$0&lt;/span&gt;~topic &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$num_authors&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; 0 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;500&lt;span dir="ltr"&gt;){&lt;/span&gt;
+    print &lt;span dir="ltr"&gt;$n_citation&lt;/span&gt;, &lt;span dir="ltr"&gt;$title&lt;/span&gt;, &lt;span dir="ltr"&gt;$authors&lt;/span&gt;, &lt;span dir="ltr"&gt;$year&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;# How to run:&lt;/span&gt;
+&lt;span dir="ltr"&gt;# awk -v topic=meditation -f src/prob1_p1.awk data/mag_papers_sample.allcols.txt&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The second approach finds the names of authors whose names are repeating for
+queried topic with at least a certain number of citations in each entry. This
+gives a reasonable idea of who are the expert figures in a given research area.
+One such result in &lt;code dir="ltr"&gt;results/cancer_research_topauths.txt&lt;/code&gt; shows authors in
+cancer research with more than one publication with at least 1,000 citations.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/usr/bin/env awk -f&lt;/span&gt;
+
+BEGIN &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    &lt;span dir="ltr"&gt;# Field separator&lt;/span&gt;
+    FS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"qwqw"&lt;/span&gt;
+    OFS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;\t&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;
+    IGNORECASE &lt;span dir="ltr"&gt;=&lt;/span&gt; 1
+
+    &lt;span dir="ltr"&gt;# Field names&lt;/span&gt;
+    &lt;span dir="ltr"&gt;id&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;1&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;title&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;2&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;num_authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;3&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doi&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;4&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;fos_isbn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;5&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doctype_issn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;6&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;lang&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;7&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;8&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;issue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;9&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;url&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;10&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;volume&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;11&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;page_start&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;12&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;page_end&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;13&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;year&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;14&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;venue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;15&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;publisher_pdf&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;16&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;references&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;17&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;keywords&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;18&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;abstract&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;19&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;20&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$0&lt;/span&gt;~topic &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$num_authors&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;0 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;1000&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+   
+   &lt;span dir="ltr"&gt;# find the authors whose names are repeating for a particular topic.&lt;/span&gt;
+   &lt;span dir="ltr"&gt;# Those authors will be considered experts. &lt;/span&gt;
+   
+   gsub&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;\"&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;,&lt;span dir="ltr"&gt;""&lt;/span&gt;,&lt;span dir="ltr"&gt;$authors&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+   &lt;span dir="ltr"&gt;split&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$authors&lt;/span&gt;, a, &lt;span dir="ltr"&gt;";"&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+   
+   &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;i &lt;span dir="ltr"&gt;in &lt;/span&gt;a&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+       &lt;span dir="ltr"&gt;split&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;a[i], b, &lt;span dir="ltr"&gt;","&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+       &lt;span dir="ltr"&gt;# auths array will have keys as auth names and the &lt;/span&gt;
+       &lt;span dir="ltr"&gt;# element value increases if the key repeats&lt;/span&gt;
+       &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;b[1]!~/null/&lt;span dir="ltr"&gt;)&lt;/span&gt; auths[b[1]]++ 
+   &lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+END &lt;span dir="ltr"&gt;{&lt;/span&gt; &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;k &lt;span dir="ltr"&gt;in &lt;/span&gt;auths&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;auths[k]&amp;gt;1&lt;span dir="ltr"&gt;)&lt;/span&gt; print auths[k], k &lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;#How to run:&lt;/span&gt;
+&lt;span dir="ltr"&gt;# awk -v topic=cancer -f src/prob1_p2.awk data/mag_papers_sample.allcols.txt&lt;/span&gt;
+&lt;span dir="ltr"&gt;# sort the results&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The HPC implementation of this solution finishes in &lt;strong dir="ltr"&gt;25 seconds&lt;/strong&gt;.&lt;/p&gt;&lt;p dir="ltr"&gt;Alongside is the citation &lt;strong dir="ltr"&gt;network graph&lt;/strong&gt; of the most cited paper in this
+&lt;a href="https://raw.githubusercontent.com/ketancmaheshwari/SMC18/15b0519d789b0e4b86f66b6bb6199fe24c1a4730/results/best_papers.svg" dir="ltr"&gt;diagram&lt;/a&gt;
+(too big to fit here). The result of a query for all-time list of most cited
+papers with a threshold of 20,000 is in &lt;code dir="ltr"&gt;results/top_papers.txt&lt;/code&gt;.&lt;/p&gt;&lt;h3&gt;Problem 2&lt;/h3&gt;&lt;p&gt;&lt;em&gt;Identify topics that have been researched across all publications.&lt;/em&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;This is solved by identifying most frequently appearing words in the
+collection. Title, abstract and keywords are parsed and top 1,000 frequently
+occurring words across the whole collection is found. Several common words (aka
+&lt;em dir="ltr"&gt;stop-words&lt;/em&gt;) are filtered from the results. At over 23 million, the word
+“patients” occurs the most frequently. The full list of top 1,000 words is
+found in &lt;code dir="ltr"&gt;/results/top_1K_words_kw_abs_title.txt&lt;/code&gt;. The target collection of
+publications may be narrowed down to criteria such as years range.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/usr/bin/env awk -f&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;# Problem  Statement&lt;/span&gt;
+&lt;span dir="ltr"&gt;#    Identify topics that have been researched across all publications.  &lt;/span&gt;
+
+&lt;span dir="ltr"&gt;# Solution:&lt;/span&gt;
+&lt;span dir="ltr"&gt;# step1. Filter the input to English language records &lt;/span&gt;
+&lt;span dir="ltr"&gt;# step2. Eliminate unnecessary content such as punctuation,&lt;/span&gt;
+&lt;span dir="ltr"&gt;#        non-printable chars and small words such as &lt;/span&gt;
+&lt;span dir="ltr"&gt;#        1 letter and 2 letter words&lt;/span&gt;
+&lt;span dir="ltr"&gt;# step3. Extract words used in keywords, title and abstract&lt;/span&gt;
+&lt;span dir="ltr"&gt;# step4. Find most frequently used words &lt;/span&gt;
+
+BEGIN &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    FS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"qwqw"&lt;/span&gt;
+    IGNORECASE &lt;span dir="ltr"&gt;=&lt;/span&gt; 1
+  
+    &lt;span dir="ltr"&gt;# Field names&lt;/span&gt;
+    &lt;span dir="ltr"&gt;id&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;1&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;title&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;2&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;num_authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;3&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doi&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;4&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;fos_isbn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;5&lt;span dir="ltr"&gt;;&lt;/span&gt; 
+    &lt;span dir="ltr"&gt;doctype_issn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;6&lt;span dir="ltr"&gt;;&lt;/span&gt;&lt;span dir="ltr"&gt;lang&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;7&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;8&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;issue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;9&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;url&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;10&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;volume&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;11&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;page_start&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;12&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;page_end&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;13&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;year&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;14&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;venue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;15&lt;span dir="ltr"&gt;;&lt;/span&gt; 
+    &lt;span dir="ltr"&gt;publisher_pdf&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;16&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;references&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;17&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;keywords&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;18&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;abstract&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;19&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;20&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;#collect stop words&lt;/span&gt;
+NR &lt;span dir="ltr"&gt;==&lt;/span&gt; FNR &lt;span dir="ltr"&gt;{&lt;/span&gt;x[&lt;span dir="ltr"&gt;$1&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;next&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;$lang&lt;/span&gt;~/en/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$keywords&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/ &lt;span dir="ltr"&gt;||&lt;/span&gt; &lt;span dir="ltr"&gt;$title&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/ &lt;span dir="ltr"&gt;||&lt;/span&gt; &lt;span dir="ltr"&gt;$abstract&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    &lt;span dir="ltr"&gt;# treat titles&lt;/span&gt;
+    &lt;span dir="ltr"&gt;$title&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; tolower&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$title&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+    &lt;span dir="ltr"&gt;split&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$title&lt;/span&gt;, a, &lt;span dir="ltr"&gt;" "&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+    &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;i &lt;span dir="ltr"&gt;in &lt;/span&gt;a&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;length&lt;span dir="ltr"&gt;(&lt;/span&gt;a[i]&lt;span dir="ltr"&gt;)&amp;gt;&lt;/span&gt;2 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; match&lt;span dir="ltr"&gt;(&lt;/span&gt;a[i],/[a-z]/&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; a[i] &lt;span dir="ltr"&gt;in &lt;/span&gt;x &lt;span dir="ltr"&gt;==&lt;/span&gt; 0&lt;span dir="ltr"&gt;)&lt;/span&gt; kw[a[i]]++
+
+    &lt;span dir="ltr"&gt;# treat keywords&lt;/span&gt;
+    &lt;span dir="ltr"&gt;$keywords&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; tolower&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$keywords&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+    &lt;span dir="ltr"&gt;split&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$keywords&lt;/span&gt;, b, &lt;span dir="ltr"&gt;","&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+    &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;i &lt;span dir="ltr"&gt;in &lt;/span&gt;b&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;length&lt;span dir="ltr"&gt;(&lt;/span&gt;b[i]&lt;span dir="ltr"&gt;)&amp;gt;&lt;/span&gt;2 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; match&lt;span dir="ltr"&gt;(&lt;/span&gt;b[i],/[a-z]/&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; b[i] &lt;span dir="ltr"&gt;in &lt;/span&gt;x &lt;span dir="ltr"&gt;==&lt;/span&gt; 0&lt;span dir="ltr"&gt;)&lt;/span&gt; kw[b[i]]++
+
+     &lt;span dir="ltr"&gt;# treat abstracts (Computationally expensive, results are in:&lt;/span&gt;
+     &lt;span dir="ltr"&gt;# top_1000_words_from_kw_abstract_title_by_freq.txt)&lt;/span&gt;
+     &lt;span dir="ltr"&gt;$abstract&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; tolower&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$abstract&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+     gsub&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;\"&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;,&lt;span dir="ltr"&gt;""&lt;/span&gt;,&lt;span dir="ltr"&gt;$abstract&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+     gsub&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;","&lt;/span&gt;,&lt;span dir="ltr"&gt;""&lt;/span&gt;,&lt;span dir="ltr"&gt;$abstract&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+     &lt;span dir="ltr"&gt;split&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$abstract&lt;/span&gt;, c, &lt;span dir="ltr"&gt;" "&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+     &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;i &lt;span dir="ltr"&gt;in &lt;/span&gt;c&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;length&lt;span dir="ltr"&gt;(&lt;/span&gt;c[i]&lt;span dir="ltr"&gt;)&amp;gt;&lt;/span&gt;2 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; match&lt;span dir="ltr"&gt;(&lt;/span&gt;c[i],/[a-z]/&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; c[i] &lt;span dir="ltr"&gt;in &lt;/span&gt;x &lt;span dir="ltr"&gt;==&lt;/span&gt; 0&lt;span dir="ltr"&gt;)&lt;/span&gt; kw[c[i]]++
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+END &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    &lt;span dir="ltr"&gt;for&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;k &lt;span dir="ltr"&gt;in &lt;/span&gt;kw&lt;span dir="ltr"&gt;){&lt;/span&gt;
+        &lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;kw[k]&amp;gt;1000&lt;span dir="ltr"&gt;)&lt;/span&gt; print kw[k], k
+    &lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;# HOW TO RUN: LC_ALL=C awk -f prob2.awk stop_words.txt \&lt;/span&gt;
+              ../aminer_papers_allcols_excl/aminer_papers_&lt;span dir="ltr"&gt;*&lt;/span&gt;.allcols.excl.txt &lt;span dir="ltr"&gt;\&lt;/span&gt;
+              ../mag_papers_allcols/mag_papers_&lt;span dir="ltr"&gt;*&lt;/span&gt;.allcols.txt &lt;span dir="ltr"&gt;\&lt;/span&gt;
+              | &lt;span dir="ltr"&gt;sort&lt;/span&gt; &lt;span dir="ltr"&gt;-nr&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; freq.txt
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The HPC implementation (Swift code shown below) finishes in &lt;strong dir="ltr"&gt;9 minutes&lt;/strong&gt;.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;files&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;unix&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;/* app defines what we want to run, the input parameters,
+   where the stdout should go, etc.
+*/&lt;/span&gt;
+&lt;span dir="ltr"&gt;app&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;out&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;myawk&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;awkprog&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;stop_words&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;infile&lt;/span&gt;&lt;span dir="ltr"&gt;){&lt;/span&gt;
+  &lt;span dir="ltr"&gt;"/usr/bin/awk"&lt;/span&gt; &lt;span dir="ltr"&gt;"-f"&lt;/span&gt; &lt;span dir="ltr"&gt;awkprog&lt;/span&gt; &lt;span dir="ltr"&gt;stop_words&lt;/span&gt; &lt;span dir="ltr"&gt;infile&lt;/span&gt; &lt;span dir="ltr"&gt;@&lt;/span&gt;&lt;span dir="ltr"&gt;stdout&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;out&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;/* populate the input data */&lt;/span&gt;
+&lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;aminer&lt;/span&gt;&lt;span dir="ltr"&gt;[]&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;glob&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"/dev/shm/aminer_mag_papers/*.txt"&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;/* output for each call will be collected here */&lt;/span&gt;
+&lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;outfiles&lt;/span&gt;&lt;span dir="ltr"&gt;[];&lt;/span&gt; 
+
+&lt;span dir="ltr"&gt;foreach&lt;/span&gt; &lt;span dir="ltr"&gt;v&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;i&lt;/span&gt; &lt;span dir="ltr"&gt;in&lt;/span&gt; &lt;span dir="ltr"&gt;aminer&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+  &lt;span dir="ltr"&gt;outfiles&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;myawk&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;input&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"/home/km0/SMC18/src/prob2.awk"&lt;/span&gt;&lt;span dir="ltr"&gt;),&lt;/span&gt;
+                &lt;span dir="ltr"&gt;input&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"/home/km0/SMC18/data/stop_words.txt"&lt;/span&gt;&lt;span dir="ltr"&gt;),&lt;/span&gt; 
+                &lt;span dir="ltr"&gt;v&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;/* Combine all output in one file */&lt;/span&gt;
+&lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;joined&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;&lt;span dir="ltr"&gt;"joined.txt"&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;cat&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;outfiles&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;/*
+ After running this swift app:
+ awk '{a[$2]+=$1} END {for (k in a) print a[k],k}' joined.txt | sort -nr &amp;gt; freq.txt
+*/&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Problem 3&lt;/h3&gt;&lt;p&gt;&lt;em&gt;Visualize the geographic distribution of the topics in the publications.&lt;/em&gt;&lt;/p&gt;&lt;p&gt;This is solved by identifying the author affiliations for the records that has
+the search topic in them. The affiliation is searched against three
+databases–cities, universities and countries to find out the geographic
+locations for that research. The results are aggregated to present a list of
+centers for which a given keyword appears most frequently. For cities, the
+results are plotted on world map. One such result is shown below for the topic
+of research on “birds”.&lt;/p&gt;&lt;img src="https://raw.githubusercontent.com/ketancmaheshwari/SMC18/master/results/bird_research_cities.png" alt="bird research" title="Bird Research Around the World!" width="453" height="236"&gt;&lt;p dir="ltr"&gt;The &lt;code dir="ltr"&gt;results/&lt;/code&gt; directory contains other similar results such as epilepsy,
+opioid, meditation research by universities and by countries. The HPC
+implementation finishes in &lt;strong dir="ltr"&gt;25 seconds&lt;/strong&gt;. The Awk code is shown below.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/usr/bin/env awk -f&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;# problem statement&lt;/span&gt;
+&lt;span dir="ltr"&gt;#    visualize the geographic distribution of the topics in the publications.&lt;/span&gt;
+
+BEGIN &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    &lt;span dir="ltr"&gt;# Field separator&lt;/span&gt;
+    FS &lt;span dir="ltr"&gt;=&lt;/span&gt; OFS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"qwqw"&lt;/span&gt;
+    IGNORECASE &lt;span dir="ltr"&gt;=&lt;/span&gt; 1
+
+    &lt;span dir="ltr"&gt;# Field names&lt;/span&gt;
+    &lt;span dir="ltr"&gt;id&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;1&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;title&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;2&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;num_authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;3&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doi&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;4&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;fos_isbn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;5&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doctype_issn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;6&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;lang&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;7&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;8&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;issue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;9&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;url&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;10&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;volume&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;11&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;page_start&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;12&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;page_end&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;13&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;year&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;14&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;venue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;15&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;publisher_pdf&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;16&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;references&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;17&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;keywords&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;18&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;abstract&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;19&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;20&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;#collect the countries/cities/univs data&lt;/span&gt;
+NR &lt;span dir="ltr"&gt;==&lt;/span&gt; FNR &lt;span dir="ltr"&gt;{&lt;/span&gt;a[&lt;span dir="ltr"&gt;$1&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;next&lt;span dir="ltr"&gt;}&lt;/span&gt; 
+
+&lt;span dir="ltr"&gt;#treat records with authors whose affiliation is available&lt;/span&gt;
+&lt;span dir="ltr"&gt;$0&lt;/span&gt;~topic &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$num_authors&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$authors&lt;/span&gt;~/&lt;span dir="ltr"&gt;\,&lt;/span&gt;/ &lt;span dir="ltr"&gt;{&lt;/span&gt; 
+    &lt;span dir="ltr"&gt;# extract words from author affiliation and compare with the countries.&lt;/span&gt;
+    &lt;span dir="ltr"&gt;# If a match is found increment that array entry.&lt;/span&gt;
+    w &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;split&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$authors&lt;/span&gt;, b, &lt;span dir="ltr"&gt;","&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+    &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;0&lt;span dir="ltr"&gt;;&lt;/span&gt;i&amp;lt;w&lt;span dir="ltr"&gt;;&lt;/span&gt;i++&lt;span dir="ltr"&gt;){&lt;/span&gt;
+        gsub&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;";"&lt;/span&gt;,&lt;span dir="ltr"&gt;" "&lt;/span&gt;,b[i]&lt;span dir="ltr"&gt;)&lt;/span&gt; 
+        &lt;span dir="ltr"&gt;if&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;b[i] &lt;span dir="ltr"&gt;in &lt;/span&gt;a&lt;span dir="ltr"&gt;)&lt;/span&gt; a[b[i]]++
+    &lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+END &lt;span dir="ltr"&gt;{&lt;/span&gt;
+  &lt;span dir="ltr"&gt;for&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;k &lt;span dir="ltr"&gt;in &lt;/span&gt;a&lt;span dir="ltr"&gt;){&lt;/span&gt; 
+     &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;a[k]&lt;span dir="ltr"&gt;)&lt;/span&gt; print a[k], k
+  &lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;# HOW TO RUN:&lt;/span&gt;
+&lt;span dir="ltr"&gt;# awk -v topic=birds -f prob3.awk cities.txt \&lt;/span&gt;
+        ../mag_papers_allcols/mag_papers_&lt;span dir="ltr"&gt;*&lt;/span&gt;.allcols.txt &lt;span dir="ltr"&gt;\&lt;/span&gt;
+        ../aminer_papers_allcols_excl/aminer_papers_&lt;span dir="ltr"&gt;*&lt;/span&gt;.allcols.excl.txt
+&lt;span dir="ltr"&gt;# awk -v topic=birds -f prob3.awk countries.txt ...&lt;/span&gt;
+&lt;span dir="ltr"&gt;# awk -v topic=birds -f prob3.awk universities.txt ... &lt;/span&gt;
+
+&lt;span dir="ltr"&gt;# Run the following pipeline on the results:&lt;/span&gt;
+&lt;span dir="ltr"&gt;# sort -nr -k 1 citywise_papers.txt &amp;gt; tmp &amp;amp;&amp;amp; mv tmp citywise_papers.txt &lt;/span&gt;
+&lt;span dir="ltr"&gt;# OR&lt;/span&gt;
+&lt;span dir="ltr"&gt;# After running the swift app:&lt;/span&gt;
+&lt;span dir="ltr"&gt;# awk -F: '{a[$2]+=$1} END {for (k in a) print a[k],k}' joined_cities.txt \&lt;/span&gt;
+         | &lt;span dir="ltr"&gt;sort&lt;/span&gt; &lt;span dir="ltr"&gt;-nr&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; tmp &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;mv &lt;/span&gt;tmp joined_cities.txt
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Problem 4&lt;/h3&gt;&lt;p&gt;&lt;em&gt;Identify how topics have shifted over time.&lt;/em&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;This problem may be solved in three distinct ways. The first approach processes
+the database to find out year-wise occurrence of any given two topics
+&lt;em dir="ltr"&gt;together&lt;/em&gt;. It generates a list of years and the number of times &lt;em dir="ltr"&gt;both&lt;/em&gt; topics
+has occurred in a single publication in that year. For example, the plot shown
+below shows how the terms “obesity” and “sugar” have trended together in
+publications over the years.&lt;/p&gt;&lt;img src="https://raw.githubusercontent.com/ketancmaheshwari/SMC18/master/results/obesity_sugar.png" alt="obesity sugar" title="papers in which obesity and sugar appears together" width="389" height="773"&gt;&lt;p&gt;Awk code shown below.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/usr/bin/env awk -f&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;# Problem Statement&lt;/span&gt;
+&lt;span dir="ltr"&gt;# Identify how topics have shifted over time.&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;# Solution 1 below will search for any two topics&lt;/span&gt;
+&lt;span dir="ltr"&gt;# mentioned and show the number of occurrence of both the topics year-wise&lt;/span&gt;
+BEGIN &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    &lt;span dir="ltr"&gt;# Field Separator&lt;/span&gt;
+    FS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"qwqw"&lt;/span&gt;
+    IGNORECASE &lt;span dir="ltr"&gt;=&lt;/span&gt; 1
+    &lt;span dir="ltr"&gt;# Field names&lt;/span&gt;
+    &lt;span dir="ltr"&gt;id&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;1&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;title&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;2&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;num_authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;3&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doi&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;4&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;fos_isbn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;5&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doctype_issn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;6&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;lang&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;7&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;8&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;issue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;9&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;url&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;10&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;volume&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;11&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;page_start&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;12&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;page_end&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;13&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;year&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;14&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;venue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;15&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;publisher_pdf&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;16&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;references&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;17&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;keywords&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;18&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;abstract&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;19&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;20&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;$lang&lt;/span&gt;~/en/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$year&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$0&lt;/span&gt;~topic1 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$0&lt;/span&gt;~topic2 &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    a[&lt;span dir="ltr"&gt;$year&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;++
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+END &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    n &lt;span dir="ltr"&gt;=&lt;/span&gt; asorti&lt;span dir="ltr"&gt;(&lt;/span&gt;a,b&lt;span dir="ltr"&gt;)&lt;/span&gt;
+    &lt;span dir="ltr"&gt;printf&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"Trend for topics: %s, %s&lt;/span&gt;&lt;span dir="ltr"&gt;\n&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;, topic1, topic2&lt;span dir="ltr"&gt;)&lt;/span&gt;
+    &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;1&lt;span dir="ltr"&gt;;&lt;/span&gt;i&amp;lt;&lt;span dir="ltr"&gt;=&lt;/span&gt;n&lt;span dir="ltr"&gt;;&lt;/span&gt;i++&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;printf&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"%d :- %d&lt;/span&gt;&lt;span dir="ltr"&gt;\n&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;, b[i], a[b[i]]&lt;span dir="ltr"&gt;)&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;# Run as follows:&lt;/span&gt;
+&lt;span dir="ltr"&gt;# awk -v topic1=obesity -v topic2=sugar -f code/prob4.awk aminer_mag_papers/*.txt&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The second approach finds the papers that has highest impact in each year and
+extracts the keywords in those papers. The impact is computed by the paper that
+is cited the most in that year. The result for this task are in
+&lt;code dir="ltr"&gt;results/yearwise_trending_keywords.txt&lt;/code&gt; in the form of year, keywords,
+citations triplet.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/usr/bin/env awk -f&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;# Problem Statement&lt;/span&gt;
+&lt;span dir="ltr"&gt;#    Identify how topics have shifted over time.&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;# Solution 2 is to find the highest cited paper&lt;/span&gt;
+&lt;span dir="ltr"&gt;# year-wise and figure out the topics it was based on&lt;/span&gt;
+BEGIN &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    FS &lt;span dir="ltr"&gt;=&lt;/span&gt; OFS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"qwqw"&lt;/span&gt;
+    IGNORECASE &lt;span dir="ltr"&gt;=&lt;/span&gt; 1
+
+    &lt;span dir="ltr"&gt;# Field names&lt;/span&gt;
+    &lt;span dir="ltr"&gt;id&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;1&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;title&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;2&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;num_authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;3&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doi&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;4&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;fos_isbn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;5&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doctype_issn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;6&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;lang&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;7&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;8&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;issue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;9&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;url&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;10&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;volume&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;11&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;page_start&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;12&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;page_end&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;13&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;year&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;14&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;venue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;15&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;publisher_pdf&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;16&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;references&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;17&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;keywords&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;18&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;abstract&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;19&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;20&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;$lang&lt;/span&gt;~/en/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$year&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$year&lt;/span&gt;&amp;lt;2020 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$keywords&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/ 
+&lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;max[&lt;span dir="ltr"&gt;$year&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt; &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    max[&lt;span dir="ltr"&gt;$year&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;$n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt; a[&lt;span dir="ltr"&gt;$year&lt;/span&gt;&lt;span dir="ltr"&gt;]=&lt;/span&gt;&lt;span dir="ltr"&gt;$keywords&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+END &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    n &lt;span dir="ltr"&gt;=&lt;/span&gt; asorti&lt;span dir="ltr"&gt;(&lt;/span&gt;a,b&lt;span dir="ltr"&gt;)&lt;/span&gt;
+    &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;1&lt;span dir="ltr"&gt;;&lt;/span&gt;i&amp;lt;&lt;span dir="ltr"&gt;=&lt;/span&gt;n&lt;span dir="ltr"&gt;;&lt;/span&gt;i++&lt;span dir="ltr"&gt;)&lt;/span&gt; print b[i], a[b[i]], max[b[i]]
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;# Run via Swift in parallel. If serial, run like so:&lt;/span&gt;
+&lt;span dir="ltr"&gt;# awk -f code/prob4_p2.awk aminer_mag_papers/*.txt &amp;gt; yearwise_trending_keywords.txt&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;The third approach finds the top 10 most frequently occurring terms each year
+to find how the topics get in and out of trend over the years. An mkv animation
+video showing a bubble plot of words trending between the year 1800 and 2017 is
+&lt;a href="https://github.com/ketancmaheshwari/SMC18/blob/master/results/freqwordsoveryears.mkv?raw=true" dir="ltr"&gt;here&lt;/a&gt;.
+A file list of all the words is found in &lt;code dir="ltr"&gt;results/trending_words_by_year&lt;/code&gt;. A
+snapshot trending words bubble in 2002 is shown below:&lt;/p&gt;&lt;img src="https://raw.githubusercontent.com/ketancmaheshwari/SMC18/master/results/trending_words_by_year/2002.png" alt="trending bubble 2020" title="top 10 research words in 2002" width="453" height="460"&gt;&lt;p&gt;The Awk code that generates the raw data for above picture is shown below:&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/usr/bin/env awk -f&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;# find the top 10 trending topics year-wise and see how they appear/disappear in the trend&lt;/span&gt;
+&lt;span dir="ltr"&gt;# We achieve this by writing keywords, titles and abstract to files named after &lt;/span&gt;
+&lt;span dir="ltr"&gt;# the year they appeared and do postprocessing on those files&lt;/span&gt;
+
+BEGIN &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    FS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"qwqw"&lt;/span&gt;
+    IGNORECASE &lt;span dir="ltr"&gt;=&lt;/span&gt; 1
+
+    &lt;span dir="ltr"&gt;# Field names&lt;/span&gt;
+    &lt;span dir="ltr"&gt;id&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;1&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;title&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;2&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;num_authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;3&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doi&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;4&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;fos_isbn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;5&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doctype_issn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;6&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;lang&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;7&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;8&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;issue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;9&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;url&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;10&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;volume&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;11&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;page_start&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;12&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;page_end&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;13&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;year&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;14&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;venue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;15&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;publisher_pdf&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;16&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;references&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;17&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;keywords&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;18&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;abstract&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;19&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;20&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;#collect stop words&lt;/span&gt;
+NR &lt;span dir="ltr"&gt;==&lt;/span&gt; FNR &lt;span dir="ltr"&gt;{&lt;/span&gt;x[&lt;span dir="ltr"&gt;$1&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;next&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;$lang&lt;/span&gt;~/en/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt;0 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$year&lt;/span&gt;&lt;span dir="ltr"&gt;==&lt;/span&gt;yr &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$keywords&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/&lt;span dir="ltr"&gt;{&lt;/span&gt;
+    &lt;span dir="ltr"&gt;# write title, keywords and abstract to a file &lt;/span&gt;
+    &lt;span dir="ltr"&gt;#      titled by the year in which they appear&lt;/span&gt;
+    
+    &lt;span dir="ltr"&gt;# treat title&lt;/span&gt;
+    &lt;span dir="ltr"&gt;$title&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; tolower&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$title&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+    &lt;span dir="ltr"&gt;split&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$title&lt;/span&gt;, a, &lt;span dir="ltr"&gt;" "&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+    &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;i &lt;span dir="ltr"&gt;in &lt;/span&gt;a&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;length&lt;span dir="ltr"&gt;(&lt;/span&gt;a[i]&lt;span dir="ltr"&gt;)&amp;gt;&lt;/span&gt;2 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; match&lt;span dir="ltr"&gt;(&lt;/span&gt;a[i],/[a-z]/&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; a[i] &lt;span dir="ltr"&gt;in &lt;/span&gt;x &lt;span dir="ltr"&gt;==&lt;/span&gt; 0&lt;span dir="ltr"&gt;)&lt;/span&gt; print a[i]
+
+    &lt;span dir="ltr"&gt;# treat keywords&lt;/span&gt;
+    &lt;span dir="ltr"&gt;$keywords&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; tolower&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$keywords&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+    gsub&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;\"&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;,&lt;span dir="ltr"&gt;""&lt;/span&gt;,&lt;span dir="ltr"&gt;$keywords&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+    &lt;span dir="ltr"&gt;split&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$keywords&lt;/span&gt;, b, &lt;span dir="ltr"&gt;","&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+    &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;i &lt;span dir="ltr"&gt;in &lt;/span&gt;b&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;length&lt;span dir="ltr"&gt;(&lt;/span&gt;b[i]&lt;span dir="ltr"&gt;)&amp;gt;&lt;/span&gt;2 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; match&lt;span dir="ltr"&gt;(&lt;/span&gt;b[i],/[a-z]/&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; b[i] &lt;span dir="ltr"&gt;in &lt;/span&gt;x &lt;span dir="ltr"&gt;==&lt;/span&gt; 0&lt;span dir="ltr"&gt;)&lt;/span&gt; print b[i]
+
+     &lt;span dir="ltr"&gt;# treat abstract&lt;/span&gt;
+     &lt;span dir="ltr"&gt;$abstract&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; tolower&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$abstract&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+     gsub&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;&lt;span dir="ltr"&gt;\"&lt;/span&gt;&lt;span dir="ltr"&gt;"&lt;/span&gt;,&lt;span dir="ltr"&gt;""&lt;/span&gt;,&lt;span dir="ltr"&gt;$abstract&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+     gsub&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;","&lt;/span&gt;,&lt;span dir="ltr"&gt;" "&lt;/span&gt;,&lt;span dir="ltr"&gt;$abstract&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+     &lt;span dir="ltr"&gt;split&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;$abstract&lt;/span&gt;, c, &lt;span dir="ltr"&gt;" "&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt;
+     &lt;span dir="ltr"&gt;for&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;i &lt;span dir="ltr"&gt;in &lt;/span&gt;c&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;if&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;length&lt;span dir="ltr"&gt;(&lt;/span&gt;c[i]&lt;span dir="ltr"&gt;)&amp;gt;&lt;/span&gt;2 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; match&lt;span dir="ltr"&gt;(&lt;/span&gt;c[i],/[a-z]/&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; c[i] &lt;span dir="ltr"&gt;in &lt;/span&gt;x &lt;span dir="ltr"&gt;==&lt;/span&gt; 0&lt;span dir="ltr"&gt;)&lt;/span&gt; print c[i]
+
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;#Do the following for postprocessing:&lt;/span&gt;
+&lt;span dir="ltr"&gt;#for i in 18?? 19?? 20??&lt;/span&gt;
+&lt;span dir="ltr"&gt;# do (grep -o -E '\w+' $i | tr [A-Z] [a-z] \&lt;/span&gt;
+&lt;span dir="ltr"&gt;#     | sed -e 's/null//g' -e 's/^.$//g' -e 's/^..$//g' -e 's/^[0-9]*$//g' \&lt;/span&gt;
+&lt;span dir="ltr"&gt;#     | awk NF | fgrep -v -w -f stop_words.txt \&lt;/span&gt;
+&lt;span dir="ltr"&gt;#     | sort | uniq -c | sort -nr \&lt;/span&gt;
+&lt;span dir="ltr"&gt;#     | head -10 &amp;gt; trending/trending.$i.txt) &amp;amp; done&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;p dir="ltr"&gt;Parallelizing the third approach was challenging as it involved a two-level
+nested foreach loop. The outer loop iterates over the years and the inner loop
+iterates over the input files. The HPC implementation finishes in &lt;strong dir="ltr"&gt;48
+minutes&lt;/strong&gt;. Swift code for this shown below.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;files&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;io&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;unix&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;import&lt;/span&gt; &lt;span dir="ltr"&gt;string&lt;/span&gt;&lt;span dir="ltr"&gt;;&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;app&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;out&lt;/span&gt;&lt;span dir="ltr"&gt;)&lt;/span&gt; &lt;span dir="ltr"&gt;myawk&lt;/span&gt; &lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;awkprog&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;infile&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;stopwords&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;string&lt;/span&gt; &lt;span dir="ltr"&gt;yr&lt;/span&gt;&lt;span dir="ltr"&gt;){&lt;/span&gt;
+  &lt;span dir="ltr"&gt;"/usr/bin/awk"&lt;/span&gt; &lt;span dir="ltr"&gt;"-v"&lt;/span&gt; &lt;span dir="ltr"&gt;yr&lt;/span&gt; &lt;span dir="ltr"&gt;"-f"&lt;/span&gt; &lt;span dir="ltr"&gt;awkprog&lt;/span&gt; &lt;span dir="ltr"&gt;stopwords&lt;/span&gt; &lt;span dir="ltr"&gt;infile&lt;/span&gt; &lt;span dir="ltr"&gt;@&lt;/span&gt;&lt;span dir="ltr"&gt;stdout&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;&lt;span dir="ltr"&gt;out&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;aminer&lt;/span&gt;&lt;span dir="ltr"&gt;[]&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;glob&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"/dev/shm/aminer_mag_papers/*.txt"&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;foreach&lt;/span&gt; &lt;span dir="ltr"&gt;y&lt;/span&gt; &lt;span dir="ltr"&gt;in&lt;/span&gt; &lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;1800&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;2017&lt;/span&gt;&lt;span dir="ltr"&gt;:&lt;/span&gt;&lt;span dir="ltr"&gt;1&lt;/span&gt;&lt;span dir="ltr"&gt;]{&lt;/span&gt;
+  &lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;yearfiles&lt;/span&gt;&lt;span dir="ltr"&gt;[];&lt;/span&gt;
+  &lt;span dir="ltr"&gt;foreach&lt;/span&gt; &lt;span dir="ltr"&gt;v&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt; &lt;span dir="ltr"&gt;i&lt;/span&gt; &lt;span dir="ltr"&gt;in&lt;/span&gt; &lt;span dir="ltr"&gt;aminer&lt;/span&gt;&lt;span dir="ltr"&gt;{&lt;/span&gt;
+    &lt;span dir="ltr"&gt;yearfiles&lt;/span&gt;&lt;span dir="ltr"&gt;[&lt;/span&gt;&lt;span dir="ltr"&gt;i&lt;/span&gt;&lt;span dir="ltr"&gt;]&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;myawk&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;input&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"/home/km0/SMC18/src/prob4_p3.awk"&lt;/span&gt;&lt;span dir="ltr"&gt;),&lt;/span&gt;  
+                         &lt;span dir="ltr"&gt;v&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;
+                         &lt;span dir="ltr"&gt;input&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"/home/km0/SMC18/data/stop_words.txt"&lt;/span&gt;&lt;span dir="ltr"&gt;),&lt;/span&gt; 
+                         &lt;span dir="ltr"&gt;sprintf&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"yr=%s"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;toString&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;y&lt;/span&gt;&lt;span dir="ltr"&gt;)));&lt;/span&gt;
+  &lt;span dir="ltr"&gt;}&lt;/span&gt;
+  &lt;span dir="ltr"&gt;file&lt;/span&gt; &lt;span dir="ltr"&gt;joined&lt;/span&gt; &lt;span dir="ltr"&gt;&amp;lt;&lt;/span&gt;&lt;span dir="ltr"&gt;sprintf&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;"year%s.txt"&lt;/span&gt;&lt;span dir="ltr"&gt;,&lt;/span&gt;&lt;span dir="ltr"&gt;toString&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;y&lt;/span&gt;&lt;span dir="ltr"&gt;))&lt;/span&gt;&lt;span dir="ltr"&gt;&amp;gt;&lt;/span&gt; &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;cat&lt;/span&gt;&lt;span dir="ltr"&gt;(&lt;/span&gt;&lt;span dir="ltr"&gt;yearfiles&lt;/span&gt;&lt;span dir="ltr"&gt;);&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;h3&gt;Problem 5&lt;/h3&gt;&lt;p&gt;&lt;em&gt;Given a research proposal, determine whether the proposed work has been accomplished previously.&lt;/em&gt;&lt;/p&gt;&lt;p dir="ltr"&gt;This has a simple solution: Find the keywords on a new proposal.  If those
+keywords appear in an existing publication record, it is a suspect. A broad
+list of suspects may be found with logical &lt;strong dir="ltr"&gt;OR&lt;/strong&gt; between keywords which could
+be narrowed down with logical &lt;strong dir="ltr"&gt;AND&lt;/strong&gt;. The keywords may be arbitrarily combined
+in ORs and ANDs. The results file &lt;code dir="ltr"&gt;/results/suspects.txt&lt;/code&gt; shows over 1,400
+suspects for an &lt;strong dir="ltr"&gt;AND&lt;/strong&gt; combination of keywords: &lt;em dir="ltr"&gt;battery&lt;/em&gt;, &lt;em dir="ltr"&gt;electronics&lt;/em&gt;,
+&lt;em dir="ltr"&gt;lithium&lt;/em&gt;, and &lt;em dir="ltr"&gt;energy&lt;/em&gt; from English language papers. The HPC implementation
+finishes in &lt;strong dir="ltr"&gt;26 seconds&lt;/strong&gt;. Awk code below.&lt;/p&gt;&lt;PRE&gt;&lt;code dir="ltr"&gt;&lt;span dir="ltr"&gt;#!/usr/bin/env awk -f&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;# Problem Statement&lt;/span&gt;
+&lt;span dir="ltr"&gt;#    Given a research proposal, determine whether the proposed work has been&lt;/span&gt;
+&lt;span dir="ltr"&gt;#    accomplished previously.&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;# Solution: Find the keywords in the new proposal. &lt;/span&gt;
+&lt;span dir="ltr"&gt;# If those keywords appear in an existing publication record, it is a suspect.&lt;/span&gt;
+
+BEGIN &lt;span dir="ltr"&gt;{&lt;/span&gt;
+    FS &lt;span dir="ltr"&gt;=&lt;/span&gt; &lt;span dir="ltr"&gt;"qwqw"&lt;/span&gt;
+    IGNORECASE &lt;span dir="ltr"&gt;=&lt;/span&gt; 1 
+
+    &lt;span dir="ltr"&gt;# Field names&lt;/span&gt;
+    &lt;span dir="ltr"&gt;id&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;1&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;title&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;2&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;num_authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;3&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doi&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;4&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;fos_isbn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;5&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;doctype_issn&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;6&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;lang&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;7&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;n_citation&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;8&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;issue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;9&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;url&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;10&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;volume&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;11&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;page_start&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;12&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;page_end&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;13&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;year&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;14&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;venue&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;15&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;publisher_pdf&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;16&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;references&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;17&lt;span dir="ltr"&gt;;&lt;/span&gt;
+    &lt;span dir="ltr"&gt;keywords&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;18&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;abstract&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;19&lt;span dir="ltr"&gt;;&lt;/span&gt; &lt;span dir="ltr"&gt;authors&lt;/span&gt;&lt;span dir="ltr"&gt;=&lt;/span&gt;20&lt;span dir="ltr"&gt;;&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+
+&lt;span dir="ltr"&gt;# topic1 .. topic4 are provided at command line&lt;/span&gt;
+&lt;span dir="ltr"&gt;$0&lt;/span&gt;~topic1 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$0&lt;/span&gt;~topic2 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$0&lt;/span&gt;~topic3 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$0&lt;/span&gt;~topic4 &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$lang&lt;/span&gt;~/en/ &lt;span dir="ltr"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span dir="ltr"&gt;$authors&lt;/span&gt;&lt;span dir="ltr"&gt;!&lt;/span&gt;~/null/&lt;span dir="ltr"&gt;{&lt;/span&gt;
+    print &lt;span dir="ltr"&gt;$id&lt;/span&gt;, &lt;span dir="ltr"&gt;$title&lt;/span&gt;, &lt;span dir="ltr"&gt;$authors&lt;/span&gt;, &lt;span dir="ltr"&gt;$year&lt;/span&gt;
+&lt;span dir="ltr"&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/PRE&gt;&lt;h1&gt;Conclusion&lt;/h1&gt;&lt;p dir="ltr"&gt;I show how the classic Unix tools may be leveraged to solve modern problems
+and that millions of records may be processed in under a minute at scale.
+About the data itself, it seems the biosciences research dominates
+the publications followed by perhaps physics. I am sure more sophisticated
+tools could be used to get refined results and gain better insights – this is
+my take. I &lt;a href="https://twitter.com/SciDatathon/status/1120335746358026240" dir="ltr"&gt;won&lt;/a&gt;
+the data challenge. Awk is awesome!&lt;/p&gt;</description><pubDate>Sun, 29 Aug 2021 06:43:32 -0500</pubDate></item><item><title>Why I will stay Janet</title><link>https://lobste.rs/s/falxep</link><description>&lt;p dir="ltr"&gt;This post is the last part of my Óde to Janet programming
 language. If this is the first time you are here, please read the
 &lt;a href="https://pan.earth/posts/how-i-became-janet.html" dir="ltr"&gt;past&lt;/a&gt; and &lt;a href="https://pan.earth/posts/why-i-am-janet.html" dir="ltr"&gt;present&lt;/a&gt;
 tense of the story first. Writing this part took much longer, as
